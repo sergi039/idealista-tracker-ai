@@ -383,6 +383,91 @@
 
 <div class="row" data-property-id="{{ property.id }}">
     <div class="col-lg-8">
+        {# What the owner decided, and what is still outstanding (#430) --
+           one line, not a card. The listing is the point of this page: its
+           price, description and measurements come first, and the owner's own
+           verdict is a label on them, not a form above them (owner verdict on
+           the first layout: it buried the object under controls). The line
+           stays at the top because a rejected listing must say so before its
+           score does -- the ticket's own requirement -- and the form costs a
+           click, which is the right price for something touched once per
+           listing. #}
+        {% set _decision = owner_decision_for(property) %}
+        {% set _action = owner_action_for(property) %}
+        {% set _decision_class = {'interested': 'success', 'waiting': 'warning', 'rejected': 'danger'} %}
+        <details class="mb-3" id="owner-review">
+            <summary class="d-inline-flex flex-wrap align-items-center gap-2" style="cursor: pointer;">
+                <span class="badge bg-{{ _decision_class.get(_decision.state, 'body-tertiary text-body-secondary') }}">
+                    {{ t(owner_decision_label_key(_decision.state)) }}
+                </span>
+                {% if _decision.reason %}
+                    <span class="small">{{ _decision.reason|truncate(140, True) }}</span>
+                {% endif %}
+                {% if _action.action %}
+                    <span class="badge bg-{{ 'danger' if _action.state == 'overdue' else 'info' }}">
+                        {{ t(owner_action_label_key(_action.state)) }}{% if _action.due_on %} · {{ _action.due_on.strftime('%Y-%m-%d') }}{% endif %}
+                    </span>
+                    <span class="small text-body-secondary">{{ _action.action|truncate(60, True) }}</span>
+                {% endif %}
+                <span class="small text-body-secondary"><i class="fas fa-pen ms-1"></i> {{ t('edit') }}</span>
+            </summary>
+            <div class="card card-body mt-2">
+                {% if review_history_out_of_sync %}
+                    {# A disclosure, not a guarantee: direct SQL is a supported
+                       workflow here, and a column written that way leaves no
+                       entry behind (services/owner_review.py). #}
+                    <div class="alert alert-warning py-2 px-3 small mb-3">
+                        <i class="fas fa-triangle-exclamation me-1"></i>
+                        {{ t('review_history_out_of_sync') }}
+                    </div>
+                {% endif %}
+                {% if _decision.decided_at %}
+                    <p class="text-muted small mb-2">
+                        {{ t('review_decided_at') }}: {{ _decision.decided_at.strftime('%Y-%m-%d') }}
+                    </p>
+                {% endif %}
+                <form method="POST" action="{{ url_for('main.set_review', property_id=property.id) }}"
+                      class="row g-2 align-items-end">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    <div class="col-12 col-md-4">
+                        <label class="form-label small mb-1" for="review-verdict">{{ t('owner_verdict') }}</label>
+                        <select class="form-select form-select-sm" id="review-verdict" name="verdict">
+                            {# The empty option clears the decision. It is not
+                               "rejected" and it is not a blank: it is the state
+                               a listing nobody has judged is in, and the only
+                               way back to it. #}
+                            <option value="" {{ 'selected' if not _decision.decided }}>{{ t('review_clear_verdict') }}</option>
+                            {% for _state in ['interested', 'waiting', 'rejected'] %}
+                                <option value="{{ _state }}" {{ 'selected' if _decision.state == _state }}>
+                                    {{ t(owner_decision_label_key(_state)) }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-12 col-md-8">
+                        <label class="form-label small mb-1" for="review-reason">{{ t('review_reason') }}</label>
+                        <input type="text" class="form-control form-control-sm" id="review-reason"
+                               name="reason" value="{{ property.owner_verdict_reason or '' }}"
+                               placeholder="{{ t('review_reason_placeholder') }}"/>
+                    </div>
+                    <div class="col-12 col-md-8">
+                        <label class="form-label small mb-1" for="review-next-action">{{ t('next_action') }}</label>
+                        <input type="text" class="form-control form-control-sm" id="review-next-action"
+                               name="next_action" value="{{ property.next_action or '' }}"
+                               placeholder="{{ t('review_next_action_placeholder') }}"/>
+                    </div>
+                    <div class="col-8 col-md-3">
+                        <label class="form-label small mb-1" for="review-due">{{ t('next_action_due_on') }}</label>
+                        <input type="date" class="form-control form-control-sm" id="review-due"
+                               name="due_on" value="{{ property.next_action_due_on.isoformat() if property.next_action_due_on else '' }}"/>
+                    </div>
+                    <div class="col-4 col-md-1">
+                        <button type="submit" class="btn btn-sm btn-primary w-100">{{ t('review_save') }}</button>
+                    </div>
+                </form>
+            </div>
+        </details>
+
         <div class="card mb-4">
             <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
                 <h2 class="h6 mb-0">
@@ -587,6 +672,205 @@
         {% endif %}
 
 
+        {# The conversation behind the listing (#430), below the listing
+           itself: the object -- price, description, measurements -- is what
+           the page is for, and the thread is its margin notes (owner
+           verdict on the first layout, which stacked this above Overview).
+           One reverse-chronological
+           feed rather than a notes list beside a contacts list: the material is
+           causally ordered -- asked, answered, promised, decided -- and two
+           lists make the reader re-interleave by date what a feed already
+           says. Verdict entries appear here too, read-only: they are the
+           history of the decision block above, and a control that could edit
+           them could edit the log into disagreement with the state it
+           describes. #}
+        {% set _channel_icons = {'whatsapp': 'fa-brands fa-whatsapp', 'email': 'fas fa-envelope',
+                                 'portal': 'fas fa-comments', 'phone': 'fas fa-phone',
+                                 'visit': 'fas fa-person-walking', 'other': 'fas fa-circle-dot'} %}
+        <div class="card mb-4" id="property-timeline">
+            <div class="card-header py-2">
+                <h2 class="h6 mb-0"><i class="fas fa-clock-rotate-left me-2"></i>{{ t('timeline_title') }}</h2>
+            </div>
+            <div class="card-body">
+                {% if not activity_timeline %}
+                    <p class="text-muted">{{ t('timeline_empty') }}</p>
+                {% else %}
+                    <ul class="list-unstyled mb-3">
+                        {% for entry in activity_timeline %}
+                            <li class="d-flex gap-3 pb-3 mb-3 border-bottom">
+                                <div class="text-muted pt-1" style="min-width: 1.5rem;">
+                                    {% if entry.kind == 'contact' %}
+                                        <i class="{{ _channel_icons.get(entry.channel, 'fas fa-circle-dot') }}"></i>
+                                    {% elif entry.kind == 'verdict' %}
+                                        <i class="fas fa-gavel"></i>
+                                    {% else %}
+                                        <i class="fas fa-pen"></i>
+                                    {% endif %}
+                                </div>
+                                <div class="flex-grow-1">
+                                    <div class="small text-body-secondary mb-1">
+                                        {{ entry.happened_at.strftime('%Y-%m-%d') }}
+                                        {% if entry.kind == 'contact' %}
+                                            · {{ t('channel_' ~ entry.channel ~ '_label') }}
+                                            {%- if entry.counterpart %} · {{ entry.counterpart }}{% endif %}
+                                        {% elif entry.kind == 'verdict' %}
+                                            · {{ t('timeline_verdict_entry') }}
+                                        {% endif %}
+                                        {% if owner_review_was_edited(entry) %}
+                                            <span class="fst-italic">({{ t('timeline_edited') }})</span>
+                                        {% endif %}
+                                    </div>
+
+                                    {% if entry.kind == 'verdict' %}
+                                        {% set _snap = entry.snapshot or {} %}
+                                        <div>
+                                            <span class="badge bg-{{ _decision_class.get(_snap.get('decision'), 'body-tertiary text-body-secondary') }}">
+                                                {{ t(owner_decision_label_key(_snap.get('decision'))) }}
+                                            </span>
+                                            {% if _snap.get('reason') %}<span class="ms-1">{{ _snap.get('reason') }}</span>{% endif %}
+                                        </div>
+                                        {% if _snap.get('action') %}
+                                            <div class="small text-body-secondary">
+                                                {{ _snap.get('action') }}{% if _snap.get('due_on') %} — {{ t('next_action_due') }} {{ _snap.get('due_on') }}{% endif %}
+                                            </div>
+                                        {% endif %}
+                                    {% else %}
+                                        {% if entry.asked %}
+                                            <div class="text-body-secondary">
+                                                <i class="fas fa-arrow-right me-1"></i>{{ entry.asked }}
+                                            </div>
+                                        {% endif %}
+                                        {% if entry.body %}
+                                            <div>{{ entry.body }}</div>
+                                        {% endif %}
+
+                                        {% for file in (attachments_by_entry.get(entry.id) or []) %}
+                                            {# A chip per file. The link goes to the
+                                               row's own id -- never to a path -- and
+                                               the route decides from the SNIFFED type
+                                               whether a browser may draw it or must
+                                               download it (services/attachments.py). #}
+                                            <div class="mt-1">
+                                                <a class="badge bg-body-tertiary text-body text-decoration-none border"
+                                                   href="{{ url_for('main.download_attachment', property_id=property.id, attachment_id=file.id) }}">
+                                                    <i class="fas {{ 'fa-image' if file.kind == 'photo' else 'fa-file-pdf' }} me-1"></i>
+                                                    {{ file.original_filename or ('attachment-' ~ file.id) }}
+                                                    <span class="text-body-secondary ms-1">{{ attachment_size(file.size_bytes) }}</span>
+                                                </a>
+                                                <form method="POST" class="d-inline"
+                                                      action="{{ url_for('main.delete_attachment', property_id=property.id, attachment_id=file.id) }}">
+                                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                                    <button type="submit" class="btn btn-link btn-sm p-0 ms-1 text-body-secondary"
+                                                            title="{{ t('attachment_remove') }}">
+                                                        <i class="fas fa-xmark"></i>
+                                                    </button>
+                                                </form>
+                                            </div>
+                                        {% endfor %}
+
+                                        <details class="mt-1">
+                                            <summary class="small text-body-secondary">{{ t('edit') }}</summary>
+                                            <form method="POST" class="row g-2 mt-1"
+                                                  action="{{ url_for('main.edit_activity', property_id=property.id, entry_id=entry.id) }}">
+                                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                                {% if entry.kind == 'contact' %}
+                                                    <div class="col-6 col-md-3">
+                                                        <select class="form-select form-select-sm" name="channel">
+                                                            {% for _c in activity_channels %}
+                                                                <option value="{{ _c }}" {{ 'selected' if entry.channel == _c }}>{{ t('channel_' ~ _c ~ '_label') }}</option>
+                                                            {% endfor %}
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-6 col-md-4">
+                                                        <input type="text" class="form-control form-control-sm" name="counterpart"
+                                                               value="{{ entry.counterpart or '' }}" placeholder="{{ t('timeline_counterpart') }}"/>
+                                                    </div>
+                                                    <div class="col-12 col-md-5">
+                                                        <input type="text" class="form-control form-control-sm" name="asked"
+                                                               value="{{ entry.asked or '' }}" placeholder="{{ t('timeline_asked') }}"/>
+                                                    </div>
+                                                {% endif %}
+                                                <div class="col-12">
+                                                    <input type="text" class="form-control form-control-sm" name="body"
+                                                           value="{{ entry.body or '' }}"/>
+                                                </div>
+                                                <div class="col-12 d-flex gap-2">
+                                                    <button type="submit" name="action" value="save"
+                                                            class="btn btn-sm btn-primary">{{ t('timeline_save') }}</button>
+                                                    <button type="submit" name="action" value="delete"
+                                                            class="btn btn-sm btn-outline-danger">{{ t('timeline_delete') }}</button>
+                                                </div>
+                                            </form>
+                                        </details>
+                                    {% endif %}
+                                </div>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                {% endif %}
+
+                {# The composer is one text box and a button. Everything an
+                   exchange carries beyond its text -- the channel, who, what
+                   was asked, the date, the file -- is real structure and rare
+                   input, so it lives behind one <details> instead of standing
+                   as six controls in front of every quick note (owner verdict
+                   on the first layout: a wall of dropdowns is not usable).
+                   multipart, because the file rides on the entry it arrived
+                   with. #}
+                <form method="POST" action="{{ url_for('main.add_activity', property_id=property.id) }}"
+                      id="add-activity" enctype="multipart/form-data">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    <div class="d-flex gap-2 align-items-start">
+                        <textarea class="form-control form-control-sm" id="activity-body" name="body"
+                                  rows="2" placeholder="{{ t('timeline_note_placeholder') }}"></textarea>
+                        <button type="submit" class="btn btn-sm btn-primary">{{ t('timeline_add') }}</button>
+                    </div>
+                    <details class="mt-1">
+                        <summary class="small text-body-secondary" style="cursor: pointer;">
+                            {{ t('timeline_more_fields') }}
+                        </summary>
+                        <div class="row g-2 mt-1">
+                            <div class="col-6 col-md-2">
+                                <label class="form-label small mb-1" for="activity-kind">&nbsp;</label>
+                                <select class="form-select form-select-sm" id="activity-kind" name="kind">
+                                    <option value="note">{{ t('timeline_add_note') }}</option>
+                                    <option value="contact">{{ t('timeline_add_contact') }}</option>
+                                </select>
+                            </div>
+                            <div class="col-6 col-md-2">
+                                <label class="form-label small mb-1" for="activity-when">{{ t('timeline_when') }}</label>
+                                <input type="date" class="form-control form-control-sm" id="activity-when" name="happened_on"/>
+                            </div>
+                            <div class="col-6 col-md-2 activity-contact-only">
+                                <label class="form-label small mb-1" for="activity-channel">{{ t('timeline_channel') }}</label>
+                                <select class="form-select form-select-sm" id="activity-channel" name="channel">
+                                    {% for _c in activity_channels %}
+                                        <option value="{{ _c }}">{{ t('channel_' ~ _c ~ '_label') }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-6 col-md-3 activity-contact-only">
+                                <label class="form-label small mb-1" for="activity-counterpart">{{ t('timeline_counterpart') }}</label>
+                                <input type="text" class="form-control form-control-sm" id="activity-counterpart"
+                                       name="counterpart" placeholder="{{ t('timeline_counterpart_placeholder') }}"/>
+                            </div>
+                            <div class="col-12 col-md-3 activity-contact-only">
+                                <label class="form-label small mb-1" for="activity-asked">{{ t('timeline_asked') }}</label>
+                                <input type="text" class="form-control form-control-sm" id="activity-asked"
+                                       name="asked" placeholder="{{ t('timeline_asked_placeholder') }}"/>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label small mb-1" for="activity-file">{{ t('attachment_add') }}</label>
+                                <input type="file" class="form-control form-control-sm" id="activity-file"
+                                       name="attachment" accept=".pdf,.jpg,.jpeg,.png,.gif,.webp,.heic"/>
+                                <div class="form-text small">{{ t('attachment_hint') }}</div>
+                            </div>
+                        </div>
+                    </details>
+                </form>
+            </div>
+        </div>
+
         <!-- AI Analysis Section (legacy parity) -->
         <div id="ai-analysis-section" class="mb-3">
             <div class="card shadow-sm">
@@ -789,6 +1073,7 @@
                         ('travel_score', t('component_travel')),
                         ('sea_score', t('component_sea')),
                         ('pool_score', t('component_pool')),
+                        ('hazard_score', t('component_hazard')),
                     ] %}
                     {% for _prof_key, _prof_label in [('investment', t('investment_score')), ('lifestyle', t('lifestyle_score'))] %}
                         {% set _prof = _profiles.get(_prof_key) if _profiles.get(_prof_key) is mapping else {} %}
@@ -953,6 +1238,152 @@
                 </div>
             </div>
         {% endif %}
+        {# The parcel behind the listing (#430), in the rail with the other
+           measurements: it is checkable fact about the ground, like Environment
+           and Pool beside it, and in the main column it crowded the object off
+           the screen (owner verdict on the first layout). #}
+        {% set _cad = (property.enrichment or {}).get('cadastre') or {} %}
+        {% set _cad_sources = _cad.get('sources') or {} %}
+        {% set _cad_geom = _cad.get('geometry') or {} %}
+        {% set _cad_attrs = _cad.get('attributes') or {} %}
+        <div class="card mb-4" id="cadastral-parcel">
+            <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
+                <h6 class="card-title mb-0 compact-header" title="{{ t('cadastre_section_title') }}">
+                    <i class="fas fa-vector-square me-1"></i>{{ t('cadastre_section_title') }}
+                </h6>
+                {% if property.cadastral_reference %}
+                    <a class="small" target="_blank" rel="noopener"
+                       href="{{ _cad.get('viewer_url') or ('https://www1.sedecatastro.gob.es/CYCBienInmueble/OVCConCiud.aspx?RefC=' ~ property.cadastral_reference) }}">
+                        <i class="fas fa-up-right-from-square me-1"></i>{{ t('cadastre_viewer') }}
+                    </a>
+                {% endif %}
+            </div>
+            <div class="card-body">
+                {% if not property.cadastral_reference %}
+                    <p class="text-muted mb-3">{{ t('cadastre_none') }}</p>
+                {% else %}
+                    <p class="mb-2">
+                        <code class="user-select-all">{{ property.cadastral_reference }}</code>
+                        {% if _cad_attrs.get('class') %}
+                            <span class="badge bg-{{ 'primary' if _cad_attrs.get('class') == 'UR' else 'secondary' }} ms-2">
+                                {{ t('cadastre_class') }}: {{ 'URBANO' if _cad_attrs.get('class') == 'UR' else 'RÚSTICO' }}
+                            </span>
+                        {% endif %}
+                    </p>
+
+                    {% if _cad_geom %}
+                        <div class="row g-2 mb-2">
+                            <div class="col-6">
+                                <div class="text-muted small">{{ t('cadastre_area') }}</div>
+                                <div class="fw-semibold">{{ '{:,.0f}'.format(_cad_geom.get('declared_area_m2') or _cad_geom.get('area_m2')) }} m²</div>
+                            </div>
+                            <div class="col-6">
+                                <div class="text-muted small">{{ t('cadastre_bbox') }}</div>
+                                <div class="fw-semibold">{{ _cad_geom.get('bbox_m', {}).get('we') }} × {{ _cad_geom.get('bbox_m', {}).get('ns') }} m</div>
+                            </div>
+                            <div class="col-6">
+                                <div class="text-muted small">{{ t('cadastre_fill_ratio') }}</div>
+                                {# The number that rejected 774: a regular plot
+                                   fills most of its own box, an L-shaped one
+                                   does not. #}
+                                <div class="fw-semibold">
+                                    <span class="badge bg-{{ 'success' if (_cad_geom.get('bbox_fill_ratio') or 0) >= 0.7 else ('warning' if (_cad_geom.get('bbox_fill_ratio') or 0) >= 0.5 else 'danger') }}">
+                                        {{ '{:.0%}'.format(_cad_geom.get('bbox_fill_ratio') or 0) }}
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="text-muted small" title="{{ t('cadastre_compactness_hint') }}">
+                                    {{ t('cadastre_compactness') }} <i class="fas fa-circle-info"></i>
+                                </div>
+                                <div class="fw-semibold">
+                                    <span class="badge bg-{{ 'success' if (_cad_geom.get('polsby_popper') or 0) >= 0.6 else ('warning' if (_cad_geom.get('polsby_popper') or 0) >= 0.4 else 'danger') }}">
+                                        {{ '%.2f'|format(_cad_geom.get('polsby_popper') or 0) }}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                        <p class="text-muted small mb-3">
+                            {# The CRS only if the block records one. A metric
+                               measurement is meaningless without the projection
+                               it was taken in, and a block written before this
+                               feature existed -- by hand, through `docker exec`
+                               -- carries the numbers and not the code. Printing
+                               `EPSG:None` there states a CRS nobody recorded,
+                               which is worse than saying it is missing. #}
+                            {% if _cad_geom.get('epsg') %}
+                                {{ t('cadastre_measured_in')|format(_cad_geom.get('epsg')) }},
+                            {% else %}
+                                {{ t('cadastre_crs_not_recorded') }},
+                            {% endif %}
+                            {{ _cad_geom.get('vertices') }} vertices
+                        </p>
+                    {% else %}
+                        <p class="text-muted mb-3">{{ t('cadastre_not_measured') }}</p>
+                    {% endif %}
+
+                    {% if _cad_attrs %}
+                        <dl class="row mb-2 small">
+                            {% if _cad_attrs.get('poligono') %}
+                                <dt class="col-sm-4">{{ t('cadastre_poligono') }}</dt>
+                                <dd class="col-sm-8">{{ _cad_attrs.get('poligono') }} / {{ _cad_attrs.get('parcela') }}</dd>
+                            {% endif %}
+                            {% if _cad_attrs.get('paraje') %}
+                                <dt class="col-sm-4">{{ t('cadastre_paraje') }}</dt>
+                                <dd class="col-sm-8">{{ _cad_attrs.get('paraje') }}</dd>
+                            {% endif %}
+                            {% if _cad_attrs.get('use') %}
+                                <dt class="col-sm-4">{{ t('cadastre_use') }}</dt>
+                                <dd class="col-sm-8">{{ _cad_attrs.get('use') }}</dd>
+                            {% endif %}
+                            {% if _cad_attrs.get('subparcels') %}
+                                <dt class="col-sm-4">{{ t('cadastre_subparcels') }}</dt>
+                                <dd class="col-sm-8">
+                                    {% for sub in _cad_attrs.get('subparcels') %}
+                                        <div>{{ sub.get('code') }} — {{ sub.get('use') }}{% if sub.get('area_m2') %}, {{ '{:,.0f}'.format(sub.get('area_m2')) }} m²{% endif %}</div>
+                                    {% endfor %}
+                                </dd>
+                            {% endif %}
+                        </dl>
+                    {% endif %}
+
+                    {# What each source said, per source. A refusal is not an
+                       absence of parcel: only `not_found` means Catastro
+                       looked and there is nothing (services/cadastre_service.py). #}
+                    {% if _cad_sources %}
+                        <p class="small text-body-secondary mb-3">
+                            {% for _name in ['metric_geometry', 'map_geometry', 'attributes'] %}
+                                {% set _src = _cad_sources.get(_name) or {} %}
+                                {% if _src.get('status') %}
+                                    <span class="me-3">
+                                        {{ t('cadastre_source_' ~ _name) }}:
+                                        <span class="{{ 'text-body-secondary' if _src.get('status') == 'ok' else 'text-warning' }}">
+                                            {{ t('cadastre_state_' ~ _src.get('status')) }}</span>{% if _src.get('kept_previous') %} ({{ t('cadastre_kept_previous') }}){% endif %}
+                                    </span>
+                                {% endif %}
+                            {% endfor %}
+                        </p>
+                    {% endif %}
+                {% endif %}
+
+                <form method="POST" action="{{ url_for('main.set_cadastral_reference', property_id=property.id) }}"
+                      class="row g-2 align-items-end">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    <div class="col-12">
+                        <label class="form-label small mb-1" for="cadastral-reference">{{ t('cadastre_reference') }}</label>
+                        <input type="text" class="form-control form-control-sm" id="cadastral-reference"
+                               name="cadastral_reference" value="{{ property.cadastral_reference or '' }}"
+                               placeholder="{{ t('cadastre_reference_placeholder') }}"/>
+                    </div>
+                    <div class="col-12">
+                        <button type="submit" class="btn btn-sm btn-primary">
+                            <i class="fas fa-cloud-arrow-down me-1"></i>{{ t('cadastre_fetch') }}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
 
         <div class="card mb-4">
             <div class="card-header">
@@ -1505,6 +1936,105 @@
                 </div>
             </div>
         {% endif %}
+
+        {# Industrial neighbours (#437). Unlike the QoL card above this one is
+           rendered whatever the row holds, and that is the feature rather
+           than an oversight: the question it answers is "is there anything
+           bad near this plot", and a page that simply says nothing reads as
+           "no". A refusal says it refused, a row nobody scanned says so, and
+           only a scan that ran and found nothing may say the neighbourhood
+           is clear. Every distance comes from `hazard_verdict_for`, which
+           restates the stored measurement against the row's *current*
+           accuracy -- a locality centroid gets a range and never a point. #}
+        {% set hazards = hazard_verdict_for(property) %}
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h6 class="card-title mb-0 compact-header" title="{{ t('hazards_title') }}">
+                    <i class="fas fa-industry me-2"></i>{{ t('hazards_title') }}
+                </h6>
+                {% if not hazards.measured %}
+                    <span class="badge bg-warning text-dark">{{ t('hazards_not_measured') }}</span>
+                {% endif %}
+            </div>
+            <div class="card-body">
+                {% if hazards.status == 'unavailable' %}
+                    <div class="small text-body-secondary">{{ t('hazards_unavailable') }}</div>
+                {% elif hazards.status == 'no_coordinates' %}
+                    <div class="small text-body-secondary">{{ t('hazards_no_coordinates') }}</div>
+                {% elif hazards.status == 'stale_origin' %}
+                    <div class="small text-body-secondary">{{ t('hazards_stale_origin') }}</div>
+                {% elif not hazards.measured %}
+                    <div class="small text-body-secondary">{{ t('hazards_missing') }}</div>
+                {% elif not hazards['items'] %}
+                    {# A scan that came back short and found nothing is not a
+                       measured absence, and "Nothing recognised" is exactly
+                       how that reads (codex review, 2026-08-20). #}
+                    <div class="small text-body-secondary">
+                        {{ t('hazards_none') if hazards.complete else t('hazards_none_incomplete') }}
+                    </div>
+                {% else %}
+                    {% for item in hazards['items'] %}
+                        <div class="d-flex justify-content-between align-items-start small mb-2">
+                            <div class="me-2">
+                                <span class="badge {{ 'bg-danger' if item.severity == 'high' else 'bg-secondary' }} fw-normal">
+                                    {{ t('hazard_severity_' ~ item.severity) if item.severity else '' }}
+                                </span>
+                                <span class="fw-bold">{{ item.name or t('hazard_kind_' ~ item.kind) }}</span>
+                                <div class="text-body-secondary">
+                                    {% for kind in item.kinds %}{% if not loop.first %} · {% endif %}{{ t('hazard_kind_' ~ kind) }}{% endfor %}
+                                    {% if item.element_count and item.element_count > 1 %}
+                                        — {{ tn('hazards_elements', item.element_count) }}
+                                    {% endif %}
+                                    {% for element in item.elements %}
+                                        {% if element.type and element.id is not none %}
+                                            <a class="ms-1" target="_blank" rel="noopener"
+                                               href="https://www.openstreetmap.org/{{ element.type }}/{{ element.id }}">{{ element.type[:1]|upper }}{{ element.id }}</a>
+                                        {% endif %}
+                                    {% endfor %}
+                                </div>
+                            </div>
+                            <div class="text-end text-nowrap">
+                                {% if item.distance_m is not none %}
+                                    <span class="fw-bold">{{ (item.distance_m / 1000.0)|round(1) }} km</span>
+                                {% elif item.min_distance_m is not none %}
+                                    <span class="fw-bold">{{ (item.min_distance_m / 1000.0)|round(1) }}–{{ (item.max_distance_m / 1000.0)|round(1) }} km</span>
+                                {% endif %}
+                                {% if item.cardinal %}
+                                    <div class="text-body-secondary">{{ t('hazards_bearing') }} {{ item.bearing_deg }}° {{ item.cardinal }}</div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    {% endfor %}
+                    {% if hazards.item_count and hazards.item_count > hazards['items']|length %}
+                        {% set hidden_items = hazards.item_count - hazards['items']|length %}
+                        <div class="small text-body-secondary">{{ tn('hazards_more', hidden_items) }}</div>
+                    {% endif %}
+                {% endif %}
+
+                {% if hazards.measured %}
+                    {% if hazards.searched_m is not none %}
+                        <div class="small text-body-secondary mt-2">
+                            {{ t('hazards_searched')|format((hazards.searched_m / 1000.0)|round(1)) }}{% if hazards.approximate_origin and hazards.guaranteed_m is not none %},
+                            {{ t('hazards_guaranteed')|format((hazards.guaranteed_m / 1000.0)|round(1)) }}{% endif %}.
+                        </div>
+                    {% endif %}
+                    {% if hazards.approximate_origin %}
+                        <div class="small text-body-secondary">{{ t('hazards_approximate') }}.</div>
+                    {% endif %}
+                    {% if hazards.truncated %}
+                        <div class="small text-warning">{{ t('hazards_truncated') }}.</div>
+                    {% endif %}
+                {% endif %}
+                {# Both lines describe a measurement, so neither is rendered
+                   over a row that has none: "OpenStreetMap says a facility
+                   exists" under "Not scanned yet" is the card asserting the
+                   opposite of what it just said (codex review, 2026-08-20). #}
+                {% if hazards.measured %}
+                    <div class="small text-body-secondary mt-2">{{ t('hazards_straight_line') }}.</div>
+                    <div class="small text-body-secondary mt-1">{{ t('hazards_limits') }}</div>
+                {% endif %}
+            </div>
+        </div>
 
         {# The pool card stands on its own (diff review, 2026-08-14):
            nesting it inside the QoL card hid the pool data — and the
@@ -2329,6 +2859,11 @@ function _pollJobPromise(jobId, timeoutMs, onUpdate) {
             },
             onError: (job) => resolve({
                 ok: false,
+                /* Not a failure: the poller gave up asking, the server never
+                   said the run failed. The caller reports it as information
+                   rather than an error (#434 review round 3 -- this was being
+                   shown as "Enrichment failed" for a run that was fine). */
+                stillRunning: !!(job && job.stillRunning),
                 result: {},
                 error: (job && job.error) ? job.error : null
             })
@@ -2358,20 +2893,37 @@ async function runGoogleEnrichment(propertyId) {
 
     try {
         const resp = await fetch(url, {
+            /* `analyze: true` says, once and up front, that the AI analyses
+               are part of this press. The server queues them itself when the
+               enrichment job finishes, so the sequel no longer depends on this
+               tab staying open -- the POSTs below join those jobs by their
+               dedupe key rather than starting second, paid ones (#434). */
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: '{}'
+            body: JSON.stringify({ analyze: true })
         });
         const data = await resp.json().catch(() => null);
 
         if (resp.status === 202 && data && data.job_id) {
             _notify(data.message || 'Enrichment queued', 'info');
+            /* The server states its own ceiling (`services/enrich_budget.py`);
+               the constant is only the fallback for a response that does not
+               carry one. A client-side guess is what went stale when the
+               Overpass fallback list raised the server's worst case (#178). */
             const outcome = await _pollJobPromise(
-                data.job_id, IdealistaApp.JOB_POLL_TIMEOUTS.enrichment);
+                data.job_id,
+                data.poll_timeout_ms || IdealistaApp.JOB_POLL_TIMEOUTS.enrichment);
             const result = outcome.result || {};
             return {
                 ok: outcome.ok,
+                stillRunning: outcome.stillRunning === true,
                 status: resp.status,
+                /* The ids of the analyses the *server* queued for this press.
+                   The page attaches to them rather than POSTing for the same
+                   work: the dedupe key only holds while a job is live, so a
+                   server job that finished first would leave the key free and
+                   one press would pay for two analyses (#434 review). */
+                analysisJobs: result.analysis_jobs || {},
                 message: result.message || result.error || outcome.error || 'Enrichment finished'
             };
         }
@@ -2404,14 +2956,34 @@ async function runEnrichAndAnalyze(propertyId) {
 
     setBusy('Enriching…');
     const enrichment = await runGoogleEnrichment(propertyId);
-    _notify(enrichment.message, enrichment.ok ? 'success' : 'error');
+    _notify(
+        enrichment.message,
+        enrichment.ok ? 'success' : (enrichment.stillRunning ? 'info' : 'error'));
 
-    setBusy(window.__OPENAI_CONFIGURED__ ? 'Analyzing (Claude + ChatGPT)…' : 'Analyzing (Claude)…');
-    const analyses = [runClaudeAnalysis(propertyId)];
-    if (window.__OPENAI_CONFIGURED__) {
-        analyses.push(generateChatGPTAnalysis(propertyId));
+    /* The server queued the analyses for this press; attach to those jobs.
+       Posting again would be a second paid run whenever the server's own
+       finished first, because the dedupe key only holds while a job is live. */
+    const queued = enrichment.analysisJobs || {};
+    let outcomes = [];
+    if (enrichment.stillRunning) {
+        /* The poller stopped asking; the *run* did not stop, and when it
+           finishes it queues the analyses itself. So there are no ids to
+           attach to -- and posting for them anyway is the double charge this
+           whole arrangement exists to avoid: the page's own jobs would
+           finish, free the live-only dedupe keys, and the enrichment would
+           then queue a second pair (#434 review round 4, reproduced against
+           the real asynchronous flow). Say what will happen instead. */
+        _notify(
+            'Still running on the server. Both analyses are queued there and '
+            + 'will appear on this page after a reload.', 'info');
+    } else {
+        setBusy(window.__OPENAI_CONFIGURED__ ? 'Analyzing (Claude + ChatGPT)…' : 'Analyzing (Claude)…');
+        const analyses = [runClaudeAnalysis(propertyId, queued.claude)];
+        if (window.__OPENAI_CONFIGURED__) {
+            analyses.push(generateChatGPTAnalysis(propertyId, queued.openai));
+        }
+        outcomes = await Promise.all(analyses);
     }
-    const outcomes = await Promise.all(analyses);
 
     refreshAiComparison();
 
@@ -2550,7 +3122,13 @@ function wireCopyButtons() {
 
 /* Runs one provider and reports the outcome to the Enrich pass; the button
    state belongs to that pass now, so nothing here touches it. */
-async function runClaudeAnalysis(propertyId) {
+/* `queuedJobId`, when given, is a `property_ai_analysis` job the *server*
+   already queued for this press. Attaching to it is not an optimisation: the
+   dedupe key only holds while a job is live, so a POST made after the server's
+   own job finished starts a second, paid run for the same pair (#434 review
+   round 3, reproduced). Called without one -- the standalone AI buttons -- it
+   posts exactly as before. */
+async function runClaudeAnalysis(propertyId, queuedJobId) {
     const targetId = 'ai-claude-structured-analysis';
     const placeholderId = 'ai-claude-placeholder';
     const alertsId = 'ai-claude-alerts';
@@ -2606,6 +3184,19 @@ async function runClaudeAnalysis(propertyId) {
     };
 
     try {
+        if (queuedJobId) {
+            _notify('Claude analysis queued', 'info');
+            const outcome = await _pollJobPromise(
+                queuedJobId, IdealistaApp.JOB_POLL_TIMEOUTS.aiAnalysis, _wireJobStatusText(statusTextId));
+            const attached = outcome.result || {};
+            if (attached.success) {
+                applyAnalysis(attached.analysis);
+                return { ok: true, status: 202 };
+            }
+            handleFailure(attached.error || outcome.error || 'Claude analysis failed', undefined, attached.failure_kind);
+            return { ok: false, status: 202 };
+        }
+
         const resp = await fetch(`/api/property/${propertyId}/analyze/structured`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2995,7 +3586,7 @@ async function refreshAiComparison() {
 
 /* Same contract as runClaudeAnalysis: render into its own tab, report the
    outcome, leave the Enrich button alone. */
-async function generateChatGPTAnalysis(propertyId) {
+async function generateChatGPTAnalysis(propertyId, queuedJobId) {
     try {
         const targetId = 'ai-chatgpt-structured-analysis';
         const placeholderId = 'ai-chatgpt-placeholder';
@@ -3018,12 +3609,16 @@ async function generateChatGPTAnalysis(propertyId) {
             `;
         }
 
-        const resp = await fetch(`/api/property/${propertyId}/analyze/structured`, {
+        /* No POST at all when the server already queued this pair for the
+           press: `applyAnalysis` and `handleFailure` are defined below, so the
+           attach branch has to sit after them, and a fetch fired here would
+           already have started the second paid run it exists to avoid. */
+        const resp = queuedJobId ? null : await fetch(`/api/property/${propertyId}/analyze/structured`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ provider: 'openai' })
         });
-        const data = await resp.json().catch(() => null);
+        const data = resp ? await resp.json().catch(() => null) : null;
 
         const applyAnalysis = (analysis) => {
             window.__EXISTING_OPENAI_ANALYSIS__ = analysis;
@@ -3051,6 +3646,19 @@ async function generateChatGPTAnalysis(propertyId) {
             showTransientAlert(alertsId, alertType, message || 'ChatGPT request failed.', 4500);
         };
 
+        if (queuedJobId) {
+            _notify('ChatGPT analysis queued', 'info');
+            const attachedOutcome = await _pollJobPromise(
+                queuedJobId, IdealistaApp.JOB_POLL_TIMEOUTS.aiAnalysis, _wireJobStatusText(statusTextId));
+            const attached = attachedOutcome.result || {};
+            if (attached.success) {
+                applyAnalysis(attached.analysis);
+                return { ok: true, status: 202 };
+            }
+            handleFailure(attached.error || attachedOutcome.error || 'ChatGPT analysis failed', undefined, attached.failure_kind);
+            return { ok: false, status: 202 };
+        }
+
         if (resp.status === 202 && data && data.job_id) {
             _notify(data.message || 'ChatGPT analysis queued', 'info');
             const outcome = await _pollJobPromise(
@@ -3076,5 +3684,31 @@ async function generateChatGPTAnalysis(propertyId) {
         return { ok: false, status: 0 };
     }
 }
+
+// The add-entry form hides its contact-only fields for a note. It lives in
+// this block rather than in a <script> tag beside the form because the page
+// has exactly one script element and tests/test_issue_23_xss_and_prompt_injection.py
+// extracts it by index -- a second tag makes that harness read the wrong one.
+// It degrades honestly: with no JavaScript every field is visible and the form
+// still posts, because `kind` decides what the route reads.
+(function () {
+    var form = document.getElementById('add-activity');
+    var kind = document.getElementById('activity-kind');
+    // Both, not just the form: the XSS/render harnesses execute this block in
+    // node against a DOM stub, where one lookup can answer and the other
+    // cannot, and an unguarded listener there fails the whole extraction.
+    if (!form || !kind || !form.querySelectorAll) { return; }
+    function paintActivityFields() {
+        var isContact = kind.value === 'contact';
+        form.querySelectorAll('.activity-contact-only').forEach(function (el) {
+            el.style.display = isContact ? '' : 'none';
+        });
+        form.querySelectorAll('.activity-note-only').forEach(function (el) {
+            el.style.display = isContact ? 'none' : '';
+        });
+    }
+    kind.addEventListener('change', paintActivityFields);
+    paintActivityFields();
+})();
 </script>
 {% endblock %}

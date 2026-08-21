@@ -337,6 +337,36 @@ def create_app(testing: bool = False):
     app.jinja_env.globals["advertiser_verdict_for"] = advertiser_verdict_for
     app.jinja_env.globals["advertiser_state_from_portal"] = advertiser_state_from_portal
 
+    # What is nearby that a buyer would walk away over (#437). Restated on
+    # read against the row's *current* accuracy, because a centroid cannot
+    # support "1.1 km" -- so the badge, the property card and the CSV all
+    # take the same reading rather than three of them parsing the block.
+    from services.hazard_service import read_verdict as hazard_verdict_for
+
+    app.jinja_env.globals["hazard_verdict_for"] = hazard_verdict_for
+    # What the owner decided, and what is still outstanding. Two readings, and
+    # the second one takes the date: `overdue` is a due date compared against
+    # today, and a template that let each row compute its own today would
+    # disagree with the query that selected the rows, once a day, at midnight
+    # in Madrid. Every list passes `review_today` explicitly
+    # (services/owner_review.py).
+    from services.owner_review import action_label_key, decision_label_key
+    from services.owner_review import read_action as owner_action_for
+    from services.owner_review import read_decision as owner_decision_for
+
+    app.jinja_env.globals["owner_decision_for"] = owner_decision_for
+    app.jinja_env.globals["owner_action_for"] = owner_action_for
+    app.jinja_env.globals["owner_decision_label_key"] = decision_label_key
+    app.jinja_env.globals["owner_action_label_key"] = action_label_key
+
+    from services.owner_review import was_edited as owner_review_was_edited
+
+    app.jinja_env.globals["owner_review_was_edited"] = owner_review_was_edited
+
+    from services.attachments import human_size as attachment_size
+
+    app.jinja_env.globals["attachment_size"] = attachment_size
+
     # #379: how much of the enabled weight a score rests on, read off the
     # stored payload (derived for rows scored before it was recorded). The
     # list and the detail page show it; the score itself never contains it.

@@ -50,7 +50,9 @@ from utils.http import (
     HTTP_USER_AGENT,
     OVERPASS_BREAKERS,
     OVERPASS_GATE,
+    LookupBudgetExceeded,
     RateGate,
+    lookup_deadline,
     request_with_retries,
 )
 
@@ -316,6 +318,18 @@ def coastline_cell(lat: float, lon: float) -> Tuple[float, float]:
     )
 
 
+class SeaViewBudgetExceeded(SeaViewSourceError):
+    """The caller's lookup budget ran out before Overpass could answer (#434).
+
+    A `SeaViewSourceError` so every existing handler still degrades the
+    verdict to `unknown` -- but its own type, because the breaker must not
+    count it. A spent clock says nothing about whether the instance would
+    have answered, and recording it as a refusal would arm five minutes of
+    silence against a healthy host on the strength of somebody else's slow
+    run.
+    """
+
+
 def fetch_coastline_points(
     lat: float, lon: float, session: Optional[requests.Session] = None
 ) -> List[Tuple[float, float]]:
@@ -354,6 +368,9 @@ def fetch_coastline_points(
         )
     try:
         points = _coastline_round_trip(cell_lat, cell_lon, session)
+    except SeaViewBudgetExceeded:
+        # Neither a refusal nor a success: this instance was never asked.
+        raise
     except SeaViewSourceError:
         breaker.record_refusal("coastline")
         raise
@@ -394,7 +411,17 @@ def _coastline_round_trip(
             # Connect and read split for the reason the amenity transport
             # gives; this one keeps its longer read budget, which a coastline
             # query over a 25 km box genuinely needs.
-            timeout=(3.0, 120),
+            timeout=(
+                float(getattr(Config, "OSM_OVERPASS_CONNECT_TIMEOUT_S", 3.0)),
+                120,
+            ),
+            # A `504` is worth all five attempts -- the instance is alive and
+            # busy. Silence is not: this client has no fallback instance to
+            # move to, so the only thing a second attempt buys is another
+            # 120 s of the caller's clock (#434).
+            silence_max_attempts=1,
+            # Bounded by whatever budget the run that asked opened, if any.
+            deadline=lookup_deadline(),
             # Streamed so the size ceiling is enforced as the body arrives,
             # not after it is already in memory.
             stream=True,
@@ -402,6 +429,8 @@ def _coastline_round_trip(
             # Shared with the amenity query, and it covers the retries too.
             gate=OVERPASS_GATE,
         )
+    except LookupBudgetExceeded as exc:
+        raise SeaViewBudgetExceeded(f"Overpass not dialled: {exc}") from exc
     except requests.RequestException as exc:
         raise SeaViewSourceError(f"Overpass request failed: {exc}") from exc
 
@@ -590,7 +619,12 @@ def fetch_elevations(
             Config.SEA_VIEW_ELEVATION_URL,
             params={"locations": locations},
             headers={"User-Agent": HTTP_USER_AGENT},
-            timeout=60,
+            timeout=(
+                float(getattr(Config, "OSM_OVERPASS_CONNECT_TIMEOUT_S", 3.0)),
+                60,
+            ),
+            silence_max_attempts=1,
+            deadline=lookup_deadline(),
             logger=logger,
             # OpenTopoData's public instance asks for one call a second, and
             # the retries count towards that as much as the first attempt.

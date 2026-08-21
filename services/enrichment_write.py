@@ -30,8 +30,12 @@ The rule this module owns, settled for this column by
 `commit=False` takes no lock and makes no concurrency promise: the caller owns
 a transaction whose end this code cannot see, and holding a lock across it is
 worse than the race it would close. That is the mode
-`PropertyEnrichmentService.enrich_property` uses, where the steps share one
-commit.
+`PropertyEnrichmentService.enrich_property` uses for its **decisive** pass --
+the coordinate, the sea distance and the travel times, which share one commit
+of their own. Its advisory pass passes `commit=True` and each step owns its
+locked write, so nothing score-neutral can hold a paid measurement in an
+uncommitted session (#434). This docstring said "the steps share one commit"
+until that ticket split them.
 
 **Nothing here is about `enrichment`** except the name and the incident that
 prompted it. Neither function mentions a column: `check_writable` inspects

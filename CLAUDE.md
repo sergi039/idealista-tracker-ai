@@ -656,6 +656,147 @@ favorites, `utils/enrich_scope.py`), costs at most three Distance Matrix
 elements per property, and is resumable per row; everything older stays manual
 via the Enrich button.
 
+**What is 1.1 km away is a datum, and an empty page was answering "nothing"**
+(#437). Property 793 is a plot advertised as a "quiet environment surrounded by
+nature" with a cement works 1.12 km off, a coal yard at 1.57, Repsol's LPG
+spheres at 1.79 and a coal-fired power station at 2.13; the page showed net
+income, supermarkets, hospitals, beaches and drive times, and not one word about
+any of it. `services/hazard_service.py` writes `enrichment["hazards"]` -- free,
+OpenStreetMap, one query per listing on the *free* pass through
+`EnrichmentService._overpass_elements` -- with the four states this file keeps
+insisting on: `ok`, `none_within_radius` (a measurement), `unavailable` (a
+refusal, never cached, never allowed to overwrite an earlier measurement) and
+`no_coordinates`. The card renders on **every** property page, including the
+rows nobody has scanned, because the question it answers is "is anything bad
+near this plot" and silence reads as no.
+
+**The tag is not the severity, and that was measured before it was written.**
+One live Overpass answer at 793's own coordinate, 6 km, ten candidate tags,
+committed verbatim as `tests/data/osm_hazards_xivares_793.json`: **144
+elements**, of which 82 are storage tanks and 42 are `landuse=industrial`. On
+the identical tags sit *Alskin Cosmetics* (`industrial=laboratory`), *Neoalgae*,
+*Fábrica de Hielo* -- an ice factory -- *Talleres Prendes*, eight *polígonos
+industriales* and a lorry park. So `services/hazard_rules.py` is the sibling of
+`services/place_rules.py` and the rule is that **a hazard has to say what it
+is**: `plant:source=coal`, `content=gas`, `industrial=steelmaking`,
+`landuse=landfill`, or the word *cementos* in its name. `landuse=industrial`
+and `man_made=works` never qualify alone. The name has to be read at all
+because OSM is sometimes coarser in its tags than in its labels -- El Musel's
+coal yard is mapped `landuse=quarry` and the cement works carries no `product`
+tag -- but it is read as **words** and the **more severe** of the two verdicts
+wins. Both halves of that are review findings with a reproduction behind them:
+substring matching read *Bioquímica* as a chemical works and *La Cantera* (the
+ordinary Spanish word for a club's youth academy) as a quarry, and letting the
+name win outright reported an LPG tank on *Polígono La Cantera* as a moderate
+quarry over its own `content=gas` -- understating a real hazard, which is
+strictly worse than reporting a spurious one. In the same family, a lifecycle
+*prefix* is not a closure: `was:name=Ensidesa` on
+*Acería de Veriña - ArcelorMittal* records that plant's renaming history, and
+reading it as "gone" erased the one hazard the feature exists to catch, so only
+bare `disused`/`abandoned`/`ruins`/`demolished`/`razed` refuse, and `historic`
+refuses by value (`monument`, never `archaeological_site`, which describes what
+is *under* a working landfill). Do not copy the table into a second caller;
+import it.
+
+**Sibling elements collapse into their facility**, which is #325's
+hospital-indexed-room-by-room in a new place: `facility_key` takes the operator
+before the name, and `merge_keys` folds a name that *contains* an operator into
+it, so *Turbina A*, *Turbina B*, two stacks, *Vertedero ArcelorMittal* and
+*Acería de Veriña - ArcelorMittal* are one entry and not six. Elements with
+neither operator nor name cluster by position at 500 m. But **a key says who
+runs it and never where it is**: keyed members are split again by
+`FACILITY_SPAN_M` (2 km), because `operator=Enagás` names a national gas
+transporter and two of its installations 5.6 km apart collapsed into one item
+wearing the near one's distance and bearing. 2 km is measured, not chosen --
+the widest real facility in the fixture, ArcelorMittal's tip, acería, turbines
+and stacks, spans 1346 m. A cluster is a disc around its anchor and never a
+chain, or a line of tanks 400 m apart walks a "facility" across kilometres.
+The direction of the guards matters: two rows for one plant over-reports, one
+row for two plants hides one.
+
+Four more things are load bearing. **An approximate coordinate cannot support
+"1.1 km"** -- `read_verdict` restates the stored block against the row's
+*current* accuracy exactly as `sea_distance_service.parcel_measurement` does,
+so a centroid gets a band (0.0-6.1 km) and never a point, and the block reports
+`guaranteed_m` -- the 6 km scan around the point guarantees only 1 km around the
+parcel. A coordinate that has *moved* since the scan is worse than an
+imprecise one and gets no restatement at all: `read_verdict` compares the
+stored `origin` through `services/enrichment_origin.py` and answers
+`stale_origin`, because re-applying today's slack to yesterday's point printed
+a centroid's 1.1 km as an exact measurement. For the same reason a row that
+*loses* its coordinate keeps its measurement rather than having it replaced by
+`no_coordinates` -- that status is not retryable, so overwriting took the row
+out of the backfill's scope for good. And the scorer reads `truncated`: a scan
+that hit Overpass's element cap and found nothing qualifying is not a clean
+neighbourhood, it is a short list, and scoring it 100 was #98 one layer under
+a card that disclosed it correctly. **The bearing is recorded and never interpreted**: whether 1.1 km
+matters depends on the wind, there is no free per-listing wind rose here, and
+writing "downwind" into a measurement field would be the STATUS-002 mistake.
+**The criterion ships weightless**, `hazard_score: 0.0` in all six scorers, and
+raising it goes through the same dry-run preview the pool weight does --
+`WEIGHTLESS_SCORE_KEYS` in `services/property_scoring_service.py` is now what
+that gate reads, so a third such criterion cannot be added to a scorer and
+forgotten by the gate. And **the scan is deliberately not folded into the
+preset Overpass query** the issue suggested folding it into: those presets run
+only on the paid path, this runs on every ingest, so sharing would drag a 100 km
+aerodrome query into every ingested row to save one round trip on an Enrich
+press -- and would invalidate every cached preset cell at a moment when Overpass
+was refusing the mini outright (#434).
+
+What OSM cannot answer is named on the card rather than left to be assumed
+away: emissions (PRTR-España publishes those, and it is worth its own issue),
+measured air quality (Asturias runs a station named *Xivares* inside this very
+urbanisation), and a plant approved but not yet built. `utils/backfill_hazards.py`
+fills the Phase-2 scope, free and resumable per row; announce it before running
+it on the mini, and read `tools/backfill_status.sh` first.
+
+**And what OSM says is not what a `product` tag says.** Three review rounds
+against live objects settled the shape of that table, and the settled rule is
+narrower than the one it started with. `product=X` names what comes *out*, not
+the process that made it: `way/1068457365` is *Balumco*, `man_made=works` +
+`product=aluminum`, and the Catalan environmental register describes extrusion
+and anodising. Nothing structural separates it from `relation/11519713`,
+*Asturiana de Zinc*, which really is a smelter — so no bare metal is evidence,
+and AZSA classifies as **nothing** until somebody tags it with a process. That
+is the price, and it is written into the table rather than left to be
+discovered. In the same family: a lifecycle prefix refuses only the *name*
+(`was:name=Ensidesa` on the acería is renaming history, `disused:power=plant`
+on a live chemical works is one dead plant on its site), `end_date` refuses on
+every documented range form, an operator may absorb a name and is never
+absorbed itself, and a *central térmica solar* burns nothing while a nuclear
+station is not harmless for burning nothing either.
+
+**Two facts, not one: `complete` and `measured`.** "Carries a complete scan" is
+answerable in SQL; "is about this coordinate" is not, and conflating them is
+what put a cast over stored JSON in the coverage predicate — where on
+PostgreSQL a hand-edited value raises and takes the whole `/properties` count,
+and the page, down with it. Nothing in that predicate casts now: the truncation
+flag is read as text against one list both languages share, which is also what
+makes them agree across a JSON boolean PostgreSQL renders `false` and SQLite
+renders `0`. `read_verdict` is the other side and it is **total and
+fail-closed** — a readable matching origin, `items` a list, `item_count` an
+integer that agrees with it, every measurement finite — because six malformed
+shapes each scored a clean 100 or raised into the redirect
+`routes/main_routes.py` turns a template error into. A block nobody can read
+reads as a block nobody has read.
+
+The scan runs in `enrich_property`'s **advisory pass** (#434/#443), where every
+score-neutral step owns its own locked write and nothing decisive waits behind
+it. That position is load bearing in both directions: the decisive pass ends by
+assigning the whole `enrichment` column from a copy loaded before its network
+calls, so a locked write placed *ahead* of it is restored to the older value by
+its commit — reproduced with two sessions — and scoring runs *after* the
+advisory pass, so it reads the block this scan just wrote.
+
+The same rule governs the scan itself: an element cap reached, a hazard OSM
+could not place, an element nobody can parse — each makes the scan *incomplete*
+rather than empty, the list badges *Scan incomplete* even with nothing to name,
+the CSV carries `Hazard Scan Complete`, the scorer abstains, and
+`needs_hazards` puts the row back in the backfill's scope. And the badge on an
+approximate row says *near the locality*: 532 of 725 rows share a centroid, so
+one scan claiming "Industry nearby" would claim it for every listing in the
+village.
+
 **`/municipalities` keeps municipality facts and listing medians apart, and says
 which is which on the page** (proposal D22, #281). Facts are the municipality's
 own values — INE renta and población, SEPE registered unemployment — with no
@@ -954,6 +1095,200 @@ the script finds nothing there now; it exists because the importer that
 produced those rows is unchanged, and a repair that can recur should have
 tests, a snapshot and a tested `restore` rather than being improvised again.
 
+**The conversation that decides a purchase has a home now, and it is not
+`enrichment`** (#430, five PRs on 2026-08-20). Everything the app stored about a
+listing had been *measured*; what it never held was the part a person produces
+-- what the agency answered, what is still owed, and what the owner concluded.
+On 2026-08-20 property 774 collected all four kinds in one day (a cadastral
+document by WhatsApp, a promise with a date, two verbal answers, a rejection)
+and every piece went in by hand through `docker exec` as JSON, because there was
+nowhere else. `property_activity` (migration 021), `property_attachment`
+(migration 023) and six columns on `properties` are that place.
+
+**The decision and the outstanding action are two independent readings, not
+one.** `services/owner_review.py` owns both, each in Python and in SQL, branch
+for branch, the `advertiser.py` contract -- and `tests/test_owner_review.py`
+runs one matrix through both, because a count that disagrees with the badges
+under it is a third wrong number. The decision is `interested` / `waiting` /
+`rejected`, with **`undecided` as what NULL reads as** rather than a fourth
+stored value: it is its own filter option with its own count and is never folded
+into `rejected` (#98, in the column the owner filters on most). The action is
+`none` / `pending` / `overdue` and is legal under *any* decision -- "interested;
+call the architect on Friday" is an ordinary state, and hanging the reminder off
+`waiting` loses it. Nothing writes `overdue`; it is derived, so the badge and
+the column cannot drift.
+
+Four things about that module are load bearing, and three of them were found by
+mutation rather than by review:
+
+* **One date per request, and it is Madrid's.** A due date is a calendar date
+  somebody reads off a calendar in Spain, so `owner_review.today()` is
+  `Europe/Madrid` -- the one place in this application that is not UTC, and the
+  docstring says why. Every collection endpoint computes it **once** and threads
+  it into the filter, the counts, the badge, the CSV and **both** API
+  serializers. The compact `/api/properties` response is hand-built and is the
+  *default* one, so a field added to `to_dict` alone is missing exactly where
+  most consumers look. Testing this needs a clock that *moves*: a frozen `today`
+  cannot tell "the request's date was threaded through" from "every consumer
+  recomputed it", and a mutation removing `review_today=` from the serializer
+  stayed green until the second call answered differently.
+* **`set_review` owns its transaction.** It takes the row `FOR UPDATE` before
+  reading the old state, because two presses on four gunicorn threads otherwise
+  append two contradictory transitions, each atomic and both wrong -- #339's
+  shape, one column over. There is deliberately **no `commit=False`**: a lock
+  whose release the callee cannot see is worse than the race, which is what
+  `services/enrichment_write.py` already says. SQLite has no row lock to
+  observe, so the test asserts the *call and its position* and says in its
+  docstring what it therefore does not prove.
+* **A verdict event carries the whole review state**, not a from/to pair: a
+  changed reason or a moved due date under an unchanged decision is a real
+  change and a pair loses it. Pressing Save twice writes one entry -- and
+  `was_edited` compares `created_at` to `updated_at` **exactly**, which is only
+  honest because both writers stamp them from one value. A tolerance was tried
+  and is the wrong shape: wide enough to swallow two column defaults and narrow
+  enough to notice a typo corrected three seconds later is not a number that
+  exists.
+* **`history_out_of_sync` is a disclosure, not a guarantee** -- detail page
+  only, one query, comparing the whole snapshot. Direct SQL is a supported
+  workflow here (`curate_on_mini.sh`, `docker exec … psql` -- 774's own data
+  arrived that way), and a column written that way leaves no entry behind. It
+  can see that the newest entry no longer describes the row; it cannot see a
+  transition nobody recorded, and it does not claim to. The row readers stay
+  **pure** -- no session, no query -- because the list calls them once per row.
+
+**The timeline is one feed, ordered by when things happened.** Notes, exchanges
+and verdict changes share `property_activity` because they share one screen: the
+material is causally ordered (asked, answered, promised, decided) and two lists
+make the reader re-interleave by date what a feed already says. `happened_at` is
+the owner's and editable; `created_at` is when the row was typed, and a feed
+ordered by the second tells the story in the order somebody sat down to write
+it. **A verdict entry is not a note**: `edit_entry` and `soft_delete_entry`
+refuse any other kind and *the route refuses before reaching them* -- hiding the
+control in the template is not the guard, and the test posts at one directly.
+Deletion is soft throughout: everything else here can be recomputed, and a
+sentence the owner typed cannot.
+
+**The cadastral parcel is fetched from two free, keyless endpoints**
+(`services/cadastre_service.py`), both verified live on 2026-08-20 at 0.15-0.28 s
+against `33016A003001530001HQ`. The INSPIRE WFS `GetParcel` stored query gives
+the outline -- the parameter really is spelled `STOREDQUERIE_ID`, which is
+Catastro's typo and not one here -- and `Consulta_DNPRC` gives the class, the
+polígono/parcela locator, the paraje and the rustic subparcels. Its parameter is
+`RefCat`; the older ASMX endpoint spells it `RC`, and the wrong name returns a
+200 carrying an error.
+
+Five rules there, each measured:
+
+* **Nothing trusts an HTTP status.** Every Catastro error arrives as `200 OK`
+  with the failure in the body; both real refusals are committed under
+  `tests/data/`. Only `not_found` is a measured negative -- `refused`,
+  `unavailable`, `malformed` and `unsupported_metric_crs` are absences of
+  measurement, never cached and never written over an answer somebody has, per
+  source rather than per run (#153's shape: the metric outline is decisive, the
+  map outline and the attributes advisory).
+* **Three requests per press, exactly, because there are no retries.**
+  `max_attempts=1`: a press is one attempt per endpoint and the retry is the
+  owner pressing again, which they can see the result of. Catastro publishes no
+  numeric rate limit and does publish an **~10-day IP ban** for abuse, so the
+  arithmetic has to be exact rather than approximately bounded; the route's
+  `@limiter.limit("5 per minute")` then caps it at fifteen a minute. Proving
+  that needs a test *under* the client -- mocking `_get` proves only what the
+  mock does, and a mutation restoring `max_attempts=3` stayed green until
+  `requests.get` itself was watched.
+* **The zone comes from the parcel's own `cp:referencePoint`**, and the EPSG
+  code is stored beside the metrics. The WFS reprojects into whatever zone it is
+  asked for, silently and wrongly: 25831 on an Asturian parcel returns a
+  negative easting and an area 1.17% out. Bayas sits at -6.027, three kilometres
+  west of the 29/30 meridian, so its zone is genuinely **25829** even though
+  Asturias is spoken of as 30 -- the first fixture assumed otherwise and the
+  `srsName` check caught it.
+* **`srsName` checks the CRS and `areaValue` checks the parse -- not the other
+  way round.** The declared area catches a dropped ring, a truncated `posList`
+  or the wrong units at `max(1 m², 1%)`, and it cannot see a wrong projection at
+  all: measured, the same parcel computes 6193.5 m² in 25830 and 6192.8 in
+  25829 against a declared 6193. One fixture in the tree is deliberately the
+  *neighbouring* zone, to keep that distinction from being re-collapsed.
+* **The largest inscribed square is deliberately absent.** A grid over the
+  axis-aligned case underestimates a diagonal parcel by an amount nobody has
+  bounded, and a number that decides a purchase must not be an unlabelled
+  approximation. 774's own 27×27 m figure stays a sentence in the rejection
+  reason, which is what it was.
+
+**Attachments put bytes on disk and metadata in the row**
+(`services/attachments.py`, `data/attachments/`). `./data` is the one bind
+mount, so a file written there survives the `COPY . .` rebuild; the database is
+17 MB and photos are megabytes each, so `bytea` would carry every one of them
+through every `pg_dump`. Four rules:
+
+* **Content-addressed**, sha256, two-level shards -- so no path is ever built
+  from anything a client sent. Measured: a PDF uploaded as
+  `../../../../etc/passwd` lands at `75/c0/75c0….pdf` with the name kept as
+  text and nothing written outside the root.
+* **Write, fsync, `os.replace`, THEN commit the row.** The two systems share no
+  transaction and the failure directions are not equal: an orphan *file* is
+  inert and the sweeper reclaims it, an orphan *row* is a download that 404s and
+  is indistinguishable from a sweep that has not run.
+* **The type is what the bytes say.** `puremagic` reads the signature and a
+  short allowlist narrows it -- the narrowing is the boundary, since "puremagic
+  identified something" is not "we accept this". **SVG is not on the list at
+  all**: it is XML, it can carry `<script>`, and `nosniff` does not help a
+  document the browser is right to render. Measured through the real form: an
+  SVG named `photo.jpg`, an HTML file named `plan.pdf`, a zip named `photo.png`
+  and an empty file are all refused, **and the entry the owner typed survives
+  the refusal**. The download route passes the *stored, sniffed* `mimetype`
+  explicitly -- left to Werkzeug it guesses from the client's own filename --
+  sets `nosniff`, and serves `as_attachment` for everything but the raster
+  formats a browser really draws. A row whose bytes are gone answers **410 and
+  logs**, because 404 reads as "no such attachment".
+* **The composite foreign key is the invariant**: `(activity_id, property_id)`
+  references `property_activity (id, property_id)`, which is what migration
+  021's `UNIQUE (id, property_id)` exists for. An attachment on one property can
+  therefore never name another property's exchange. There is deliberately **no**
+  unique constraint on `(property_id, content_sha256)`: the same document may be
+  attached to two exchanges, and a soft-deleted row would otherwise hold the key
+  against re-uploading the file it refers to. Dedup is on disk; a row is a link,
+  which also means a file has no single owner -- so `utils/sweep_attachments.py`
+  keeps any hash **any live row** references, keeps anything younger than 48 h
+  (the fsync-to-commit window every upload passes through), skips `tmp/`, and
+  *moves* rather than deletes. `tools/backup_attachments.sh` exists because
+  "back up this app" stopped meaning one `pg_dump`: the dump goes first and the
+  bytes second, since the other order puts a row in the backup whose file is in
+  no archive.
+
+**774's own thread was converted on production on 2026-08-20**
+(`utils/import_review_notes.py`, snapshot at
+`data/review_import_774_20260820.json` on the mini). It **copies** rather than
+moves -- `enrichment` still holds the review and the cadastral block, because
+nothing here deletes a measurement -- **refuses a property that already carries
+entries** under `FOR UPDATE` (that, and not a marker column, is its
+idempotency), and writes the verdict **through `set_review`** so the columns and
+the verdict entry land in one transaction. Its `restore` is compare-and-swap: it
+touches only the rows its snapshot names and *stops* rather than deleting one
+that was edited afterwards. The ficha catastral PDF itself is **not** in the
+app: it arrived in the owner's WhatsApp, so the converted entry says a document
+was received and names it. Writing it as a stored attachment because its name is
+known would be this ticket's own defect, relocated.
+
+Three things this feature cost that are not about the feature:
+
+* **Two defects were found by looking at the page and could not have been found
+  otherwise.** The cadastral block rendered `None × None m` (the template read
+  `bbox`, the service writes `bbox_m`) and then `measured in EPSG:None` (774's
+  hand-written block predates the feature and carries no `epsg`). Both passed
+  every unit test, because a test asserting the section is *present*, and that
+  the reference and the paraje appear in it, is satisfied by a block full of
+  `None`s. Assert the numbers **by value**.
+* **The property page has exactly one `<script>` element**, and
+  `tests/test_issue_23_xss_and_prompt_injection.py` extracts it *by index*. A
+  second `<script>` beside a form made that harness read the wrong one and
+  failed eleven tests across three files; page-specific JavaScript goes at the
+  end of the existing block, and guards **both** elements it looks up, because
+  those harnesses run it in node against a DOM stub where one lookup answers and
+  the other does not.
+* **An i18n key ending in `_other` is read as a plural form.**
+  `tests/test_subscription_copy_is_translated.py` then demands a `_one` beside
+  it, which is why the channel labels carry a `_label` suffix.
+
 **Three reference files are committed on purpose, and `.gitignore` re-includes
 them one at a time.** `data/*` excludes the runtime artifacts — backfill
 snapshots, ledgers, logs — and `!data/ine_municipal.json`,
@@ -1003,10 +1338,15 @@ and TODO.md; respect it if you ever run both side by side.
   scraping with throttle (`listing_status_service`), market analysis, AI
   (`anthropic_service`, `openai_service`, `property_ai_service`),
   `scheduler_service`, `background_jobs`
+  Since #430 also: `owner_review` (the owner's decision, the outstanding
+  action and the timeline behind them), `cadastre_service` (the parcel, from
+  Catastro), `attachments` (documents and photos)
 - `models.py` — SQLAlchemy models; `migrations/` — schema migrations
 - `utils/` — `auth` (admin_required, rate limits), `security`, `cache`,
   `email_parser`, `idealista_extractors`, bulk tools
-  (`bulk_ai_analysis`, `recalc_travel_times`, `backfill_sea_view`)
+  (`bulk_ai_analysis`, `recalc_travel_times`, `backfill_sea_view`),
+  `sweep_attachments` (the only thing that removes attachment bytes),
+  `import_review_notes` (the #430 conversion)
 - `templates/`, `static/` — Jinja2, Bootstrap, minimal vanilla JS/HTMX
 - `tests/` — pytest suite; external APIs are mocked
 - `docs/` — DEV_RULES.md, STATE.md, UNIVERSAL_PROPERTIES.md,
@@ -1170,6 +1510,41 @@ and TODO.md; respect it if you ever run both side by side.
   The lesson underneath is worth more than the list: **this project can get
   itself blocked by its own backfills**, and the moment a free source becomes
   load bearing that stops being an inconvenience.
+
+  **Two fallbacks were not enough, and a list whose entries fail together is
+  the single point of failure with more names on it** (2026-08-20). Measured
+  at 22:30 CEST from the mini: overpass-api.de timed out on connect,
+  kumi.systems answered `502`, private.coffee timed out -- all three, at once,
+  while the laptop got overpass-api.de in 0.6 s. So it is the same IP-level
+  refusal as 2026-08-19 and the spares did not cover it.
+  `overpass.openstreetmap.fr` answered the mini in 0.24 s throughout and is
+  now first among the fallbacks, ahead of the two that were down, because it
+  is the only one that answered either machine that day.
+
+  **An instance is added on evidence, never on a `200`.** The dangerous
+  failure is not the one that refuses -- it is a thin or regional mirror that
+  answers `200` with an empty `elements` list, which this project writes down
+  as a *measured* absence: "nothing hazardous nearby" for a plot beside a
+  cement works, #98's defect arriving through the spare tyre. That is not
+  hypothetical and it is not rare: `overpass.osm.ch` was caught doing exactly
+  it the same afternoon, in another session's hand-run override. So a
+  candidate is checked against a **known answer** first. openstreetmap.fr
+  returned the same 144 elements with the same tags as overpass-api.de and as
+  the committed fixture for property 793's coordinate -- zero differences --
+  and the same national chains in the same counts for a dense unrelated query
+  over central Gijon. Two sources agreeing on an answer somebody already had
+  is the check; "it responded" is not.
+
+  **A new instance is not free, and the one place it costs is
+  `OSM_OVERPASS_WALK_BUDGET_S`.** The ceiling is derived from the *number* of
+  instances -- one patient attempt on the primary plus a complete attempt on
+  each fallback -- so a third fallback moved it from 210 s to 275 s, and
+  `ENRICH_LOOKUP_BUDGET_S` from 240 to 305 to stay above it. Leaving the
+  ceiling alone would have bought the shorter walk by clamping the *last*
+  fallback's read leg, and on the day this was measured the last fallback was
+  the only one answering. `tests/test_one_press_is_bounded.py` derives both
+  from `len(OSM_OVERPASS_FALLBACK_URLS)` and goes red if a future instance
+  arrives without them.
 - **Every Overpass caller reads three refusals, not one** (#144, all measured
   against the live instance): the `406` above, which also fires for a UA
   carrying a parenthetical comment; the `504` above, which needs a backoff in
@@ -1182,6 +1557,121 @@ and TODO.md; respect it if you ever run both side by side.
   handled in `EnrichmentService._fetch_osm_amenities` and pinned by
   `tests/test_overpass_user_agent_and_refusal.py`; this rule exists so the
   next Overpass caller does not have to rediscover them.
+- **An advisory step may not hold a paid one hostage, and every free lookup
+  runs on a clock** (#434, measured on the mini 2026-08-20 on property 793).
+  The owner pressed **Enrich**, saw nothing, pressed three more times, and
+  sixteen minutes later the travel block filled in; the AI analysis never ran
+  at all. One Overpass lookup spent **888 s** without completing a single
+  request -- three instances x four attempts at a scalar 60 s timeout plus
+  8+16+32 s of backoff each -- and the step spending it was
+  `PoolService.enrich`, whose criterion ships at weight 0. Meanwhile the
+  Distance Matrix request billed at 12:59 sat in an uncommitted session until
+  13:12:55, behind it.
+
+  **The retry policy splits by whether the server spoke, not by connect
+  versus read.** `429` and `504` mean the instance is alive and busy, and
+  #144's patient 8-16-32 budget is still right for them. Silence means the
+  host is unreachable or hung, and a caller with a fallback list says
+  `silence_max_attempts=1` and moves on. It is not a connect-only rule and the
+  measurement is why: on the mini, overpass-api.de refused the connection
+  outright but kumi.systems **connected in 0.109 s and then sent nothing for
+  30 s**, so a connect-only rule would have walked straight past the instance
+  that cost the most. `utils/http._is_silence` therefore reads
+  `ConnectionError` and `Timeout` alike.
+
+  **The budgets are `utils/http.lookup_budget`, and only the free transports
+  read them.** `OSM_OVERPASS_WALK_BUDGET_S` (210 s) bounds one walk across
+  every instance; `ENRICH_LOOKUP_BUDGET_S` (240 s) bounds every free lookup of
+  one Enrich press together, because a run makes up to eleven of them. 210 is
+  derived rather than chosen -- #144's patient budget on the first instance
+  (~76 s with the gate) plus one complete attempt on each fallback (2 x 65 s)
+  -- and the guarantee it buys is conditional and says so where the number
+  lives: *a prompt refusal on the primary* leaves a complete attempt for each
+  fallback, while a primary spending 30 s per `504` leaves the first fallback
+  a clamped read. Making it unconditional costs seven and a half minutes for
+  one lookup, and the price of the gap is a retry, never a wrong answer.
+  Google's paid transports are deliberately outside all of it: abandoning a
+  billed Distance Matrix request because a free source spent the clock is the
+  same defect with the roles swapped, and the owner pays for a measurement
+  nobody receives (#178).
+
+  **A budget refusal is nobody's fault but the clock's**, and three places
+  have to know it. It is not in `_OVERPASS_TRY_ELSEWHERE` -- the next instance
+  would answer the same one gate wait later. It is not counted against
+  #438's `OVERPASS_BREAKERS`, in the amenity client or the coastline one
+  (`SeaViewBudgetExceeded` exists for that and for nothing else), or five
+  minutes of silence gets armed against a healthy host on the strength of
+  somebody else's slow run. And **a silence produced by a clamped attempt is
+  the budget's too**: review reproduced three calls with a 0.1 s clamped read
+  arming the breaker against a host never given the 60 s it is configured for.
+  Conversely a server that already answered outranks the clock -- a `504`
+  observed on an earlier attempt is returned rather than replaced by a budget
+  error, because it is what the caller classifies the host by.
+
+  **`enrich_property` has two passes and the boundary between them is a
+  commit.** The decisive pass -- the coordinate, the sea distance, the travel
+  times -- runs first and is committed on its own, so a container recreated
+  mid-run (#283) cannot take a paid measurement with it. The advisory pass
+  runs after, each step owning its write. Three of its four take the row under
+  `FOR UPDATE` (`services/enrichment_write.py`); `enrich_osm_amenities` does
+  not, which is #352's open gap and is not made worse here -- the old
+  shared-transaction form lost a concurrently written block just as
+  thoroughly. Order is a budget decision as much as a commit one: the free
+  lookup the *paid* call depends on is `services/osm_places.py`, and no
+  destinations means no Distance Matrix request, so the decisive steps must
+  hold the clock while there is any. The pool step stays off the
+  coordinate-less path, because `no_coordinates` is not one of the two
+  statuses its "a refusal never overwrites an answer" guard defends against.
+
+  **`dedupe_key` holds only while a job is *active*, and that is a trap that
+  bit three times.** `property_enrich:<id>` is keyed on the property alone --
+  keying on `(property, refresh_coords)` would let a `refresh=True` press race
+  an ordinary one, which is #339. The AI sequel is where the trap lives: the
+  enrichment job queues `property_ai_analysis` itself, so the analyses survive
+  the tab, and it **returns the ids in its result** so the page attaches to
+  them. A page that POSTs instead pays twice whenever the server's own job
+  finished first and freed the key -- including on the path where the poller
+  gave up and there are no ids to attach to, which is why the page does not
+  dispatch there at all. The flag asking for the sequel is read from the JSON
+  body only: these blueprints are CSRF-exempt and unauthenticated, and a
+  simple cross-origin form POST cannot set `Content-Type: application/json`.
+
+  **The client's poll budget is for silence, not duration.** No constant can
+  be a run's worst case -- the executor's queue is unbounded, a `FOR UPDATE`
+  can wait on a database with no statement timeout, and `requests` measures
+  its read timeout *between* reads -- so `JOB_POLL_TIMEOUTS.enrichment` went
+  stale the moment the fallback list was added and nobody re-derived it, which
+  is #178. `services/enrich_budget.py` states what the server allows and the
+  202 carries it as `poll_timeout_ms`; `pollJob` spends that on the gap
+  between two answers, resetting whenever the server confirms the job is
+  alive, with a backstop at four budgets because "still running" is not "will
+  finish". Read the AI term from the transport the caller actually reaches:
+  `classify_text_with_ai` passes no `timeout=`, so it takes
+  `subscription_transport.DEFAULT_TIMEOUT_SECONDS` (300) and not
+  `AI_ANALYSIS_TIMEOUT_SECONDS`.
+
+  One thing the deadline does **not** promise, measured against a loopback
+  server rather than assumed: it bounds when an attempt may *start* and what
+  its socket timeouts are, not how long one attempt may run. A server dripping
+  a byte often enough held a request open for 0.63 s under a 0.20 s deadline.
+  That is stated rather than fixed because the outage this bounds is the
+  opposite one -- instances that connect and say nothing -- and a total-time
+  bound needs a streamed body with its own clock, which the coastline client
+  already has. `tests/test_one_press_is_bounded.py` pins all of the above on a
+  virtual clock, so what it asserts is the arithmetic and not how the machine
+  felt on the day.
+- **Catastro is free and keyless, and the way to lose it is an IP ban.** Its
+  terms publish no requests-per-second figure at all and do publish a block of
+  "generally ten days" for abuse, so the interactive path is bounded by
+  arithmetic rather than by a backoff: `max_attempts=1` in
+  `services/cadastre_service.py` (a press is one attempt per endpoint, the
+  retry is the owner pressing again), three endpoints per uncached press, and
+  `@limiter.limit("5 per minute")` on the route -- fifteen requests a minute at
+  the very worst. `CATASTRO_GATE` paces and a `HostBreakers` breaker stops a
+  broken loop, but neither is what makes the number true; dropping the retries
+  is. Do not add a bulk path over it: this project has already blocked itself
+  at one free source with its own backfills (the Overpass rule above), and
+  there is no paid fallback behind Catastro at all.
 - **Google Places Nearby Search reaches 50 km, whatever `radius=` asks for.**
   Measured 2026-08-11 at 43.551663,-6.831426 (property 360, La Caridad):
   `radius=50000`, `radius=100000` and `radius=200000` returned the *identical*

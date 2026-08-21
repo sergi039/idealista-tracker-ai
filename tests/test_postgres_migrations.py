@@ -61,6 +61,9 @@ PROPERTY_AI_VARIANT_MIGRATION = "017_property_ai_variant_unique"
 LAND_TRAVEL_MIGRATION = "018_add_land_travel_provenance"
 PRICE_AT_ANALYSIS_MIGRATION = "019_add_price_at_analysis"
 HIDDEN_SUBSCRIPTION_MIGRATION = "020_add_search_profile_is_hidden"
+OWNER_REVIEW_MIGRATION = "021_add_property_review_and_activity"
+CADASTRAL_MIGRATION = "022_add_property_cadastral_reference"
+ATTACHMENT_MIGRATION = "023_create_property_attachment"
 PROPERTY_VARIANT_UNIQUE_CONSTRAINT = (
     "ux_property_ai_analysis_variants_property_provider"
 )
@@ -274,6 +277,9 @@ def test_013_frees_the_label_on_a_database_that_already_holds_rows(
             LAND_TRAVEL_MIGRATION,
             PRICE_AT_ANALYSIS_MIGRATION,
             HIDDEN_SUBSCRIPTION_MIGRATION,
+            OWNER_REVIEW_MIGRATION,
+            CADASTRAL_MIGRATION,
+            ATTACHMENT_MIGRATION,
         ]
 
         # Two *identified* subscriptions may now share the label...
@@ -1495,6 +1501,9 @@ def test_017_deduplicates_existing_rows_and_adds_the_unique_constraint(
             LAND_TRAVEL_MIGRATION,
             PRICE_AT_ANALYSIS_MIGRATION,
             HIDDEN_SUBSCRIPTION_MIGRATION,
+            OWNER_REVIEW_MIGRATION,
+            CADASTRAL_MIGRATION,
+            ATTACHMENT_MIGRATION,
         ]
 
         with engine.begin() as connection:
@@ -1680,6 +1689,9 @@ def test_017_deduplicates_existing_land_variants_and_adds_the_unique_constraint(
             LAND_TRAVEL_MIGRATION,
             PRICE_AT_ANALYSIS_MIGRATION,
             HIDDEN_SUBSCRIPTION_MIGRATION,
+            OWNER_REVIEW_MIGRATION,
+            CADASTRAL_MIGRATION,
+            ATTACHMENT_MIGRATION,
         ]
 
         with engine.begin() as connection:
@@ -1797,5 +1809,258 @@ def test_017_two_concurrent_inserts_for_the_same_land_pair_leave_only_one_row(
                 {"lid": land_id},
             ).scalar_one()
         assert count == 1
+    finally:
+        engine.dispose()
+
+
+def _insert_property(connection, **values) -> int:
+    values.setdefault("source_email_id", "review-fixture")
+    values.setdefault("title", "Plot")
+    columns = ", ".join(values)
+    placeholders = ", ".join(f":{column}" for column in values)
+    return connection.execute(
+        text(  # noqa: S608
+            f"INSERT INTO properties ({columns}) VALUES ({placeholders}) RETURNING id"
+        ),
+        values,
+    ).scalar_one()
+
+
+def test_021_refuses_the_states_its_checks_are_written_against(postgres_url):
+    """One rejected INSERT per constraint, against a real server.
+
+    SQLite executes the model's own copy of these rules, but not the ones in
+    the migration -- and the two are worded differently on purpose: PostgreSQL
+    tests for a non-whitespace character with `~ '[^[:space:]]'`, because
+    `BTRIM` strips spaces and *not* tabs or newlines. Measured before this was
+    written: `NULLIF(BTRIM(E'\\n'), '')` is not NULL, so a note holding a
+    single newline passed the trim form. Every case below is therefore run
+    here, on the engine the deployment uses, and the whitespace cases include
+    a tab and a CRLF rather than only spaces.
+    """
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+
+        with engine.begin() as connection:
+            property_id = _insert_property(connection)
+
+        refused = [
+            # A contact with no channel at all. The naive form of this check --
+            # `kind <> 'contact' OR channel IN (...)` -- passes on NULL,
+            # because a CHECK is satisfied by UNKNOWN.
+            ("contact", {"channel": None, "body": "they answered"}),
+            ("contact", {"channel": "telegram", "body": "they answered"}),
+            # A channel and nothing else: no question, no answer, nobody named.
+            ("contact", {"channel": "visit"}),
+            ("contact", {"channel": "visit", "body": "\t", "asked": "\r\n"}),
+            # A note is its text.
+            ("note", {}),
+            ("note", {"body": "   "}),
+            ("note", {"body": "\n"}),
+            ("note", {"body": "\t"}),
+            # A verdict event and its snapshot are inseparable, both ways.
+            ("verdict", {}),
+            ("note", {"body": "real", "snapshot": '{"decision": "rejected"}'}),
+            # Contact-only columns on a note.
+            ("note", {"body": "real", "channel": "whatsapp"}),
+            ("note", {"body": "real", "counterpart": "Sellmi"}),
+            # A kind nobody defined.
+            ("other", {"body": "real"}),
+        ]
+
+        for kind, columns in refused:
+            with pytest.raises(IntegrityError):
+                with engine.begin() as connection:
+                    payload = {
+                        "property_id": property_id,
+                        "kind": kind,
+                        "happened_at": "2026-08-20 09:00:00",
+                        **columns,
+                    }
+                    names = ", ".join(payload)
+                    placeholders = ", ".join(f":{name}" for name in payload)
+                    connection.execute(
+                        text(  # noqa: S608
+                            f"INSERT INTO property_activity ({names}) "
+                            f"VALUES ({placeholders})"
+                        ),
+                        payload,
+                    )
+
+        accepted = [
+            ("note", {"body": "the agent sent the ficha catastral"}),
+            ("note", {"body": "\t indented but real \n"}),
+            (
+                "contact",
+                {
+                    "channel": "whatsapp",
+                    "counterpart": "David Villa, Sellmi",
+                    "asked": "ficha catastral?",
+                    "body": "sent the PDF",
+                },
+            ),
+            # A visit with nobody quoted is a real entry as long as it says who
+            # was met -- the first version of this rule refused it.
+            ("contact", {"channel": "visit", "counterpart": "Sellmi"}),
+            ("verdict", {"snapshot": '{"decision": "rejected"}'}),
+        ]
+        for kind, columns in accepted:
+            with engine.begin() as connection:
+                payload = {
+                    "property_id": property_id,
+                    "kind": kind,
+                    "happened_at": "2026-08-20 09:00:00",
+                    **columns,
+                }
+                names = ", ".join(payload)
+                placeholders = ", ".join(f":{name}" for name in payload)
+                connection.execute(
+                    text(  # noqa: S608
+                        f"INSERT INTO property_activity ({names}) "
+                        f"VALUES ({placeholders})"
+                    ),
+                    payload,
+                )
+
+        # Re-running the file is what a redeploy does; it must not fail.
+        sql = (MIGRATIONS_DIR / f"{OWNER_REVIEW_MIGRATION}.sql").read_text(
+            encoding="utf-8"
+        )
+        with engine.begin() as connection:
+            connection.exec_driver_sql(sql)
+    finally:
+        engine.dispose()
+
+
+def test_021_refuses_a_verdict_and_a_due_date_nobody_can_read(postgres_url):
+    """The two checks on `properties`, including the whitespace one."""
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+
+        refused = (
+            {"owner_verdict": "maybe"},
+            # A due date with nothing due at all, and with whitespace that
+            # `BTRIM` would not strip.
+            {"next_action_due_on": "2026-09-20"},
+            {"next_action": "   ", "next_action_due_on": "2026-09-20"},
+            {"next_action": "\t", "next_action_due_on": "2026-09-20"},
+            {"next_action": "\r\n", "next_action_due_on": "2026-09-20"},
+        )
+        for index, columns in enumerate(refused):
+            with pytest.raises(IntegrityError):
+                with engine.begin() as connection:
+                    # A distinct source_email_id per case: that column is
+                    # unique, so a repeated one would raise IntegrityError for
+                    # the wrong reason and the assertion would pass over a
+                    # constraint that never fired.
+                    _insert_property(
+                        connection, source_email_id=f"refused-{index}", **columns
+                    )
+
+        with engine.begin() as connection:
+            _insert_property(
+                connection,
+                source_email_id="accepted",
+                owner_verdict="waiting",
+                next_action="condiciones de edificabilidad",
+                next_action_due_on="2026-09-20",
+            )
+            # An action with no date is ordinary: nobody promised a day.
+            _insert_property(
+                connection, source_email_id="undated", next_action="ask for the RC"
+            )
+    finally:
+        engine.dispose()
+
+
+def test_021_cannot_attach_an_exchange_to_another_property(postgres_url):
+    """The pair PR3's attachment table will carry a composite key against.
+
+    `UNIQUE (id, property_id)` is what makes that possible, so it is pinned
+    here rather than in the PR that will use it: without it, an attachment on
+    one property could reference another property's exchange and no constraint
+    in the database would say otherwise.
+    """
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+
+        unique_constraints = {
+            constraint["name"]
+            for constraint in inspect(engine).get_unique_constraints(
+                "property_activity"
+            )
+        }
+        assert "uq_property_activity_id_property" in unique_constraints
+    finally:
+        engine.dispose()
+
+
+def test_023_cannot_attach_a_file_to_another_propertys_exchange(postgres_url):
+    """The composite key, exercised where it is actually enforced.
+
+    SQLite does not check foreign keys unless the pragma is set per connection,
+    so the suite's own engine cannot refuse this insert; the model-side test in
+    tests/test_property_attachments.py checks only that the pair is declared.
+    This is the one that proves the database refuses it -- an attachment on one
+    property that names another property's exchange would otherwise be
+    reachable, and editable, from a page it does not belong to.
+    """
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+
+        with engine.begin() as connection:
+            mine = _insert_property(connection, source_email_id="mine")
+            theirs = _insert_property(connection, source_email_id="theirs")
+            their_entry = connection.execute(
+                text(
+                    "INSERT INTO property_activity "
+                    "(property_id, kind, happened_at, body) "
+                    "VALUES (:p, 'note', NOW(), 'theirs') RETURNING id"
+                ),
+                {"p": theirs},
+            ).scalar_one()
+
+        def insert(property_id, activity_id, sha):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO property_attachment "
+                        "(property_id, activity_id, content_sha256, storage_path, "
+                        " content_type, size_bytes, kind) VALUES "
+                        "(:p, :a, :s, 'aa/bb/x.pdf', 'application/pdf', 10, 'document')"
+                    ),
+                    {"p": property_id, "a": activity_id, "s": sha},
+                )
+
+        with pytest.raises(IntegrityError):
+            insert(mine, their_entry, "a" * 64)
+
+        # The same file against its own property's exchange is fine, and so is
+        # one filed against the listing with no exchange at all -- MATCH SIMPLE
+        # is what makes the optional half work.
+        insert(theirs, their_entry, "b" * 64)
+        insert(mine, None, "c" * 64)
+
+        for bad_sha in ("nothex", "A" * 64, "a" * 63):
+            with pytest.raises(IntegrityError):
+                insert(mine, None, bad_sha)
+
+        sql = (MIGRATIONS_DIR / f"{ATTACHMENT_MIGRATION}.sql").read_text(
+            encoding="utf-8"
+        )
+        with engine.begin() as connection:
+            connection.exec_driver_sql(sql)
     finally:
         engine.dispose()

@@ -134,6 +134,23 @@ def pytest_runtest_setup(item) -> None:
 
     _osm_places.lookup_candidates = lambda service, specs, lat, lon: ({}, None)
 
+    # The hazard scan (#437) is the second Overpass consumer to run on the
+    # *free* pass, so it reaches the network from every suite that exercises
+    # ingestion or the Enrich flow -- the same six that #323 caught, plus the
+    # ingestion ones. Its network seam is `_elements`, which is where the
+    # cache and the transport meet; stubbing it here rather than
+    # `EnrichmentService._overpass_elements` leaves the amenity, pool and
+    # quality-of-life suites free to patch that underneath, exactly as the
+    # preset stub above does.
+    #
+    # `[]` is "Overpass replied and there is nothing here", never a refusal.
+    import services.hazard_service as _hazard_service
+
+    _hazard_service.fetch_elements = lambda service, lat, lon: (
+        {"elements": [], "returned": 0},
+        None,
+    )
+
 
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_teardown(item, nextitem):

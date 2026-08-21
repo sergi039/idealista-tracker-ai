@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timezone
+from typing import Dict
 from flask import Blueprint, Response, current_app, jsonify, request
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -9,11 +10,13 @@ from sqlalchemy.exc import IntegrityError
 # unknown id stays a 404 (issue #136).
 from werkzeug.exceptions import HTTPException
 from models import Land, LandHistory, SyncHistory, AiAnalysisVariant
+from services.enrich_budget import poll_timeout_ms
 from services.ingest_policy import ingest_verdict
 from services.listing_verification import read_verdict as listing_verdict
 from utils.api_errors import json_http_error
 from utils.listing_search import listing_search_clause
 from services import advertiser
+from services import owner_review
 from utils.listing_source import source_filter_clause
 from utils.municipality_grouping import municipality_filter_clause
 from app import db
@@ -866,6 +869,155 @@ def analyze_property_structured(land_id):
         ), 500
 
 
+def _property_structured_analysis_runner(
+    property_id: int, provider: str, existing_analysis=None
+):
+    """The closure that runs one structured AI analysis, as a job body.
+
+    Module level rather than nested in the route since #434, because the
+    enrichment job enqueues this same work as its sequel and a closure defined
+    inside a request handler cannot be reached from another job. Nothing about
+    the body changed: `existing_analysis` is the merge base the caller passed
+    (a re-run enriching an earlier answer), and `None` -- the enrichment
+    sequel's case -- means there is nothing to merge with.
+    """
+    from models import Property
+    from services.property_ai_service import PropertyAIService
+
+    is_enrichment = existing_analysis is not None
+
+    def _run():
+        prop_local = db.session.get(Property, property_id)
+        if not prop_local:
+            return {"success": False, "error": "Property not found"}
+
+        service = PropertyAIService()
+        result = service.analyze_property_structured(prop_local, provider=provider)
+
+        if not result or result.get("status") != "success":
+            return {
+                "success": False,
+                "error": (result.get("error") if isinstance(result, dict) else None)
+                or "Analysis failed",
+                "failure_kind": result.get("failure_kind")
+                if isinstance(result, dict)
+                else None,
+            }
+
+        new_analysis = result.get("structured_analysis") or {}
+
+        final = new_analysis
+        if (
+            is_enrichment
+            and isinstance(existing_analysis, dict)
+            and isinstance(new_analysis, dict)
+        ):
+            merged = dict(existing_analysis)
+            merged.update(new_analysis)
+            final = merged
+
+        # Claude remains the primary analysis stored on the Property
+        # record itself (legacy parity). Staged, not committed: the
+        # variant upsert below has its own SAVEPOINT-scoped recovery
+        # now (#190 review round 4, finding 4), so it no longer needs
+        # this change committed first to protect it from its own
+        # rollback -- _execute_job commits this together with the
+        # job's own terminal CAS write, once, so a reap racing this
+        # job's execution rolls both back together.
+        if provider == "claude":
+            prop_local.ai_analysis = final
+
+        # Store per-provider analysis for side-by-side comparison in the
+        # UI. _upsert_property_ai_variant is an update-or-insert that
+        # recovers from a lost race against the unique constraint
+        # migration 017 adds, rather than the old query-then-insert that
+        # let two concurrent writers both see "no row" and both insert.
+        # It stages its own write too -- no commit or rollback here
+        # either, since its own SAVEPOINT-based recovery already leaves
+        # the session valid for whatever failed for a reason other than
+        # the recognized race.
+        try:
+            _upsert_property_ai_variant(
+                property_id,
+                provider,
+                model=result.get("model"),
+                analysis=final,
+                price_at_analysis=prop_local.price,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to store AI analysis variant for property %s (%s): %s",
+                property_id,
+                provider,
+                e,
+            )
+
+        return {
+            "success": True,
+            "analysis": final,
+            "provider": provider,
+            "model": result.get("model"),
+            "is_enrichment": is_enrichment,
+        }
+
+    return _run
+
+
+def _property_analysis_providers():
+    """The providers an Enrich press should ask, in the page's own order.
+
+    Claude always; ChatGPT only when the bridge is configured, which is the
+    same condition `routes/main_routes.py` passes to the template as
+    `openai_configured` and the page reads as `window.__OPENAI_CONFIGURED__`.
+    Read here rather than sent by the client: a client that says which
+    providers to bill is a client that can ask for one that is not there.
+    """
+    from config import Config
+
+    providers = ["claude"]
+    if bool(getattr(Config, "AI_BRIDGE_TOKEN", None)):
+        providers.append("openai")
+    return providers
+
+
+def _enqueue_property_analyses(property_id: int) -> Dict[str, str]:
+    """Queue the AI analyses that follow an Enrich press (#434).
+
+    Called from inside the enrichment job, so the sequel survives the tab that
+    started it. Every failure is swallowed and logged: the enrichment has
+    already run, and reporting it as failed because a follow-up could not be
+    queued would send the owner to press it -- and pay for it -- again (#178).
+
+    **Returns the job ids, and the caller must hand them to the page.** The
+    dedupe key stops a second *live* run for the same pair -- it does not stop
+    a second run once the first has finished, and review round 3 reproduced
+    exactly that: the server's claude job completed before the browser got
+    round to POSTing its own, the key was free again, and one press paid for
+    two analyses. So the page attaches to these ids instead of asking for
+    work that is already done.
+    """
+    queued: Dict[str, str] = {}
+    for provider in _property_analysis_providers():
+        try:
+            queued[provider] = _enqueue(
+                _property_structured_analysis_runner(property_id, provider),
+                job_type="property_ai_analysis",
+                meta={"property_id": property_id, "provider": provider},
+                # The key the analysis endpoint already uses, so a *concurrent*
+                # POST for the same pair returns this job's id rather than
+                # starting a second, paid run.
+                dedupe_key=f"property_ai_analysis:{property_id}:{provider}",
+            )
+        except Exception:
+            logger.warning(
+                "Could not queue the %s analysis after enriching property %s",
+                provider,
+                property_id,
+                exc_info=True,
+            )
+    return queued
+
+
 @api_bp.route("/property/<int:property_id>/analyze/structured", methods=["POST"])
 @limiter.limit("3 per 5 minutes")
 def analyze_universal_property_structured(property_id: int):
@@ -873,7 +1025,6 @@ def analyze_universal_property_structured(property_id: int):
     try:
         from models import Property
         from services.background_jobs import EnqueueOutcomeUnknown
-        from services.property_ai_service import PropertyAIService
 
         prop = db.get_or_404(Property, property_id)
 
@@ -888,81 +1039,10 @@ def analyze_universal_property_structured(property_id: int):
         else:
             provider = "claude"
         existing_analysis = request_data.get("existing_analysis")
-        is_enrichment = existing_analysis is not None
 
-        def _run():
-            prop_local = db.session.get(Property, property_id)
-            if not prop_local:
-                return {"success": False, "error": "Property not found"}
-
-            service = PropertyAIService()
-            result = service.analyze_property_structured(prop_local, provider=provider)
-
-            if not result or result.get("status") != "success":
-                return {
-                    "success": False,
-                    "error": (result.get("error") if isinstance(result, dict) else None)
-                    or "Analysis failed",
-                    "failure_kind": result.get("failure_kind")
-                    if isinstance(result, dict)
-                    else None,
-                }
-
-            new_analysis = result.get("structured_analysis") or {}
-
-            final = new_analysis
-            if (
-                is_enrichment
-                and isinstance(existing_analysis, dict)
-                and isinstance(new_analysis, dict)
-            ):
-                merged = dict(existing_analysis)
-                merged.update(new_analysis)
-                final = merged
-
-            # Claude remains the primary analysis stored on the Property
-            # record itself (legacy parity). Staged, not committed: the
-            # variant upsert below has its own SAVEPOINT-scoped recovery
-            # now (#190 review round 4, finding 4), so it no longer needs
-            # this change committed first to protect it from its own
-            # rollback -- _execute_job commits this together with the
-            # job's own terminal CAS write, once, so a reap racing this
-            # job's execution rolls both back together.
-            if provider == "claude":
-                prop_local.ai_analysis = final
-
-            # Store per-provider analysis for side-by-side comparison in the
-            # UI. _upsert_property_ai_variant is an update-or-insert that
-            # recovers from a lost race against the unique constraint
-            # migration 017 adds, rather than the old query-then-insert that
-            # let two concurrent writers both see "no row" and both insert.
-            # It stages its own write too -- no commit or rollback here
-            # either, since its own SAVEPOINT-based recovery already leaves
-            # the session valid for whatever failed for a reason other than
-            # the recognized race.
-            try:
-                _upsert_property_ai_variant(
-                    property_id,
-                    provider,
-                    model=result.get("model"),
-                    analysis=final,
-                    price_at_analysis=prop_local.price,
-                )
-            except Exception as e:
-                logger.warning(
-                    "Failed to store AI analysis variant for property %s (%s): %s",
-                    property_id,
-                    provider,
-                    e,
-                )
-
-            return {
-                "success": True,
-                "analysis": final,
-                "provider": provider,
-                "model": result.get("model"),
-                "is_enrichment": is_enrichment,
-            }
+        _run = _property_structured_analysis_runner(
+            property_id, provider, existing_analysis
+        )
 
         # The observed #176 failure: a redeploy interrupted this exact job
         # for (property, provider), and resubmitting it must reuse the
@@ -1721,6 +1801,22 @@ def get_properties():
         )
         if advertiser_clause is not None:
             query = query.filter(advertiser_clause)
+        # What the owner decided, and what is still outstanding. One Madrid
+        # date for the whole request, threaded into the filter AND into both
+        # serializers below -- a payload describing a row against a different
+        # day from the query that selected it disagrees with itself once a day
+        # (services/owner_review.py).
+        review_today = owner_review.today()
+        verdict_clause = owner_review.decision_filter_clause(
+            Property, request.args.get("verdict", "")
+        )
+        if verdict_clause is not None:
+            query = query.filter(verdict_clause)
+        action_clause = owner_review.action_filter_clause(
+            Property, request.args.get("action", ""), review_today
+        )
+        if action_clause is not None:
+            query = query.filter(action_clause)
         # A pasted listing URL, or a bare listing id, is a search too --
         # utils/listing_search.py owns what the box accepts.
         search_clause = listing_search_clause(Property, search_query)
@@ -1770,7 +1866,7 @@ def get_properties():
         props = query.offset(offset).limit(limit).all()
 
         if full:
-            properties_data = [p.to_dict() for p in props]
+            properties_data = [p.to_dict(review_today=review_today) for p in props]
         else:
             properties_data = []
             for p in props:
@@ -1799,6 +1895,13 @@ def get_properties():
                         # live listing from a never-checked one.
                         "listing_status": p.listing_status or "active",
                         "listing_status_verdict": listing_verdict(p)["state"],
+                        # This response is assembled by hand rather than from
+                        # `to_dict`, so a field added there does not appear
+                        # here -- and the compact payload is the default one.
+                        "owner_verdict": owner_review.read_decision(p)["state"],
+                        "next_action_state": owner_review.read_action(p, review_today)[
+                            "state"
+                        ],
                         "created_at": p.created_at.isoformat()
                         if p.created_at
                         else None,
@@ -2114,6 +2217,31 @@ def manual_property_enrichment(property_id: int):
         if request.args.get("refresh_coords") in ("1", "true", "yes", "on"):
             refresh_coords = True
 
+        # Whether the AI analyses are part of what was pressed (#434).
+        #
+        # The property page's one button has always meant "enrich, then Claude
+        # and ChatGPT" -- but only as a promise chain in the tab: the server
+        # knew nothing about the sequel, so a reload, a closed tab or a poll
+        # that timed out ended it. On property 793 no `property_ai_analysis`
+        # row was ever created, because each re-press reloaded the page and
+        # killed the previous chain before it reached the AI step.
+        #
+        # Asked for by the caller rather than assumed, so this endpoint keeps
+        # meaning exactly what it says for anything that only wants the
+        # enrichment. The page says so once, up front, instead of driving the
+        # sequence step by step.
+        #
+        # **Read from the JSON body only, unlike `refresh_coords` above.** The
+        # JSON API blueprints are CSRF-exempt and there is no authentication
+        # (owner decision 2026-08-08), so the only thing standing between a
+        # page on another origin and this endpoint is that a simple form POST
+        # cannot set `Content-Type: application/json` and anything that can
+        # takes a CORS preflight this app does not answer. A `?analyze=1` in
+        # the query string would hand that page the AI spend as well, which is
+        # a wider surface than the ticket asked for and buys nothing: the one
+        # caller posts JSON.
+        analyze = bool(payload.get("analyze")) if isinstance(payload, dict) else False
+
         # A refresh asked for on a row whose location a person established is
         # refused by `ensure_coordinates`, before any request goes out. Saying
         # so is the same disclosure `utils/refresh_property_accuracy.py` makes
@@ -2134,40 +2262,70 @@ def manual_property_enrichment(property_id: int):
                 refresh_coords=refresh_coords,
                 recalc_scoring=True,
             )
+
+            # The sequel, queued by the server on the numbers it just wrote.
+            # Deliberately not conditional on `ok`: the page runs the analyses
+            # either way, and a listing Google could not place is still worth
+            # an opinion on.
+            #
+            # The ids ride back in every answer this closure gives, including
+            # the failures below, because the page attaches to them rather
+            # than POSTing for the same work a second time.
+            analysis_jobs = _enqueue_property_analyses(property_id) if analyze else {}
+
+            def _answer(payload):
+                if analysis_jobs:
+                    payload = dict(payload)
+                    payload["analysis_jobs"] = analysis_jobs
+                return payload
+
             if ok:
-                return {
-                    "success": True,
-                    "message": "Property enriched successfully with Google API data",
-                }
+                return _answer(
+                    {
+                        "success": True,
+                        "message": "Property enriched successfully with Google API data",
+                    }
+                )
 
             # Neither a refused API nor a bad address: the address resolved,
             # to the middle of the locality. Pressing Enrich again buys
             # nothing, so the message names the repair instead of a retry.
             if travel_api_state(prop_local) == TRAVEL_STATE_APPROXIMATE_ORIGIN:
-                return {
-                    "success": False,
-                    "error": (
-                        "This listing's coordinate is a locality centroid, not its "
-                        "address, so travel times were not measured — they would "
-                        "describe that point, not the property. Re-geocode it "
-                        "first (utils/refresh_property_accuracy.py)."
-                    ),
-                }
+                return _answer(
+                    {
+                        "success": False,
+                        "error": (
+                            "This listing's coordinate is a locality centroid, not "
+                            "its address, so travel times were not measured — they "
+                            "would describe that point, not the property. "
+                            "Re-geocode it first "
+                            "(utils/refresh_property_accuracy.py)."
+                        ),
+                    }
+                )
 
             # A refused API is not a bad address: say which one it was (#98).
             if travel_api_state(prop_local) == TRAVEL_STATE_UNAVAILABLE:
-                return {
+                return _answer(
+                    {
+                        "success": False,
+                        "error": (
+                            "Google refused every travel request; no data was "
+                            "stored. Check the API keys, billing and enabled APIs, "
+                            "then retry."
+                        ),
+                    }
+                )
+
+            return _answer(
+                {
                     "success": False,
                     "error": (
-                        "Google refused every travel request; no data was stored. "
-                        "Check the API keys, billing and enabled APIs, then retry."
+                        "Geocoding failed; enrichment skipped. Check that the "
+                        "property has a valid location."
                     ),
                 }
-
-            return {
-                "success": False,
-                "error": "Geocoding failed; enrichment skipped. Check that the property has a valid location.",
-            }
+            )
 
         # `allow_request_override=False`, the way #136 closed the same hatch on
         # the two status endpoints below. This chain makes up to eleven Overpass
@@ -2175,25 +2333,61 @@ def manual_property_enrichment(property_id: int):
         # sockets at all -- each one cost four attempts against three instances
         # at a 60 s connect timeout. `?sync=1` is the one path that still spends
         # that inside the request, and the API is unauthenticated.
+        # #438 closed `?sync=1` at this call site; what is left of the inline
+        # path is `TESTING`, and it goes through the registry so it claims the
+        # same slot rather than running a second execution alongside a live
+        # async one (#190 review round 3, finding 4, in a second place).
         if _should_run_sync(allow_request_override=False):
-            result = _run()
-            if hand_set:
-                # Both exits carry the disclosure. The synchronous path is the
-                # one the suite and `?sync=1` take, so a refusal announced only
-                # on the queued branch is one the tests cannot see.
-                result = dict(result)
-                result["coordinate_refresh"] = "refused_hand_set"
-                result["message"] = (
-                    f"{result.get('message', '').rstrip('.')}; the coordinate "
-                    "was not refreshed because this listing's location was set "
-                    "by hand"
+            from services.background_jobs import JobAlreadyActive
+
+            try:
+                job = _run_sync(
+                    _run,
+                    job_type="property_enrich",
+                    meta={
+                        "property_id": prop.id,
+                        "refresh_coords": refresh_coords,
+                        "analyze": analyze,
+                    },
+                    dedupe_key=f"property_enrich:{prop.id}",
                 )
-            return jsonify(result), 200
+            except JobAlreadyActive as exc:
+                return _job_already_active_response(exc)
+            result = (job or {}).get("result")
+            if result is not None:
+                if hand_set:
+                    # Both exits carry the disclosure (#448). The inline path
+                    # is the one the suite and `?sync=1` take, so a refusal
+                    # announced only on the queued branch is one the tests
+                    # cannot see.
+                    result = dict(result)
+                    result["coordinate_refresh"] = "refused_hand_set"
+                    result["message"] = (
+                        f"{result.get('message', '').rstrip('.')}; the "
+                        "coordinate was not refreshed because this listing's "
+                        "location was set by hand"
+                    )
+                # `_run` answers for itself, including its own `success: False`
+                # for a listing the geocoder could not place -- that is a
+                # completed run reporting a measured outcome, and it kept its
+                # 200 before this path went through the job registry.
+                return jsonify(result), 200
+            return jsonify(
+                {
+                    "success": False,
+                    "error": (job or {}).get("error")
+                    or "An internal error occurred. Check server logs for details.",
+                }
+            ), 500
 
         job_id = _enqueue(
             _run,
             job_type="property_enrich",
-            meta={"property_id": prop.id, "refresh_coords": refresh_coords},
+            meta={
+                "property_id": prop.id,
+                "refresh_coords": refresh_coords,
+                "analyze": analyze,
+            },
             # An impatient second press joins the run already in flight instead
             # of claiming another of the four executor slots -- the shape the
             # fotocasa import already uses. Keyed on the property alone: a
@@ -2207,6 +2401,13 @@ def manual_property_enrichment(property_id: int):
                 "success": True,
                 "status": "queued",
                 "job_id": job_id,
+                # What the server itself allows this to take, so the page does
+                # not have to guess. `static/js/main.js` carried a 300 000 ms
+                # guess that predated the three-instance Overpass fallback and
+                # was therefore shorter than the work -- which is #178's defect
+                # exactly: a running job announced as a failure, and the
+                # obvious next move pays for it again.
+                "poll_timeout_ms": poll_timeout_ms(),
                 "message": (
                     "Enrichment queued; the coordinate was not refreshed "
                     "because this listing's location was set by hand"

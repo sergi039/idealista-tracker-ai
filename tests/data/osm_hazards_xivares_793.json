@@ -1,0 +1,1845 @@
+{
+ "elements": [
+  {
+   "id": 983676688,
+   "lat": 43.5417933,
+   "lon": -5.6744527,
+   "tags": {
+    "historic": "monument",
+    "man_made": "chimney",
+    "name": "Antigua chimenea"
+   },
+   "type": "node"
+  },
+  {
+   "id": 2719641169,
+   "lat": 43.5253916,
+   "lon": -5.7040912,
+   "tags": {
+    "man_made": "works",
+    "name": "Talleres Prendes"
+   },
+   "type": "node"
+  },
+  {
+   "id": 3028191645,
+   "lat": 43.5335078,
+   "lon": -5.7076147,
+   "tags": {
+    "addr:city": "Gijón/Xixón",
+    "addr:housenumber": "61",
+    "addr:street": "Camino del Melón",
+    "email": "centro@ctgijon.com",
+    "fax": "+34 985300362",
+    "landuse": "industrial",
+    "name": "Centro de Transportes de Gijon",
+    "phone": "+34 985300364",
+    "website": "https://www.ctgijon.com/"
+   },
+   "type": "node"
+  },
+  {
+   "id": 5072576877,
+   "lat": 43.5569751,
+   "lon": -5.6961626,
+   "tags": {
+    "addr:city": "Gijón/Xixón",
+    "addr:postcode": "33290",
+    "addr:street": "Viario interior de El Musel - Muelle de El Rendiello",
+    "man_made": "works",
+    "name": "Fábrica de Hielo",
+    "nohousenumber": "yes",
+    "operator": "LonjaGijón-Musel"
+   },
+   "type": "node"
+  },
+  {
+   "id": 6616340322,
+   "lat": 43.5320342,
+   "lon": -5.7266334,
+   "tags": {
+    "man_made": "chimney",
+    "material": "concrete"
+   },
+   "type": "node"
+  },
+  {
+   "id": 9157304733,
+   "lat": 43.5331644,
+   "lon": -5.7247993,
+   "tags": {
+    "man_made": "chimney",
+    "material": "concrete"
+   },
+   "type": "node"
+  },
+  {
+   "id": 12992796185,
+   "lat": 43.5873579,
+   "lon": -5.7665258,
+   "tags": {
+    "man_made": "chimney"
+   },
+   "type": "node"
+  },
+  {
+   "center": {
+    "lat": 43.5277756,
+    "lon": -5.6922514
+   },
+   "id": 4813805,
+   "tags": {
+    "landuse": "industrial",
+    "name": "Polígono industrial Balagón"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5304976,
+    "lon": -5.6885132
+   },
+   "id": 14370854,
+   "tags": {
+    "landuse": "industrial",
+    "name": "Polígono industrial Mora Garay"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5335247,
+    "lon": -5.6937589
+   },
+   "id": 14903049,
+   "tags": {
+    "landuse": "industrial",
+    "name": "Polígono Industrial Bankunión I"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5324181,
+    "lon": -5.6889087
+   },
+   "id": 14906137,
+   "tags": {
+    "landuse": "industrial",
+    "name": "Polígono Industrial PROMOSA"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5114534,
+    "lon": -5.7246976
+   },
+   "id": 15956960,
+   "tags": {
+    "landuse": "industrial",
+    "name": "Polígono Industrial Somonte"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5644159,
+    "lon": -5.7069555
+   },
+   "id": 17947901,
+   "tags": {
+    "barrier": "wall",
+    "height": "2",
+    "landuse": "industrial",
+    "name": "Factoría Repsol Butano",
+    "operator": "Repsol Butano",
+    "utility": "gas",
+    "wikimedia_commons": "Category:Repsol Butano gasometer, Gijón"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5655421,
+    "lon": -5.7056037
+   },
+   "id": 17950740,
+   "tags": {
+    "content": "gas",
+    "man_made": "storage_tank",
+    "operator": "Repsol Butano"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5658001,
+    "lon": -5.7060568
+   },
+   "id": 17950741,
+   "tags": {
+    "content": "gas",
+    "man_made": "storage_tank",
+    "operator": "Repsol Butano"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5654675,
+    "lon": -5.706409
+   },
+   "id": 17950742,
+   "tags": {
+    "content": "gas",
+    "man_made": "storage_tank",
+    "operator": "Repsol Butano"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5650182,
+    "lon": -5.7068801
+   },
+   "id": 17951131,
+   "tags": {
+    "content": "gas",
+    "man_made": "storage_tank",
+    "operator": "Repsol Butano"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.564993,
+    "lon": -5.7057222
+   },
+   "id": 17951134,
+   "tags": {
+    "content": "gas",
+    "man_made": "storage_tank",
+    "operator": "Repsol Butano"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5645143,
+    "lon": -5.7058025
+   },
+   "id": 17957873,
+   "tags": {
+    "content": "gas",
+    "man_made": "storage_tank",
+    "operator": "Repsol Butano"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5636362,
+    "lon": -5.708049
+   },
+   "id": 17957874,
+   "tags": {
+    "content": "gas",
+    "man_made": "storage_tank",
+    "operator": "Repsol Butano"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5632672,
+    "lon": -5.7083341
+   },
+   "id": 17957875,
+   "tags": {
+    "content": "gas",
+    "man_made": "storage_tank",
+    "operator": "Repsol Butano"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5643003,
+    "lon": -5.7063019
+   },
+   "id": 17957877,
+   "tags": {
+    "content": "gas",
+    "man_made": "storage_tank",
+    "operator": "Repsol Butano"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5645989,
+    "lon": -5.7064098
+   },
+   "id": 17957878,
+   "tags": {
+    "content": "gas",
+    "man_made": "storage_tank",
+    "operator": "Repsol Butano"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5642212,
+    "lon": -5.7066931
+   },
+   "id": 17961801,
+   "tags": {
+    "content": "gas",
+    "man_made": "storage_tank",
+    "operator": "Repsol Butano"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5641545,
+    "lon": -5.7070104
+   },
+   "id": 17961803,
+   "tags": {
+    "content": "gas",
+    "man_made": "storage_tank",
+    "operator": "Repsol Butano"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5640949,
+    "lon": -5.7073477
+   },
+   "id": 17961804,
+   "tags": {
+    "content": "gas",
+    "man_made": "storage_tank",
+    "operator": "Repsol Butano"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5640434,
+    "lon": -5.7076623
+   },
+   "id": 17961805,
+   "tags": {
+    "content": "gas",
+    "man_made": "storage_tank",
+    "operator": "Repsol Butano"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5278196,
+    "lon": -5.7143542
+   },
+   "id": 22775696,
+   "tags": {
+    "landuse": "industrial",
+    "name": "Polígono Industrial Bankunión II"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5316316,
+    "lon": -5.7180559
+   },
+   "id": 22775963,
+   "tags": {
+    "landuse": "industrial",
+    "name": "Polígono Industrial de La Peñona"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5227125,
+    "lon": -5.736602
+   },
+   "id": 22794125,
+   "tags": {
+    "industrial": "steelmaking",
+    "landuse": "industrial",
+    "name": "Acería de Veriña - ArcelorMittal"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5700706,
+    "lon": -5.7676631
+   },
+   "id": 63132577,
+   "tags": {
+    "landuse": "quarry",
+    "name": "Cantera de Perecil"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5418681,
+    "lon": -5.7070206
+   },
+   "id": 87397703,
+   "tags": {
+    "landuse": "industrial",
+    "source": "PNOA;survey",
+    "source:date": "2009"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5559599,
+    "lon": -5.7163122
+   },
+   "id": 88264723,
+   "tags": {
+    "man_made": "wastewater_plant",
+    "name": "Estación Depuradora de Aguas Residuales La Reguerona",
+    "short_name": "EDAR La Reguerona"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.567012,
+    "lon": -5.6889798
+   },
+   "id": 88615506,
+   "tags": {
+    "landuse": "industrial",
+    "man_made": "works",
+    "name": "EBHISA"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5487114,
+    "lon": -5.6946765
+   },
+   "id": 90537916,
+   "tags": {
+    "building": "yes",
+    "content": "fuel",
+    "layer": "1",
+    "man_made": "storage_tank",
+    "source": "PNOA",
+    "source:date": "2009"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5488213,
+    "lon": -5.6935809
+   },
+   "id": 90537918,
+   "tags": {
+    "building": "yes",
+    "layer": "1",
+    "man_made": "storage_tank",
+    "source": "PNOA",
+    "source:date": "2009"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5490653,
+    "lon": -5.6932816
+   },
+   "id": 90538042,
+   "tags": {
+    "building": "yes",
+    "layer": "1",
+    "man_made": "storage_tank",
+    "source": "PNOA",
+    "source:date": "2009"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5492798,
+    "lon": -5.6942427
+   },
+   "id": 90538043,
+   "tags": {
+    "building": "yes",
+    "layer": "1",
+    "man_made": "storage_tank",
+    "source": "PNOA",
+    "source:date": "2009"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5496273,
+    "lon": -5.6920308
+   },
+   "id": 90538044,
+   "tags": {
+    "building": "yes",
+    "layer": "1",
+    "man_made": "storage_tank",
+    "source": "PNOA",
+    "source:date": "2009"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5487259,
+    "lon": -5.6942265
+   },
+   "id": 90538049,
+   "tags": {
+    "building": "yes",
+    "layer": "1",
+    "man_made": "storage_tank",
+    "source": "PNOA",
+    "source:date": "2009"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5497444,
+    "lon": -5.6937554
+   },
+   "id": 90538050,
+   "tags": {
+    "building": "yes",
+    "layer": "1",
+    "man_made": "storage_tank",
+    "source": "PNOA",
+    "source:date": "2009"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5484159,
+    "lon": -5.693625
+   },
+   "id": 90538052,
+   "tags": {
+    "building": "yes",
+    "layer": "1",
+    "man_made": "storage_tank",
+    "source": "PNOA",
+    "source:date": "2009"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5481765,
+    "lon": -5.6938774
+   },
+   "id": 90538053,
+   "tags": {
+    "building": "yes",
+    "layer": "1",
+    "man_made": "storage_tank",
+    "source": "PNOA",
+    "source:date": "2009"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5483993,
+    "lon": -5.6941179
+   },
+   "id": 90538054,
+   "tags": {
+    "building": "yes",
+    "layer": "1",
+    "man_made": "storage_tank",
+    "source": "PNOA",
+    "source:date": "2009"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5495402,
+    "lon": -5.6941131
+   },
+   "id": 90538056,
+   "tags": {
+    "building": "yes",
+    "layer": "1",
+    "man_made": "storage_tank",
+    "source": "PNOA",
+    "source:date": "2009"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5539107,
+    "lon": -5.7209424
+   },
+   "id": 108137852,
+   "tags": {
+    "building": "industrial",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5542513,
+    "lon": -5.7216091
+   },
+   "id": 108137858,
+   "tags": {
+    "building": "industrial",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5493859,
+    "lon": -5.69381
+   },
+   "id": 152737816,
+   "tags": {
+    "building": "yes",
+    "layer": "1",
+    "man_made": "storage_tank",
+    "source": "PNOA",
+    "source:date": "2009"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5428467,
+    "lon": -5.686762
+   },
+   "id": 170055868,
+   "tags": {
+    "industrial": "shipyard",
+    "landuse": "industrial",
+    "name": "Astilleros Armón Gijón",
+    "source": "PNOA",
+    "source:date": "2009",
+    "wikidata": "Q97171358",
+    "wikipedia": "es:Astilleros Armon Gijón"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5514048,
+    "lon": -5.7234437
+   },
+   "id": 190113600,
+   "tags": {
+    "landuse": "industrial",
+    "name": "Central Térmica de Aboño",
+    "operator": "EDP",
+    "plant:method": "combustion",
+    "plant:output:electricity": "904 MW",
+    "plant:source": "coal",
+    "power": "plant",
+    "source": "Red Eléctrica de España - Informe del Sistema Eléctrico Español 2019;https://www.gem.wiki/Abo%C3%B1o_power_station",
+    "wikidata": "Q5760844",
+    "wikipedia": "es:Central térmica de Aboño"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5532485,
+    "lon": -5.6969644
+   },
+   "id": 195450153,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5561187,
+    "lon": -5.6987127
+   },
+   "id": 195450154,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5527776,
+    "lon": -5.6962605
+   },
+   "id": 195450155,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5562831,
+    "lon": -5.6994698
+   },
+   "id": 195450156,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5554415,
+    "lon": -5.6984104
+   },
+   "id": 195450157,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.555678,
+    "lon": -5.6986031
+   },
+   "id": 195450158,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5563839,
+    "lon": -5.7003902
+   },
+   "id": 195450159,
+   "tags": {
+    "building": "industrial",
+    "industrial": "warehouse",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.552913,
+    "lon": -5.6971289
+   },
+   "id": 195450160,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank",
+    "material": "metal"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5522543,
+    "lon": -5.6964747
+   },
+   "id": 195450161,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.556045,
+    "lon": -5.7001118
+   },
+   "id": 195450162,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5555045,
+    "lon": -5.6989937
+   },
+   "id": 195450163,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5559209,
+    "lon": -5.6992076
+   },
+   "id": 195450164,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5550226,
+    "lon": -5.6986272
+   },
+   "id": 195450165,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5551973,
+    "lon": -5.6982366
+   },
+   "id": 195450166,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5566205,
+    "lon": -5.6997481
+   },
+   "id": 195450167,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5533396,
+    "lon": -5.6961547
+   },
+   "id": 195450168,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5524743,
+    "lon": -5.6974911
+   },
+   "id": 195450169,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5568182,
+    "lon": -5.6992532
+   },
+   "id": 195450170,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5538278,
+    "lon": -5.6965366
+   },
+   "id": 195450172,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5552668,
+    "lon": -5.6988011
+   },
+   "id": 195450173,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5564809,
+    "lon": -5.698975
+   },
+   "id": 195450174,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.555686,
+    "lon": -5.6998498
+   },
+   "id": 195450176,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5253259,
+    "lon": -5.7035924
+   },
+   "id": 266406984,
+   "tags": {
+    "landuse": "industrial",
+    "name": "Polígono Industrial Maximino Vega"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5589447,
+    "lon": -5.7534126
+   },
+   "id": 276579856,
+   "tags": {
+    "landuse": "industrial",
+    "name": "Polígono Industrial de Prendes"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5263028,
+    "lon": -5.6880341
+   },
+   "id": 290910941,
+   "tags": {
+    "building": "industrial",
+    "man_made": "works",
+    "name": "Industrias Metalicas Ruiz"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5642393,
+    "lon": -5.7031337
+   },
+   "id": 293979306,
+   "tags": {
+    "landuse": "quarry"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5548922,
+    "lon": -5.6989557
+   },
+   "id": 297323861,
+   "tags": {
+    "industrial": "oil",
+    "landuse": "industrial",
+    "name": "Exolum - Musel II",
+    "old_name": "CLH",
+    "operator": "Exolum"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5528149,
+    "lon": -5.6966387
+   },
+   "id": 384896975,
+   "tags": {
+    "barrier": "wall",
+    "industrial": "oil",
+    "landuse": "industrial"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5268074,
+    "lon": -5.7008477
+   },
+   "id": 431128845,
+   "tags": {
+    "building": "industrial",
+    "man_made": "works",
+    "name": "Esmena / Mecalux"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.568456,
+    "lon": -5.7087779
+   },
+   "id": 445430581,
+   "tags": {
+    "landuse": "quarry",
+    "name": "Parque de carbones"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5577193,
+    "lon": -5.7037387
+   },
+   "id": 448146753,
+   "tags": {
+    "addr:city": "Gijón/Xixón",
+    "building": "industrial",
+    "industrial": "oil_tank_farm",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5535946,
+    "lon": -5.7218092
+   },
+   "id": 450560790,
+   "tags": {
+    "building": "industrial",
+    "height": "225",
+    "man_made": "chimney",
+    "name": "Central Térmica de Aboño",
+    "operator": "EDP",
+    "wikidata": "Q5760844"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5471862,
+    "lon": -5.729462
+   },
+   "id": 467807911,
+   "tags": {
+    "landuse": "industrial"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5609508,
+    "lon": -5.7008234
+   },
+   "id": 489343594,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5608619,
+    "lon": -5.7010252
+   },
+   "id": 489343595,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.560789,
+    "lon": -5.7012358
+   },
+   "id": 489343596,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5583445,
+    "lon": -5.7042009
+   },
+   "id": 528117415,
+   "tags": {
+    "addr:city": "Gijón/Xixón",
+    "building": "industrial",
+    "industrial": "oil_tank_farm",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5703853,
+    "lon": -5.6950563
+   },
+   "id": 627135840,
+   "tags": {
+    "building": "industrial",
+    "content": "LNG",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.570727,
+    "lon": -5.6936908
+   },
+   "id": 627135843,
+   "tags": {
+    "building": "industrial",
+    "content": "LNG",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5709101,
+    "lon": -5.6931853
+   },
+   "id": 627138088,
+   "tags": {
+    "landuse": "industrial",
+    "name": "Planta regasificadora de El Musel - Enagás"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.55233,
+    "lon": -5.722917
+   },
+   "id": 641499372,
+   "tags": {
+    "building": "industrial",
+    "man_made": "chimney",
+    "operator": "EDP"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5326089,
+    "lon": -5.7069386
+   },
+   "id": 713380940,
+   "tags": {
+    "landuse": "industrial",
+    "name": "Centro de Transportes de Gijon"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5198071,
+    "lon": -5.7068369
+   },
+   "id": 823824026,
+   "tags": {
+    "landuse": "industrial"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5386651,
+    "lon": -5.7046783
+   },
+   "id": 867533176,
+   "tags": {
+    "height": "30",
+    "historic": "monument",
+    "man_made": "chimney",
+    "material": "brick",
+    "name": "Antigua chimenea de Cristasa"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5594186,
+    "lon": -5.7204553
+   },
+   "id": 991137084,
+   "tags": {
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.559402,
+    "lon": -5.7208315
+   },
+   "id": 991137085,
+   "tags": {
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5601506,
+    "lon": -5.6992532
+   },
+   "id": 1010955245,
+   "tags": {
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5600507,
+    "lon": -5.6993981
+   },
+   "id": 1010955246,
+   "tags": {
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5601575,
+    "lon": -5.699535
+   },
+   "id": 1010955247,
+   "tags": {
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5599486,
+    "lon": -5.6995359
+   },
+   "id": 1010955248,
+   "tags": {
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.569954,
+    "lon": -5.6899447
+   },
+   "id": 1040517148,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.581606,
+    "lon": -5.6857324
+   },
+   "id": 1040517178,
+   "tags": {
+    "landuse": "industrial"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5805628,
+    "lon": -5.6860022
+   },
+   "id": 1040517181,
+   "tags": {
+    "landuse": "industrial"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5685189,
+    "lon": -5.6909298
+   },
+   "id": 1040517185,
+   "tags": {
+    "landuse": "industrial"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5672182,
+    "lon": -5.7016043
+   },
+   "id": 1041129372,
+   "tags": {
+    "landuse": "industrial"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5607708,
+    "lon": -5.7010245
+   },
+   "id": 1041134593,
+   "tags": {
+    "industrial": "warehouse",
+    "landuse": "industrial",
+    "name": "Moeve",
+    "name:-2024": "Cepsa"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.554626,
+    "lon": -5.6983804
+   },
+   "id": 1041134600,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5542639,
+    "lon": -5.6972323
+   },
+   "id": 1041134603,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5552975,
+    "lon": -5.699695
+   },
+   "id": 1050523350,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5553642,
+    "lon": -5.6995316
+   },
+   "id": 1050523351,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5551789,
+    "lon": -5.6996046
+   },
+   "id": 1050523352,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5552452,
+    "lon": -5.6994429
+   },
+   "id": 1050523353,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5550637,
+    "lon": -5.6995289
+   },
+   "id": 1050523354,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5551241,
+    "lon": -5.6993568
+   },
+   "id": 1050523355,
+   "tags": {
+    "building": "yes",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5191858,
+    "lon": -5.7331867
+   },
+   "id": 1065846076,
+   "tags": {
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5192175,
+    "lon": -5.733142
+   },
+   "id": 1065846077,
+   "tags": {
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5192498,
+    "lon": -5.7330999
+   },
+   "id": 1065846078,
+   "tags": {
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5192814,
+    "lon": -5.733054
+   },
+   "id": 1065846079,
+   "tags": {
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.519313,
+    "lon": -5.733011
+   },
+   "id": 1065846080,
+   "tags": {
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5193419,
+    "lon": -5.7330517
+   },
+   "id": 1065846081,
+   "tags": {
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5193097,
+    "lon": -5.7330953
+   },
+   "id": 1065846082,
+   "tags": {
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.519278,
+    "lon": -5.7331375
+   },
+   "id": 1065846083,
+   "tags": {
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5192475,
+    "lon": -5.7331841
+   },
+   "id": 1065846084,
+   "tags": {
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5358104,
+    "lon": -5.7075165
+   },
+   "id": 1231995723,
+   "tags": {
+    "landuse": "industrial"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5224059,
+    "lon": -5.708269
+   },
+   "id": 1232002729,
+   "tags": {
+    "landuse": "industrial",
+    "name": "Polígono de La Juvería"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5305831,
+    "lon": -5.7018229
+   },
+   "id": 1233180706,
+   "tags": {
+    "landuse": "industrial"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5567984,
+    "lon": -5.7029299
+   },
+   "id": 1271675963,
+   "tags": {
+    "addr:city": "Gijón/Xixón",
+    "building": "industrial",
+    "man_made": "storage_tank"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5432948,
+    "lon": -5.6822729
+   },
+   "id": 1319836499,
+   "tags": {
+    "industrial": "metal_fabrication",
+    "landuse": "industrial",
+    "man_made": "works",
+    "name": "INDRA (El Tallerón)",
+    "old_name": "Duro Felguera Calderería Pesada",
+    "start_date": "1968",
+    "website": "https://www.durofelguera.com/segmentos-de-negocio/caldereria-pesada/"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5234295,
+    "lon": -5.7018046
+   },
+   "id": 1325265440,
+   "tags": {
+    "landuse": "industrial",
+    "name": "Neoalgae",
+    "website": "https://neoalgae.es/"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5235323,
+    "lon": -5.7015851
+   },
+   "id": 1325265441,
+   "tags": {
+    "industrial": "laboratory",
+    "landuse": "industrial",
+    "name": "Alskin Cosmetics",
+    "website": "https://alskincosmetics.com/"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5599785,
+    "lon": -5.6994905
+   },
+   "id": 1342370393,
+   "tags": {
+    "barrier": "wall",
+    "landuse": "industrial"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5301441,
+    "lon": -5.7234276
+   },
+   "id": 1345281645,
+   "tags": {
+    "landuse": "landfill",
+    "name": "Vertedero ArcelorMittal"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5454943,
+    "lon": -5.6961708
+   },
+   "id": 1352033267,
+   "tags": {
+    "man_made": "wastewater_plant"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5576952,
+    "lon": -5.7034755
+   },
+   "id": 1352073595,
+   "tags": {
+    "barrier": "wall",
+    "landuse": "industrial",
+    "name": "Exolum - Musel I",
+    "old_name": "CLH"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5323818,
+    "lon": -5.7026579
+   },
+   "id": 1485962194,
+   "tags": {
+    "landuse": "industrial"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5260933,
+    "lon": -5.727852
+   },
+   "id": 1525305559,
+   "tags": {
+    "area": "yes",
+    "height": "130",
+    "man_made": "chimney",
+    "material": "concrete",
+    "operator": "ArcelorMittal"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5277547,
+    "lon": -5.7277336
+   },
+   "id": 1525305560,
+   "tags": {
+    "area": "yes",
+    "height": "130",
+    "man_made": "chimney",
+    "material": "concrete",
+    "operator": "ArcelorMittal"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5241324,
+    "lon": -5.7363884
+   },
+   "id": 1525305561,
+   "tags": {
+    "area": "yes",
+    "landuse": "industrial",
+    "name": "Turbina B",
+    "operator": "ArcelorMittal",
+    "plant:method": "gas turbine",
+    "plant:output:electricity": "12 MW",
+    "plant:source": "blast furnace gas",
+    "power": "plant"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5252186,
+    "lon": -5.7349366
+   },
+   "id": 1525305564,
+   "tags": {
+    "area": "yes",
+    "landuse": "industrial",
+    "name": "Turbina A",
+    "operator": "ArcelorMittal",
+    "plant:method": "gas turbine",
+    "plant:output:electricity": "12 MW",
+    "plant:source": "blast furnace gas",
+    "power": "plant"
+   },
+   "type": "way"
+  },
+  {
+   "center": {
+    "lat": 43.5587002,
+    "lon": -5.7166151
+   },
+   "id": 1307771,
+   "tags": {
+    "landuse": "industrial",
+    "name": "Parque de Carbones",
+    "type": "multipolygon"
+   },
+   "type": "relation"
+  },
+  {
+   "center": {
+    "lat": 43.5492771,
+    "lon": -5.7242913
+   },
+   "id": 1307772,
+   "tags": {
+    "landuse": "quarry",
+    "name": "Cantera de Aboño",
+    "type": "multipolygon"
+   },
+   "type": "relation"
+  },
+  {
+   "center": {
+    "lat": 43.5497465,
+    "lon": -5.6934915
+   },
+   "id": 1330872,
+   "tags": {
+    "industrial": "oil",
+    "landuse": "industrial",
+    "name": "Exolum - Musel III",
+    "old_name": "GALP Distribucion",
+    "type": "multipolygon"
+   },
+   "type": "relation"
+  },
+  {
+   "center": {
+    "lat": 43.5609265,
+    "lon": -5.7224102
+   },
+   "id": 1360542,
+   "tags": {
+    "landuse": "industrial",
+    "man_made": "works",
+    "name": "Fábrica de Cementos Tudela Veguín",
+    "type": "multipolygon"
+   },
+   "type": "relation"
+  },
+  {
+   "center": {
+    "lat": 43.5304658,
+    "lon": -5.7055286
+   },
+   "id": 9916450,
+   "tags": {
+    "barrier": "fence",
+    "fence_type": "wire",
+    "landuse": "industrial",
+    "type": "multipolygon"
+   },
+   "type": "relation"
+  }
+ ],
+ "generator": "Overpass API 0.7.62.7 375dc00a",
+ "osm3s": {
+  "copyright": "The data included in this document is from www.openstreetmap.org. The data is made available under ODbL.",
+  "timestamp_osm_base": "2026-08-20T13:55:06Z"
+ },
+ "version": 0.6
+}

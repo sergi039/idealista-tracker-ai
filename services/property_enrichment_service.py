@@ -7,13 +7,16 @@ from sqlalchemy.orm.attributes import flag_modified
 from app import db
 from models import Property
 from services import advertiser, sea_view_service
+from services.enrich_budget import lookup_budget_seconds
 from services.enrichment_service import EnrichmentService
+from services.hazard_service import HazardService
 from services.property_location_service import PropertyLocationService
 from services.property_scoring_service import PropertyScoringService
 from services.pool_service import PoolService
 from services.property_travel_service import PropertyTravelService, travel_api_state
 from services.quality_of_life_service import QualityOfLifeService
 from services.sea_distance_service import SeaDistanceService
+from utils.http import lookup_budget
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +26,12 @@ class PropertyEnrichmentService:
 
     Mirrors the legacy "Enrich with Google APIs" flow:
     - ensure coordinates (Geocoding)
-    - measure distance to the sea (OpenStreetMap, free)
-    - the free pass: nearby amenities, quality of life, sea-view verdict
-      (OpenStreetMap / OpenTopoData / local reference files, all free)
-    - compute travel targets (Places + Distance Matrix, with fallback)
+    - the decisive pass, committed on its own (#434): distance to the sea
+      (OpenStreetMap, free but scored) and the travel targets (Places +
+      Distance Matrix, paid)
+    - the advisory pass, each step writing for itself: who is selling, the
+      free sources (amenities, quality of life, sea-view verdict) and the
+      pool
     - recompute scoring (local)
 
     `enrich_free_sources` is that free pass on its own: ingestion runs it
@@ -42,6 +47,7 @@ class PropertyEnrichmentService:
         sea_distance_service: Optional[SeaDistanceService] = None,
         enrichment_service: Optional[EnrichmentService] = None,
         quality_of_life_service: Optional["QualityOfLifeService"] = None,
+        hazard_service: Optional["HazardService"] = None,
         pool_service: Optional["PoolService"] = None,
         sea_view_calculator=None,
     ):
@@ -55,6 +61,13 @@ class PropertyEnrichmentService:
         # Shares the amenity client's Overpass transport through the same
         # EnrichmentService instance, so one gate paces both lookups.
         self.quality_of_life_service = quality_of_life_service or QualityOfLifeService(
+            enrichment_service=self.enrichment_service
+        )
+        # And again for the hazard scan (#437): one EnrichmentService means
+        # one Overpass client and one 5 s gate across all three lookups, which
+        # is the whole reason this class holds the instance rather than each
+        # service building its own.
+        self.hazard_service = hazard_service or HazardService(
             enrichment_service=self.enrichment_service
         )
         # Same sharing for the pool lookup (Overpass) and its drive times
@@ -76,7 +89,7 @@ class PropertyEnrichmentService:
     def enrich_free_sources(
         self, prop: Property, *, commit: bool, use_ai: bool
     ) -> None:
-        """The free pass: OSM amenities, quality-of-life, sea view (#299).
+        """The free pass: OSM amenities, quality-of-life, hazards, sea view.
 
         One home for the three enrichers that reach no billed API -- the
         amenity counts (#152), the QoL block (#275) and the sea-view verdict
@@ -115,7 +128,24 @@ class PropertyEnrichmentService:
         With `commit=False` (the Enrich flow) everything rides the caller's
         transaction, so a failed step must not roll back -- that would
         discard the caller's own pending work.
+
+        **The pass runs on a clock, and it opens one here rather than trusting
+        its caller to** (#434 review, reproduced 2026-08-20). `enrich_property`
+        opens a budget for the whole run, but ingestion calls this method
+        directly and had none at all: with all three Overpass instances
+        connecting and then saying nothing, one listing cost **640 s** -- a
+        120 s coastline read, eight 60 s requests and eight 5 s gate waits --
+        bounded only by each walk's own 210 s ceiling, which three independent
+        walks do not compose into a run budget. Opening it here gives every
+        caller the ceiling, including the free backfills. Nested inside
+        `enrich_property`'s it takes the *earlier* deadline
+        (`utils/http.lookup_budget`), so no caller gains time by having two.
         """
+        with lookup_budget(lookup_budget_seconds()):
+            self._free_sources(prop, commit=commit, use_ai=use_ai)
+
+    def _free_sources(self, prop: Property, *, commit: bool, use_ai: bool) -> None:
+        """The steps themselves, inside the budget `enrich_free_sources` opens."""
         try:
             self.enrichment_service.enrich_osm_amenities(prop, commit=commit)
         except Exception as e:
@@ -136,6 +166,25 @@ class PropertyEnrichmentService:
                 e,
             )
             if commit:
+                db.session.rollback()
+
+        # The hazard scan (#437) is one more Overpass round trip through the
+        # same client and gate, and it runs here **only when this pass owns
+        # its commits**. With `commit=False` the caller owns a transaction
+        # this cannot lock inside, and a scan written that way loses a
+        # concurrently committed measurement. Every caller that matters passes
+        # `commit=True`: ingestion, and the advisory pass of an Enrich press,
+        # which is where #434 put every score-neutral step for exactly this
+        # reason -- each one owning its own locked write.
+        if commit:
+            try:
+                self.hazard_service.enrich(prop, commit=True)
+            except Exception as e:
+                logger.warning(
+                    "Hazard scan failed for %s: %s",
+                    getattr(prop, "id", None),
+                    e,
+                )
                 db.session.rollback()
 
         # Sea view last: with commit=True its writer takes the row under
@@ -161,6 +210,36 @@ class PropertyEnrichmentService:
         refresh_coords: bool = False,
         recalc_scoring: bool = True,
     ) -> bool:
+        """One Enrich press: coordinates, the decisive measurements, then the
+        advisory ones, then the score.
+
+        The order and the commits are the ticket (#434). On 2026-08-20 a press
+        on property 793 spent 888 s inside `PoolService.enrich` waiting on
+        three unreachable Overpass instances -- a step whose criterion ships at
+        weight 0 -- while the Distance Matrix request that had already been
+        *billed* at 12:59 sat in an uncommitted session until 13:12:55. A
+        container recreated in that window (#283) would have taken the paid
+        measurement with it and left nothing recording that it had ever been
+        made.
+
+        So the run has two passes and the boundary between them is a commit:
+
+        * the **decisive** pass -- the coordinate, the sea distance and the
+          travel times -- runs first and is committed on its own. It goes
+          first for the clock as much as for the commit: the free-lookup
+          budget below is shared, and the steps that feed a score (and the one
+          that spends money) must be the ones that get it.
+        * the **advisory** pass -- who is selling, the free sources, the pool
+          -- runs after, each step owning its own locked write. None of them
+          can move what is already stored, and a step that finds the budget
+          spent records `unavailable` and the run goes on.
+
+        `lookup_budget` bounds the free lookups of the whole run, not each
+        one: eleven bounded Overpass walks are still eleven walks. It is
+        deliberately not opened around the Google steps -- see
+        `utils/http._LOOKUP_DEADLINE` for why abandoning a billed request is
+        the defect this fix would otherwise import.
+        """
         if not prop:
             return False
 
@@ -172,35 +251,15 @@ class PropertyEnrichmentService:
         # everything below it: Overpass, an AI-bridge call whose timeout is
         # 600 s, and Distance Matrix. That is precisely the cost #196 refused,
         # so the coordinate write is its own short transaction instead.
-        #
-        # Which is why it runs before the advertiser lookup rather than after.
-        # `check_writable` refuses a `commit=True` write on a session with
-        # anything pending (`services/enrichment_write.py`), and
-        # `advertiser.enrich(commit=False)` assigns `prop.enrichment` and calls
-        # `flag_modified` on a row whose seller nothing has established yet --
-        # which is every fresh fotocasa import, the rows most likely to need a
-        # coordinate. Left in the old order this raises on exactly them.
-        #
-        # The swap costs the advertiser step nothing: its early returns read
-        # the URL and the stored verdict, never a coordinate, and it still runs
-        # before the "no coordinates" return below, so a listing the geocoder
-        # cannot place still gets its seller answered.
         self.location_service.ensure_coordinates(
             prop, refresh=refresh_coords, commit=True
         )
 
-        # Who is selling: the owner, or an agency. Free: it reads the listing
-        # page the row already links to, and only when the row does not answer
-        # for itself already (`services/advertiser.py` refuses the fetch
-        # otherwise). Advisory -- no score reads it, and a refusal must not
-        # fail the run.
-        try:
-            advertiser.enrich(prop, commit=False)
-        except Exception as e:
-            logger.warning(
-                "Advertiser lookup failed for %s: %s", getattr(prop, "id", None), e
-            )
+        with lookup_budget(lookup_budget_seconds()):
+            return self._enrich_located(prop, recalc_scoring=recalc_scoring)
 
+    def _enrich_located(self, prop: Property, *, recalc_scoring: bool) -> bool:
+        """Everything after the coordinate, inside the run's lookup budget."""
         # `is None`, not truthiness: a coordinate of exactly 0 is a location,
         # and the amenity lookup below already treats it as one.
         if prop.location_lat is None or prop.location_lon is None:
@@ -217,7 +276,13 @@ class PropertyEnrichmentService:
             # `use_ai=True` because this method is the Enrich button: the
             # text signal runs before the coordinate check, so it is the one
             # part of the pass a coordinate-less row still gets in full.
-            self.enrich_free_sources(prop, commit=True, use_ai=True)
+            # Without the pool step, which the old shape did not run here
+            # either. `PoolService._compute` answers `no_coordinates` -- free,
+            # no network -- but that status is not one of the two its "a
+            # refusal never overwrites an answer" guard defends against, so a
+            # re-geocode that lost a coordinate would write it over a pool
+            # somebody had measured when the row still had one.
+            self._advisory_pass(prop, use_ai=True, with_pool=False)
             return False
 
         # Enrichment does not touch `search_profile_id` (owner decision,
@@ -225,8 +290,9 @@ class PropertyEnrichmentService:
         # profile had the nearest custom target, discarding the saved search
         # its alert email came from. Ingestion owns that column now.
 
-        # Distance to the sea is measured before scoring so the recalculation
-        # below already sees it. It rides on the shared commit at the end.
+        # -- the decisive pass ------------------------------------------------
+        # Distance to the sea is a scored criterion, so it runs here rather
+        # than among the advisory steps, and it rides the commit below.
         try:
             self.sea_distance_service.update_property(prop, commit=False)
         except Exception as e:
@@ -236,37 +302,8 @@ class PropertyEnrichmentService:
                 e,
             )
 
-        # The free pass: amenity counts (#152), the QoL block (#275) and the
-        # sea-view verdict (#299). All advisory and score-neutral; a refusal
-        # is recorded as a refusal and never fails the run. It rides the
-        # shared commit at the end, and a hand-set sea-view verdict is left
-        # alone by the sea-view writer itself. `use_ai=True`: this method is
-        # what the Enrich button calls, so a subscription call here is one
-        # owner press, not an unattended loop.
-        self.enrich_free_sources(prop, commit=False, use_ai=True)
-
         ok = self.travel_service.calculate_for_property(prop, commit=False)
         travel_state = travel_api_state(prop)
-
-        # Pool discovery + drive times (proposal D17): OSM via the shared
-        # gate plus ≤3 Distance Matrix elements (and, only on the empty
-        # path, one budgeted Text Search). Before scoring, because
-        # `pool_score` reads it — though it ships at weight 0, so nothing
-        # moves until the owner turns it on. A failure never fails the run.
-        try:
-            self.pool_service.enrich(prop, commit=False)
-        except Exception as e:
-            logger.warning(
-                "Pool enrichment failed for %s: %s", getattr(prop, "id", None), e
-            )
-
-        if recalc_scoring:
-            try:
-                self.scoring_service.calculate_for_property(prop, commit=False)
-            except Exception as e:
-                logger.warning(
-                    "Property scoring failed during enrichment for %s: %s", prop.id, e
-                )
 
         # `enrichment` is a plain JSON column, not a MutableDict: reading the
         # loaded dict, mutating it and assigning the *same object* back leaves
@@ -287,8 +324,80 @@ class PropertyEnrichmentService:
         prop.enrichment = enrichment
         flag_modified(prop, "enrichment")
 
+        # The paid measurement is durable from here. It used to wait for the
+        # single commit at the end of the whole method, behind the advisory
+        # steps below (#434).
         db.session.commit()
+
+        # -- the advisory pass ------------------------------------------------
+        self._advisory_pass(prop, use_ai=True, with_pool=True)
+
+        if recalc_scoring:
+            try:
+                self.scoring_service.calculate_for_property(prop, commit=False)
+                db.session.commit()
+            except Exception as e:
+                db.session.rollback()
+                logger.warning(
+                    "Property scoring failed during enrichment for %s: %s", prop.id, e
+                )
         return ok
+
+    def _advisory_pass(self, prop: Property, *, use_ai: bool, with_pool: bool) -> None:
+        """The score-neutral steps, each owning its own write.
+
+        They commit for themselves rather than riding a shared transaction at
+        the end of the run, so nothing decisive waits behind them and a step
+        that fails costs only itself.
+
+        **Three of the four take the row under `FOR UPDATE` for the length of
+        their own write** (`services/enrichment_write.py`): the advertiser, the
+        quality-of-life block and the pool. The exception is
+        `EnrichmentService.enrich_osm_amenities`, which reads, modifies and
+        commits `enrichment` with no lock at all -- the #352 gap, named there
+        and still open. It is not made worse here: under the old shape this
+        step staged into a transaction committed at the end of the run from the
+        same stale copy, so a block another process wrote mid-run was lost
+        either way, and each writer's staleness window is now shorter rather
+        than longer. It is not fixed here either, and deliberately: that writer
+        is also ingestion's, `check_writable` refuses a `commit=True` write on
+        a session with anything pending, and converting it means proving the
+        ingestion path is clean at that point -- which is a ticket, not a line.
+        """
+        # Who is selling: the owner, or an agency. Free: it reads the listing
+        # page the row already links to, and only when the row does not answer
+        # for itself already (`services/advertiser.py` refuses the fetch
+        # otherwise). Advisory -- no score reads it, and a refusal must not
+        # fail the run.
+        try:
+            advertiser.enrich(prop, commit=True)
+        except Exception as e:
+            db.session.rollback()
+            logger.warning(
+                "Advertiser lookup failed for %s: %s", getattr(prop, "id", None), e
+            )
+
+        # The free pass: amenity counts (#152), the QoL block (#275) and the
+        # sea-view verdict (#299). All advisory and score-neutral; a refusal
+        # is recorded as a refusal and never fails the run. A hand-set sea-view
+        # verdict is left alone by the sea-view writer itself.
+        self.enrich_free_sources(prop, commit=True, use_ai=use_ai)
+
+        # Pool discovery + drive times (proposal D17): OSM via the shared
+        # gate plus <=3 Distance Matrix elements (and, only on the empty
+        # path, one budgeted Text Search). `pool_score` reads it, and ships at
+        # weight 0 -- which is exactly why it may not hold the paid steps up.
+        # It runs on whatever is left of the run's lookup budget, and records
+        # `unavailable` when there is none.
+        if not with_pool:
+            return
+        try:
+            self.pool_service.enrich(prop, commit=True)
+        except Exception as e:
+            db.session.rollback()
+            logger.warning(
+                "Pool enrichment failed for %s: %s", getattr(prop, "id", None), e
+            )
 
     def enrich_property_id(
         self,

@@ -2,7 +2,7 @@ import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Optional, Tuple
 
 from app import db
@@ -277,6 +277,74 @@ def _resolve_pool_config(
     return resolved, None
 
 
+# Criteria that ship at weight 0 and re-score every listing in a subscription
+# the moment somebody raises them. `routes/main_routes.py` reads this to decide
+# which save needs the dry-run preview instead of applying straight away, and
+# it lives here rather than there so a criterion cannot be added to the scorer
+# and forgotten by the gate — which would be a silent mass rescore that
+# `git log` cannot explain (the pool criterion, D17/#278, and the hazard
+# criterion, #437).
+WEIGHTLESS_SCORE_KEYS = ("pool_score", "hazard_score")
+
+
+def _resolve_hazard_config(
+    raw: Any, defaults: Dict[str, float]
+) -> Tuple[Dict[str, float], Optional[str]]:
+    """Validate a per-profile hazard override (near_m/far_m/moderate_factor).
+
+    Same contract as `_resolve_sea_distance_config` and `_resolve_pool_config`:
+    the profile JSON is free-form, so a bad value falls back to the defaults
+    and says which one, rather than scoring a listing against a number nobody
+    chose.
+    """
+    if raw is None:
+        return dict(defaults), None
+    if not isinstance(raw, dict):
+        return dict(defaults), "hazard override is not an object"
+
+    resolved = dict(defaults)
+    for key in ("near_m", "far_m", "moderate_factor"):
+        if raw.get(key) is None:
+            continue
+        value = _finite_float(raw.get(key))
+        if value is None:
+            return dict(defaults), f"{key} is not a finite number"
+        resolved[key] = value
+
+    if resolved["near_m"] < 0:
+        return dict(defaults), "near_m must not be negative"
+    if resolved["far_m"] <= resolved["near_m"]:
+        return dict(defaults), "far_m must be greater than near_m"
+    if not 0.0 <= resolved["moderate_factor"] <= 1.0:
+        return dict(defaults), "moderate_factor must be between 0 and 1"
+    return resolved, None
+
+
+def _hazard_proximity_score(
+    distance_m: Optional[float], *, near_m: float, far_m: float, factor: float
+) -> Optional[float]:
+    """100 is far from anything, 0 is next door. Linear between the bounds.
+
+    Linear rather than the logarithmic decay the sea distance uses, and the
+    difference is deliberate: the sea's premium collapses over the first few
+    hundred metres, while a plume, a noise contour and a lorry route fall off
+    over kilometres. `factor` scales the *penalty*, so a `moderate` hazard at
+    the doorstep scores 50 rather than 0 and one past `far_m` still scores
+    100.
+    """
+    if distance_m is None:
+        return None
+    if far_m <= near_m:
+        return None
+    if distance_m <= near_m:
+        raw = 0.0
+    elif distance_m >= far_m:
+        raw = 100.0
+    else:
+        raw = (distance_m - near_m) / (far_m - near_m) * 100.0
+    return _clamp(100.0 - (100.0 - raw) * factor)
+
+
 def _linear_minutes_score(
     minutes: Optional[float], best: float, worst: float
 ) -> Optional[float]:
@@ -361,6 +429,7 @@ class HousingPropertyScorer(BasePropertyScorer):
         "sea_score": 0.15,
         "size_score": 0.0,
         "pool_score": 0.0,
+        "hazard_score": 0.0,
     }
     DEFAULT_LIFESTYLE_WEIGHTS = {
         "travel_score": 0.45,
@@ -368,6 +437,7 @@ class HousingPropertyScorer(BasePropertyScorer):
         "sea_score": 0.25,
         "value_score": 0.0,
         "pool_score": 0.0,
+        "hazard_score": 0.0,
     }
     DEFAULT_TRAVEL_MINUTES = {"best": 10.0, "worst": 60.0}
     # Straight-line metres to the coastline. 300 m is where the coastal premium
@@ -378,6 +448,17 @@ class HousingPropertyScorer(BasePropertyScorer):
     # counts only pools with indoor evidence — the owner swims year-round.
     # Weightless (0.0) in every category until the owner turns it on.
     DEFAULT_POOL = {"best_min": 10.0, "worst_min": 40.0, "require_indoor": 1.0}
+    # Straight-line metres to the nearest hazardous neighbour (#437). At or
+    # inside `near_m` the criterion scores 0; at or beyond `far_m` it scores
+    # 100. Both numbers come from the coordinate that prompted the ticket:
+    # property 793 has a cement works at 1.12 km and a coal-fired power
+    # station at 2.13 km, and 5 km is where the last facility in that
+    # measurement (ArcelorMittal, 5.34 km) falls outside. `moderate_factor`
+    # halves the penalty for the `moderate` severity band -- a quarry and a
+    # sewage works are a nuisance, not an emitter -- and is the one knob that
+    # is a judgement rather than a measurement.
+    # Weightless (0.0) in every category until the owner turns it on.
+    DEFAULT_HAZARD = {"near_m": 1000.0, "far_m": 5000.0, "moderate_factor": 0.5}
 
     def calculate(
         self, prop: Property, profile: Optional[SearchProfile]
@@ -415,6 +496,16 @@ class HousingPropertyScorer(BasePropertyScorer):
                 "Ignoring pool override for category %s: %s",
                 self.category,
                 pool_cfg_error,
+            )
+        hazard_cfg, hazard_cfg_error = _resolve_hazard_config(
+            cat_cfg.get("hazard") if isinstance(cat_cfg, dict) else None,
+            self.DEFAULT_HAZARD,
+        )
+        if hazard_cfg_error:
+            logger.warning(
+                "Ignoring hazard override for category %s: %s",
+                self.category,
+                hazard_cfg_error,
             )
 
         # One unusable value must not take the whole subscription's scoring with
@@ -504,6 +595,14 @@ class HousingPropertyScorer(BasePropertyScorer):
         )
         if pool_cfg_error:
             pool_meta = {**pool_meta, "config_override_ignored": pool_cfg_error}
+        hazard_score, hazard_meta = self._hazard_score(
+            prop,
+            near_m=hazard_cfg["near_m"],
+            far_m=hazard_cfg["far_m"],
+            moderate_factor=hazard_cfg["moderate_factor"],
+        )
+        if hazard_cfg_error:
+            hazard_meta = {**hazard_meta, "config_override_ignored": hazard_cfg_error}
 
         investment_inputs = {
             "value_score": (
@@ -517,6 +616,10 @@ class HousingPropertyScorer(BasePropertyScorer):
             "sea_score": (sea_score, investment_weights.get("sea_score", 0.0)),
             "size_score": (size_score, investment_weights.get("size_score", 0.0)),
             "pool_score": (pool_score, investment_weights.get("pool_score", 0.0)),
+            "hazard_score": (
+                hazard_score,
+                investment_weights.get("hazard_score", 0.0),
+            ),
         }
         lifestyle_inputs = {
             "travel_score": (
@@ -527,6 +630,10 @@ class HousingPropertyScorer(BasePropertyScorer):
             "sea_score": (sea_score, lifestyle_weights.get("sea_score", 0.0)),
             "value_score": (value_score, lifestyle_weights.get("value_score", 0.0)),
             "pool_score": (pool_score, lifestyle_weights.get("pool_score", 0.0)),
+            "hazard_score": (
+                hazard_score,
+                lifestyle_weights.get("hazard_score", 0.0),
+            ),
         }
         investment = _weighted_average(investment_inputs)
         lifestyle = _weighted_average(lifestyle_inputs)
@@ -591,6 +698,7 @@ class HousingPropertyScorer(BasePropertyScorer):
                         "sea_score": sea_score,
                         "size_score": size_score,
                         "pool_score": pool_score,
+                        "hazard_score": hazard_score,
                     },
                 },
                 "lifestyle": {
@@ -602,6 +710,7 @@ class HousingPropertyScorer(BasePropertyScorer):
                         "sea_score": sea_score,
                         "value_score": value_score,
                         "pool_score": pool_score,
+                        "hazard_score": hazard_score,
                     },
                 },
             },
@@ -629,6 +738,7 @@ class HousingPropertyScorer(BasePropertyScorer):
                 "travel": travel_meta,
                 "sea": sea_meta,
                 "pool": pool_meta,
+                "hazard": hazard_meta,
             },
         }
 
@@ -942,6 +1052,180 @@ class HousingPropertyScorer(BasePropertyScorer):
             else None,
         }
 
+    def _hazard_score(
+        self,
+        prop: Property,
+        near_m: float,
+        far_m: float,
+        moderate_factor: float,
+    ) -> Tuple[Optional[float], Dict[str, Any]]:
+        """Straight-line metres to the nearest hazardous neighbour (#437).
+
+        Three refusals, and each is the #98 rule in a different clothing:
+
+        * no block, a refusal, or no coordinate scores `None`. Nobody looked,
+          and a clean 100 for a listing nobody scanned is exactly the false
+          all-clear this feature exists to remove;
+        * a *measured* absence scores 100 -- but only when the scan reached
+          far enough to support it. `guaranteed_m` is the radius the answer
+          covers around the **parcel**, so an approximate row's 6 km scan
+          guarantees 1 km and cannot say anything about a works at 4 km. That
+          is `sea_distance`'s rule that a `far_m` past the searched radius
+          scores `None` rather than 0;
+        * a measured hazard scores only when the answer is the same at both
+          ends of the coordinate's slack (#358). For a precise row the bounds
+          are one number twice, so nothing about that path is special-cased;
+          for a centroid at 1.1 km the band runs 0 to 6.1 km and the scores
+          disagree, so the component abstains rather than asserting either.
+
+        The scan is read through `hazard_service.read_verdict`, never off the
+        stored block, because a row re-geocoded since the measurement carries
+        a `slack_m` that no longer matches its accuracy.
+        """
+        from services import hazard_rules, hazard_service
+
+        bounds = {
+            "near_m": near_m,
+            "far_m": far_m,
+            "moderate_factor": moderate_factor,
+        }
+        verdict = hazard_service.read_verdict(prop)
+        status = verdict.get("status")
+        if not verdict.get("measured"):
+            return None, {**bounds, "status": status or "missing_hazard_data"}
+
+        if verdict.get("truncated"):
+            # The scan reached Overpass's element cap, so what came back is a
+            # statement about the elements it saw and not about the radius --
+            # and the elements it did not see could be anywhere, including
+            # nearer than everything it did. That is true with items and
+            # without them: the first version of this guard sat inside the
+            # empty branch, and a truncated scan carrying one distant facility
+            # still scored 100 (codex review, 2026-08-20). The card discloses
+            # it; the number must not answer over it.
+            return None, {**bounds, "status": "scan_truncated"}
+
+        # The horizon check is asked of every scan, not only an empty one.
+        # `far_m` is configurable per subscription, and a scan that covered
+        # less than it cannot answer for the ground past its edge: a moderate
+        # quarry at 5 km scored 72 while an unseen high-severity facility at
+        # 6 km would have scored 55 and decided the component (codex review,
+        # 2026-08-20). This is why an approximate row does not score the
+        # criterion at all -- 6 km around a centroid guarantees 1 km around
+        # the parcel, which is the #358 rule and not a special case.
+        guaranteed = verdict.get("guaranteed_m")
+        if guaranteed is None or guaranteed < far_m:
+            # Two different reasons wear this shape, and the meta names the
+            # one the owner can act on: a scan that really was too short, and
+            # a scan long enough whose *slack* eats the difference. The second
+            # is a re-geocode away; the first is not.
+            searched = verdict.get("searched_m")
+            shortfall = (
+                STATUS_APPROXIMATE_ORIGIN
+                if searched is not None and searched >= far_m
+                else "searched_radius_too_small"
+            )
+            return None, {
+                **bounds,
+                "status": shortfall,
+                "guaranteed_m": guaranteed,
+                "origin_accuracy": verdict.get("origin_accuracy"),
+            }
+
+        items = verdict.get("items") or []
+        if not items:
+            return 100.0, {
+                **bounds,
+                "status": status,
+                "guaranteed_m": guaranteed,
+                "items": 0,
+            }
+
+        worst_score: Optional[float] = None
+        worst_item: Optional[Dict[str, Any]] = None
+        for item in items:
+            factor = (
+                moderate_factor
+                if item.get("severity") != hazard_rules.SEVERITY_HIGH
+                else 1.0
+            )
+            low = _hazard_proximity_score(
+                _finite_float(item.get("min_distance_m")),
+                near_m=near_m,
+                far_m=far_m,
+                factor=factor,
+            )
+            high = _hazard_proximity_score(
+                _finite_float(item.get("max_distance_m")),
+                near_m=near_m,
+                far_m=far_m,
+                factor=factor,
+            )
+            if low is None or high is None:
+                # Unreachable through `read_verdict`, which refuses a block
+                # holding an item without a finite distance rather than
+                # handing one on -- an item that cannot be read is not an item
+                # that can be walked past, because the ones beside it would
+                # then be reported as the whole picture (codex review,
+                # 2026-08-20). Kept because this function takes a dict and
+                # somebody will one day hand it one from somewhere else.
+                return None, {
+                    **bounds,
+                    "status": "unreadable_item",
+                    "item": item.get("name") or item.get("kind"),
+                }
+            if low != high:
+                # The slack can move this one, and the exemption is asked of
+                # the *listing*, not of the items that happen to be safe: a
+                # block whose nearest facility is unresolvable cannot report
+                # the second-nearest as the answer.
+                return None, {
+                    **bounds,
+                    "status": STATUS_APPROXIMATE_ORIGIN,
+                    "origin_accuracy": verdict.get("origin_accuracy"),
+                    "slack_m": verdict.get("slack_m"),
+                    "item": item.get("name") or item.get("kind"),
+                }
+            if worst_score is None or low < worst_score:
+                worst_score = low
+                worst_item = item
+
+        if worst_score is None:
+            return None, {**bounds, "status": "no_scorable_item"}
+
+        # The stored list is capped, so a facility may have been left out --
+        # but only ones further away than every item here. Their score is
+        # therefore at least the score of the farthest kept item taken at full
+        # severity, and while the worst kept item is at or below that bound,
+        # nothing dropped can beat it. When it is not, the answer is not
+        # knowable from what was stored.
+        stored_count = verdict.get("item_count") or len(items)
+        if stored_count > len(items):
+            farthest = max(
+                (_finite_float(item.get("max_distance_m")) for item in items),
+                default=None,
+            )
+            bound = _hazard_proximity_score(
+                farthest, near_m=near_m, far_m=far_m, factor=1.0
+            )
+            if bound is None or worst_score > bound:
+                return None, {
+                    **bounds,
+                    "status": "list_truncated",
+                    "items": len(items),
+                    "item_count": stored_count,
+                }
+
+        return worst_score, {
+            **bounds,
+            "status": status,
+            "item": (worst_item or {}).get("name") or (worst_item or {}).get("kind"),
+            "kind": (worst_item or {}).get("kind"),
+            "severity": (worst_item or {}).get("severity"),
+            "distance_m": (worst_item or {}).get("origin_distance_m"),
+            "items": len(items),
+        }
+
     def _travel_score(
         self,
         prop: Property,
@@ -1054,6 +1338,7 @@ class LandPropertyScorer(HousingPropertyScorer):
         "sea_score": 0.15,
         "size_score": 0.0,
         "pool_score": 0.0,
+        "hazard_score": 0.0,
     }
     DEFAULT_LIFESTYLE_WEIGHTS = {
         "travel_score": 0.4,
@@ -1061,6 +1346,7 @@ class LandPropertyScorer(HousingPropertyScorer):
         "sea_score": 0.25,
         "value_score": 0.0,
         "pool_score": 0.0,
+        "hazard_score": 0.0,
     }
 
 
@@ -1076,6 +1362,7 @@ class GaragePropertyScorer(HousingPropertyScorer):
         "sea_score": 0.0,
         "size_score": 0.0,
         "pool_score": 0.0,
+        "hazard_score": 0.0,
     }
     DEFAULT_LIFESTYLE_WEIGHTS = {
         "travel_score": 0.7,
@@ -1083,6 +1370,7 @@ class GaragePropertyScorer(HousingPropertyScorer):
         "sea_score": 0.0,
         "value_score": 0.0,
         "pool_score": 0.0,
+        "hazard_score": 0.0,
     }
 
 
@@ -1095,6 +1383,7 @@ class CommercialPropertyScorer(HousingPropertyScorer):
         "sea_score": 0.05,
         "size_score": 0.0,
         "pool_score": 0.0,
+        "hazard_score": 0.0,
     }
     DEFAULT_LIFESTYLE_WEIGHTS = {
         "travel_score": 0.55,
@@ -1102,6 +1391,7 @@ class CommercialPropertyScorer(HousingPropertyScorer):
         "sea_score": 0.1,
         "value_score": 0.0,
         "pool_score": 0.0,
+        "hazard_score": 0.0,
     }
 
 
@@ -1114,6 +1404,7 @@ class BuildingPropertyScorer(HousingPropertyScorer):
         "sea_score": 0.05,
         "size_score": 0.0,
         "pool_score": 0.0,
+        "hazard_score": 0.0,
     }
     DEFAULT_LIFESTYLE_WEIGHTS = {
         "travel_score": 0.55,
@@ -1121,6 +1412,7 @@ class BuildingPropertyScorer(HousingPropertyScorer):
         "sea_score": 0.1,
         "value_score": 0.0,
         "pool_score": 0.0,
+        "hazard_score": 0.0,
     }
 
 
@@ -1133,6 +1425,7 @@ class NewDevelopmentPropertyScorer(HousingPropertyScorer):
         "sea_score": 0.15,
         "size_score": 0.0,
         "pool_score": 0.0,
+        "hazard_score": 0.0,
     }
     DEFAULT_LIFESTYLE_WEIGHTS = {
         "travel_score": 0.45,
@@ -1140,6 +1433,7 @@ class NewDevelopmentPropertyScorer(HousingPropertyScorer):
         "sea_score": 0.25,
         "value_score": 0.0,
         "pool_score": 0.0,
+        "hazard_score": 0.0,
     }
 
 
@@ -1184,6 +1478,7 @@ class PropertyScoringService:
         "travel_score",
         "sea_score",
         "pool_score",
+        "hazard_score",
     )
     EDITABLE_SECTIONS = {
         "investment": WEIGHT_KEYS,
@@ -1194,6 +1489,7 @@ class PropertyScoringService:
         # require_indoor is numeric like every field here: 1 = only pools
         # with indoor evidence count (the daily-swimmer default), 0 = any.
         "pool": ("best_min", "worst_min", "require_indoor"),
+        "hazard": ("near_m", "far_m", "moderate_factor"),
     }
 
     def known_categories(self) -> list:
@@ -1249,6 +1545,14 @@ class PropertyScoringService:
                     {"best_min": 10.0, "worst_min": 40.0, "require_indoor": 1.0},
                 ).items()
             },
+            "hazard": {
+                key: float(value)
+                for key, value in getattr(
+                    scorer,
+                    "DEFAULT_HAZARD",
+                    {"near_m": 1000.0, "far_m": 5000.0, "moderate_factor": 0.5},
+                ).items()
+            },
         }
 
     def scorer_for(self, prop: Property) -> BasePropertyScorer:
@@ -1284,6 +1588,43 @@ class PropertyScoringService:
         if commit:
             db.session.commit()
         return True
+
+    @staticmethod
+    def stored_score(value: Any) -> Optional[Decimal]:
+        """The value as the database will keep it, or None.
+
+        `Property.score_*` are `Numeric(5, 2)`, so a score is stored to the
+        cent and a shift of 0.01 is a real difference in the table. Anything
+        asking "would this save change the score" has to ask it at that
+        precision -- `routes/main_routes.py`'s weight preview asked it with
+        `abs(new - old) >= 0.05` and answered *"0 of 4 listings would change"*
+        for a save that then wrote 33.32 over 33.33 (review of #453,
+        2026-08-20).
+
+        The precision is read off the column rather than written here again,
+        so a schema that changes it does not leave this rounding behind. And
+        the comparison stays in `Decimal`: both sides already are one -- the
+        column gives Decimals and `calculate_for_property` assigns
+        `Decimal(str(...))` -- and going through `float` is what defeated the
+        old threshold at its own boundary, where `float(50.05) - float(50.0)`
+        is 0.049999999999997 and therefore *not* `>= 0.05`.
+
+        `ROUND_HALF_UP` is **measured, not chosen**. This function claims to
+        say what the database keeps, so the tie-breaking has to be the
+        database's: asked on the deployment's own PostgreSQL, `0.005::numeric
+        (5,2)` is `0.01`, `0.025` is `0.03` and `-0.005` is `-0.01` -- half
+        away from zero. `Decimal`'s default is `ROUND_HALF_EVEN`, which makes
+        the first of those `0.00`; `round(float(...), 2)` gets that one right
+        and `0.015` wrong. A first version of this helper used the default and
+        was therefore describing a database nobody runs (found by pushing on a
+        mutation that escaped, 2026-08-20).
+        """
+        if value is None:
+            return None
+        scale = getattr(Property.__table__.c.score_total.type, "scale", 2) or 0
+        return Decimal(str(value)).quantize(
+            Decimal(1).scaleb(-scale), rounding=ROUND_HALF_UP
+        )
 
     def calculate_for_property_id(self, property_id: int, commit: bool = True) -> bool:
         prop = db.session.get(Property, property_id)

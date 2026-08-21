@@ -30,9 +30,10 @@ its own because both are easy to "correct" into a defect later:
   assertions that fail without the key are the href ones, and the row-set
   assertions are kept as a regression guard on the far end's default rather
   than as proof of this link. Do not read their green as coverage of it.
-* `measured` is deliberately absent. `/map` never applies it, and carrying it
-  would narrow the list below the map it came from: filtering claimed where
-  none happened.
+* `measured` was deliberately absent while `/map` ignored it -- carrying it
+  would have narrowed the list below the map it came from. #445 made the map
+  apply it, so it now rides the link, and the test below is the inverse of the
+  one it replaces. The rule did not change; its premise did.
 
 The list is still a superset of the map, and `test_the_list_is_a_superset`
 pins that on purpose: the map plots only rows that have coordinates, the list
@@ -240,15 +241,20 @@ class TestTheTwoParametersThatAreNotCopied:
             client.get(href).get_data(as_text=True)
         )
 
-    def test_measured_is_not_carried_because_the_map_never_applied_it(
-        self, client, listings
-    ):
-        map_body = client.get("/map?measured=travel").get_data(as_text=True)
+    def test_measured_is_carried_now_that_the_map_applies_it(self, client, listings):
+        """This assertion is the inverse of the one it replaces, on purpose.
 
-        assert "measured" not in _params(_list_view_href(map_body)), (
-            "the map applies no `measured` filter; carrying it would open a "
-            "list narrower than the map it came from"
-        )
+        While `/map` ignored `measured`, carrying it would have opened a list
+        narrower than the map the reader came from, so the link left it out and
+        this test pinned that. #445 removed the premise by applying the filter
+        on the map, and the pin has to move with it -- a test that keeps
+        asserting the old shape would be defending the defect. What has *not*
+        changed is the rule underneath: a link carries a filter exactly when
+        its origin applies it, which is now expressed by building the link from
+        what the route read rather than from a list."""
+        map_body = client.get("/map?measured=full").get_data(as_text=True)
+
+        assert _params(_list_view_href(map_body)).get("measured") == ["full"]
 
 
 class TestTheListIsAllowedToBeWider:

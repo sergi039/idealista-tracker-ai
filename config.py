@@ -236,19 +236,154 @@ class Config:
     # Overpass consumer on 2026-08-18 -- one endpoint is a single point of
     # failure for a feature that now has no paid path behind it.
     #
-    # Order matters and is not alphabetical: the primary above stays first
-    # because it is the reference instance, and these are tried only after it
-    # refuses. Comma-separated in the environment to add or reorder without a
-    # deploy.
+    # **Two fallbacks were not enough, measured 2026-08-20 at 22:30 CEST**:
+    # from the mini, all three of the above were unusable *at once* --
+    # overpass-api.de timed out on connect, kumi.systems answered 502,
+    # private.coffee timed out -- while the laptop got overpass-api.de in
+    # 0.6 s. A list whose every entry can be down together is the single point
+    # of failure it was written to remove, just with more names on it. The
+    # openstreetmap.fr instance answered the mini in 0.24 s throughout that
+    # window and the laptop in 4.3 s, and it goes *first* among the fallbacks
+    # because it is the only one that answered either machine that day. The
+    # primary above still leads the walk: it is the reference instance, and
+    # these are tried only after it refuses.
+    #
+    # It was added on evidence rather than on availability, because an
+    # instance that merely answers is the more dangerous kind of failure. A
+    # thin or regional mirror returns `200` with an empty `elements` list, and
+    # this project would write that down as a *measured* absence -- "nothing
+    # hazardous nearby" for a plot beside a cement works, which is #98's
+    # defect arriving through a spare tyre. One was caught doing exactly that
+    # the same afternoon (overpass.osm.ch, in another session's hand-run
+    # override). So openstreetmap.fr was checked against a known answer before
+    # it was written down: the hazard query for property 793's own coordinate
+    # returned the **same 144 elements with the same tags** as overpass-api.de
+    # and as the committed fixture in `tests/data/`, zero differences, and a
+    # dense unrelated query (`shop=supermarket` over central Gijon) returned
+    # the same national chains in the same counts. Do not add an instance to
+    # this list on a `200` alone.
+    #
+    # Comma-separated in the environment to add or reorder without a deploy --
+    # which is the escape hatch when the next one goes down, and is how the
+    # mini was kept working while this landed.
     OSM_OVERPASS_FALLBACK_URLS = [
         url.strip()
         for url in os.environ.get(
             "OSM_OVERPASS_FALLBACK_URLS",
+            "https://overpass.openstreetmap.fr/api/interpreter,"
             "https://overpass.kumi.systems/api/interpreter,"
             "https://overpass.private.coffee/api/interpreter",
         ).split(",")
         if url.strip()
     ]
+
+    # How long one Overpass lookup may wait, and on what.
+    #
+    # The 3 s is #438's, measured, and moved into config here rather than
+    # rewritten: pure TCP connect to the reachable instances is 0.06-0.08 s
+    # (three samples each, 2026-08-20), and an independent measurement the same
+    # afternoon puts the *complete TLS handshake* at 0.128-0.132 s -- so 3 s is
+    # a twentyfold margin over the whole thing, not just the SYN, while
+    # overpass-api.de answered `No route to host` instantly. It is separate
+    # from the read allowance because `requests` expands a scalar timeout to
+    # `connect=read=value`, so the 60 s an Overpass query genuinely needs to
+    # *compute* was also being granted to learn that a host does not answer.
+    # `tests/test_enrich_does_not_hold_a_slot.py` pins the pair as shipped.
+    OSM_OVERPASS_CONNECT_TIMEOUT_S = float(
+        os.environ.get("OSM_OVERPASS_CONNECT_TIMEOUT_S") or "3"
+    )
+    # Unchanged, and deliberately: this is Overpass's own query-computation
+    # time, and shortening it would turn a slow answer into a manufactured
+    # absence.
+    OSM_OVERPASS_READ_TIMEOUT_S = float(
+        os.environ.get("OSM_OVERPASS_READ_TIMEOUT_S") or "60"
+    )
+    # The ceiling on one lookup's walk across every instance above.
+    #
+    # Derived from what a *prompt* refusal costs, which is what a `504` is:
+    #
+    #   #144's patient budget on the first instance -- both per-IP slots are
+    #   busy and one frees up in about a minute, so 8+16+32 s of backoff plus
+    #   four 5 s gate waits, ~76 s
+    # + one full attempt on each of the three fallbacks, 5 s gate + 60 s read
+    # = ~271 s, rounded to 275.
+    #
+    # It was 210 for two fallbacks. A third instance was added on 2026-08-20
+    # and this number moves with the count -- deliberately, and it is the one
+    # place a new instance is not free. Leaving it at 210 would have bought
+    # the shorter walk by clamping the *last* fallback's read leg, and that
+    # afternoon the last fallback was the only one answering the mini at all.
+    # `tests/test_one_press_is_bounded.py` derives this from
+    # `len(OSM_OVERPASS_FALLBACK_URLS)` and goes red if the two drift.
+    #
+    # What that does **not** guarantee, because review reproduced it: a
+    # primary whose four `504`s each take 30 s of the read allowance spends
+    # ~177 s legally, and the first fallback then gets a clamped 28 s read
+    # while the second is never dialled. The guarantee is therefore "a prompt
+    # refusal on the primary leaves a complete attempt for each fallback", not
+    # "every path does". Making it unconditional would mean 76 + 4x60 + 2x65
+    # -- seven and a half minutes for one lookup -- which is the cost this
+    # ticket exists to remove. A clamped attempt is reported as
+    # `budget_exhausted` and never held against the host it was cut short on
+    # (`utils/http.py`), so the price of the gap is a retry, not a wrong
+    # answer.
+    #
+    # A tighter number would clamp a real query's read leg, and the presets
+    # query asks Overpass for up to `[timeout:90]` of computation. That would
+    # not break #98 -- a spent budget is recorded as `budget_exhausted`, a
+    # refusal and never an absence -- but it would buy latency with retries
+    # nobody asked for. What actually bounds one Enrich press is
+    # ENRICH_LOOKUP_BUDGET_S below; this bounds the callers that have no run
+    # around them, which is every backfill.
+    OSM_OVERPASS_WALK_BUDGET_S = float(
+        os.environ.get("OSM_OVERPASS_WALK_BUDGET_S") or "275"
+    )
+    # The ceiling on *all* the free lookups one Enrich press may wait for --
+    # every Overpass walk and every elevation query in the run, together.
+    #
+    # The walk budget alone bounds one lookup; an enrichment run makes up to
+    # eleven, so without this the press is still bounded only by their sum. The
+    # decisive steps run first (services/property_enrichment_service.py), so
+    # what an outage costs the advisory ones is whatever is left -- which is
+    # the point: an advisory, score-neutral step must not hold a paid one
+    # hostage, and when the clock is gone it records `unavailable` and the run
+    # goes on.
+    #
+    # 305 s is a little over one full walk, so a total outage costs the press
+    # about five minutes: one lookup that learns the instances are down, a
+    # second that spends what is left, and every one after that refusing
+    # before it opens a socket. Measured on the mini 2026-08-20, one lookup
+    # alone cost 888 s and the run made eleven.
+    #
+    # It was 240 against a 210 s walk, and it moved with the walk rather than
+    # for a reason of its own: this has to stay *above* the walk ceiling or
+    # the second lookup of a run is starved on a merely-degraded day, which is
+    # the outage's symptom appearing when there is no outage. The minute it
+    # costs an unlucky press is paid only when every instance is down, and
+    # `enrich_budget` hands the number to both clients so nothing has to be
+    # told the ceiling moved.
+    ENRICH_LOOKUP_BUDGET_S = float(os.environ.get("ENRICH_LOOKUP_BUDGET_S") or "305")
+    # What the rest of one run may take: the paid Google steps plus the one
+    # free HTTP fetch that is neither Google nor an OSM lookup. Not a deadline
+    # -- nothing enforces it, and nothing should, since abandoning a billed
+    # request is how a press pays for a measurement nobody receives (#178). It
+    # exists so `services/enrich_budget.py` can state the run's worst case
+    # instead of a client guessing at it.
+    #
+    # Added up from the transports rather than picked, and rounded up because
+    # the harmful direction is being *short*: a client that stops polling
+    # while the server is still working reports a running job as failed, and
+    # the obvious next move pays for it again.
+    #
+    #   geocoding      2 queries x 3 attempts x 10 s + backoff   ~70 s
+    #   Places         wide search, 3 attempts x 12 s + backoff  ~40 s
+    #   DistanceMatrix 3 attempts x 15 s + backoff                ~50 s
+    #   advertiser     3 attempts x 20 s behind a 3 s gate       ~70 s
+    #
+    # Those worst cases do not co-occur in any run anyone has observed; 240 s
+    # is roughly the sum of the two largest plus room, and being generous here
+    # costs a spinner that waits, not money.
+    ENRICH_PAID_ALLOWANCE_S = float(os.environ.get("ENRICH_PAID_ALLOWANCE_S") or "240")
 
     # Sea-view estimation. Both sources are free and keyless -- Google billing
     # is off (#98) and is not needed here: the coastline comes from
@@ -267,6 +402,18 @@ class Config:
     # Paths
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     DATA_DIR = os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data"))
+    # Attached documents and photos (#430). Under DATA_DIR because that is the
+    # one directory docker-compose bind-mounts, so a file written here survives
+    # the `COPY . .` rebuild that takes the image -- and it is already covered
+    # by the `data/*` line in .gitignore, so nothing here is ever committed.
+    ATTACHMENTS_DIR = os.environ.get(
+        "ATTACHMENTS_DIR", os.path.join(DATA_DIR, "attachments")
+    )
+    # The whole request body. Werkzeug refuses past this with 413 rather than
+    # buffering it, which is the only place a limit can be applied before the
+    # bytes arrive; the per-file cap in services/attachments.py is counted as
+    # they stream, because this one cannot bound one part of a multipart body.
+    MAX_CONTENT_LENGTH = int(os.environ.get("MAX_CONTENT_LENGTH", 32 * 1024 * 1024))
     LAST_SEEN_UID_PATH = os.environ.get(
         "LAST_SEEN_UID_PATH", os.path.join(DATA_DIR, ".last_seen_uid")
     )

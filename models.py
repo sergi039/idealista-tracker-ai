@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 import json
 
 from app import db
+from services import owner_review
 from services.advertiser import read_verdict as advertiser_verdict
 from services.listing_verification import read_verdict as listing_verdict
 from services.search_subscription_identity import SEARCH_KEY_LENGTH
@@ -159,6 +160,9 @@ class Property(db.Model):
         db.Index("ix_properties_score_total", "score_total"),
         db.Index("ix_properties_score_investment", "score_investment"),
         db.Index("ix_properties_score_lifestyle", "score_lifestyle"),
+        db.Index("ix_properties_owner_verdict", "owner_verdict"),
+        db.Index("ix_properties_next_action_due_on", "next_action_due_on"),
+        db.Index("ix_properties_cadastral_reference", "cadastral_reference"),
         # Data integrity constraints
         CheckConstraint(
             "price IS NULL OR price >= 0", name="ck_properties_price_non_negative"
@@ -190,6 +194,18 @@ class Property(db.Model):
             "listing_status IN ('active', 'removed', 'sold', 'unknown')",
             name="ck_properties_listing_status_enum",
         ),
+        # The two review CHECKs -- `ck_properties_owner_verdict_enum` and
+        # `ck_properties_due_needs_action` -- live in migration 021 and
+        # deliberately NOT here, which is migration 015's precedent for the
+        # same situation. `tests/test_deployment_bootstrap.py` rebuilds the
+        # pre-ledger schema by running `create_all()` and dropping what later
+        # migrations added, and SQLite refuses to drop a column any CHECK
+        # mentions -- so declaring them on the model makes that baseline
+        # impossible to construct. They are exercised where they matter, on a
+        # real server, by `tests/test_postgres_migrations.py`; the reading in
+        # `services/owner_review.py` refuses an unknown verdict on every
+        # engine, towards `undecided` rather than towards a decision nobody
+        # made.
     )
 
     id = db.Column(db.Integer, primary_key=True)
@@ -272,6 +288,27 @@ class Property(db.Model):
     # predate the column -- nothing was backfilled, because nothing recorded it.
     listing_status_source = db.Column(db.String(16), default="ingest")
 
+    # What the OWNER concluded, which is a different question from whether the
+    # advert is still live -- writing one into `listing_status` is STATUS-002
+    # again (issue #430). NULL is not a fourth value: it means nobody has
+    # decided, and `services/owner_review.py` presents it as `undecided`,
+    # never as a rejection.
+    owner_verdict = db.Column(db.String(16))
+    owner_verdict_reason = db.Column(db.Text)
+    owner_verdict_at = db.Column(db.DateTime)
+    # What is still outstanding on this listing, and when it is due. Legal
+    # under any verdict, because "interested; call the architect on Friday" is
+    # an ordinary state. `overdue` is derived from the date and never stored.
+    next_action = db.Column(db.Text)
+    next_action_due_on = db.Column(db.Date)
+
+    # The parcel this listing sits on, as the cadastre names it (issue #430).
+    # Typed by a human off a document, so it is a column rather than a key
+    # inside `enrichment`: it is what every later check keys on, and it is
+    # looked up. The measurement it unlocks lives in `enrichment["cadastre"]`,
+    # written under the same lock (services/cadastre_service.py).
+    cadastral_reference = db.Column(db.String(20))
+
     created_at = db.Column(db.DateTime, default=utcnow)
     email_date = db.Column(db.DateTime)
     updated_at = db.Column(db.DateTime, default=utcnow, onupdate=utcnow)
@@ -281,7 +318,18 @@ class Property(db.Model):
         snippet = (title[:50] + "...") if len(title) > 50 else title
         return f"<Property {self.id}: {snippet}>"
 
-    def to_dict(self):
+    def to_dict(self, review_today=None):
+        """Serialize the row. `review_today` is the request's one Madrid date.
+
+        A collection endpoint MUST pass it: `overdue` is the comparison of a
+        due date against today, and a filter that selected rows against one
+        date while the payload describes them against another disagrees with
+        itself once a day, at the hour nobody is watching. `None` means
+        "compute it", which is right for a single-row caller and wrong for a
+        list -- `tests/test_owner_review_propagation.py` freezes the clock at
+        23:59 Madrid and asserts the filter and both serializers agree.
+        """
+        review_action = owner_review.read_action(self, review_today)
         return {
             "id": self.id,
             "source_email_id": self.source_email_id,
@@ -350,6 +398,21 @@ class Property(db.Model):
             # (services/advertiser.py). 'unchecked' where nobody established
             # it -- never 'agency' by default.
             "advertiser_verdict": advertiser_verdict(self)["state"],
+            # What the owner decided, and what is still outstanding. Absent is
+            # `undecided`, never `rejected`: a report built off the raw column
+            # alone cannot tell "nobody looked" from "looked and said no"
+            # (services/owner_review.py).
+            "owner_verdict": owner_review.read_decision(self)["state"],
+            "owner_verdict_reason": self.owner_verdict_reason,
+            "owner_verdict_at": self.owner_verdict_at.isoformat()
+            if self.owner_verdict_at
+            else None,
+            "next_action": self.next_action,
+            "next_action_due_on": self.next_action_due_on.isoformat()
+            if self.next_action_due_on
+            else None,
+            "next_action_state": review_action["state"],
+            "cadastral_reference": self.cadastral_reference,
             "email_date": self.email_date.isoformat() if self.email_date else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
@@ -1264,6 +1327,184 @@ class PropertyAiAnalysisVariant(db.Model):
 
     def __repr__(self):
         return f"<PropertyAiAnalysisVariant property={self.property_id} provider={self.provider}>"
+
+
+class PropertyActivity(db.Model):
+    """The conversation and the decisions behind one listing (issue #430).
+
+    Three kinds of entry share this table because they share one screen: the
+    timeline on `/properties/<id>` is a single reverse-chronological feed, and
+    splitting notes from contacts from verdict changes would make the page
+    re-interleave by date what the reader is trying to read in order.
+
+    * `note`    -- free text the owner typed.
+    * `contact` -- one exchange: `channel`, `counterpart`, what was `asked`,
+                   what came back in `body`.
+    * `verdict` -- appended by `services.owner_review.set_review`, carrying the
+                   whole review state in `snapshot` (plus the previous one).
+                   It is the history, so the UI renders it read-only.
+
+    `happened_at` is when the exchange happened; `created_at` is when the row
+    was typed. An answer given on the phone yesterday is recorded today, and a
+    timeline ordered by the wrong one of those tells the story wrong.
+
+    Deletion is soft. Everything else in this application can be recomputed --
+    a drive time, a score, a sea-view verdict -- and a sentence the owner typed
+    cannot, so a mis-tap must not be the end of it.
+
+    The CHECK constraints are declared here in a form SQLite can execute too;
+    migration 021 states the same rules in PostgreSQL, where the blank tests
+    are `~ '[^[:space:]]'` rather than `TRIM(...) <> ''` (measured: `BTRIM`
+    strips spaces but not tabs or newlines, so a note holding one newline
+    passed the trim form). The two agree on everything the suite can reach; the
+    stricter PostgreSQL wording is pinned by tests/test_postgres_migrations.py
+    against a real server.
+    """
+
+    __tablename__ = "property_activity"
+
+    id = db.Column(db.Integer, primary_key=True)
+    property_id = db.Column(
+        db.Integer,
+        db.ForeignKey("properties.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    kind = db.Column(db.String(16), nullable=False)
+    happened_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    channel = db.Column(db.String(24))
+    counterpart = db.Column(db.String(160))
+    asked = db.Column(db.Text)
+    body = db.Column(db.Text)
+    snapshot = db.Column(JSON)
+    created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+    deleted_at = db.Column(db.DateTime)
+
+    property = db.relationship(
+        "Property", backref=db.backref("activity", lazy="dynamic")
+    )
+
+    __table_args__ = (
+        # ix_property_activity_property_id comes from `index=True` on the
+        # column itself, the way PropertyAiAnalysisVariant declares its own.
+        db.Index(
+            "ix_property_activity_property_happened", "property_id", "happened_at"
+        ),
+        db.Index("ix_property_activity_kind", "kind"),
+        # An attachment (PR3) points at a property and, optionally, at the
+        # exchange it arrived in. This pair is what lets that table carry a
+        # composite foreign key, so an attachment on one property can never
+        # reference another property's exchange.
+        db.UniqueConstraint(
+            "id", "property_id", name="uq_property_activity_id_property"
+        ),
+        CheckConstraint(
+            "kind IN ('note', 'contact', 'verdict')",
+            name="ck_property_activity_kind",
+        ),
+        CheckConstraint(
+            "kind <> 'verdict' OR snapshot IS NOT NULL",
+            name="ck_property_activity_verdict_snapshot",
+        ),
+        CheckConstraint(
+            "kind = 'verdict' OR snapshot IS NULL",
+            name="ck_property_activity_snapshot_is_verdict",
+        ),
+        CheckConstraint(
+            "kind = 'contact' OR "
+            "(channel IS NULL AND counterpart IS NULL AND asked IS NULL)",
+            name="ck_property_activity_contact_columns",
+        ),
+        CheckConstraint(
+            "kind <> 'contact' OR ("
+            "channel IS NOT NULL AND channel IN "
+            "('whatsapp', 'email', 'portal', 'phone', 'visit', 'other') AND ("
+            "(asked IS NOT NULL AND TRIM(asked) <> '') OR "
+            "(body IS NOT NULL AND TRIM(body) <> '') OR "
+            "(counterpart IS NOT NULL AND TRIM(counterpart) <> '')))",
+            name="ck_property_activity_contact_content",
+        ),
+        CheckConstraint(
+            "kind <> 'note' OR (body IS NOT NULL AND TRIM(body) <> '')",
+            name="ck_property_activity_note_body",
+        ),
+    )
+
+    def __repr__(self):
+        return f"<PropertyActivity {self.id} property={self.property_id} {self.kind}>"
+
+
+class PropertyAttachment(db.Model):
+    """A document or photo attached to a listing (issue #430).
+
+    The bytes live under `DATA_DIR`, named by their own sha256; this row is
+    what is known about them. `services/attachments.py` owns the writing and
+    the type policy, and its docstring explains why the bytes are not in the
+    database.
+
+    It points at a property and, optionally, at the exchange it arrived in --
+    through a **composite** foreign key, so an attachment on one property can
+    never reference another property's exchange. That is enforced by the
+    database (migration 023) rather than by whichever writer remembers to
+    check, and it is why `property_activity` carries `UNIQUE (id,
+    property_id)`.
+
+    There is deliberately no unique constraint on (property_id,
+    content_sha256): the same document may be attached to two exchanges, and a
+    soft-deleted row would otherwise hold the key against re-uploading the
+    file it refers to. Deduplication is on disk, one file per hash; a row here
+    is a link.
+    """
+
+    __tablename__ = "property_attachment"
+
+    id = db.Column(db.Integer, primary_key=True)
+    property_id = db.Column(
+        db.Integer,
+        db.ForeignKey("properties.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    activity_id = db.Column(db.Integer, index=True)
+    content_sha256 = db.Column(db.String(64), nullable=False, index=True)
+    storage_path = db.Column(db.String(255), nullable=False)
+    original_filename = db.Column(db.String(255))
+    # The sniffed type, never the client's claim.
+    content_type = db.Column(db.String(64), nullable=False)
+    size_bytes = db.Column(db.Integer, nullable=False)
+    kind = db.Column(db.String(16), nullable=False)
+    uploaded_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+    deleted_at = db.Column(db.DateTime)
+
+    property = db.relationship(
+        "Property", backref=db.backref("attachments", lazy="dynamic")
+    )
+
+    __table_args__ = (
+        db.ForeignKeyConstraint(
+            ["activity_id", "property_id"],
+            ["property_activity.id", "property_activity.property_id"],
+            name="fk_property_attachment_activity",
+            ondelete="SET NULL",
+        ),
+        # All three indexes come from `index=True` on the columns themselves,
+        # the way PropertyAiAnalysisVariant declares its own; repeating them
+        # here is a duplicate CREATE INDEX.
+        CheckConstraint(
+            "kind IN ('document', 'photo')", name="ck_property_attachment_kind"
+        ),
+        CheckConstraint("size_bytes > 0", name="ck_property_attachment_size"),
+        # The PostgreSQL form of this is a regex (migration 023); written here
+        # without one so SQLite executes the same rule, the way migration 021's
+        # blank checks are.
+        CheckConstraint(
+            "LENGTH(content_sha256) = 64", name="ck_property_attachment_sha256"
+        ),
+    )
+
+    def __repr__(self):
+        return f"<PropertyAttachment {self.id} property={self.property_id}>"
 
 
 class BackgroundJob(db.Model):

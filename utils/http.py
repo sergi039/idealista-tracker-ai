@@ -1,12 +1,22 @@
+import contextvars
 import logging
 import random
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Dict, Iterable, Optional
+from typing import Callable, Dict, Iterable, Optional, Tuple, Union
 from urllib.parse import urlsplit
 
 import requests
+
+# What a caller may hand to `timeout=`. `requests` accepts a scalar, which
+# urllib3 expands to `connect=read=value` -- so a 60 s read allowance for an
+# Overpass query that genuinely computes for a minute also granted 60 s to
+# learn that a host is not answering its SYN. The tuple form separates the
+# two; see `request_with_retries` and the Overpass transports for the
+# measurements behind the numbers they pass.
+Timeout = Union[float, Tuple[float, float]]
 
 _DEFAULT_RETRY_STATUSES = (429, 500, 502, 503, 504)
 
@@ -291,6 +301,101 @@ class HostBreakers:
 OVERPASS_BREAKERS = HostBreakers(threshold=3, cooldown_s=300)
 
 
+class LookupBudgetExceeded(requests.RequestException):
+    """The wall-clock budget for this lookup ran out before it could finish.
+
+    A `RequestException` on purpose: every caller of `request_with_retries`
+    already classifies one as a transport refusal and records an honest
+    absence for it, so a budget that runs out reads as "nobody looked" rather
+    than as a measurement (#98). What it must never become is a *different*
+    kind of answer -- the cause it interrupted is chained onto it so an
+    operator reading the log sees which host was silent, not only that a
+    ceiling was reached.
+    """
+
+
+# The deadline the free lookups inside a `lookup_budget(...)` block share.
+#
+# A context variable rather than an argument threaded through eleven call
+# sites: the steps of one enrichment run reach Overpass through four
+# different services, and a parameter every one of them has to forward is a
+# parameter one of them will not. A thread started by the background-job
+# executor begins with this unset, which is the safe default -- no budget, and
+# today's behaviour -- and `enrich_property` opens its own inside that thread.
+#
+# **Only the free lookups read it.** `services/enrichment_service.py`'s
+# Overpass transport, the coastline and elevation queries in
+# `services/sea_view_service.py`. Google's paid transports deliberately do not,
+# and the reason is #178's: a Distance Matrix request abandoned because a free
+# source spent the clock is a paid measurement nobody made, and the owner's
+# next press pays for it again. The budget exists to stop an advisory step
+# holding a paid one hostage; spending it on the paid one would be the same
+# defect with the roles swapped.
+_LOOKUP_DEADLINE: contextvars.ContextVar[Optional[float]] = contextvars.ContextVar(
+    "lookup_deadline", default=None
+)
+
+
+@contextmanager
+def lookup_budget(seconds: float):
+    """Bound the wall-clock time the free lookups inside may spend waiting.
+
+    Nested budgets take the *earlier* deadline: an inner block may ask for
+    less than the run it sits in, never for more, so no single lookup can
+    extend the ceiling its caller stated.
+    """
+    deadline = time.monotonic() + max(0.0, seconds)
+    outer = _LOOKUP_DEADLINE.get()
+    if outer is not None:
+        deadline = min(deadline, outer)
+    token = _LOOKUP_DEADLINE.set(deadline)
+    try:
+        yield deadline
+    finally:
+        _LOOKUP_DEADLINE.reset(token)
+
+
+def lookup_deadline() -> Optional[float]:
+    """The ambient deadline, or None when no budget is open."""
+    return _LOOKUP_DEADLINE.get()
+
+
+def earliest_deadline(*deadlines: Optional[float]) -> Optional[float]:
+    """The soonest of the deadlines given, ignoring the absent ones."""
+    present = [d for d in deadlines if d is not None]
+    return min(present) if present else None
+
+
+def _is_silence(exc: BaseException) -> bool:
+    """Whether no HTTP response arrived at all.
+
+    The distinction the retry policy turns on. A server that answers `429` or
+    `504` is alive and asking for a moment -- #144 measured that an Overpass
+    slot frees up in about a minute, which is what the patient 8-16-32 backoff
+    was sized for, and what it is still right for. Silence is the opposite
+    fact: the host is unreachable or hung, waiting 56 s changes nothing about
+    it, and the next instance in the fallback list is the thing worth trying.
+
+    `ConnectionError` covers a refused or blackholed connect (and
+    `ConnectTimeout`, which subclasses both); `Timeout` covers a handshake
+    that completed onto a host that then never sent a byte -- measured on the
+    mini 2026-08-20, kumi.systems connected in 0.109 s and said nothing for
+    30 s, so a connect-only rule would have missed the instance that cost the
+    most.
+    """
+    return isinstance(exc, (requests.ConnectionError, requests.Timeout))
+
+
+def _clamped_timeout(timeout: Optional[Timeout], remaining: float) -> Timeout:
+    """`timeout`, with no leg allowed to outlive the remaining budget."""
+    if timeout is None:
+        return remaining
+    if isinstance(timeout, tuple):
+        connect, read = timeout
+        return (min(connect, remaining), min(read, remaining))
+    return min(timeout, remaining)
+
+
 def _compute_backoff(attempt: int, base: float, max_delay: float) -> float:
     jitter = random.uniform(0, 0.2)
     delay = base * (2 ** max(attempt - 1, 0))
@@ -304,7 +409,9 @@ def request_with_retries(
     retryable_statuses: Optional[Iterable[int]] = None,
     backoff_base: float = 0.5,
     backoff_max: float = 5.0,
-    timeout: Optional[float] = None,
+    timeout: Optional[Timeout] = None,
+    silence_max_attempts: Optional[int] = None,
+    deadline: Optional[float] = None,
     logger: Optional[logging.Logger] = None,
     gate: Optional[RateGate] = None,
     **kwargs,
@@ -323,6 +430,42 @@ def request_with_retries(
     server just asked for; the gate is what this process allows itself across
     every caller. Waiting for the gate after the backoff yields the longer of
     the two: a backoff already past the next slot costs nothing extra.
+
+    `silence_max_attempts` splits the retry policy by what the failure *means*
+    (#434). The patient budget above answers a server that spoke: `429` and
+    `504` mean "come back shortly", and #144 measured that shortly is about a
+    minute. Silence means the host is unreachable or hung, and retrying it is
+    the one thing that cannot help -- a caller with somewhere else to go says
+    `silence_max_attempts=1` and gets there after one attempt instead of
+    four. Left unset, silence keeps the same budget as everything else, which
+    is what every caller that has no second instance still wants.
+
+    `deadline` is a `time.monotonic()` ceiling on when an attempt may *start*
+    and on what its socket timeouts may be. It clamps each attempt's timeout
+    to what is left, never sleeps past it, and raises `LookupBudgetExceeded`
+    rather than starting an attempt it cannot finish -- so a budget already
+    spent costs no socket at all.
+
+    **It is not a total-time guarantee, and the difference is measurable.**
+    `requests` applies its read timeout *between* reads, not to the response as
+    a whole, so a server that keeps sending a byte just often enough can hold
+    one attempt open indefinitely: measured against a loopback server on
+    2026-08-20, a request under a 0.20 s deadline returned successfully after
+    0.63 s. That is stated rather than fixed because the failure this bound
+    exists for is the opposite one -- three instances that connect and then say
+    nothing -- and because a total-time bound needs a streamed body with its
+    own clock, which the coastline client already has
+    (`services/sea_view_service._read_bounded_body`) and a 25 km amenity query
+    does not need. What the deadline does guarantee is that the *next* attempt,
+    and the next instance, do not start. A caller inside a `lookup_budget(...)` block passes
+    `earliest_deadline(lookup_deadline(), its_own)`; nothing here reads the
+    ambient budget on a caller's behalf, because the paid transports must not
+    honour it (see `_LOOKUP_DEADLINE`).
+
+    It is not the same tool as `OVERPASS_BREAKERS` above and neither replaces
+    the other: the breaker stops *this process* dialling a host it has just
+    watched refuse three times, and needs those three refusals to learn it.
+    The deadline bounds what the very first of them costs.
     """
     if max_attempts < 1:
         max_attempts = 1
@@ -336,10 +479,57 @@ def request_with_retries(
         kwargs["timeout"] = timeout
 
     last_exc = None
+    # The timeout as the caller stated it. Each attempt is clamped from *this*
+    # rather than from the previous attempt's clamp, so an early attempt that
+    # ran close to the deadline cannot shrink the budget of a retry made after
+    # a backoff that the deadline still had room for.
+    stated_timeout = kwargs.get("timeout")
+    # Whether the deadline shortened the attempt about to be made, and the last
+    # response the server actually produced. Both exist for the same reason
+    # (#434 review round 2): a caller reading the failure decides from it
+    # whether *the host* is refusing -- `HostBreakers` opens after three -- and
+    # a budget must not be able to put words in a host's mouth in either
+    # direction.
+    clamped = False
+    last_retryable_response = None
+
+    def _budget_left():
+        """Seconds until the deadline, or None when there is no deadline."""
+        return None if deadline is None else deadline - time.monotonic()
+
+    def _out_of_budget(left):
+        """Give up on the budget -- unless the server has already spoken.
+
+        A `504` observed on an earlier attempt is a fact about the instance,
+        and the caller uses it to decide whether to try a different one and
+        whether to hold the refusal against this host. Replacing it with a
+        budget error because the *retry's* gate wait crossed the deadline
+        loses that fact, which review round 2 reproduced: one real 504, a 10 s
+        budget, two reserved gate slots, and the breaker recorded nothing.
+        """
+        if last_retryable_response is not None:
+            return last_retryable_response
+        raise LookupBudgetExceeded(
+            f"lookup budget exhausted with {left:.1f}s to spare"
+            if left is not None and left > 0
+            else "lookup budget exhausted"
+        ) from last_exc
 
     for attempt in range(1, max_attempts + 1):
+        # Checked before the gate as well as after it: the gate can sleep for
+        # a whole interval, and a caller walking a fallback list would pay one
+        # of those per remaining instance to learn something it already knew.
+        left = _budget_left()
+        if left is not None and left <= 0:
+            return _out_of_budget(left)
         if gate is not None:
             gate.wait()
+        left = _budget_left()
+        if left is not None:
+            if left <= 0:
+                return _out_of_budget(left)
+            kwargs["timeout"] = _clamped_timeout(stated_timeout, left)
+            clamped = kwargs["timeout"] != stated_timeout
         try:
             # The inner `finally` marks the moment the attempt is over, however
             # it ended: `request_fn` is an arbitrary callable, so a session
@@ -357,13 +547,32 @@ def request_with_retries(
                     gate.mark()
         except requests.RequestException as exc:
             last_exc = exc
-            if attempt >= max_attempts:
+            allowed = max_attempts
+            if silence_max_attempts is not None and _is_silence(exc):
+                allowed = min(max_attempts, max(1, silence_max_attempts))
+            if attempt >= allowed:
+                if clamped and _is_silence(exc):
+                    # The budget cut this attempt short, so the silence is
+                    # ours and not the host's. Reported as a budget refusal so
+                    # a breaker does not open against an instance that was
+                    # never given the timeout it is configured for -- measured
+                    # in review, three calls with a 0.1 s clamped read arming
+                    # `OVERPASS_BREAKERS` against a healthy host.
+                    return _out_of_budget(_budget_left())
+                raise
+            delay = _compute_backoff(attempt, backoff_base, backoff_max)
+            left = _budget_left()
+            if left is not None and left <= delay:
+                # Sleeping out the rest of the budget and then raising the same
+                # failure buys the caller nothing but the wait. Raise the cause
+                # now, so a fallback list still has the seconds to try the next
+                # instance with.
                 raise
             if logger:
                 logger.warning(
-                    "Request failed (%s). Retrying %s/%s.", exc, attempt, max_attempts
+                    "Request failed (%s). Retrying %s/%s.", exc, attempt, allowed
                 )
-            time.sleep(_compute_backoff(attempt, backoff_base, backoff_max))
+            time.sleep(delay)
             continue
 
         if response.status_code in statuses and attempt < max_attempts:
@@ -374,11 +583,25 @@ def request_with_retries(
                     attempt,
                     max_attempts,
                 )
+            delay = _compute_backoff(attempt, backoff_base, backoff_max)
+            left = _budget_left()
+            if left is not None and left <= delay:
+                # The budget cannot fit the wait this server asked for. Return
+                # its own refusal rather than a budget error: a `504` says the
+                # instance is alive and busy, which is what decides whether the
+                # caller tries somewhere else (#144), and a budget error would
+                # erase that.
+                return response
+            # Kept so a deadline reached *during the retry* still reports what
+            # the server said rather than a budget error (see `_out_of_budget`).
+            # Safe to hand back after `close()`: a buffered body is already
+            # read, and every caller of a non-200 reads only its status.
+            last_retryable_response = response
             # A discarded response has to release its connection. Buffered bodies
             # are already read, so this is a no-op for them, but a stream=True
             # caller would otherwise leak the socket on every retry.
             response.close()
-            time.sleep(_compute_backoff(attempt, backoff_base, backoff_max))
+            time.sleep(delay)
             continue
 
         return response

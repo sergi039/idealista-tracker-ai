@@ -51,7 +51,7 @@ def _answers(service, monkeypatch, outcomes):
     """`outcomes` maps a URL to (elements, failure). Records the order tried."""
     tried = []
 
-    def _one(url, query):
+    def _one(url, query, deadline=None):
         tried.append(url)
         return outcomes.get(url, ([], None))
 
@@ -117,11 +117,23 @@ class TestItMovesOnWhenTheInstanceWillNotTalk:
 class TestItDoesNotAskTwiceForNothing:
     def test_a_406_stops_at_the_first_instance(self, service, monkeypatch):
         """That refusal is this client's User-Agent, and every instance runs
-        the same software: moving hosts repeats it and doubles the traffic."""
+        the same software: moving hosts repeats it and doubles the traffic.
+
+        The failure is built the way **production** builds it. It used to be
+        `reason="not_acceptable"`, which nothing emits -- every non-200 comes
+        back as `REASON_HTTP_ERROR`, which is fallback-eligible -- so the rule
+        this file states in words was not the rule the code followed, and a
+        real 406 fanned out to all three hosts (codex review, 2026-08-20).
+        """
         tried = _answers(
             service,
             monkeypatch,
-            {PRIMARY: (None, GoogleApiFailure(reason="not_acceptable"))},
+            {
+                PRIMARY: (
+                    None,
+                    GoogleApiFailure(reason=REASON_HTTP_ERROR, http_status=406),
+                )
+            },
         )
 
         elements, failure = service._overpass_elements("[out:json];node;out;")
@@ -129,6 +141,26 @@ class TestItDoesNotAskTwiceForNothing:
         assert elements is None
         assert failure is not None
         assert tried == [PRIMARY], "a 406 is the same answer everywhere"
+
+    def test_a_502_still_tries_the_next_instance(self, service, monkeypatch):
+        """...and the narrowing must not turn every HTTP error into a stop:
+        a 502 is one instance being down, which is what the list is for."""
+        tried = _answers(
+            service,
+            monkeypatch,
+            {
+                PRIMARY: (
+                    None,
+                    GoogleApiFailure(reason=REASON_HTTP_ERROR, http_status=502),
+                ),
+                KUMI: ([{"id": 5}], None),
+            },
+        )
+
+        elements, failure = service._overpass_elements("[out:json];node;out;")
+
+        assert failure is None and elements == [{"id": 5}]
+        assert tried == [PRIMARY, KUMI]
 
     def test_an_answer_costs_exactly_one_instance(self, service, monkeypatch):
         tried = _answers(service, monkeypatch, {PRIMARY: ([{"id": 4}], None)})
