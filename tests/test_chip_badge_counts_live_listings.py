@@ -48,7 +48,15 @@ def app():
             is_hidden=True,
             travel_targets={"presets": {}, "custom": []},
         )
-        db.session.add_all([norte, ghost])
+        # Active, and every listing delisted: the case the #472 review
+        # reproduced -- its rows still render with Hide removed off, so its
+        # controls must not vanish with its live count.
+        allsold = SearchProfile(
+            name="AllSold",
+            is_active=True,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add_all([norte, ghost, allsold])
         db.session.commit()
         rows = []
         for slug, status, sea_view in [
@@ -67,6 +75,19 @@ def app():
                     enrichment=(
                         {"environment": {"sea_view": sea_view}} if sea_view else None
                     ),
+                )
+            )
+        for slug, status in [
+            ("allsold-1", "sold"),
+            ("allsold-2", "removed"),
+        ]:
+            rows.append(
+                Property(
+                    source_email_id=slug,
+                    title=f"Plot {slug}",
+                    municipality="Cudillero",
+                    search_profile_id=allsold.id,
+                    listing_status=status,
                 )
             )
         for slug, status in [
@@ -140,6 +161,39 @@ class TestTheBadgeIsALiveCount:
         # Ghost holds 3 rows, one of them sold.
         assert "1 hidden subscription" in note.group(0)
         assert "2 listings" in note.group(0)
+
+
+class TestAnAllDelistedSubscriptionKeepsItsControls:
+    """The #472 review's own reproduction, inverted into a guard.
+
+    `profile_id=all` renders an active subscription's rows whatever their
+    status the moment Hide removed is off, so the chip and the checkbox are
+    offered on "holds anything at all" and display the live count -- a badge
+    of 0 under the default switch is the honest reading, not a reason to
+    drop the control that reaches those rows.
+    """
+
+    def test_the_chip_stays_with_an_honest_zero_badge(self, client):
+        body = _rendered(client.get("/properties", query_string={"profile_id": "all"}))
+        assert _chip_badge(body, "AllSold") == 0
+
+    def test_the_menu_checkbox_stays_too(self, client, app):
+        with app.app_context():
+            allsold_id = SearchProfile.query.filter_by(name="AllSold").one().id
+        body = _rendered(client.get("/properties", query_string={"profile_id": "all"}))
+        assert f'id="profile-option-{allsold_id}"' in body
+
+    def test_its_rows_and_its_chip_share_the_widened_page(self, client):
+        # `mode` marks the request as the filter form's, so an absent
+        # hide_removed reads as the box unticked and the delisted rows render.
+        body = _rendered(
+            client.get(
+                "/properties",
+                query_string={"profile_id": "all", "mode": "combined"},
+            )
+        )
+        assert "Plot allsold-1" in body
+        assert _chip_badge(body, "AllSold") == 0
 
 
 class TestTheSeventyReproductionIsGone:
