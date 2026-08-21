@@ -435,7 +435,12 @@ TRANSLATIONS = {
         "hazards_more_other": "%s more facilities not shown",
         "hazards_truncated": "The scan reached its element limit, so this list may be incomplete",
         "hazards_limits": "OpenStreetMap says a facility exists. It says nothing about its emissions (PRTR-España publishes those), nothing about measured air quality, and nothing about a plant that is approved but not yet built. Which way the wind blows is not recorded here either — only the bearing is.",
-        "hazard_severity_high": "Emitting",
+        # Names what the facility *is*, not what it emits. OSM establishes
+        # a cement works; the block's own disclosure says in the next
+        # breath that it establishes nothing about emissions, and a badge
+        # reading "Emitting" beside that sentence was an inference wearing
+        # a measurement's clothes -- the STATUS-002 shape (review, #453).
+        "hazard_severity_high": "Heavy industry",
         "hazard_severity_moderate": "Nuisance",
         "hazard_kind_cement_works": "Cement works",
         "hazard_kind_steelworks": "Steelworks",
@@ -509,6 +514,48 @@ TRANSLATIONS = {
         ),
         # Municipality comparison page (proposal D22).
         "municipalities": "Municipalities",
+        # /construccion — the building-rules reference. The chapter BODIES
+        # are committed Russian content, not chrome; these keys are only the
+        # page chrome and the state words the #98 contract depends on.
+        "construccion": "Building rules",
+        "concejo_select_label": "Concejo:",
+        "concejo_none_selected_option": "— not selected —",
+        "concejo_scope_group": "Search perimeter",
+        "concejo_all_group": "All of Asturias",
+        "concejo_snapshot_missing": (
+            "The concejo identity snapshot is missing — the page refuses "
+            "rather than serve identity from a fallback source."
+        ),
+        "concejo_code_rejected": "Concejo code not recognised — no overlay shown.",
+        "concejo_coverage_line": (
+            "Perimeter: {scope} concejos. Search performed in {searched}. "
+            "All mandatory topics searched in {mandatory} "
+            "(confirmed values: {confirmed}, of them stale: {stale})."
+        ),
+        "concejo_beyond_scope": "Also researched beyond the perimeter: {n}.",
+        "concejo_not_researched_banner": (
+            "nobody has researched this municipality. None of the fields "
+            "below is checked for it."
+        ),
+        "concejo_regional_norm": "Regional norm",
+        "concejo_pick_first": "concejo not selected — municipal terms not checked",
+        "concejo_for_name": "For {name}",
+        "concejo_not_researched": "not researched",
+        "concejo_not_confirmed": "searched, not confirmed",
+        "concejo_searched_in": "Searched in",
+        "concejo_agent_unverified": "unverified",
+        "concejo_stale": "recheck recommended",
+        "concejo_chapter_callout": ("Regional frame. Not confirmed for {name}:"),
+        "concejo_chapter_callout_none": (
+            "Regional frame. No concejo selected — municipal terms are not "
+            "checked for any place."
+        ),
+        "concejo_topic_pgo": "PGO adopted, and when",
+        "concejo_topic_cedula": "Cédula or certificado only",
+        "concejo_topic_coastal": "Coastal concejo (POLA/PESC)",
+        "concejo_topic_silence": "Licence silence period",
+        "concejo_topic_occupation": "First-occupation regime",
+        "concejo_topic_icio": "ICIO rate",
         "listings_lower": "listings",
         "municipalities_listings": "Listings",
         "municipalities_score": "Score",
@@ -1008,7 +1055,7 @@ TRANSLATIONS = {
         "hazards_more_other": "%s instalaciones más sin mostrar",
         "hazards_truncated": "La exploración alcanzó su límite de elementos, así que esta lista puede estar incompleta",
         "hazards_limits": "OpenStreetMap dice que la instalación existe. No dice nada sobre sus emisiones (PRTR-España las publica), nada sobre la calidad del aire medida y nada sobre una planta aprobada pero aún no construida. Tampoco se registra aquí de dónde viene el viento — solo el rumbo.",
-        "hazard_severity_high": "Emisora",
+        "hazard_severity_high": "Industria pesada",
         "hazard_severity_moderate": "Molestia",
         "hazard_kind_cement_works": "Fábrica de cemento",
         "hazard_kind_steelworks": "Acería",
@@ -1082,6 +1129,47 @@ TRANSLATIONS = {
         # Municipality comparison page (proposal D22). "municipality" itself
         # is already defined above with the table headers.
         "municipalities": "Municipios",
+        "construccion": "Normas de construcción",
+        "concejo_select_label": "Concejo:",
+        "concejo_none_selected_option": "— sin seleccionar —",
+        "concejo_scope_group": "Perímetro de búsqueda",
+        "concejo_all_group": "Toda Asturias",
+        "concejo_snapshot_missing": (
+            "Falta la instantánea de identidad de concejos — la página se "
+            "niega antes que servir la identidad desde otra fuente."
+        ),
+        "concejo_code_rejected": "Código de concejo no reconocido — sin capa municipal.",
+        "concejo_coverage_line": (
+            "Perímetro: {scope} concejos. Búsqueda realizada en {searched}. "
+            "Todos los temas obligatorios buscados en {mandatory} "
+            "(valores confirmados: {confirmed}, de ellos caducos: {stale})."
+        ),
+        "concejo_beyond_scope": "Investigados además fuera del perímetro: {n}.",
+        "concejo_not_researched_banner": (
+            "nadie ha investigado este municipio. Ninguno de los campos "
+            "siguientes está comprobado para él."
+        ),
+        "concejo_regional_norm": "Norma regional",
+        "concejo_pick_first": (
+            "concejo sin seleccionar — condiciones municipales sin comprobar"
+        ),
+        "concejo_for_name": "Para {name}",
+        "concejo_not_researched": "sin investigar",
+        "concejo_not_confirmed": "buscado, sin confirmar",
+        "concejo_searched_in": "Buscado en",
+        "concejo_agent_unverified": "sin verificar",
+        "concejo_stale": "conviene recomprobar",
+        "concejo_chapter_callout": ("Marco regional. Sin confirmar para {name}:"),
+        "concejo_chapter_callout_none": (
+            "Marco regional. Sin concejo seleccionado — las condiciones "
+            "municipales no están comprobadas para ningún lugar."
+        ),
+        "concejo_topic_pgo": "PGO aprobado, y cuándo",
+        "concejo_topic_cedula": "Cédula o solo certificado",
+        "concejo_topic_coastal": "Concejo litoral (POLA/PESC)",
+        "concejo_topic_silence": "Plazo de silencio de la licencia",
+        "concejo_topic_occupation": "Régimen de primera ocupación",
+        "concejo_topic_icio": "Tipo de ICIO",
         "listings_lower": "anuncios",
         "municipalities_listings": "Anuncios",
         "municipalities_score": "Puntuación",

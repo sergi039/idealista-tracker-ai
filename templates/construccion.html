@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+
+{% block title %}{{ t('construccion') }}{% endblock %}
+
+{% block content %}
+{# The building-rules reference. One page: the regional dossier as an
+   accordion, and a per-concejo overlay for the concejo a PERSON selected.
+   The #98 contract, pinned by tests/test_construccion_page.py:
+   - a topic requiring local confirmation shows NO value node unless a
+     `present` record exists — the regional statute is its own row about its
+     own subject, never the concejo's value;
+   - `not_confirmed` (searched, found nothing) and `not_researched` (nobody
+     looked) are different states with different words;
+   - a chapter holding local topics carries a callout naming what is NOT
+     confirmed for the selected concejo, so deep links cannot scroll past
+     the disclosure. #}
+
+{% if snapshot_missing %}
+<div class="alert alert-danger my-4">{{ t('concejo_snapshot_missing') }}</div>
+{% else %}
+
+<div class="d-flex flex-wrap align-items-center gap-3 my-3">
+    <h1 class="h3 mb-0"><i class="fas fa-file-signature me-2"></i>{{ t('construccion') }}</h1>
+    <form method="get" class="d-flex align-items-center gap-2" id="concejo-form">
+        <label for="concejo-select" class="form-label mb-0">{{ t('concejo_select_label') }}</label>
+        <select name="concejo" id="concejo-select" class="form-select form-select-sm w-auto"
+                onchange="this.form.submit()">
+            <option value="">{{ t('concejo_none_selected_option') }}</option>
+            <optgroup label="{{ t('concejo_scope_group') }}">
+                {% for code, name in selector if code in scope_codes %}
+                <option value="{{ code }}" {% if selected and selected.code == code %}selected{% endif %}>{{ name }}</option>
+                {% endfor %}
+            </optgroup>
+            <optgroup label="{{ t('concejo_all_group') }}">
+                {% for code, name in selector if code not in scope_codes %}
+                <option value="{{ code }}" {% if selected and selected.code == code %}selected{% endif %}>{{ name }}</option>
+                {% endfor %}
+            </optgroup>
+        </select>
+    </form>
+</div>
+
+{% if code_rejected %}
+<div class="alert alert-warning py-2" data-test="code-rejected">{{ t('concejo_code_rejected') }}</div>
+{% endif %}
+
+{% if coverage %}
+<p class="text-muted small" data-test="coverage-line">
+    {{ t('concejo_coverage_line').format(
+        scope=coverage.scope_total,
+        searched=coverage.searched_any,
+        mandatory=coverage.searched_all_mandatory,
+        confirmed=coverage.confirmed_values,
+        stale=coverage.stale_values) }}
+    {% if coverage.beyond_scope %}
+        {{ t('concejo_beyond_scope').format(n=coverage.beyond_scope | length) }}
+    {% endif %}
+</p>
+{% endif %}
+
+{% if selected and not selected.researched %}
+<div class="alert alert-secondary" data-test="not-researched-banner">
+    <strong>{{ selected.name }}</strong>: {{ t('concejo_not_researched_banner') }}
+</div>
+{% endif %}
+
+{% macro topic_slot(topic_key) %}
+{# The two-row slot. Row 1: the regional statute, its own subject, always
+   captioned with its citation, never a provenance icon. Row 2: the selected
+   concejo's own state. The value node (data-test="value") exists ONLY for
+   `present` — review rounds 1 and 6 are both about this macro. #}
+{% set topic = topics[topic_key] %}
+<div class="border rounded p-2 my-2 bg-body-tertiary" data-test="slot-{{ topic_key }}">
+    <div class="fw-semibold small">{{ t(topic.label_key) }}</div>
+    {% if topic.regional_statute %}
+    <div class="small" data-test="regional-row">
+        <span class="text-muted">{{ t('concejo_regional_norm') }} ({{ topic.regional_statute[1] }}):</span>
+        {{ topic.regional_statute[0] }}
+    </div>
+    {% endif %}
+    <div class="small" data-test="concejo-row">
+        {% if not selected %}
+            <span class="text-muted">{{ t('concejo_pick_first') }}</span>
+        {% else %}
+            <span class="text-muted">{{ t('concejo_for_name').format(name=selected.name) }}:</span>
+            {% set cell = selected.cells[topic_key] %}
+            {% if cell.state == 'present' %}
+                <span data-test="value" class="fw-semibold">{{ cell.value }}</span>
+                {% if cell.confidence == 'verified' %}
+                    <i class="fas fa-check text-success" title="{{ cell.source }}"></i>
+                {% else %}
+                    <span class="badge text-bg-warning fw-normal">{{ t('concejo_agent_unverified') }}</span>
+                {% endif %}
+                {% if cell.stale %}
+                    <span title="{{ t('concejo_stale') }}"><i class="fas fa-clock text-muted"></i>
+                    {{ t('concejo_stale') }}</span>
+                {% endif %}
+                {% if cell.source_url %}<a href="{{ cell.source_url }}" rel="noopener">{{ cell.source }}</a>
+                {% elif cell.source %}{{ cell.source }}{% endif %}
+                <span class="text-muted">({{ cell.checked_at }})</span>
+            {% elif cell.state == 'not_confirmed' %}
+                <span data-test="state-not-confirmed">&mdash; {{ t('concejo_not_confirmed') }}</span>
+                <span class="text-muted">{{ t('concejo_searched_in') }}: {{ cell.searched }} ({{ cell.checked_at }})</span>
+            {% else %}
+                <span data-test="state-not-researched" class="text-muted">&#11034; {{ t('concejo_not_researched') }}</span>
+            {% endif %}
+        {% endif %}
+    </div>
+</div>
+{% endmacro %}
+
+<div class="accordion-like">
+    {% for chapter in chapters %}
+    <details class="border rounded mb-2 p-3" id="chapter-{{ chapter.file_id }}" data-anchor="{{ chapter.anchor }}">
+        <summary class="fw-semibold">{{ chapter.title }}</summary>
+        {% if chapter.local_topics %}
+        <div class="alert alert-light border small mt-2 mb-2" data-test="chapter-callout-{{ chapter.file_id }}">
+            <i class="fas fa-map-pin me-1"></i>
+            {% if selected %}
+                {{ t('concejo_chapter_callout').format(name=selected.name) }}
+                {% for tk in chapter.local_topics %}
+                    {% if selected.cells[tk].state != 'present' %}<span class="badge text-bg-secondary fw-normal">{{ t(topics[tk].label_key) }}</span>{% endif %}
+                {% endfor %}
+            {% else %}
+                {{ t('concejo_chapter_callout_none') }}
+            {% endif %}
+        </div>
+        {% endif %}
+        <div class="mt-2">{{ chapter.body | safe }}</div>
+        {% for tk in chapter.local_topics %}{{ topic_slot(tk) }}{% endfor %}
+    </details>
+    {% endfor %}
+</div>
+
+<script>
+// Open the chapter a #fragment points into — on load AND on hashchange:
+// hashchange alone never fires for the initial URL (review round 1 of the
+// design), which is exactly the email-link-on-a-phone scenario.
+(function () {
+    function openForHash() {
+        var id = window.location.hash.replace('#', '');
+        if (!id) return;
+        var target = document.getElementById(id);
+        var details = target ? target.closest('details') : null;
+        if (!details) {
+            document.querySelectorAll('details[data-anchor]').forEach(function (d) {
+                if (d.dataset.anchor === id) details = d;
+            });
+        }
+        if (details) {
+            details.open = true;
+            (target || details).scrollIntoView();
+        }
+    }
+    document.addEventListener('DOMContentLoaded', openForHash);
+    window.addEventListener('hashchange', openForHash);
+})();
+</script>
+
+{% endif %}
+{% endblock %}

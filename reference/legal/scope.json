@@ -1,0 +1,12 @@
+{
+  "_comment": "The owner's search perimeter — an owner decision, edited by hand, never derived from listings. Seeded 2026-08-21 from the vetted coastal spots (western Castrillón first; Cabueñes/Gijón, Soto del Barco, El Pito/Cudillero, Bañugues/Gozón, Muros de Nalón). The coverage line counts against this list.",
+  "concejos": [
+    "33016",
+    "33021",
+    "33024",
+    "33025",
+    "33039",
+    "33069"
+  ],
+  "updated": "2026-08-21"
+}
