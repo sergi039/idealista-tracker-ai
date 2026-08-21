@@ -182,6 +182,45 @@ class TestSnapshotRefusal:
         assert 'data-test="coverage-line"' not in resp.get_data(as_text=True)
 
 
+class TestFullDossier:
+    """The full-view contract: a reading page with NO concejo context.
+
+    The round-6 review forbade a local topic's value in prose next to a
+    selected concejo; the full document keeps that by having no selector, no
+    slots and no overlay -- ?concejo= is ignored outright."""
+
+    def test_renders_the_uncompressed_document(self, client):
+        resp = client.get("/construccion?view=full")
+        html = resp.get_data(as_text=True)
+        assert resp.status_code == 200
+        assert 'data-test="full-body"' in html
+        assert "32 ter" in html  # deep §7 marker the digest does not carry
+        assert 'id="full-top"' in html
+
+    def test_carries_no_concejo_machinery_even_when_asked(self, client):
+        resp = client.get("/construccion?view=full&concejo=33016")
+        html = resp.get_data(as_text=True)
+        assert resp.status_code == 200
+        assert 'data-test="slot-' not in html
+        assert 'data-test="not-researched-banner"' not in html
+        assert "<option" not in html
+        assert 'data-test="full-note"' in html
+
+    def test_digest_page_links_to_it(self, client):
+        html = client.get("/construccion").get_data(as_text=True)
+        assert 'data-test="full-link"' in html
+
+    def test_missing_file_refuses_rather_than_renders_empty(self, client, monkeypatch):
+        from pathlib import Path
+
+        monkeypatch.setattr(
+            concejo_legal, "FULL_DOSSIER_PATH", Path("/nonexistent/full.html")
+        )
+        resp = client.get("/construccion?view=full")
+        assert resp.status_code == 503
+        assert 'data-test="full-missing"' in resp.get_data(as_text=True)
+
+
 class TestDeepLink:
     def test_chapter_carries_callout_and_states(self, client, tmp_path, monkeypatch):
         monkeypatch.setattr(concejo_legal, "CONCEJOS_DIR", tmp_path / "none")

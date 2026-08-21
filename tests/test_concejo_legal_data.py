@@ -260,6 +260,7 @@ class TestImageInclusion:
         "reference/legal/scope.json",
         "reference/legal/asturias/01-permisos.html",
         "reference/legal/concejos",
+        "reference/legal/asturias_full.html",
     ]
 
     def test_dockerignore_does_not_exclude_reference_legal(self):
