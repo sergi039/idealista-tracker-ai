@@ -3362,6 +3362,71 @@ def municipalities():
         return redirect(url_for("main.properties"))
 
 
+@main_bp.route("/construccion")
+def construccion():
+    """The building-rules reference: regional dossier + per-concejo overlay.
+
+    The concejo is an explicit human choice, never derived from a listing --
+    the design decision seven review rounds arrived at (services/
+    concejo_legal.py has the history). A missing identity snapshot refuses
+    the page outright: identity served from a fallback is the defect the
+    snapshot exists to remove.
+    """
+    from services import concejo_legal
+    from services.buildability_catalog import TOPICS, topics_for_chapter
+
+    try:
+        snapshot = concejo_legal.load_snapshot()
+    except concejo_legal.SnapshotUnavailable:
+        logger.exception("concejo identity snapshot unavailable")
+        return (
+            render_template(
+                "construccion.html",
+                snapshot_missing=True,
+                chapters=[],
+                selector=[],
+                scope_codes=[],
+                coverage=None,
+                selected=None,
+                code_rejected=False,
+            ),
+            503,
+        )
+
+    raw_code = request.args.get("concejo")
+    code = concejo_legal.validate_code(raw_code, snapshot)
+    code_rejected = bool(raw_code) and code is None
+
+    selected = None
+    if code:
+        payload = concejo_legal.load_concejo(code)
+        selected = {
+            "code": code,
+            "name": snapshot[code],
+            "researched": concejo_legal.researched(payload),
+            "cells": {t: concejo_legal.cell_for(payload, t) for t in TOPICS},
+        }
+
+    chapters = []
+    for chapter in concejo_legal.load_chapters():
+        chapter["local_topics"] = topics_for_chapter(chapter["file_id"])
+        chapters.append(chapter)
+
+    scope_codes = [c for c in concejo_legal.load_scope() if c in snapshot]
+    selector = sorted(snapshot.items(), key=lambda kv: kv[1])
+    return render_template(
+        "construccion.html",
+        snapshot_missing=False,
+        chapters=chapters,
+        selector=selector,
+        scope_codes=scope_codes,
+        coverage=concejo_legal.coverage(snapshot),
+        selected=selected,
+        code_rejected=code_rejected,
+        topics=TOPICS,
+    )
+
+
 @main_bp.route("/map")
 def map_view():
     """Interactive map view of all properties with coordinates"""
