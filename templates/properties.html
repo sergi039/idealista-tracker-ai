@@ -1022,6 +1022,27 @@
                             <i class="fas fa-circle-info me-1"></i>{% if search_interpretation.listing_id %}{{ t('search_read_as_listing')|format(search_interpretation.listing_id) }}{% else %}{{ t('search_read_as_link')|format(search_interpretation.url_fragment|truncate(80, True)) }}{% endif %}
                         </span>
                     {% endif %}
+                    {# The filter bar narrowed this count, and the chips above
+                       carry unfiltered badges beside it -- so without this
+                       line "All subscriptions" under a sticky filter reads as
+                       a broken selection ("23 properties found" against a
+                       chip saying 60). The baseline is the same subscription
+                       selection plus the toolbar switches, which is exactly
+                       the set the clear link lands on: the link is `base_args`
+                       with every filter-bar key dropped, so it keeps the
+                       subscriptions, Favorites, Hide removed and the view
+                       state, and resets nothing else. Rendered only on a real
+                       narrowing -- a filter that matched everything hid
+                       nothing worth a line. #}
+                    {% if pagination and filter_bar_scope_total is defined
+                          and filter_bar_scope_total is not none
+                          and filter_bar_scope_total != pagination.total %}
+                        <span id="filter-bar-narrowing-note" class="text-body-secondary small">
+                            <i class="fas fa-filter me-1"></i>{{ t('filter_bar_narrowing')|format(pagination.total, filter_bar_scope_total) }}
+                            (<a id="clear-filters-link"
+                                href="{{ url_for('main.properties', **dict(base_args, search=None, category=None, subtype=None, municipality=None, source=None, advertiser=None, verdict=None, action=None, inv_metr=None, sea_view=None, measured=None, page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">{{ t('clear_filters_link') }}</a>)
+                        </span>
+                    {% endif %}
                     {# Whether that total covers the listings with no subscription
                        at all (issue #111). `all` means every *active* subscription,
                        so those rows are outside every selection but their own --

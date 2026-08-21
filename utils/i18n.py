@@ -142,6 +142,11 @@ TRANSLATIONS = {
         "listing_unchecked_tooltip": "Never verified on the source site — the default a new listing carries",
         "listing_checked_ago": "checked %s d ago",
         "listing_status_coverage": "Listing status: %s of %s verified on the source site",
+        # The filter bar narrowed the result, and the count line says so --
+        # first %s is the filtered total, second the same subscriptions
+        # without the filter bar.
+        "filter_bar_narrowing": "Filters: %s of %s shown",
+        "clear_filters_link": "clear filters",
         # Importing listings by link (fotocasa).
         "import_listings": "Import listings by link",
         "back_to_listings": "Back to listings",
@@ -782,6 +787,11 @@ TRANSLATIONS = {
         "listing_unchecked_tooltip": "Nunca verificado en el sitio de origen — es el valor por defecto de un anuncio nuevo",
         "listing_checked_ago": "comprobado hace %s d",
         "listing_status_coverage": "Estado del anuncio: %s de %s verificados en el sitio de origen",
+        # La barra de filtros ha acotado el resultado y la línea del total lo
+        # dice -- el primer %s es el total filtrado, el segundo las mismas
+        # suscripciones sin la barra de filtros.
+        "filter_bar_narrowing": "Filtros: se muestran %s de %s",
+        "clear_filters_link": "quitar filtros",
         # Importación de anuncios por enlace (fotocasa).
         "import_listings": "Importar anuncios por enlace",
         "back_to_listings": "Volver a los anuncios",
