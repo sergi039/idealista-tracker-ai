@@ -556,6 +556,17 @@ TRANSLATIONS = {
         "concejo_topic_silence": "Licence silence period",
         "concejo_topic_occupation": "First-occupation regime",
         "concejo_topic_icio": "ICIO rate",
+        "construccion_full_title": "Full dossier (regional)",
+        "construccion_full_link": "Full dossier",
+        "construccion_full_back": "Back to the reference",
+        "construccion_full_note": (
+            "This is the regional document in full. It carries no concejo "
+            "context: nothing on this page is checked for any particular "
+            "municipality — municipal terms live on the reference page."
+        ),
+        "construccion_full_missing": (
+            "The full dossier file is missing from this build."
+        ),
         "listings_lower": "listings",
         "municipalities_listings": "Listings",
         "municipalities_score": "Score",
@@ -1170,6 +1181,17 @@ TRANSLATIONS = {
         "concejo_topic_silence": "Plazo de silencio de la licencia",
         "concejo_topic_occupation": "Régimen de primera ocupación",
         "concejo_topic_icio": "Tipo de ICIO",
+        "construccion_full_title": "Dossier completo (regional)",
+        "construccion_full_link": "Dossier completo",
+        "construccion_full_back": "Volver a la referencia",
+        "construccion_full_note": (
+            "Este es el documento regional íntegro. No lleva contexto de "
+            "concejo: nada de esta página está comprobado para ningún "
+            "municipio — las condiciones municipales viven en la referencia."
+        ),
+        "construccion_full_missing": (
+            "Falta el fichero del dossier completo en esta build."
+        ),
         "listings_lower": "anuncios",
         "municipalities_listings": "Anuncios",
         "municipalities_score": "Puntuación",

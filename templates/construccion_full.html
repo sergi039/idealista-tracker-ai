@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}{{ t('construccion_full_title') }}{% endblock %}
+
+{% block content %}
+{# The uncompressed regional dossier. Deliberately WITHOUT the concejo
+   selector and without topic slots: the round-6 review contract forbids a
+   local topic's value in prose NEXT TO a selected concejo, and this page
+   keeps it by carrying no concejo context at all. data-test markers absent
+   here are asserted absent by tests/test_construccion_page.py. #}
+<div class="d-flex flex-wrap align-items-center gap-3 my-3">
+    <h1 class="h3 mb-0"><i class="fas fa-book me-2"></i>{{ t('construccion_full_title') }}</h1>
+    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.construccion') }}">
+        <i class="fas fa-arrow-left me-1"></i>{{ t('construccion_full_back') }}
+    </a>
+</div>
+
+{% if not body %}
+<div class="alert alert-danger" data-test="full-missing">{{ t('construccion_full_missing') }}</div>
+{% else %}
+<div class="alert alert-light border small" data-test="full-note">
+    <i class="fas fa-info-circle me-1"></i>{{ t('construccion_full_note') }}
+</div>
+<div class="construccion-full" data-test="full-body">{{ body | safe }}</div>
+{% endif %}
+{% endblock %}
