@@ -1612,11 +1612,14 @@ and TODO.md; respect it if you ever run both side by side.
   commit.** The decisive pass -- the coordinate, the sea distance, the travel
   times -- runs first and is committed on its own, so a container recreated
   mid-run (#283) cannot take a paid measurement with it. The advisory pass
-  runs after, each step owning its write. Three of its four take the row under
-  `FOR UPDATE` (`services/enrichment_write.py`); `enrich_osm_amenities` does
-  not, which is #352's open gap and is not made worse here -- the old
-  shared-transaction form lost a concurrently written block just as
-  thoroughly. Order is a budget decision as much as a commit one: the free
+  runs after, each step owning its write, and **every one of them takes the
+  row under `FOR UPDATE`** (`services/enrichment_write.py`). That sentence
+  said "three of its four" for eight hours: `enrich_osm_amenities` was #352's
+  last unlocked writer, this file described the gap instead of closing it, and
+  the first thing #437's new hazard block met was the one writer that could
+  erase it -- reproduced, then closed in #460. Describing a gap is not the
+  same as closing one, and a rule file that names an open hole is read as
+  permission to leave it open. Order is a budget decision as much as a commit one: the free
   lookup the *paid* call depends on is `services/osm_places.py`, and no
   destinations means no Distance Matrix request, so the decisive steps must
   hold the clock while there is any. The pool step stays off the
