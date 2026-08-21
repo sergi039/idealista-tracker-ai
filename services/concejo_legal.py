@@ -41,6 +41,7 @@ SNAPSHOT_PATH = REFERENCE_DIR / "asturias_concejos.json"
 SCOPE_PATH = REFERENCE_DIR / "scope.json"
 CONCEJOS_DIR = REFERENCE_DIR / "concejos"
 CHAPTERS_DIR = REFERENCE_DIR / "asturias"
+FULL_DOSSIER_PATH = REFERENCE_DIR / "asturias_full.html"
 
 ASTURIAS_CODE_MIN, ASTURIAS_CODE_MAX = 33001, 33078
 
@@ -293,6 +294,20 @@ def coverage(snapshot: dict) -> dict:
         "stale_values": stale_count,
         "beyond_scope": sorted(set(researched_files) - set(scope)),
     }
+
+
+def load_full_dossier():
+    """The uncompressed dossier, or None. Rendered WITHOUT the concejo
+    selector and without slots: it is a purely regional reading document, and
+    the round-6 contract (a value in prose must not sit next to a selected
+    concejo) is kept by there being no concejo context on that page at all.
+    It also lives outside CHAPTERS_DIR on purpose -- the chapter lint forbids
+    local-topic values in chapter prose, and this document legitimately
+    carries the regional statutes in full."""
+    try:
+        return FULL_DOSSIER_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return None
 
 
 # --- the regional chapters --------------------------------------------------
