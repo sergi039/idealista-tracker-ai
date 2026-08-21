@@ -215,15 +215,40 @@
     font-size: 0.75rem;
 }
 
-/* Subscription chips: long saved-search names must not push the rest of the
-   toolbar off the row. */
+/* Subscription chips: one thin strip that scrolls sideways. Every chip is
+   the same fixed size, a long saved-search name truncates inside its chip,
+   and the overflow stays inside the strip -- eleven live subscriptions must
+   not wrap into a wall of two-line buttons that pushes the toolbar apart. */
+.properties-subscription-chips {
+    flex: 1 1 0%;
+    min-width: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+}
+
+.properties-subscription-chips .btn {
+    display: inline-flex;
+    flex: 0 0 9rem;
+    width: 9rem;
+    align-items: center;
+    justify-content: center;
+    white-space: nowrap;
+    padding-top: 0.125rem;
+    padding-bottom: 0.125rem;
+    font-size: 0.75rem;
+}
+
+.properties-subscription-chips .badge {
+    flex: 0 0 auto;
+}
+
 .properties-subscription-name {
-    display: inline-block;
-    max-width: 18rem;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    vertical-align: bottom;
 }
 
 .properties-subscription-menu {
@@ -232,11 +257,11 @@
     overflow-y: auto;
 }
 
-/* A button group does not wrap, so on a phone the chips have to give way
-   rather than push the page sideways. */
+/* On a phone the same strip simply holds narrower chips. */
 @media (max-width: 575.98px) {
-    .properties-subscription-name {
-        max-width: 7rem;
+    .properties-subscription-chips .btn {
+        flex-basis: 7rem;
+        width: 7rem;
     }
 
     .properties-subscription-menu {

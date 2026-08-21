@@ -480,7 +480,7 @@
             <div class="btn-group btn-group-sm properties-subscription-chips" role="group" aria-label="{{ t('subscriptions') }}">
                 <a class="btn {{ 'btn-primary' if profile_selection.state == 'all' else 'btn-outline-secondary' }}"
                    href="{{ url_for('main.properties', **dict(base_args, profile_id='all', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">
-                    {{ t('all_subscriptions') }}
+                    <span class="properties-subscription-name">{{ t('all_subscriptions') }}</span>
                 </a>
                 {% for option in live_subscriptions %}
                     <a class="btn {{ 'btn-primary' if profile_selection.single_id == option.id else 'btn-outline-secondary' }}"
