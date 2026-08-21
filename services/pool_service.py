@@ -47,11 +47,13 @@ logger = logging.getLogger(__name__)
 
 POOL_SEARCH_RADIUS_M = 25000
 # Enough measured options for the require-indoor toggle to still have a
-# candidate left; also the Distance Matrix element cap per property.
+# candidate left; also the per-property cap on measured drive times — three
+# billed Google Distance Matrix elements when `OSRM_URL` is unset, three free
+# legs of one local OSRM /table request when it is set (#416).
 POOL_MEASURE_TOP_N = 3
 
 STATUS_OK = "ok"  # at least one candidate with a measured drive time
-STATUS_PENDING = "pending_measurement"  # candidates found, Distance Matrix refused
+STATUS_PENDING = "pending_measurement"  # candidates found, routing refused
 STATUS_UNVERIFIED_ABSENCE = "unverified_absence"  # OSM + cross-check found nothing
 STATUS_UNAVAILABLE = "unavailable"  # the lookup itself refused
 STATUS_NO_COORDINATES = "no_coordinates"
@@ -100,7 +102,7 @@ def _indoor_evidence(tags: Dict[str, Any]) -> Tuple[str, Optional[str]]:
 
 
 def _select_for_measurement(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """The ≤3 candidates worth a Distance Matrix element.
+    """The ≤3 candidates worth a measured drive time.
 
     Nearest-first alone starved the require-indoor toggle: three outdoor
     pools up front left a verified indoor one 4th and unmeasured, scoring
