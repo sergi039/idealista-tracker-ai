@@ -129,11 +129,35 @@ def test_the_geo_heuristic_is_gone_entirely():
 
     A flag defaulting to off can be flipped back by an `.env` line or a stray
     `Config.AUTO_PROFILE_ASSIGNMENT = True` in a test; a deleted module cannot.
-    """
-    import config as config_module
 
-    reloaded = importlib.reload(config_module)
-    assert not hasattr(reloaded.Config, "AUTO_PROFILE_ASSIGNMENT")
+    The flag's absence is read from a clean interpreter, **not** via
+    `importlib.reload(config)`: reloading rebinds `config.Config` to a new
+    class while every `from config import Config` already executed in this
+    process keeps the old one, so any later test's `monkeypatch.setattr(
+    Config, ...)` patches a class the services no longer read. This test's
+    reload is what `tests/test_osrm_routing.py` blames for "seven unrelated
+    tests in three other files went red", and on 2026-08-21 the same
+    mechanism broke another Config-patching test; the subprocess probe is
+    the pattern `test_the_shipped_default_is_off` there already uses.
+    """
+    import os
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from config import Config;"
+            "print(hasattr(Config, 'AUTO_PROFILE_ASSIGNMENT'))",
+        ],
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "False"
 
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module("services.profile_assignment_service")
