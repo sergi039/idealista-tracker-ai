@@ -572,8 +572,11 @@ The reason it can go is that the rows the owner wants numbers for cannot become
 precise: their adverts give a hamlet or hide the address, so a re-geocode
 returns the same centroid, and the choice was a measured duration that says
 what it is against no answer at any price. What it costs is that a recalc over
-such rows is **no longer free** — ~$0.36 a listing where it used to walk past —
-so read the billing rule above before pointing one at a wide scope. Nothing
+such rows no longer walks past them, and whether that bills depends on who
+routes: free with `OSRM_URL` set (#416; the mini since 2026-08-20), a billed
+Distance Matrix request per listing without it — so read the billing rule
+above before pointing one at a wide scope on a machine where Google still
+routes. Nothing
 unattended reaches that code (`AUTO_TRAVEL_ENRICHMENT` is false), which is what
 keeps the lift a spending decision rather than a spending default. The run
 records `api_status.origin_accuracy`, and the only refusal left is a row with
@@ -652,9 +655,10 @@ evidence with a source — `verified` (`covered=yes`), `likely` (a building, or
 toggle is applied by the *scorer*, so narrowing or widening it never rewrites
 the evidence. A refusal never overwrites measured candidates.
 `utils/backfill_pool.py` covers the Phase-2 auto-scope (last 30 days plus
-favorites, `utils/enrich_scope.py`), costs at most three Distance Matrix
-elements per property, and is resumable per row; everything older stays manual
-via the Enrich button.
+favorites, `utils/enrich_scope.py`), measures at most three drive times per
+property (billed Distance Matrix elements only when `OSRM_URL` is unset —
+free legs of the local routing engine otherwise, #416), and is resumable per
+row; everything older stays manual via the Enrich button.
 
 **What is 1.1 km away is a datum, and an empty page was answering "nothing"**
 (#437). Property 793 is a plot advertised as a "quiet environment surrounded by
@@ -899,9 +903,11 @@ measurement: the measured plot carries `rooms: 0, bathrooms: 0, heating: 0`.
 And **the portal declares its own coordinate inexact** (`coordinates.accuracy:
 0`, `address.isExact: false`), so a fotocasa row is stored `approximate` and
 never `precise` — `precise` grants zero slack in `services/coordinate_quality.py`
-and unlocks a ~$0.36 travel run, and no page claiming exactness has ever been
-seen. Both portal flags ride verbatim into `enrichment["import"]` so that
-measurement, when somebody takes it, needs no re-fetch.
+and unlocks a travel run (billed via Distance Matrix only while `OSRM_URL` is
+unset; free from the local routing engine otherwise, #416), and no page
+claiming exactness has ever been seen. Both portal flags ride verbatim into
+`enrichment["import"]` so that measurement, when somebody takes it, needs no
+re-fetch.
 
 **And so does the pin itself**, because a re-geocode used to throw it away
 (#393). `refresh=True` clears the coordinate *before* geocoding, and
@@ -1361,11 +1367,15 @@ and TODO.md; respect it if you ever run both side by side.
   2026-08-17, after a billing overrun). `AUTO_TRAVEL_ENRICHMENT` defaults to
   **false**; it was `true`, and it was the only automatic caller of a billed
   Google API in this repository — everything else is behind a button press or
-  a CLI backfill. One automatic run is 6 preset Places Nearby lookups + 1 for
-  the beaches + a Distance Matrix request of ~26 elements: about **$0.36 a
-  listing**, twice a day, for however many alert emails arrived. Travel is
-  measured on request now — the Enrich button on `/properties/<id>`, or
-  `utils/recalc_property_travel.py`.
+  a CLI backfill. One automatic run was, at the time, 6 preset Places Nearby
+  lookups + 1 for the beaches + a Distance Matrix request of ~26 elements:
+  about **$0.36 a listing**, twice a day, for however many alert emails
+  arrived. (Since then the presets and beaches moved to the register and
+  OpenStreetMap, and with `OSRM_URL` set — the mini since 2026-08-20, #416 —
+  the Distance Matrix leg itself is answered locally for nothing; the flag
+  stays false anyway, because the rule is about what runs unattended, not
+  about today's price.) Travel is measured on request now — the Enrich button
+  on `/properties/<id>`, or `utils/recalc_property_travel.py`.
 
   What made it expensive rather than merely wasteful is that **the scheduler
   ran on both machines against one mailbox.** `AUTO_START_SCHEDULER` used to
@@ -1446,7 +1456,10 @@ and TODO.md; respect it if you ever run both side by side.
   to a flag about a paid one, leaving a row that reads "nothing nearby" when
   the truth is "nobody looked". That is #98's defect arriving through the back
   door of a cost control. Geocoding is $0.005 a listing, ~$1 a month here
-  against ~$75 for the travel step. Set it false only for a machine that must
+  against ~$75 for the travel step as it was billed then — a figure from before
+  #416; with `OSRM_URL` set the routing itself is free, and the comparison
+  survives only on a machine where Google still routes. Set it false only for
+  a machine that must
   reach no Google API at all; ingestion then makes no billed call whatsoever.
   `tests/test_paid_google_is_on_request.py` pins the defaults (read from a
   clean interpreter, not from the suite's own patched `Config`), that
@@ -1710,8 +1723,10 @@ and TODO.md; respect it if you ever run both side by side.
   itself at rank 18 of 20 — `hospital de día` (a day unit) and `unidad de
   hospitalización` (one ward) carry the word and must be refused for the parent
   to win. The old rows are not fixed by the deploy —
-  `utils/recalc_property_travel.py --ids …` rewrites them and **spends money**,
-  so it needs the owner to ask.
+  `utils/recalc_property_travel.py --ids …` rewrites them and, while
+  `OSRM_URL` is unset, **spends money** (with the local routing engine on,
+  #416, the routing is free) — either way it rewrites data the app cannot
+  roll back, so it needs the owner to ask.
 - **The hospital preset is answered from the national register, not from
   Places** (owner decision 2026-08-18, after the invoice read **EUR 190** for
   1-18 August on a project ingesting ~7 listings a day). The whole of that
@@ -1736,9 +1751,10 @@ and TODO.md; respect it if you ever run both side by side.
   outside its five provinces -- produces a **refusal and never a fallback to
   the paid search**, because falling through would spend exactly where the
   register is thinnest, which is the opposite of the point. This removes one
-  of the seven Places calls per listing; the drive time to the hospital is
-  still a Distance Matrix element, so a hospital only becomes free when the
-  routing does (`tests/test_hospital_from_the_register.py`).
+  of the seven Places calls per listing; the drive time to the hospital is a
+  Distance Matrix element only while `OSRM_URL` is unset — #416 made the
+  routing free, so with the engine on the hospital costs nothing end to end
+  (`tests/test_hospital_from_the_register.py`).
 - **The other five presets are answered from OpenStreetMap** (step 2 of the
   same plan, 2026-08-18). Five of the seven Places calls a listing costs are
   `airport`, `train_station`, `supermarket`, `school` and `police`;
@@ -1782,6 +1798,22 @@ and TODO.md; respect it if you ever run both side by side.
   deleted line puts that path back. `tests/test_osm_places.py` pins the module
   *and the wiring*, because a green unit suite over a dead hook is the defect
   this repository keeps rediscovering (#309).
+- **Drive times come from a routing engine on this machine when `OSRM_URL` is
+  set** (step 3 of the same plan, #416; set on the mini since 2026-08-20, so
+  production routes for free). `services/osrm_routing.py` owns it, and
+  `_distance_matrix_batch` in `services/property_travel_service.py` asks it
+  first — with `OSRM_URL` set no Distance Matrix request is made at all, so a
+  travel run, a pool measurement or a recalc bills nothing for routing; unset
+  means Google answers exactly as before (~26 elements a listing). Every cost
+  sentence in this file that names Distance Matrix is about the *unset*
+  configuration. Three things the module's own docstring records and this
+  file should not water down: it is **opt-in** because OSRM's car profile
+  runs +26–34% slower than Google on 30–75 km motorway legs, so turning it on
+  decides what the stored minutes *mean*, not only what they cost; a routing
+  engine that cannot be reached is a **refusal, never a silent fall back to
+  the paid API** (the `osm_places` decision again); and the extract carries
+  `car.lua` alone, so any other mode is refused rather than answered with a
+  driving time.
 - **A town crowds the real hospital off the page, so the preset carries
   `wide_search_query` too** (#325). Nearby Search returns **one page of 20**,
   and #323 shipped without the fallback on the strength of one *rural*

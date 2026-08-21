@@ -1,10 +1,12 @@
 """Scoped pool backfill (proposal D17; issue #271's scope rule).
 
 Auto-scope = last 30 days + favorites (utils/enrich_scope.py); older
-listings stay manual via Enrich. Paid, but tiny: per property ≤3 Distance
-Matrix elements, plus one Places Text Search only on the OSM-empty path —
-both inside the monthly free caps at this app's volume, and both counted in
-the ledger. A rollback snapshot of the score columns is written first even
+listings stay manual via Enrich. What it costs depends on who routes (#416):
+the ≤3 drive times per property are free legs of the local routing engine
+when `OSRM_URL` is set, and billed Google Distance Matrix elements when it is
+not; the one Places Text Search on the OSM-empty path is billed either way.
+Every external call is counted in the ledger. A rollback snapshot of the
+score columns is written first even
 though the criterion ships at weight 0: rolling the app back does not undo
 a data rewrite, and the snapshot is cheap insurance either way.
 
@@ -87,12 +89,15 @@ def main() -> None:
             notes=(
                 window_note(args.days, args.all),
                 "profile-agnostic on purpose (#410): a hidden subscription keeps ingesting",
-                f"worst case: <={len(properties) * 3} Distance Matrix elements + <={len(properties)} Places Text Search",
+                f"worst case: <={len(properties) * 3} drive times "
+                "(billed Distance Matrix elements only if OSRM_URL is unset, "
+                f"#416) + <={len(properties)} Places Text Search",
             ),
         )
         if args.dry_run:
             logger.info(
-                "Dry run. Worst-case: ≤%s DM elements + ≤%s Text Search "
+                "Dry run. Worst-case: ≤%s drive times (billed DM elements "
+                "only if OSRM_URL is unset) + ≤%s Text Search "
                 "(absence path only). No API was called.",
                 len(properties) * 3,
                 len(properties),
