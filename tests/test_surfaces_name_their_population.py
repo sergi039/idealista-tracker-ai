@@ -706,13 +706,21 @@ class TestABackfillSaysWhatItIsAboutToCover:
 
         The estimate branches on `osrm_routing.is_enabled()`, so the config is
         patched rather than the predicate — a stubbed `is_enabled` would keep
-        this green while the tool read some other switch.
+        this green while the tool read some other switch. Patched through
+        `osrm_routing`'s own `Config` reference, not a fresh
+        `from config import Config`: `test_subscription_assignment_is_
+        automatic.py` reloads `config`, which rebinds `config.Config` to a new
+        class while the services keep the old one, and a patch on the fresh
+        class is invisible to `is_enabled()` — the documented trap in
+        `tests/test_osrm_routing.py`, reproduced here as an order-dependent
+        failure (any app-importing file + that reload + this one).
         """
         import logging
         from contextlib import nullcontext
 
-        from config import Config
         from utils import recalc_property_travel as tool
+
+        Config = tool.osrm_routing.Config
 
         live, retired, _ = _profiles()
         rows = [
