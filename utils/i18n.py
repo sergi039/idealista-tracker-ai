@@ -435,7 +435,12 @@ TRANSLATIONS = {
         "hazards_more_other": "%s more facilities not shown",
         "hazards_truncated": "The scan reached its element limit, so this list may be incomplete",
         "hazards_limits": "OpenStreetMap says a facility exists. It says nothing about its emissions (PRTR-España publishes those), nothing about measured air quality, and nothing about a plant that is approved but not yet built. Which way the wind blows is not recorded here either — only the bearing is.",
-        "hazard_severity_high": "Emitting",
+        # Names what the facility *is*, not what it emits. OSM establishes
+        # a cement works; the block's own disclosure says in the next
+        # breath that it establishes nothing about emissions, and a badge
+        # reading "Emitting" beside that sentence was an inference wearing
+        # a measurement's clothes -- the STATUS-002 shape (review, #453).
+        "hazard_severity_high": "Heavy industry",
         "hazard_severity_moderate": "Nuisance",
         "hazard_kind_cement_works": "Cement works",
         "hazard_kind_steelworks": "Steelworks",
@@ -1008,7 +1013,7 @@ TRANSLATIONS = {
         "hazards_more_other": "%s instalaciones más sin mostrar",
         "hazards_truncated": "La exploración alcanzó su límite de elementos, así que esta lista puede estar incompleta",
         "hazards_limits": "OpenStreetMap dice que la instalación existe. No dice nada sobre sus emisiones (PRTR-España las publica), nada sobre la calidad del aire medida y nada sobre una planta aprobada pero aún no construida. Tampoco se registra aquí de dónde viene el viento — solo el rumbo.",
-        "hazard_severity_high": "Emisora",
+        "hazard_severity_high": "Industria pesada",
         "hazard_severity_moderate": "Molestia",
         "hazard_kind_cement_works": "Fábrica de cemento",
         "hazard_kind_steelworks": "Acería",
