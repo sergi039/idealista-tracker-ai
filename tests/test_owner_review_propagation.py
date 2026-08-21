@@ -166,14 +166,26 @@ class TestBothFiltersTogether:
 
 
 def _links(body, prefix):
-    """Every href on the page starting with `prefix`, unescaped."""
+    """Every href on the page starting with `prefix`, unescaped.
+
+    Minus exactly one: the count line's "clear filters" link. This file
+    guards against a link *silently* widening the page; that link's entire,
+    labelled purpose is to drop the filter bar, and the narrowing note beside
+    it says what it is dropping ("Filters: X of Y shown"). Excluded here by
+    its id rather than in each caller, so a future assertion in this file
+    cannot re-trip over it.
+    """
     import re
 
-    return [
-        match.replace("&amp;", "&")
-        for match in re.findall(r'href="([^"]+)"', body)
-        if match.startswith(prefix)
-    ]
+    links = []
+    for tag in re.findall(r"<a\b[^>]*>", body):
+        href_match = re.search(r'href="([^"]+)"', tag)
+        if not href_match:
+            continue
+        href = href_match.group(1).replace("&amp;", "&")
+        if href.startswith(prefix) and 'id="clear-filters-link"' not in tag:
+            links.append(href)
+    return links
 
 
 class TestOneDateForTheWholeRequest:

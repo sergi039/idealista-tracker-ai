@@ -1221,6 +1221,25 @@ def properties():
         # See the comment there for why the order matters.
         query = Property.query
 
+        # Toolbar scope first -- Favorites and Hide removed are the switches on
+        # the subscription row, not filter-bar fields -- so `filter_bar_scope`
+        # below is the set the filter bar is about to narrow. The disclosure
+        # beside the result count is diffed against it: the chips carry every
+        # filter in their links (the page's own link contract, see `base_args`),
+        # which is how "All subscriptions" came to read "23 properties found"
+        # under a sticky sea-view filter with nothing on the page saying the
+        # other 488 were filtered out, not missing. SQLAlchemy queries are
+        # immutable, so branching here cannot drift from the filtered chain.
+        if favorites_filter:
+            query = query.filter(Property.is_favorite.is_(True))
+
+        if hide_removed_filter:
+            query = query.filter(
+                Property.listing_status.notin_(DELISTED_LISTING_STATUSES)
+            )
+
+        filter_bar_scope = query
+
         if category_filter:
             if category_filter == UNCLASSIFIED_FILTER:
                 query = query.filter(_unclassified_clause(Property.property_category))
@@ -1275,13 +1294,13 @@ def properties():
         if measured_filter:
             query = _filter_by_measured(query, Property, measured_filter)
 
-        if favorites_filter:
-            query = query.filter(Property.is_favorite.is_(True))
-
-        if hide_removed_filter:
-            query = query.filter(
-                Property.listing_status.notin_(DELISTED_LISTING_STATUSES)
-            )
+        # Whether the filter bar narrowed anything. Object identity is the
+        # honest reading: every applied clause produced a new query object,
+        # and every helper above hands back the *same* object when its value
+        # is empty or unknown -- so `sea_view=banana` does not count as a
+        # filter, and the disclosure cannot describe a narrowing that was
+        # never applied.
+        filter_bar_active = query is not filter_bar_scope
 
         # Listings with no subscription at all (issue #111). They are invisible
         # to every profile selection including `all`, so the page has to say
@@ -1300,6 +1319,18 @@ def properties():
         query = apply_profile_filter(
             query, Property.search_profile_id, profile_selection
         )
+
+        # What the same subscription selection holds *without* the filter bar
+        # -- the number the "clear filters" link lands on, so the count line
+        # can say "23 of 511" instead of presenting a narrowed set as the
+        # whole one (#98's shape, at the level of the page's own total).
+        # Counted only when a filter really applied: the extra COUNT is not
+        # spent on the common unfiltered page.
+        filter_bar_scope_total = None
+        if filter_bar_active:
+            filter_bar_scope_total = apply_profile_filter(
+                filter_bar_scope, Property.search_profile_id, profile_selection
+            ).count()
 
         # How much of what the page is about to draw was ever verified against
         # idealista. `listing_status` is 'active' by default and nothing
@@ -1427,6 +1458,9 @@ def properties():
             ),
             profile_names=profile_names,
             unassigned_count=unassigned_count,
+            # None when the filter bar narrowed nothing -- the disclosure
+            # beside the count renders only on a real narrowing.
+            filter_bar_scope_total=filter_bar_scope_total,
             max_selected_profiles=MAX_SELECTED_PROFILE_IDS,
             selected_profile_id=selected_profile_id,
             profile_selection=profile_selection,
@@ -1484,6 +1518,7 @@ def properties():
             # The page failed before it could count anything; claiming a number
             # here would be worse than the missing disclosure.
             unassigned_count=0,
+            filter_bar_scope_total=None,
             max_selected_profiles=MAX_SELECTED_PROFILE_IDS,
             selected_profile_id=None,
             profile_selection=empty_profile_selection(),
