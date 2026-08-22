@@ -9,7 +9,7 @@
     "idealista_types": "chalets independientes + casas rusticas (casas-de-pueblo)",
     "fotocasa_types": "Casa o chalet (3) + Finca rustica (9)"
   },
-  "method": "idealista: the 867 agency accounts in the Asturias and Cantabria directories; every account with at least one branded listing in the category (467) was measured on its own microsite with the filter applied (price <= 300,000; chalets independientes + casas rusticas) — the remaining 400 accounts show no branded casas y chalets at all, and none of the small accounts measured so far exceeded 6. fotocasa: agency page with maxPrice=300000 and propertySubtypeIds=3;9. Portal counts are not summed across portals, and a listing can appear on several portals.",
+  "method": "idealista: all 867 agency accounts in the Asturias and Cantabria directories, each measured on its own microsite with the filter applied (price <= 300,000; chalets independientes + casas rusticas); the 400 accounts without a branded listing in the category hold 32 such houses between them (largest: 9). fotocasa: agency page with maxPrice=300000 and propertySubtypeIds=3;9. Portal counts are not summed across portals, and a listing can appear on several portals.",
   "agencies": [
     {
       "name": "Alpaca Inmobiliaria",
