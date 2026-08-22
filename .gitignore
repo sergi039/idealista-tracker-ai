@@ -46,6 +46,7 @@ data/*
 !data/ine_municipal.json
 !data/hospitals_cnh.json
 !data/sepe_unemployment.json
+!data/top_agencies.json
 instance/
 *.db
 *.sqlite

@@ -1,0 +1,317 @@
+{
+  "measured_at": "2026-08-22",
+  "criteria": {
+    "max_price_eur": 300000,
+    "regions": ["Asturias", "Cantabria"],
+    "idealista_types": "chalets independientes + casas rusticas (casas-de-pueblo)",
+    "fotocasa_types": "Casa o chalet (3) + Finca rustica (9)"
+  },
+  "method": "idealista: all 867 agency accounts in the Asturias and Cantabria directories, each measured on its own microsite with the filter applied (price <= 300,000; chalets independientes + casas rusticas); fotocasa: agency page with maxPrice=300000 and propertySubtypeIds=3;9. Portal counts are not summed across portals.",
+  "agencies": [
+    {
+      "name": "Alpaca Inmobiliaria",
+      "region": "Asturias",
+      "base": "Cangas de Onís · Arriondas · Infiesto",
+      "founded": null,
+      "website": "https://www.alpacainmobiliaria.com/",
+      "phone": "985 848 685",
+      "description": "Independent agency with three offices in eastern Asturias (Picos de Europa area); the largest stock of detached village houses and plots in the region.",
+      "idealista": {
+        "detached": 92,
+        "independientes": 91,
+        "casas_chalets": 95,
+        "url": "https://www.idealista.com/pro/alpacainmobiliaria/venta-viviendas/asturias/con-precio-hasta_300000,chalets-independientes,casas-de-pueblo/"
+      },
+      "fotocasa": {
+        "count": 88,
+        "url": "https://www.fotocasa.es/es/inmobiliaria-alpaca-servicios-inmobiliarios/comprar/viviendas/asturias-provincia/todas-las-zonas/l?clientId=9202752125409&maxPrice=300000&propertySubtypeIds=3;9"
+      },
+      "reviews": {"google_rating": null, "google_count": null, "source": null},
+      "other_links": [
+        {"label": "habitaclia", "url": "https://english.habitaclia.com/real_estate-alpaca_servicios_inmobiliarios_35928_1/"},
+        {"label": "yaencontre", "url": "https://www.yaencontre.com/inmobiliarias/alpaca-servicios-inmobiliarios-73978"}
+      ]
+    },
+    {
+      "name": "RE/MAX Vetusta",
+      "region": "Asturias",
+      "base": "Oviedo",
+      "founded": null,
+      "website": "https://remaxvetusta.es/",
+      "phone": "985 061 778",
+      "description": "RE/MAX franchise office in Oviedo covering the whole of Asturias; several hundred active listings (homes and land).",
+      "idealista": {
+        "detached": 90,
+        "independientes": 79,
+        "casas_chalets": 99,
+        "url": "https://www.idealista.com/pro/remax-vetusta/venta-viviendas/asturias/con-precio-hasta_300000,chalets-independientes,casas-de-pueblo/"
+      },
+      "fotocasa": {
+        "count": 88,
+        "url": "https://www.fotocasa.es/es/inmobiliaria-remax-vetusta/comprar/viviendas/asturias-provincia/todas-las-zonas/l?clientId=9202761925498&maxPrice=300000&propertySubtypeIds=3;9"
+      },
+      "reviews": {"google_rating": null, "google_count": null, "source": null},
+      "other_links": [
+        {"label": "habitaclia", "url": "https://english.habitaclia.com/real_estate-remax_vetusta_30615_1/"},
+        {"label": "remax.es", "url": "https://www.remax.es/buscador-de-oficinas/asturias/oviedo/todos/remax-vetusta/"}
+      ]
+    },
+    {
+      "name": "MN Tu Punto Inmobiliario",
+      "region": "Cantabria",
+      "base": "Selaya (valles del Pas y Pisueña)",
+      "founded": null,
+      "website": "https://www.tupuntoinmobiliario.com/",
+      "phone": "942 173 089",
+      "description": "Independent agency in Selaya specialising in rural Cantabria: cabañas pasiegas, stone village houses and fincas; almost all of its stock is casa rústica rather than chalet.",
+      "idealista": {
+        "detached": 84,
+        "independientes": 2,
+        "casas_chalets": 84,
+        "url": "https://www.idealista.com/pro/mn-tu-punto-inmobiliario/venta-viviendas/cantabria/con-precio-hasta_300000,chalets-independientes,casas-de-pueblo/"
+      },
+      "fotocasa": {
+        "count": 79,
+        "url": "https://www.fotocasa.es/es/inmobiliaria-tu-punto-inmobiliario-sc/comprar/viviendas/cantabria-provincia/todas-las-zonas/l?clientId=9202774228215&maxPrice=300000&propertySubtypeIds=3;9",
+        "note": "24 casa/chalet + 55 finca rústica"
+      },
+      "reviews": {"google_rating": null, "google_count": null, "source": null},
+      "other_links": [
+        {"label": "habitaclia", "url": "https://english.habitaclia.com/real_estate-tu_punto_inmobiliario_sc_54324_1/"},
+        {"label": "yaencontre", "url": "https://www.yaencontre.com/inmobiliarias/mn-tu-punto-inmobiliario-45006"}
+      ]
+    },
+    {
+      "name": "RE/MAX Casa Élite",
+      "region": "Asturias",
+      "base": "Gijón",
+      "founded": null,
+      "website": "https://www.remaxcasaelite.es/",
+      "phone": "984 480 000",
+      "description": "RE/MAX franchise office in Gijón operating across Asturias; roughly half of its houses under 300k are casas rústicas, and a third of its casas y chalets are adosados/pareados.",
+      "idealista": {
+        "detached": 74,
+        "independientes": 27,
+        "casas_chalets": 100,
+        "url": "https://www.idealista.com/pro/remax-casa-elite/venta-viviendas/asturias/con-precio-hasta_300000,chalets-independientes,casas-de-pueblo/"
+      },
+      "fotocasa": {
+        "count": null,
+        "url": null,
+        "note": "fotocasa agency page (clientId 9202754569566) returned 0 listings on 2026-08-22"
+      },
+      "reviews": {"google_rating": null, "google_count": null, "source": null},
+      "other_links": [
+        {"label": "habitaclia", "url": "https://english.habitaclia.com/real_estate-remax_elite_29724_1/"},
+        {"label": "remax.es", "url": "https://www.remax.es/buscador-de-oficinas/asturias/gijon-xixon/centro-centro/remax-casaelite/"}
+      ]
+    },
+    {
+      "name": "Sellmi",
+      "region": "Asturias",
+      "base": "Oviedo · Gijón",
+      "founded": null,
+      "website": "https://www.sellmi.es/",
+      "phone": "984 051 993",
+      "description": "Independent two-office agency (Oviedo, Gijón) covering Asturias broadly — sales, rentals, plots; nearly all of its houses under 300k are chalets independientes.",
+      "idealista": {
+        "detached": 61,
+        "independientes": 58,
+        "casas_chalets": 86,
+        "url": "https://www.idealista.com/pro/sellmi/venta-viviendas/asturias/con-precio-hasta_300000,chalets-independientes,casas-de-pueblo/"
+      },
+      "fotocasa": {
+        "count": 62,
+        "url": "https://www.fotocasa.es/es/inmobiliaria-inmobiliaria-sellmi/comprar/viviendas/asturias-provincia/todas-las-zonas/l?clientId=9202758952957&maxPrice=300000&propertySubtypeIds=3;9"
+      },
+      "reviews": {"google_rating": null, "google_count": null, "source": null},
+      "other_links": [
+        {"label": "habitaclia", "url": "https://english.habitaclia.com/real_estate-inmobiliaria_sellmi_29644_1/"}
+      ]
+    },
+    {
+      "name": "Oyambre Servicios Inmobiliarios",
+      "region": "Cantabria · Asturias",
+      "base": "San Vicente de la Barquera",
+      "founded": null,
+      "website": "https://oyambre.es/",
+      "phone": "942 71 23 51",
+      "description": "Independent agency in San Vicente de la Barquera (western Cantabria, reaching into eastern Asturias); member of MLS Cantabria. 40 detached houses in Cantabria plus 15 in Asturias.",
+      "idealista": {
+        "detached": 55,
+        "independientes": 49,
+        "casas_chalets": null,
+        "url": "https://www.idealista.com/pro/inmobiliaria-oyambre/venta-viviendas/cantabria/con-precio-hasta_300000,chalets-independientes,casas-de-pueblo/",
+        "url_secondary": "https://www.idealista.com/pro/inmobiliaria-oyambre/venta-viviendas/asturias/con-precio-hasta_300000,chalets-independientes,casas-de-pueblo/",
+        "secondary_label": "idealista · Asturias (15)"
+      },
+      "fotocasa": {
+        "count": 19,
+        "url": "https://www.fotocasa.es/es/inmobiliaria-oyambre-servicios-inmobiliarios/comprar/viviendas/cantabria-provincia/todas-las-zonas/l?clientId=9202751226162&maxPrice=300000&propertySubtypeIds=3;9",
+        "note": "Cantabria only"
+      },
+      "reviews": {"google_rating": null, "google_count": null, "source": null},
+      "other_links": [
+        {"label": "habitaclia", "url": "https://english.habitaclia.com/real_estate-inmobiliaria_oyambre_30542_1/"}
+      ]
+    },
+    {
+      "name": "Veri Corral Inmobiliaria",
+      "region": "Asturias",
+      "base": "Llanes · Gijón · Oviedo · Ribadesella",
+      "founded": null,
+      "website": "https://www.vericorral.com/",
+      "phone": "985 40 15 15",
+      "description": "Independent multi-office agency (Llanes HQ, Gijón x2, Oviedo, Ribadesella, plus Madrid), strong on the eastern Asturian coast; 49 detached houses in Asturias plus 1 in Cantabria.",
+      "idealista": {
+        "detached": 50,
+        "independientes": 48,
+        "casas_chalets": 59,
+        "url": "https://www.idealista.com/pro/veri-corral/venta-viviendas/asturias/con-precio-hasta_300000,chalets-independientes,casas-de-pueblo/"
+      },
+      "fotocasa": {
+        "count": 63,
+        "url": "https://www.fotocasa.es/es/inmobiliaria-veri-corral-inmobiliaria/comprar/viviendas/asturias-provincia/todas-las-zonas/l?clientId=9202751782906&maxPrice=300000&propertySubtypeIds=3;9"
+      },
+      "reviews": {"google_rating": null, "google_count": null, "source": null},
+      "other_links": [
+        {"label": "yaencontre", "url": "https://www.yaencontre.com/inmobiliarias/veri-corral-inmobiliaria-49838"},
+        {"label": "habitaclia", "url": "https://english.habitaclia.com/real_estate-veri_corral_30565_1/"}
+      ]
+    },
+    {
+      "name": "Inmobiliaria Florez Cosmen",
+      "region": "Asturias",
+      "base": "Cangas del Narcea",
+      "founded": null,
+      "website": "https://www.inmobiliariaflorezcosmen.com/",
+      "phone": "985 810 161",
+      "description": "Real-estate division of the Flórez Cosmen family group in Cangas del Narcea (south-west Asturias); rural houses and plots in the Narcea valley.",
+      "idealista": {
+        "detached": 30,
+        "independientes": 26,
+        "casas_chalets": 30,
+        "url": "https://www.idealista.com/pro/florezcosmeninmobiliaria/venta-viviendas/asturias/con-precio-hasta_300000,chalets-independientes,casas-de-pueblo/"
+      },
+      "fotocasa": {"count": null, "url": null, "note": "no fotocasa agency page found"},
+      "reviews": {"google_rating": null, "google_count": null, "source": null},
+      "other_links": [
+        {"label": "yaencontre", "url": "https://www.yaencontre.com/inmobiliarias/inmobiliaria-florez-cosmen-46276"}
+      ]
+    },
+    {
+      "name": "Inmobiliaria Occidente",
+      "region": "Asturias",
+      "base": "Luarca (Valdés)",
+      "founded": null,
+      "website": "https://www.inmobiliariaoccidente.com/",
+      "phone": "985 470 742",
+      "description": "Independent agency in Luarca covering western Asturias (Valdés, Cudillero, Navia, Tapia, Tineo); all of its houses under 300k are chalets independientes.",
+      "idealista": {
+        "detached": 28,
+        "independientes": 28,
+        "casas_chalets": 34,
+        "url": "https://www.idealista.com/pro/inmobiliaria-occidente/venta-viviendas/asturias/con-precio-hasta_300000,chalets-independientes,casas-de-pueblo/"
+      },
+      "fotocasa": {
+        "count": 75,
+        "url": "https://www.fotocasa.es/es/inmobiliaria-inmobiliaria-occidente/comprar/viviendas/asturias-provincia/todas-las-zonas/l?clientId=9202752243943&maxPrice=300000&propertySubtypeIds=3;9"
+      },
+      "reviews": {"google_rating": null, "google_count": null, "source": null},
+      "other_links": [
+        {"label": "yaencontre", "url": "https://www.yaencontre.com/inmobiliarias/inmobiliaria-occidente-49176"}
+      ]
+    },
+    {
+      "name": "Espazio Inmobiliario",
+      "region": "Cantabria",
+      "base": "Torrelavega",
+      "founded": null,
+      "website": "https://www.espazioinmobiliario.com/",
+      "phone": "942 133 235",
+      "description": "Independent agency in Torrelavega selling across Cantabria province; mostly casas rústicas among its houses under 300k.",
+      "idealista": {
+        "detached": 24,
+        "independientes": 8,
+        "casas_chalets": null,
+        "url": "https://www.idealista.com/pro/espazio-inmobiliario/venta-viviendas/cantabria/con-precio-hasta_300000,chalets-independientes,casas-de-pueblo/"
+      },
+      "fotocasa": {
+        "count": null,
+        "url": "https://www.fotocasa.es/es/inmobiliaria-espazio-inmobiliario-torrelavega/comprar/inmuebles/cantabria-provincia/todas-las-zonas/l?clientId=9202765861334",
+        "note": "agency page (unfiltered)"
+      },
+      "reviews": {"google_rating": null, "google_count": null, "source": null},
+      "other_links": [
+        {"label": "habitaclia", "url": "https://english.habitaclia.com/real_estate-espazio_inmobiliario_torrelavega_32943_1/"}
+      ]
+    },
+    {
+      "name": "Legis Properties",
+      "region": "Asturias",
+      "base": "Oviedo",
+      "founded": null,
+      "website": "https://www.legisproperties.es/",
+      "phone": "+34 643 83 19 98",
+      "description": "Oviedo agency combining sales with legal advisory for buyers (including foreign buyers); chalets independientes across Asturias.",
+      "idealista": {
+        "detached": 23,
+        "independientes": 19,
+        "casas_chalets": null,
+        "url": "https://www.idealista.com/pro/legis-properties/venta-viviendas/asturias/con-precio-hasta_300000,chalets-independientes,casas-de-pueblo/"
+      },
+      "fotocasa": {
+        "count": null,
+        "url": "https://www.fotocasa.es/es/inmobiliaria-legis-properties-sl/comprar/inmuebles/espana/todas-las-zonas/l?clientId=9202766604460",
+        "note": "agency page (unfiltered)"
+      },
+      "reviews": {"google_rating": null, "google_count": null, "source": null},
+      "other_links": [
+        {"label": "habitaclia", "url": "https://www.habitaclia.com/inmobiliaria-legis_properties_s_l/"}
+      ]
+    },
+    {
+      "name": "Ceballos Inmobiliaria",
+      "region": "Cantabria",
+      "base": "Reinosa · Santander",
+      "founded": null,
+      "website": "https://ceballosasesores.es/",
+      "phone": "942 750 798",
+      "description": "Real-estate arm of Ceballos Asesores (Reinosa, Campoo) with a Santander office; mostly casas rústicas in southern Cantabria.",
+      "idealista": {
+        "detached": 20,
+        "independientes": 6,
+        "casas_chalets": null,
+        "url": "https://www.idealista.com/pro/ceballosinmobiliaria/venta-viviendas/cantabria/con-precio-hasta_300000,chalets-independientes,casas-de-pueblo/"
+      },
+      "fotocasa": {"count": null, "url": null, "note": "no fotocasa agency page found"},
+      "reviews": {"google_rating": null, "google_count": null, "source": null},
+      "other_links": [
+        {"label": "yaencontre", "url": "https://www.yaencontre.com/inmobiliarias/ceballos-inmobiliaria-47281"}
+      ]
+    },
+    {
+      "name": "Activa Norte Gestión Inmobiliaria",
+      "region": "Cantabria",
+      "base": "Puente San Miguel · Torrelavega · Sarón · Renedo · Los Corrales · Cabezón de la Sal",
+      "founded": "1999",
+      "website": "https://www.activanorte.com/",
+      "phone": "942 70 26 06",
+      "description": "Six-office group in western Cantabria (founded 1999), the largest casas-y-chalets stock in the province under 300k (57), but two thirds of it adosados/pareados.",
+      "idealista": {
+        "detached": 19,
+        "independientes": 19,
+        "casas_chalets": 57,
+        "url": "https://www.idealista.com/pro/activa-norte/venta-viviendas/cantabria/con-precio-hasta_300000,chalets-independientes,casas-de-pueblo/"
+      },
+      "fotocasa": {
+        "count": 43,
+        "url": "https://www.fotocasa.es/es/inmobiliaria-activa-norte/comprar/viviendas/cantabria-provincia/todas-las-zonas/l?clientId=900150000139&maxPrice=300000&propertySubtypeIds=3;9"
+      },
+      "reviews": {"google_rating": null, "google_count": null, "source": null},
+      "other_links": [
+        {"label": "habitaclia", "url": "https://english.habitaclia.com/real_estate-activa_norte_gestion_29499_1/"}
+      ]
+    }
+  ]
+}

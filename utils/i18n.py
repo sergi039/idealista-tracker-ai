@@ -523,6 +523,36 @@ TRANSLATIONS = {
         # are committed Russian content, not chrome; these keys are only the
         # page chrome and the state words the #98 contract depends on.
         "construccion": "Building rules",
+        "agencies": "Agencies",
+        "agencies_title": "Top agencies — detached houses ≤ €300k, Asturias & Cantabria",
+        "agencies_measured_on": "Measured on",
+        "agencies_definition": (
+            "Detached house = idealista's chalet independiente + casa rústica "
+            "(casa de pueblo / rural / casona); adosados and pareados are excluded. "
+            "Ranked by the idealista count; the chalets-independientes-only figure "
+            "is shown beside it. fotocasa counts use that portal's Casa o chalet + "
+            "Finca rústica types with the same price cap. Every count links to the "
+            "filtered page it was read from."
+        ),
+        "agencies_col_agency": "Agency",
+        "agencies_col_website": "Website",
+        "agencies_col_idealista": "idealista · detached ≤ €300k",
+        "agencies_col_fotocasa": "fotocasa · casa/chalet + finca ≤ €300k",
+        "agencies_col_reviews": "Reviews",
+        "agencies_col_description": "Description",
+        "agencies_founded": "Founded",
+        "agencies_independientes": "of which chalets independientes",
+        "agencies_all_houses": "all casas y chalets",
+        "agencies_method": (
+            "Method: every agency account in the idealista directories of both provinces "
+            "was measured on its own microsite with the filters applied; portal figures "
+            "change daily and a listing may appear on several portals, so counts are not "
+            "summed across portals."
+        ),
+        "agencies_no_data": (
+            "The agency table is not available: data/top_agencies.json is missing or "
+            "unreadable."
+        ),
         "concejo_select_label": "Concejo:",
         "concejo_none_selected_option": "— not selected —",
         "concejo_scope_group": "Search perimeter",
@@ -1151,6 +1181,33 @@ TRANSLATIONS = {
         # is already defined above with the table headers.
         "municipalities": "Municipios",
         "construccion": "Normas de construcción",
+        "agencies": "Agencias",
+        "agencies_title": "Top agencias — casas independientes ≤ 300.000 €, Asturias y Cantabria",
+        "agencies_measured_on": "Medido el",
+        "agencies_definition": (
+            "Casa independiente = chalet independiente + casa rústica de idealista "
+            "(casa de pueblo / rural / casona); adosados y pareados quedan fuera. "
+            "Ordenado por el recuento de idealista; al lado, la cifra solo de chalets "
+            "independientes. En fotocasa se cuentan Casa o chalet + Finca rústica con "
+            "el mismo tope de precio. Cada recuento enlaza a la página filtrada de la que se leyó."
+        ),
+        "agencies_col_agency": "Agencia",
+        "agencies_col_website": "Web",
+        "agencies_col_idealista": "idealista · independientes ≤ 300k €",
+        "agencies_col_fotocasa": "fotocasa · casa/chalet + finca ≤ 300k €",
+        "agencies_col_reviews": "Opiniones",
+        "agencies_col_description": "Descripción",
+        "agencies_founded": "Fundada",
+        "agencies_independientes": "de ellas chalets independientes",
+        "agencies_all_houses": "todas las casas y chalets",
+        "agencies_method": (
+            "Método: cada cuenta de agencia de los directorios de idealista de ambas provincias "
+            "se midió en su propio microsite con los filtros aplicados; las cifras de los portales "
+            "cambian a diario y un anuncio puede estar en varios portales, así que no se suman."
+        ),
+        "agencies_no_data": (
+            "La tabla de agencias no está disponible: falta data/top_agencies.json o no se puede leer."
+        ),
         "concejo_select_label": "Concejo:",
         "concejo_none_selected_option": "— sin seleccionar —",
         "concejo_scope_group": "Perímetro de búsqueda",

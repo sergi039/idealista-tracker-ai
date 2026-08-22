@@ -109,6 +109,16 @@
                             <i class="fas fa-file-signature me-1"></i>{{ t('construccion') }}
                         </a>
                     </li>
+                    {# The agency table (/agencies, owner request 2026-08-22):
+                       a dated measurement of which agencies hold the most
+                       detached houses <= 300k in Asturias and Cantabria. A
+                       reference page like /municipalities, not a listing
+                       surface. #}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('main.agencies') }}">
+                            <i class="fas fa-building me-1"></i>{{ t('agencies') }}
+                        </a>
+                    </li>
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('main.criteria') }}">
                             <i class="fas fa-sliders-h me-1"></i>{{ t('scoring_criteria') }}

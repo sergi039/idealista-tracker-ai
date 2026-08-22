@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+
+{% block title %}{{ t('agencies') }}{% endblock %}
+
+{% block content %}
+{# The curated agency table (owner request 2026-08-22): which agencies hold
+   the most detached houses up to 300k EUR in Asturias and Cantabria. Every
+   figure is a measurement taken on `table.measured_at` -- counts read off
+   idealista microsites and fotocasa agency pages with the filters applied --
+   so the date is printed next to the title, and a row's counts link to the
+   very filtered page they were read from. The ranking key is the idealista
+   count of chalets independientes + casas rusticas; the independientes-only
+   figure sits beside it so a reader with the narrower definition can re-rank
+   by eye instead of trusting ours. A missing file refuses the page (503) and
+   says so -- never an empty table. #}
+<div class="container-fluid px-0">
+  <div class="d-flex flex-wrap align-items-baseline justify-content-between gap-2 mb-2">
+    <h2 class="mb-0">
+      <i class="fas fa-building me-2"></i>{{ t('agencies_title') }}
+    </h2>
+    {% if table %}
+    <span class="text-muted" data-test="measured-at">
+      {{ t('agencies_measured_on') }} <strong>{{ table.measured_at }}</strong>
+    </span>
+    {% endif %}
+  </div>
+
+  {% if not table %}
+  <div class="alert alert-warning" role="alert" data-test="agencies-unavailable">
+    <i class="fas fa-triangle-exclamation me-1"></i>{{ t('agencies_no_data') }}
+  </div>
+  {% else %}
+  <p class="text-muted small mb-3">{{ t('agencies_definition') }}</p>
+
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle" data-test="agencies-table">
+      <thead class="table-light">
+        <tr>
+          <th scope="col">#</th>
+          <th scope="col">{{ t('agencies_col_agency') }}</th>
+          <th scope="col">{{ t('agencies_col_website') }}</th>
+          <th scope="col" class="text-nowrap">{{ t('agencies_col_idealista') }}</th>
+          <th scope="col" class="text-nowrap">{{ t('agencies_col_fotocasa') }}</th>
+          <th scope="col">{{ t('agencies_col_reviews') }}</th>
+          <th scope="col">{{ t('agencies_col_description') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in table.agencies %}
+        <tr data-test="agency-row" data-agency="{{ a.name }}">
+          <td class="text-muted">{{ a.rank }}</td>
+          <td>
+            <div class="fw-semibold">{{ a.name }}</div>
+            <div class="small text-muted">
+              {% if a.region %}{{ a.region }}{% endif %}{% if a.base %} · {{ a.base }}{% endif %}
+            </div>
+            {% if a.founded %}
+            <div class="small text-muted">{{ t('agencies_founded') }}: {{ a.founded }}</div>
+            {% endif %}
+            {% if a.phone %}
+            <div class="small text-muted"><i class="fas fa-phone me-1"></i>{{ a.phone }}</div>
+            {% endif %}
+          </td>
+          <td>
+            {% if a.website %}
+            <a href="{{ a.website }}" target="_blank" rel="noopener noreferrer">{{ a.website | replace('https://', '') | replace('http://', '') | trim('/') }}</a>
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+            {% if a.other_links %}
+            <div class="small">
+              {% for link in a.other_links %}
+              <a href="{{ link.url }}" target="_blank" rel="noopener noreferrer" class="me-2">{{ link.label }}</a>
+              {% endfor %}
+            </div>
+            {% endif %}
+          </td>
+          <td>
+            {% if a.idealista.detached is not none %}
+              {% if a.idealista.url %}
+              <a href="{{ a.idealista.url }}" target="_blank" rel="noopener noreferrer" class="fw-semibold" data-test="idealista-detached">{{ a.idealista.detached }}</a>
+              {% else %}
+              <span class="fw-semibold" data-test="idealista-detached">{{ a.idealista.detached }}</span>
+              {% endif %}
+              <div class="small text-muted">
+                {% if a.idealista.independientes is not none %}{{ t('agencies_independientes') }}: {{ a.idealista.independientes }}{% endif %}
+                {% if a.idealista.casas_chalets is not none %}<br>{{ t('agencies_all_houses') }}: {{ a.idealista.casas_chalets }}{% endif %}
+              </div>
+              {% if a.idealista.url_secondary %}
+              <div class="small"><a href="{{ a.idealista.url_secondary }}" target="_blank" rel="noopener noreferrer">{{ a.idealista.secondary_label or 'idealista' }}</a></div>
+              {% endif %}
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if a.fotocasa.count is not none %}
+              {% if a.fotocasa.url %}
+              <a href="{{ a.fotocasa.url }}" target="_blank" rel="noopener noreferrer">{{ a.fotocasa.count }}</a>
+              {% else %}
+              {{ a.fotocasa.count }}
+              {% endif %}
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+            {% if a.fotocasa.note %}<div class="small text-muted">{{ a.fotocasa.note }}</div>{% endif %}
+          </td>
+          <td class="text-nowrap">
+            {% if a.reviews.google_rating is not none %}
+              {% if a.reviews.source %}<a href="{{ a.reviews.source }}" target="_blank" rel="noopener noreferrer">{% endif %}
+              <i class="fas fa-star text-warning"></i> {{ '%.1f' | format(a.reviews.google_rating) }}{% if a.reviews.google_count is not none %} ({{ a.reviews.google_count }}){% endif %}
+              {% if a.reviews.source %}</a>{% endif %}
+              <div class="small text-muted">Google</div>
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+            {% if a.reviews.note %}<div class="small text-muted text-wrap" style="max-width: 12rem;">{{ a.reviews.note }}</div>{% endif %}
+          </td>
+          <td class="small" style="min-width: 16rem;">
+            {{ a.description }}
+            {% if a.notes %}<div class="text-muted mt-1">{{ a.notes }}</div>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <p class="text-muted small" data-test="agencies-method">
+    {{ t('agencies_method') }}{% if table.method %} {{ table.method }}{% endif %}
+  </p>
+  {% endif %}
+</div>
+{% endblock %}
