@@ -3518,6 +3518,26 @@ def construccion():
     )
 
 
+@main_bp.route("/agencies")
+def agencies():
+    """The curated agency table (owner request 2026-08-22).
+
+    Which agencies hold the most detached houses up to 300 000 EUR in Asturias
+    and Cantabria -- a dated measurement read from data/top_agencies.json
+    (services/agency_directory.py), not a live feed. A missing or unreadable
+    file refuses the page with 503 and says so: an empty table would read as
+    "no agencies", which is the #98 defect in a reference file.
+    """
+    from services.agency_directory import AgencyDataUnavailable, load_top_agencies
+
+    try:
+        table = load_top_agencies()
+    except AgencyDataUnavailable:
+        logger.exception("agency table unavailable")
+        return render_template("agencies.html", table=None), 503
+    return render_template("agencies.html", table=table)
+
+
 @main_bp.route("/map")
 def map_view():
     """Interactive map view of all properties with coordinates"""
