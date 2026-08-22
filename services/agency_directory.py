@@ -53,6 +53,14 @@ def _normalise(agency: dict) -> dict:
         "name": str(agency.get("name") or "").strip(),
         "region": agency.get("region") or "",
         "base": agency.get("base") or "",
+        # Up to three offices -- "Town -- address" strings, the main one first
+        # (owner request 2026-08-22). A list, not prose, so the template can draw
+        # one line per office without splitting free text.
+        "offices": [
+            str(o).strip()
+            for o in (agency.get("offices") or [])
+            if isinstance(o, str) and o.strip()
+        ][:3],
         "founded": agency.get("founded") or None,
         "website": agency.get("website") or None,
         "phone": agency.get("phone") or None,

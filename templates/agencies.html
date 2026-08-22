@@ -52,8 +52,15 @@
           <td style="min-width: 13rem;">
             <div class="fw-semibold">{{ a.name }}</div>
             <div class="small text-muted">
-              {% if a.region %}{{ a.region }}{% endif %}{% if a.base %} · {{ a.base }}{% endif %}
+              {% if a.region %}{{ a.region }}{% endif %}{% if a.base and not a.offices %} · {{ a.base }}{% endif %}
             </div>
+            {% if a.offices %}
+            <ul class="list-unstyled small text-muted mb-1" data-test="offices">
+              {% for office in a.offices %}
+              <li><i class="fas fa-map-marker-alt me-1"></i>{{ office }}</li>
+              {% endfor %}
+            </ul>
+            {% endif %}
             {% if a.founded %}
             <div class="small text-muted">{{ t('agencies_founded') }}: {{ a.founded }}</div>
             {% endif %}

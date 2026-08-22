@@ -46,6 +46,7 @@ FIXTURE = {
             "founded": "2004",
             "website": "https://big.example/",
             "phone": "985 000 000",
+            "offices": ["Oviedo — Calle Uno 1 (HQ)", "Gijón — Calle Dos 2"],
             "idealista": {
                 "detached": 92,
                 "independientes": 91,
@@ -116,6 +117,7 @@ def test_loader_ranks_by_detached_count_with_unmeasured_last(monkeypatch, tmp_pa
     assert big["other_links"] == [
         {"label": "habitaclia", "url": "https://habitaclia.example/big"}
     ]
+    assert big["offices"] == ["Oviedo — Calle Uno 1 (HQ)", "Gijón — Calle Dos 2"]
 
 
 @pytest.mark.parametrize(
@@ -160,6 +162,8 @@ def test_page_renders_ranked_table_with_date_and_links(client, monkeypatch, tmp_
     assert "clientId=1&amp;maxPrice=300000&amp;propertySubtypeIds=3;9" in html
     assert "https://big.example/" in html
     assert "4.6" in html and "(120)" in html
+    # Offices: one line each, main office first.
+    assert html.index("Oviedo — Calle Uno 1 (HQ)") < html.index("Gijón — Calle Dos 2")
     assert "fixture method note" in html
     assert 'data-test="agencies-unavailable"' not in html
 
@@ -186,6 +190,7 @@ def test_committed_data_file_is_well_formed():
     assert len(table["agencies"]) >= 5
     for agency in table["agencies"]:
         assert agency["name"]
+        assert agency["offices"], agency["name"]
         assert agency["website"], agency["name"]
         assert agency["idealista"]["url"], agency["name"]
         assert isinstance(agency["idealista"]["detached"], int), agency["name"]
