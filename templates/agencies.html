@@ -39,8 +39,8 @@
           <th scope="col">#</th>
           <th scope="col">{{ t('agencies_col_agency') }}</th>
           <th scope="col">{{ t('agencies_col_website') }}</th>
-          <th scope="col" class="text-nowrap">{{ t('agencies_col_idealista') }}</th>
-          <th scope="col" class="text-nowrap">{{ t('agencies_col_fotocasa') }}</th>
+          <th scope="col" style="min-width: 11rem;">{{ t('agencies_col_idealista') }}</th>
+          <th scope="col" style="min-width: 9rem;">{{ t('agencies_col_fotocasa') }}</th>
           <th scope="col">{{ t('agencies_col_reviews') }}</th>
           <th scope="col">{{ t('agencies_col_description') }}</th>
         </tr>
@@ -49,7 +49,7 @@
         {% for a in table.agencies %}
         <tr data-test="agency-row" data-agency="{{ a.name }}">
           <td class="text-muted">{{ a.rank }}</td>
-          <td>
+          <td style="min-width: 13rem;">
             <div class="fw-semibold">{{ a.name }}</div>
             <div class="small text-muted">
               {% if a.region %}{{ a.region }}{% endif %}{% if a.base %} · {{ a.base }}{% endif %}
@@ -82,7 +82,7 @@
               {% else %}
               <span class="fw-semibold" data-test="idealista-detached">{{ a.idealista.detached }}</span>
               {% endif %}
-              <div class="small text-muted">
+              <div class="small text-muted text-nowrap">
                 {% if a.idealista.independientes is not none %}{{ t('agencies_independientes') }}: {{ a.idealista.independientes }}{% endif %}
                 {% if a.idealista.casas_chalets is not none %}<br>{{ t('agencies_all_houses') }}: {{ a.idealista.casas_chalets }}{% endif %}
               </div>
@@ -116,7 +116,7 @@
             {% endif %}
             {% if a.reviews.note %}<div class="small text-muted text-wrap" style="max-width: 12rem;">{{ a.reviews.note }}</div>{% endif %}
           </td>
-          <td class="small" style="min-width: 16rem;">
+          <td class="small" style="min-width: 18rem; max-width: 28rem;">
             {{ a.description }}
             {% if a.notes %}<div class="text-muted mt-1">{{ a.notes }}</div>{% endif %}
           </td>
