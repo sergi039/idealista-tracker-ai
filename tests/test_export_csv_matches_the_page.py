@@ -70,6 +70,7 @@ FILTERS = [
     ("verdict", "rejected"),
     ("action", "overdue"),
     ("sea_dist", "800"),
+    ("build", "solar"),
 ]
 
 # Combinations, because a filter can be applied on both sides and still be
@@ -217,6 +218,12 @@ def listings(app):
                 pid,
                 "near_sea",
                 enrichment={"sea": {"status": "ok", "distance_m": 350.0}},
+            ),
+            # The one row `build=solar` keeps -- everything else is uncurated.
+            "buildable": _make(
+                pid,
+                "buildable",
+                attributes={"land_classification": "urbano_solar"},
             ),
             "excellent": _make(
                 pid,

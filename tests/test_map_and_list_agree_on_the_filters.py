@@ -77,6 +77,7 @@ FILTERS = [
     ("sea_view", "yes"),
     ("inv_metr", "EXCELLENT"),
     ("sea_dist", "800"),
+    ("build", "solar"),
 ]
 
 # Keys of `current_filters` that are not filters, and why. Anything else the
@@ -221,6 +222,12 @@ def listings(app):
                 pid,
                 "near_sea",
                 enrichment={"sea": {"status": "ok", "distance_m": 350.0}},
+            ),
+            # The one row `build=solar` keeps -- everything else is uncurated.
+            "buildable": _make(
+                pid,
+                "buildable",
+                attributes={"land_classification": "urbano_solar"},
             ),
             "excellent": _make(
                 pid,
