@@ -32,6 +32,7 @@
     'search': current_filters.search or None,
     'inv_metr': current_filters.inv_metr or None,
     'sea_view': current_filters.sea_view or None,
+    'sea_dist': current_filters.sea_dist or None,
     'measured': current_filters.measured or None,
     'verdict': current_filters.verdict or None,
     'action': current_filters.action or None,
@@ -931,6 +932,20 @@
                         <option value="likely" {{ 'selected' if current_filters.sea_view in ('likely', 'on') }}>{{ t('sea_view_yes_or_likely') }}</option>
                     </select>
 
+                    {# Straight-line metres to the coastline, cut at walking
+                       reach (~5 km/h). Matches only a *measured* distance --
+                       for an approximate coordinate that is the locality
+                       centroid's figure (#358), the same number the plot badge
+                       and the property page already show captioned. A row
+                       nobody measured never matches a cut (#98). #}
+                    <select class="form-select form-select-sm properties-filter-select" id="sea_dist" name="sea_dist"
+                            aria-label="{{ t('sea_distance_filter') }}">
+                        <option value="" {{ 'selected' if not current_filters.sea_dist }}>{{ t('sea_distance_any') }}</option>
+                        <option value="400" {{ 'selected' if current_filters.sea_dist == '400' }}>{{ t('sea_distance_400') }}</option>
+                        <option value="800" {{ 'selected' if current_filters.sea_dist == '800' }}>{{ t('sea_distance_800') }}</option>
+                        <option value="1600" {{ 'selected' if current_filters.sea_dist == '1600' }}>{{ t('sea_distance_1600') }}</option>
+                    </select>
+
                     {# #379: the score rests on the criteria that answered, and this
                        is the reader's lever -- not a reorder the app decides for
                        them. "Fully measured" is coverage recorded at 100%; a row
@@ -1157,7 +1172,7 @@
                        export never re-derives a default the page has already
                        resolved. #}
                     <a class="btn btn-success btn-sm"
-                       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, verdict=current_filters.verdict or None, action=current_filters.action or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, measured=current_filters.measured or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else 'off', sort=current_filters.sort_by, order=current_filters.order) }}"
+                       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, verdict=current_filters.verdict or None, action=current_filters.action or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, sea_dist=current_filters.sea_dist or None, measured=current_filters.measured or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else 'off', sort=current_filters.sort_by, order=current_filters.order) }}"
                        title="Download filtered data as CSV">
                         <i class="fas fa-download me-1"></i>{{ t('export_csv') }}
                     </a>
@@ -1315,6 +1330,13 @@
                                                         <i class="fas fa-map-marker-alt me-1 {{ 'text-success' if p.location_accuracy == 'precise' else 'text-danger' }}"></i>
                                                         <small>{{ '%.4f'|format(p.location_lat|float) }}, {{ '%.4f'|format(p.location_lon|float) }}</small>
                                                     </a>
+                                                    {% set _gijon_route = maps_route_from_gijon_url(p.location_lat, p.location_lon) %}
+                                                    {% if _gijon_route %}
+                                                        <a href="{{ _gijon_route }}" target="_blank" rel="noopener"
+                                                           class="text-decoration-none ms-1" title="{{ t('route_from_gijon') }}">
+                                                            <i class="fas fa-route"></i>
+                                                        </a>
+                                                    {% endif %}
                                                     {% if p.municipality %}
                                                         <small class="text-muted d-block compact-text">{{ p.municipality }}</small>
                                                     {% endif %}
@@ -1496,11 +1518,20 @@
                                 <!-- Location -->
                                 <div class="mb-3">
                                     {% if p.location_lat and p.location_lon %}
-                                        <a href="https://www.google.com/maps/search/?api=1&amp;query={{ p.location_lat }},{{ p.location_lon }}"
-                                           target="_blank" rel="noopener" class="text-decoration-none d-flex align-items-center">
-                                            <i class="fas fa-map-marker-alt me-2 {{ 'text-success' if p.location_accuracy == 'precise' else 'text-warning' }}"></i>
-                                            <small>{{ p.municipality or 'Unknown location' }}</small>
-                                        </a>
+                                        <div class="d-flex align-items-center">
+                                            <a href="https://www.google.com/maps/search/?api=1&amp;query={{ p.location_lat }},{{ p.location_lon }}"
+                                               target="_blank" rel="noopener" class="text-decoration-none d-flex align-items-center">
+                                                <i class="fas fa-map-marker-alt me-2 {{ 'text-success' if p.location_accuracy == 'precise' else 'text-warning' }}"></i>
+                                                <small>{{ p.municipality or 'Unknown location' }}</small>
+                                            </a>
+                                            {% set _gijon_route = maps_route_from_gijon_url(p.location_lat, p.location_lon) %}
+                                            {% if _gijon_route %}
+                                                <a href="{{ _gijon_route }}" target="_blank" rel="noopener"
+                                                   class="text-decoration-none ms-2" title="{{ t('route_from_gijon') }}">
+                                                    <i class="fas fa-route"></i>
+                                                </a>
+                                            {% endif %}
+                                        </div>
                                     {% else %}
                                         {# Same distinction the table draws: the advert's municipality
                                            is not a coordinate, and a marker in front of it says it is. #}

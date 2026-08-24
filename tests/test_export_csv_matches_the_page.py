@@ -69,6 +69,7 @@ FILTERS = [
     ("favorites", "on"),
     ("verdict", "rejected"),
     ("action", "overdue"),
+    ("sea_dist", "800"),
 ]
 
 # Combinations, because a filter can be applied on both sides and still be
@@ -209,6 +210,13 @@ def listings(app):
             ),
             "sea_yes": _make(
                 pid, "sea_yes", enrichment={"environment": {"sea_view": "yes"}}
+            ),
+            # The one row `sea_dist=800` keeps: every other row carries no sea
+            # block, so the cut bites without a "far" twin.
+            "near_sea": _make(
+                pid,
+                "near_sea",
+                enrichment={"sea": {"status": "ok", "distance_m": 350.0}},
             ),
             "excellent": _make(
                 pid,

@@ -78,6 +78,14 @@
                                 <i class="fas fa-map"></i>
                             </a>
                             {% endif %}
+                            {% set _gijon_route = maps_route_from_gijon_url(property.location_lat, property.location_lon) %}
+                            {% if _gijon_route %}
+                            <a href="{{ _gijon_route }}" target="_blank" rel="noopener"
+                               class="btn btn-sm btn-outline-primary detail-link-icon"
+                               title="{{ t('route_from_gijon') }}" aria-label="{{ t('route_from_gijon') }}">
+                                <i class="fas fa-route"></i>
+                            </a>
+                            {% endif %}
                             {% if property.url %}
                             <a href="{{ property.url }}" target="_blank" rel="noopener"
                                class="btn btn-sm btn-outline-success detail-link-icon"
