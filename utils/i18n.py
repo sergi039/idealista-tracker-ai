@@ -96,6 +96,15 @@ TRANSLATIONS = {
         "sea_view_any": "Sea view: any",
         "sea_view_confirmed": "Sea view: confirmed",
         "sea_view_yes_or_likely": "Sea view: confirmed or likely",
+        # Straight-line metres to the coastline, labelled with the walk they
+        # roughly buy at 5 km/h. The walk is over roads and never shorter than
+        # the straight line, which is why the metres lead the label.
+        "sea_distance_filter": "Distance to the sea",
+        "sea_distance_any": "Sea distance: any",
+        "sea_distance_400": "Sea ≤ 400 m (~5 min walk)",
+        "sea_distance_800": "Sea ≤ 800 m (~10 min walk)",
+        "sea_distance_1600": "Sea ≤ 1.6 km (~20 min walk)",
+        "route_from_gijon": "Route from Gijón (Google Maps)",
         "sea_view_state_yes": "Sea view",
         "sea_view_state_likely": "Sea view likely",
         # A `likely` that rests on bare-earth terrain alone. It says the ground
@@ -803,6 +812,12 @@ TRANSLATIONS = {
         "sea_view_any": "Vista al mar: cualquiera",
         "sea_view_confirmed": "Vista al mar: confirmada",
         "sea_view_yes_or_likely": "Vista al mar: confirmada o probable",
+        "sea_distance_filter": "Distancia al mar",
+        "sea_distance_any": "Distancia al mar: cualquiera",
+        "sea_distance_400": "Mar ≤ 400 m (~5 min a pie)",
+        "sea_distance_800": "Mar ≤ 800 m (~10 min a pie)",
+        "sea_distance_1600": "Mar ≤ 1,6 km (~20 min a pie)",
+        "route_from_gijon": "Ruta desde Gijón (Google Maps)",
         "sea_view_state_yes": "Vista al mar",
         "sea_view_state_likely": "Vista al mar probable",
         "sea_view_state_likely_geometry": "El terreno permite vista al mar",

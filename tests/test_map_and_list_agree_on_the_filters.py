@@ -76,6 +76,7 @@ FILTERS = [
     ("action", "overdue"),
     ("sea_view", "yes"),
     ("inv_metr", "EXCELLENT"),
+    ("sea_dist", "800"),
 ]
 
 # Keys of `current_filters` that are not filters, and why. Anything else the
@@ -213,6 +214,13 @@ def listings(app):
                 pid,
                 "sea_yes",
                 enrichment={"environment": {"sea_view": "yes"}},
+            ),
+            # The one row `sea_dist=800` keeps: every other row has no sea
+            # block at all, so the cut bites without a "far" twin.
+            "near_sea": _make(
+                pid,
+                "near_sea",
+                enrichment={"sea": {"status": "ok", "distance_m": 350.0}},
             ),
             "excellent": _make(
                 pid,

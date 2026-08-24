@@ -78,6 +78,21 @@ def maps_directions_url(
     return "https://www.google.com/maps/dir/?" + urlencode(params)
 
 
+# The owner's reference origin (request of 2026-08-24): every listing offers a
+# one-click route *from the centre of Gijón to the parcel*. Plaza Mayor, the
+# town hall square -- a stable, recognisable point, not anybody's home address.
+GIJON_CENTER = (43.5453, -5.6619)
+
+
+def maps_route_from_gijon_url(dest_lat, dest_lon) -> str | None:
+    """Driving route from the centre of Gijón to the property, or None.
+
+    None without a destination pin, same contract as `maps_directions_url` --
+    the template renders nothing rather than a route to nowhere.
+    """
+    return maps_directions_url(GIJON_CENTER[0], GIJON_CENTER[1], dest_lat, dest_lon)
+
+
 def maps_place_url(lat, lon, place_id=None) -> str | None:
     """Pin a place on the map, or None without a coordinate to pin."""
     p_lat, p_lon = _coord(lat), _coord(lon)

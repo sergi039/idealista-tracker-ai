@@ -379,6 +379,49 @@ def _filter_by_sea_view(query, model, raw_value):
     return query.filter(_sea_view_state_expr(model).in_(wanted))
 
 
+# Walking-reach cuts of the sea distance, in metres over the ground at ~5 km/h:
+# 400 m is five minutes, 800 m ten, 1600 m twenty. Straight-line metres, so the
+# real walk is never shorter than the label -- the option text says both.
+SEA_DISTANCE_FILTER_VALUES = {
+    "400": 400.0,
+    "800": 800.0,
+    "1600": 1600.0,
+}
+
+
+def _sea_distance_m_expr(model):
+    """Metres to the coastline as measured; NULL without a measurement.
+
+    Reads the parcel-grade figure first (`distance_m`, written only for a
+    precise coordinate) and falls back to the centroid figure
+    (`origin_distance_m`, what an approximate row's measurement is really
+    about, #358) -- the same two numbers the property page and the plot badge
+    already show, captioned. The two never coexist in one payload
+    (services/sea_distance_service.py writes `distance_m: None` beside
+    `origin_distance_m`), so the coalesce is a fallback, not a preference.
+    JSON null reads as SQL NULL, so a refusal, a measured "no coastline within
+    the radius" and a row nobody measured all stay NULL -- a threshold filter
+    can never read absence as nearness (#98).
+    """
+    return func.coalesce(
+        model.enrichment["sea"]["distance_m"].as_float(),
+        model.enrichment["sea"]["origin_distance_m"].as_float(),
+    )
+
+
+def _filter_by_sea_distance(query, model, raw_value):
+    """Keep only rows measured within the requested distance of the sea.
+
+    Unknown values hand back the *same* query object -- `filter_bar_active`
+    reads object identity, and `sea_dist=banana` must not count as a
+    narrowing that never happened.
+    """
+    threshold = SEA_DISTANCE_FILTER_VALUES.get((raw_value or "").strip())
+    if threshold is None:
+        return query
+    return query.filter(_sea_distance_m_expr(model) <= threshold)
+
+
 def _map_auto_profile_id(default_profile, profiles, focus_property=None):
     """The map's own fallback when the request names no profile.
 
@@ -1229,6 +1272,7 @@ def properties():
         investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
         sea_view_filter = request.args.get("sea_view", "")
+        sea_distance_filter = request.args.get("sea_dist", "")
         measured_filter = request.args.get("measured", "")
 
         # Hide removed: ON by default (similar to /lands), unless this request
@@ -1336,6 +1380,8 @@ def properties():
 
         if sea_view_filter:
             query = _filter_by_sea_view(query, Property, sea_view_filter)
+        if sea_distance_filter:
+            query = _filter_by_sea_distance(query, Property, sea_distance_filter)
         if measured_filter:
             query = _filter_by_measured(query, Property, measured_filter)
 
@@ -1535,6 +1581,7 @@ def properties():
                 "search": search_query,
                 "inv_metr": investment_metrics_filter,
                 "sea_view": sea_view_filter,
+                "sea_dist": sea_distance_filter,
                 "measured": measured_filter,
                 "favorites": favorites_filter,
                 "hide_removed": hide_removed_filter,
@@ -3605,6 +3652,7 @@ def map_view():
         investment_metrics_filter = filters.get("inv_metr")
         favorites_filter = filters.flag("favorites")
         sea_view_filter = filters.get("sea_view")
+        sea_distance_filter = filters.get("sea_dist")
         # #445. This page ignored `measured` while /properties applied it, so
         # pressing Map on a narrowed list widened it again and said nothing:
         # measured on production 2026-08-20, the list found 72 listings and the
@@ -3660,6 +3708,8 @@ def map_view():
             )
         if sea_view_filter:
             query = _filter_by_sea_view(query, Property, sea_view_filter)
+        if sea_distance_filter:
+            query = _filter_by_sea_distance(query, Property, sea_distance_filter)
         # Same helper and same position as /properties, so one URL cannot
         # describe two sets across the two surfaces (#445).
         if measured_filter:
@@ -4757,6 +4807,7 @@ def export_properties_csv():
         investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
         sea_view_filter = request.args.get("sea_view", "")
+        sea_distance_filter = request.args.get("sea_dist", "")
         # The export did not read this one at all, so the Export CSV button on
         # a `measured=full` page exported the whole subscription: measured
         # against production 2026-08-20, the page found 72 listings and its own
@@ -4834,6 +4885,9 @@ def export_properties_csv():
 
         if sea_view_filter:
             query = _filter_by_sea_view(query, Property, sea_view_filter)
+
+        if sea_distance_filter:
+            query = _filter_by_sea_distance(query, Property, sea_distance_filter)
 
         if measured_filter:
             query = _filter_by_measured(query, Property, measured_filter)

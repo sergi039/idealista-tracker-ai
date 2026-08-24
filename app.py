@@ -385,10 +385,15 @@ def create_app(testing: bool = False):
     # One Maps URL builder for every surface: list travel cells, detail rows,
     # beach lines. Templates used to concatenate free-text place names into
     # /maps/dir/ paths — unencoded, and resolvable to the wrong town.
-    from utils.maps_urls import maps_directions_url, maps_place_url
+    from utils.maps_urls import (
+        maps_directions_url,
+        maps_place_url,
+        maps_route_from_gijon_url,
+    )
 
     app.jinja_env.globals["maps_directions_url"] = maps_directions_url
     app.jinja_env.globals["maps_place_url"] = maps_place_url
+    app.jinja_env.globals["maps_route_from_gijon_url"] = maps_route_from_gijon_url
 
     # Display-side cleanup of the Gmail-alert boilerplate in descriptions —
     # the raw column is never modified, and the card keeps "show original".
