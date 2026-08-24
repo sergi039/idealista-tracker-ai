@@ -1594,8 +1594,14 @@
                                            the route from the listing (D12/D24). #}
                                         {% if place_name %}
                                             {# Both links (owner ask, 2026-08-24): the
-                                               name pins the place, the icon keeps the
-                                               route it always opened. #}
+                                               name pins the place, the icon opens the
+                                               route. The icon lives in the readout
+                                               column, NOT after the name: this label
+                                               span is `compact-text` — 120px of
+                                               ellipsis — and an icon behind a long
+                                               name is clipped invisible. Measured on
+                                               property 360: 5 of 6 hub icons were cut
+                                               off, only "Supermercados" fit. #}
                                             <span class="d-block fw-normal">
                                                 {% if _hub_pin %}
                                                     <a href="{{ _hub_pin }}" target="_blank" rel="noopener"
@@ -1604,17 +1610,19 @@
                                                 {% else %}
                                                     <span class="text-body-secondary">{{ place_name }}</span>
                                                 {% endif %}
-                                                {% if _hub_route %}
-                                                    <a href="{{ _hub_route }}" target="_blank" rel="noopener"
-                                                       class="text-decoration-none"
-                                                       title="{{ t('route_from_property') }}: {{ place_name }}">
-                                                        <i class="fas fa-diamond-turn-right"></i>
-                                                    </a>
-                                                {% endif %}
                                             </span>
                                         {% endif %}
                                     </span>
-                                    <div class="text-nowrap">{{ readout }}</div>
+                                    <div class="text-nowrap">
+                                        {% if _hub_route %}
+                                            <a href="{{ _hub_route }}" target="_blank" rel="noopener"
+                                               class="me-1 text-decoration-none"
+                                               title="{{ t('route_from_property') }}{% if place_name %}: {{ place_name }}{% endif %}">
+                                                <i class="fas fa-diamond-turn-right"></i>
+                                            </a>
+                                        {% endif %}
+                                        {{ readout }}
+                                    </div>
                                 </div>
                             {% endif %}
                         {% endif %}
