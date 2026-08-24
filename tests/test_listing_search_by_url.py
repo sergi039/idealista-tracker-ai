@@ -77,6 +77,19 @@ def app():
                     location_lon=-5.71,
                 ),
                 Property(
+                    source_email_id="research_sheet:no-id-extracted",
+                    title="Plot from the research sheet",
+                    municipality="Gozon",
+                    search_profile_id=profile.id,
+                    listing_status="active",
+                    # `utils/import_research_sheet.py` stores the link and
+                    # never the id, so 48 of production's 786 idealista rows
+                    # (measured 2026-08-24) carry it in the URL alone.
+                    url="https://www.idealista.com/inmueble/81187720/",
+                    location_lat=43.60,
+                    location_lon=-5.85,
+                ),
+                Property(
                     source_email_id="other-listing",
                     title="House in Gijon",
                     municipality="Gijon",
@@ -178,6 +191,31 @@ class TestPastedUrlFindsTheListing:
         )
         assert response.status_code == 200
         assert "Land plot in Salamir" in response.get_data(as_text=True)
+
+    def test_a_row_whose_id_was_never_extracted_is_found_by_its_url(self, client):
+        # The id column is NULL here, so only the `/inmueble/<id>/` half of
+        # `listing_id_clause` can answer. Deleting that half leaves every
+        # other test in this file green.
+        response = client.get(
+            "/properties",
+            query_string={
+                "profile_id": "all",
+                "search": "https://www.idealista.com/es/inmueble/81187720/",
+            },
+        )
+        assert response.status_code == 200
+        body = response.get_data(as_text=True)
+        assert "Plot from the research sheet" in body
+        assert "House in Gijon" not in body
+
+    def test_a_shorter_id_does_not_match_the_longer_one(self, client):
+        # The trailing slash is the boundary: `/inmueble/8118772` is a
+        # substring of the stored `/inmueble/81187720/`.
+        response = client.get(
+            "/properties", query_string={"profile_id": "all", "search": "8118772"}
+        )
+        assert response.status_code == 200
+        assert "Plot from the research sheet" not in response.get_data(as_text=True)
 
     def test_a_non_idealista_url_finds_its_row(self, client):
         response = client.get(
