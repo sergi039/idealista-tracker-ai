@@ -439,6 +439,55 @@ class TestAmenityCardLinks:
             # script.
             assert "Osm Amenity Items" not in body
 
+    def test_malformed_items_degrade_instead_of_killing_the_page(self, app, client):
+        """One junk entry skips its row; it must not 302 the whole page.
+
+        `enrichment` is hand-editable JSON (curate_on_mini.sh, docker exec),
+        and routes/main_routes.py turns a template error into a redirect —
+        the review's refuter reproduced exactly that with a bare string in
+        the list before the guard existed.
+        """
+        with app.app_context():
+            prop = _listing(
+                "malformed",
+                enrichment={
+                    "infrastructure_extended": {
+                        "osm_amenities": {"restaurant": 2, "fuel": 1, "cafe": 1},
+                        OSM_AMENITY_ITEMS_KEY: {
+                            # A junk entry beside a good one.
+                            "restaurant": [
+                                "not-a-dict-just-a-name",
+                                {
+                                    "name": "Rego",
+                                    "lat": 43.001,
+                                    "lon": -6.0,
+                                    "osm_type": "node",
+                                    "osm_id": 1,
+                                    "distance_m": 111,
+                                },
+                            ],
+                            # A kind whose value is not a list at all.
+                            "fuel": 7,
+                            "cafe": "junk",
+                        },
+                        OSM_STATUS_KEY: {
+                            "state": OSM_STATE_OK,
+                            "checked_at": "2026-08-24T00:00:00+00:00",
+                            "measured_at": "2026-08-24T00:00:00+00:00",
+                        },
+                    }
+                },
+            )
+            body = self._page(client, prop)
+            # The good item still renders with both links...
+            assert "Rego" in body
+            assert _escaped(maps_place_url(43.001, -6.0)) in body
+            # ...and the junk is skipped rather than rendered or raised. The
+            # bare string legitimately appears in the page's embedded
+            # enrichment JSON, so the probe is the composite only the item
+            # row's title attribute could produce.
+            assert "not-a-dict-just-a-name — Google Maps" not in body
+
     def test_a_row_without_items_renders_counts_alone(self, app, client):
         with app.app_context():
             prop = _listing(
@@ -525,7 +574,14 @@ class TestBothLinksOnPlaceCards:
             body = self._page(client, prop)
             assert "Comercial Alonso" in body
             assert _escaped(maps_place_url(43.55, -5.41)) in body
-            assert _escaped(maps_directions_url(43.53, -5.39, 43.55, -5.41)) in body
+            # The hero pill row (D6) builds the identical directions URL for
+            # the same target, so `in body` would stay green with the hub
+            # row's own icon deleted — the refuter reproduced exactly that.
+            # Two occurrences pin both: the pill's and the hub row's.
+            hub_route = _escaped(maps_directions_url(43.53, -5.39, 43.55, -5.41))
+            assert body.count(hub_route) >= 2, (
+                "the hub row must carry its own route icon beside the hero pill"
+            )
 
     def test_qol_shop_and_hospital_rows_carry_both(self, app, client):
         with app.app_context():

@@ -1691,7 +1691,14 @@
                                origin rides in as arguments (the beach_row lesson). #}
                             {% set osm_items = property.infrastructure_extended.get('osm_amenity_items') if property.infrastructure_extended.get('osm_amenity_items') is mapping else {} %}
                             {% macro amenity_item_rows(items, origin_lat, origin_lon) %}
-                                {% for item in items %}
+                                {# Fail open on shape: `enrichment` is hand-editable
+                                   JSON, and routes/main_routes.py turns a template
+                                   error into a redirect — so one junk entry must
+                                   become a skipped row, never take the whole page
+                                   down (review finding, 2026-08-24; reproduced with
+                                   a bare string in the list). #}
+                                {% if items is string or items is not iterable %}{% set items = [] %}{% endif %}
+                                {% for item in items if item is mapping %}
                                     {% set _item_pin = maps_place_url(item.get('lat'), item.get('lon')) %}
                                     {% set _item_route = maps_directions_url(origin_lat, origin_lon, item.get('lat'), item.get('lon')) %}
                                     <div class="d-flex justify-content-between align-items-center mb-1 ps-4 small">
