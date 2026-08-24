@@ -523,6 +523,9 @@ class TestAnAnsweredCallIsNotRelabelled:
         with app.app_context():
             mock_cached.return_value = {
                 "counts": {"school": 1},
+                # The named items ride in the same entry since the v3 bump;
+                # an entry without them is a miss, not a hit.
+                "items": {"school": []},
                 "measured_at": "2026-08-01T10:00:00+00:00",
             }
 

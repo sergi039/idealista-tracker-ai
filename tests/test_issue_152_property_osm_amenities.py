@@ -40,6 +40,7 @@ import pytest
 from app import create_app, db
 from models import Property, SearchProfile
 from services.enrichment_service import (
+    OSM_AMENITY_ITEMS_KEY,
     OSM_REASON_NO_COORDINATES,
     OSM_REASON_QUERY_ERROR,
     OSM_STATE_OK,
@@ -826,6 +827,10 @@ class TestTheBackfillStaysFree:
             enrichment={
                 "infrastructure_extended": {
                     "osm_amenities": {"cafe": 1},
+                    # An answer under the *current* shape carries the named
+                    # items too; counts alone predate them and are re-queried
+                    # once (tests/test_amenity_items_and_links.py pins that).
+                    OSM_AMENITY_ITEMS_KEY: {"cafe": []},
                     OSM_STATUS_KEY: {"state": OSM_STATE_OK},
                 }
             },

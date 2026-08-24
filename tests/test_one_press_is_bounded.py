@@ -864,7 +864,10 @@ class TestTheAdvisoryPassDoesNotEraseTheDecisiveOne:
             service.enrichment_service,
             "_fetch_osm_amenities",
             lambda lat, lon: types.SimpleNamespace(
-                failure=None, counts={"cafe": 2}, measured_at="2026-08-20T00:00:00Z"
+                failure=None,
+                counts={"cafe": 2},
+                items={"cafe": []},
+                measured_at="2026-08-20T00:00:00Z",
             ),
         )
         monkeypatch.setattr(

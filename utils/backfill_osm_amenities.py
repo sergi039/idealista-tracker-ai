@@ -30,6 +30,7 @@ from collections import Counter
 from app import create_app
 from models import Property
 from services.enrichment_service import (
+    OSM_AMENITY_ITEMS_KEY,
     OSM_STATE_OK,
     OSM_STATUS_KEY,
     EnrichmentService,
@@ -57,6 +58,20 @@ def _osm_state(prop) -> str:
     return str(status.get("state") or "")
 
 
+def _has_items(prop) -> bool:
+    """Whether the row already carries the named-amenity items.
+
+    Rows measured before the items shipped hold counts alone, so "missing"
+    covers them too: `--only-missing` re-queries such a row exactly once, and
+    a row that already carries the key -- even an empty dict, which is a real
+    answer for a coordinate whose elements had no readable point -- is left
+    alone.
+    """
+    return isinstance(
+        (prop.infrastructure_extended or {}).get(OSM_AMENITY_ITEMS_KEY), dict
+    )
+
+
 def backfill(
     properties,
     service: EnrichmentService,
@@ -77,7 +92,7 @@ def backfill(
 
     for index, prop in enumerate(properties, start=1):
         state = _osm_state(prop)
-        if only_missing and state == OSM_STATE_OK:
+        if only_missing and state == OSM_STATE_OK and _has_items(prop):
             outcome["skipped"] += 1
             continue
 
