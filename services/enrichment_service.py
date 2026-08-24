@@ -69,7 +69,10 @@ OSM_REASON_QUERY_ERROR = "overpass_query_error"
 # Bumped from v1: the entry now carries the time its counts were measured, so a
 # cache hit can report their real age instead of the age of the read. A v1
 # entry is a bare counts dict, which this key simply never looks at.
-OSM_CACHE_KEY = "osm_amenities_v2"
+# Bumped from v2: the entry now carries the linkable items (name, point, OSM
+# ref) beside the counts. A v2 entry holds counts alone, so a cell cached
+# before the bump re-fetches once and then carries both.
+OSM_CACHE_KEY = "osm_amenities_v3"
 
 # A property with no usable coordinates was never asked about, which is not the
 # same as "nothing nearby". Geocoding it would be a paid Google call, so the
@@ -87,6 +90,17 @@ PROPERTY_INFRASTRUCTURE_KEY = "infrastructure_extended"
 # question it was never asked.
 OSM_AMENITY_KINDS = ("supermarket", "school", "hospital", "restaurant", "cafe", "fuel")
 OSM_AMENITY_RADIUS_M = 2000
+
+# The named amenities behind those counts, stored beside them under this key
+# so the card can link each one (Google Maps pin + car route) instead of
+# answering "2 nearby" with no way to ask which two. A sibling key, not a new
+# counts shape: the flat `{amenity: int}` dict is pinned by a dozen tests and
+# read by two templates, and changing its shape would relocate the feature's
+# cost into every reader.
+OSM_AMENITY_ITEMS_KEY = "osm_amenity_items"
+# Nearest first, and only this many per kind: within 2 km of a town centre
+# "restaurant" runs to dozens, and the card is a summary, not a directory.
+OSM_AMENITY_ITEMS_MAX = 10
 
 
 def _osm_coordinate(value: Any, *, limit: float) -> Optional[float]:
@@ -117,6 +131,12 @@ class OsmAmenityReading:
     """
 
     counts: Optional[Dict[str, int]] = None
+    # The named amenities behind the counts, `{amenity: [item, ...]}`, nearest
+    # first. An element whose point cannot be read still counts and yields no
+    # item -- the count claims presence, the item claims *where*, and only the
+    # second needs a coordinate -- so empty items under a non-zero count is a
+    # legal answer, not a defect.
+    items: Optional[Dict[str, list]] = None
     measured_at: Optional[str] = None
     failure: Optional[GoogleApiFailure] = None
 
@@ -1359,10 +1379,16 @@ class EnrichmentService:
         """
         try:
             cached = get_cached_enrichment_data(lat, lon, OSM_CACHE_KEY)
-            if isinstance(cached, dict) and isinstance(cached.get("counts"), dict):
+            if (
+                isinstance(cached, dict)
+                and isinstance(cached.get("counts"), dict)
+                and isinstance(cached.get("items"), dict)
+            ):
                 logger.debug("OSM amenities cache hit for %s,%s", lat, lon)
                 return OsmAmenityReading(
-                    counts=cached["counts"], measured_at=cached.get("measured_at")
+                    counts=cached["counts"],
+                    items=cached["items"],
+                    measured_at=cached.get("measured_at"),
                 )
 
             amenities = "|".join(OSM_AMENITY_KINDS)
@@ -1382,12 +1408,20 @@ class EnrichmentService:
                 return OsmAmenityReading(failure=transport_failure)
 
             amenity_counts: Dict[str, int] = {}
+            amenity_items: Dict[str, list] = {}
             for element in elements:
                 if not isinstance(element, dict):
                     continue
                 amenity = (element.get("tags") or {}).get("amenity")
-                if amenity:
-                    amenity_counts[amenity] = amenity_counts.get(amenity, 0) + 1
+                if not amenity:
+                    continue
+                amenity_counts[amenity] = amenity_counts.get(amenity, 0) + 1
+                item = self._amenity_item(element, lat, lon)
+                if item is not None:
+                    amenity_items.setdefault(amenity, []).append(item)
+            for items in amenity_items.values():
+                items.sort(key=lambda entry: entry["distance_m"])
+                del items[OSM_AMENITY_ITEMS_MAX:]
 
             # An empty dict here is a real answer: Overpass looked and there is
             # nothing within the radius.
@@ -1402,18 +1436,69 @@ class EnrichmentService:
                     lat,
                     lon,
                     OSM_CACHE_KEY,
-                    {"counts": amenity_counts, "measured_at": measured_at},
+                    {
+                        "counts": amenity_counts,
+                        "items": amenity_items,
+                        "measured_at": measured_at,
+                    },
                     timeout=60 * 60 * 24 * 7,
                 )
             except Exception:
                 logger.warning(
                     "Could not cache OSM amenities for %s,%s", lat, lon, exc_info=True
                 )
-            return OsmAmenityReading(counts=amenity_counts, measured_at=measured_at)
+            return OsmAmenityReading(
+                counts=amenity_counts, items=amenity_items, measured_at=measured_at
+            )
 
         except Exception as exc:
             logger.error("Failed to fetch OSM amenities", exc_info=True)
             return OsmAmenityReading(failure=failure_from_exception(exc))
+
+    @staticmethod
+    def _amenity_item(
+        element: Dict[str, Any], origin_lat: float, origin_lon: float
+    ) -> Optional[Dict[str, Any]]:
+        """One linkable amenity off an Overpass element, or None without a point.
+
+        The point is the node's own lat/lon, or the `out center` centroid for a
+        way or relation (`services/hazard_service.py` reads elements the same
+        way). Two of the three fuel stations at property 360's coordinate are
+        nameless ways, so the label falls back through `brand` and `operator`
+        before giving up -- a None name still renders, as a generic row.
+
+        `distance_m` is measured from the queried coordinate, which on an
+        approximate row is a locality centroid and not the parcel (#358): it
+        orders the list nearest-first and is not printed by the card.
+        """
+        centre = element.get("center")
+        if not isinstance(centre, dict):
+            centre = element
+        item_lat = _osm_coordinate(centre.get("lat"), limit=90.0)
+        item_lon = _osm_coordinate(centre.get("lon"), limit=180.0)
+        if item_lat is None or item_lon is None:
+            return None
+
+        tags = element.get("tags") or {}
+        name = None
+        for key in ("name", "brand", "operator"):
+            value = tags.get(key)
+            if isinstance(value, str) and value.strip():
+                name = value.strip()
+                break
+
+        osm_type = element.get("type")
+        osm_id = element.get("id")
+        return {
+            "name": name,
+            "lat": item_lat,
+            "lon": item_lon,
+            "osm_type": osm_type if osm_type in ("node", "way", "relation") else None,
+            "osm_id": osm_id if isinstance(osm_id, int) else None,
+            "distance_m": int(
+                round(haversine_m(origin_lat, origin_lon, item_lat, item_lon))
+            ),
+        }
 
     # Reasons worth asking a *different* Overpass instance about. A 406 is
     # not among them: that is this client's User-Agent being refused, and
@@ -1808,7 +1893,9 @@ class EnrichmentService:
                 )
             else:
                 self._write_property_infrastructure_extended(
-                    prop, osm_amenities=reading.counts
+                    prop,
+                    osm_amenities=reading.counts,
+                    **{OSM_AMENITY_ITEMS_KEY: reading.items or {}},
                 )
                 self._record_property_osm_status(
                     prop, OSM_STATE_OK, measured_at=reading.measured_at

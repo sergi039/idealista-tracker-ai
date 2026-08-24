@@ -1173,11 +1173,15 @@
                     {# Top-3 visible, the rest behind a disclosure (D11): 16
                        beach rows pushed every other card below the fold. The
                        macro renders one row either way. #}
-                    {% macro beach_row(beach, last) %}
+                    {% macro beach_row(beach, last, origin_lat, origin_lon) %}
                         {# Straight to the place on Google Maps via the shared
                            builder: the place id pins the exact beach, the
-                           coordinate is the fallback when Google gave no id. #}
+                           coordinate is the fallback when Google gave no id.
+                           Both links (owner ask, 2026-08-24): the name pins the
+                           beach, the icon routes to it by car. A macro sees no
+                           template context, so the origin rides in as arguments. #}
                         {% set beach_url = maps_place_url(beach.get('lat'), beach.get('lon'), beach.get('place_id')) %}
+                        {% set beach_route = maps_directions_url(origin_lat, origin_lon, beach.get('lat'), beach.get('lon'), beach.get('place_id')) %}
                         <div class="d-flex justify-content-between align-items-start {{ 'mb-2' if not last }}">
                             {# No `compact-text` here. That class is 120px of
                                ellipsis, which turned "Playa de Riboira" into
@@ -1196,6 +1200,13 @@
                                 </span>
                             {% endif %}
                             <div class="text-nowrap ms-auto flex-shrink-0">
+                                {% if beach_route %}
+                                    <a href="{{ beach_route }}" target="_blank" rel="noopener"
+                                       class="me-1 text-decoration-none"
+                                       title="{{ t('route_from_property') }}">
+                                        <i class="fas fa-diamond-turn-right"></i>
+                                    </a>
+                                {% endif %}
                                 {% if beach.get('duration_min') is not none %}
                                     <span class="badge bg-info me-1"
                                           {% if beach.get('estimated') %}title="Estimated, not measured by Google"{% endif %}>
@@ -1209,7 +1220,7 @@
                         </div>
                     {% endmacro %}
                     {% for beach in beach_items[:3] %}
-                        {{ beach_row(beach, loop.last and beach_items|length <= 3) }}
+                        {{ beach_row(beach, loop.last and beach_items|length <= 3, property.location_lat, property.location_lon) }}
                     {% endfor %}
                     {% if beach_items|length > 3 %}
                         <details class="mt-1">
@@ -1219,7 +1230,7 @@
                             </summary>
                             <div class="mt-2">
                                 {% for beach in beach_items[3:] %}
-                                    {{ beach_row(beach, loop.last) }}
+                                    {{ beach_row(beach, loop.last, property.location_lat, property.location_lon) }}
                                 {% endfor %}
                             </div>
                         </details>
@@ -1571,6 +1582,7 @@
                                 {% set _hub_place = tdata.get('place') if tdata.get('place') is mapping else {} %}
                                 {% set place_name = _hub_place.get('name') %}
                                 {% set _hub_route = maps_directions_url(property.location_lat, property.location_lon, _hub_place.get('lat'), _hub_place.get('lon'), _hub_place.get('place_id')) %}
+                                {% set _hub_pin = maps_place_url(_hub_place.get('lat'), _hub_place.get('lon'), _hub_place.get('place_id')) %}
                                 <div class="d-flex justify-content-between align-items-start mb-2">
                                     <span class="small fw-bold compact-text" title="{{ hub_label }}">
                                         <i class="fas {{ hub_icon }} me-1 text-primary"></i>{{ hub_label }}
@@ -1581,15 +1593,25 @@
                                            from "10 min to a contractor". The name opens
                                            the route from the listing (D12/D24). #}
                                         {% if place_name %}
-                                            {% if _hub_route %}
-                                                <a href="{{ _hub_route }}" target="_blank" rel="noopener"
-                                                   class="d-block fw-normal text-decoration-none text-body-secondary"
-                                                   title="{{ t('route_from_property') }}: {{ place_name }}">
-                                                    {{ place_name }} <i class="fas fa-diamond-turn-right"></i>
-                                                </a>
-                                            {% else %}
-                                                <span class="d-block fw-normal text-body-secondary">{{ place_name }}</span>
-                                            {% endif %}
+                                            {# Both links (owner ask, 2026-08-24): the
+                                               name pins the place, the icon keeps the
+                                               route it always opened. #}
+                                            <span class="d-block fw-normal">
+                                                {% if _hub_pin %}
+                                                    <a href="{{ _hub_pin }}" target="_blank" rel="noopener"
+                                                       class="text-decoration-none text-body-secondary"
+                                                       title="{{ place_name }} — Google Maps">{{ place_name }}</a>
+                                                {% else %}
+                                                    <span class="text-body-secondary">{{ place_name }}</span>
+                                                {% endif %}
+                                                {% if _hub_route %}
+                                                    <a href="{{ _hub_route }}" target="_blank" rel="noopener"
+                                                       class="text-decoration-none"
+                                                       title="{{ t('route_from_property') }}: {{ place_name }}">
+                                                        <i class="fas fa-diamond-turn-right"></i>
+                                                    </a>
+                                                {% endif %}
+                                            </span>
                                         {% endif %}
                                     </span>
                                     <div class="text-nowrap">{{ readout }}</div>
@@ -1660,6 +1682,38 @@
                                them (#98). #}
                             {% set osm_status = property.infrastructure_extended.get('osm_amenities_status') %}
                             {% set osm_stale = osm_status is mapping and osm_status.get('state') == 'unavailable' %}
+                            {# The named amenities behind the counts (owner ask,
+                               2026-08-24): each row carries both links — the name
+                               pins the place on Google Maps, the icon opens the
+                               car route from this property. Rows measured before
+                               the items shipped hold counts alone and simply show
+                               no list. A macro sees no template context, so the
+                               origin rides in as arguments (the beach_row lesson). #}
+                            {% set osm_items = property.infrastructure_extended.get('osm_amenity_items') if property.infrastructure_extended.get('osm_amenity_items') is mapping else {} %}
+                            {% macro amenity_item_rows(items, origin_lat, origin_lon) %}
+                                {% for item in items %}
+                                    {% set _item_pin = maps_place_url(item.get('lat'), item.get('lon')) %}
+                                    {% set _item_route = maps_directions_url(origin_lat, origin_lon, item.get('lat'), item.get('lon')) %}
+                                    <div class="d-flex justify-content-between align-items-center mb-1 ps-4 small">
+                                        {% if _item_pin %}
+                                            <a href="{{ _item_pin }}" target="_blank" rel="noopener"
+                                               class="text-decoration-none text-truncate me-2"
+                                               title="{{ item.get('name') or t('amenity_unnamed') }} — Google Maps">
+                                                {{ item.get('name') or t('amenity_unnamed') }}
+                                            </a>
+                                        {% else %}
+                                            <span class="text-truncate me-2 text-body-secondary">{{ item.get('name') or t('amenity_unnamed') }}</span>
+                                        {% endif %}
+                                        {% if _item_route %}
+                                            <a href="{{ _item_route }}" target="_blank" rel="noopener"
+                                               class="text-decoration-none flex-shrink-0"
+                                               title="{{ t('route_from_property') }}">
+                                                <i class="fas fa-diamond-turn-right"></i>
+                                            </a>
+                                        {% endif %}
+                                    </div>
+                                {% endfor %}
+                            {% endmacro %}
                             <div class="mb-3">
                                 {% if osm_stale %}
                                     <span class="small fw-bold text-muted">Nearby Amenities (last known):</span>
@@ -1687,6 +1741,7 @@
                                                 </span>
                                                 <span class="badge bg-primary">{{ value[priority_amenity] }} nearby</span>
                                             </div>
+                                            {{ amenity_item_rows(osm_items.get(priority_amenity) or [], property.location_lat, property.location_lon) }}
                                         {% endif %}
                                     {% endfor %}
 
@@ -1714,10 +1769,14 @@
                                                 </span>
                                                 <span class="badge bg-primary">{{ count }} nearby</span>
                                             </div>
+                                            {{ amenity_item_rows(osm_items.get(amenity) or [], property.location_lat, property.location_lon) }}
                                         {% endif %}
                                     {% endfor %}
                                 </div>
                             </div>
+                        {% elif key == 'osm_amenity_items' %}
+                            {# Rendered inside the osm_amenities branch above; falling
+                               through to the generic branch would print the raw dict. #}
                         {% else %}
                             {% set base_key = key.replace('_available', '').replace('_distance', '').replace('_travel_time', '') %}
 
@@ -1852,6 +1911,7 @@
                     {% if qol_shops.get('status') == 'ok' %}
                         {% for shop in (qol_shops.get('items') or [])[:3] %}
                             {% set _shop_url = maps_place_url(shop.get('lat'), shop.get('lon')) %}
+                            {% set _shop_route = maps_directions_url(property.location_lat, property.location_lon, shop.get('lat'), shop.get('lon')) %}
                             <div class="d-flex justify-content-between align-items-center mb-1 small">
                                 {% if _shop_url %}
                                     <a href="{{ _shop_url }}" target="_blank" rel="noopener"
@@ -1865,6 +1925,13 @@
                                     </span>
                                 {% endif %}
                                 <span class="text-nowrap">
+                                    {% if _shop_route %}
+                                        <a href="{{ _shop_route }}" target="_blank" rel="noopener"
+                                           class="me-1 text-decoration-none"
+                                           title="{{ t('route_from_property') }}">
+                                            <i class="fas fa-diamond-turn-right"></i>
+                                        </a>
+                                    {% endif %}
                                     {% if shop.get('shop') == 'convenience' %}
                                         <span class="badge bg-light text-dark border me-1" title="{{ t('qol_convenience_tooltip') }}">mini</span>
                                     {% endif %}
@@ -1898,6 +1965,7 @@
                             {% set hosp = (qol_hosp.get('nearest') or {}).get(grouping_key) %}
                             {% if hosp is mapping %}
                                 {% set _hosp_route = maps_directions_url(property.location_lat, property.location_lon, hosp.get('lat'), hosp.get('lon')) %}
+                                {% set _hosp_pin = maps_place_url(hosp.get('lat'), hosp.get('lon')) %}
                                 <div class="d-flex justify-content-between align-items-start mb-1 small">
                                     <span class="me-2">
                                         <span class="d-block text-body-secondary">{{ grouping_label }}</span>
@@ -1906,17 +1974,29 @@
                                            "no" (two catalogue rows carry
                                            null; the sea-view rule again). #}
                                         {% set _teach = t('yes') if hosp.get('teaching') else (t('no') if hosp.get('teaching') is sameas false else '—') %}
-                                        {% if _hosp_route %}
-                                            <a href="{{ _hosp_route }}" target="_blank" rel="noopener"
+                                        {# Both links (owner ask, 2026-08-24): the name
+                                           pins the hospital, the icon by the distance
+                                           opens the route it used to open itself. #}
+                                        {% if _hosp_pin %}
+                                            <a href="{{ _hosp_pin }}" target="_blank" rel="noopener"
                                                class="text-decoration-none"
-                                               title="{{ t('route_from_property') }} · {{ t('qol_hospital_fields') }}: {{ hosp.get('beds') }} / {{ _teach }} / {{ hosp.get('high_tech_count') }}{% if qol_hosp.get('source') %} · {{ qol_hosp.get('source') }}{% endif %}">
+                                               title="{{ hosp.get('name') }} — Google Maps · {{ t('qol_hospital_fields') }}: {{ hosp.get('beds') }} / {{ _teach }} / {{ hosp.get('high_tech_count') }}{% if qol_hosp.get('source') %} · {{ qol_hosp.get('source') }}{% endif %}">
                                                 <i class="fas fa-hospital me-1 text-primary"></i>{{ hosp.get('name') }}
                                             </a>
                                         {% else %}
                                             <span><i class="fas fa-hospital me-1 text-primary"></i>{{ hosp.get('name') }}</span>
                                         {% endif %}
                                     </span>
-                                    <span class="badge bg-secondary flex-shrink-0">{{ hosp.get('distance_km') }} km</span>
+                                    <span class="text-nowrap flex-shrink-0">
+                                        {% if _hosp_route %}
+                                            <a href="{{ _hosp_route }}" target="_blank" rel="noopener"
+                                               class="me-1 text-decoration-none"
+                                               title="{{ t('route_from_property') }}">
+                                                <i class="fas fa-diamond-turn-right"></i>
+                                            </a>
+                                        {% endif %}
+                                        <span class="badge bg-secondary">{{ hosp.get('distance_km') }} km</span>
+                                    </span>
                                 </div>
                             {% endif %}
                         {% endfor %}
@@ -2057,11 +2137,15 @@
                         {% elif qol_pool.get('status') == 'ok' %}
                             {% for cand in (qol_pool.get('candidates') or [])[:3] %}
                                 {% set _pool_route = maps_directions_url(property.location_lat, property.location_lon, cand.get('lat'), cand.get('lon')) %}
+                                {% set _pool_pin = maps_place_url(cand.get('lat'), cand.get('lon')) %}
                                 <div class="d-flex justify-content-between align-items-center mb-1 small">
-                                    {% if _pool_route %}
-                                        <a href="{{ _pool_route }}" target="_blank" rel="noopener"
+                                    {# Both links (owner ask, 2026-08-24): the name pins
+                                       the pool, the icon by the badges opens the route
+                                       the name used to open itself. #}
+                                    {% if _pool_pin %}
+                                        <a href="{{ _pool_pin }}" target="_blank" rel="noopener"
                                            class="text-decoration-none text-truncate me-2"
-                                           title="{{ t('route_from_property') }}{% if cand.get('indoor_evidence') %} · {{ cand.get('indoor_evidence') }}{% endif %}">
+                                           title="{{ cand.get('name') or t('pool_unnamed') }} — Google Maps{% if cand.get('indoor_evidence') %} · {{ cand.get('indoor_evidence') }}{% endif %}">
                                             <i class="fas fa-person-swimming me-1 text-primary"></i>{{ cand.get('name') or t('pool_unnamed') }}
                                         </a>
                                     {% else %}
@@ -2070,6 +2154,13 @@
                                         </span>
                                     {% endif %}
                                     <span class="text-nowrap">
+                                        {% if _pool_route %}
+                                            <a href="{{ _pool_route }}" target="_blank" rel="noopener"
+                                               class="me-1 text-decoration-none"
+                                               title="{{ t('route_from_property') }}">
+                                                <i class="fas fa-diamond-turn-right"></i>
+                                            </a>
+                                        {% endif %}
                                         {% if cand.get('indoor_status') == 'verified' %}
                                             <span class="badge bg-success me-1" title="{{ cand.get('indoor_evidence') or '' }}">{{ t('pool_indoor') }}</span>
                                         {% elif cand.get('indoor_status') == 'likely' %}
