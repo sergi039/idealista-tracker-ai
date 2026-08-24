@@ -422,6 +422,45 @@ def _filter_by_sea_distance(query, model, raw_value):
     return query.filter(_sea_distance_m_expr(model) <= threshold)
 
 
+# `attributes.land_classification` is a *curated* field: hand-run curation
+# scripts write it from planning documents, portal claims and research sheets,
+# and ingestion deliberately preserves it
+# (tests/test_ingest_preserves_curated_fields.py). Its vocabulary, measured in
+# production rather than invented here:
+#   urbano_solar        - urban/solar, a dwelling may be built now
+#   urbanizable         - buildable only after urbanisation/gestion completes
+#   residential_claimed - the seller claims buildability; no document seen
+# A row with no value was never curated -- it is offered as its own bucket and
+# never folded into any of the three (#98: absence is not a classification).
+LAND_CLASSIFICATION_FILTER_VALUES = {
+    "solar": ("urbano_solar",),
+    "urbanizable": ("urbanizable",),
+    "claimed": ("residential_claimed",),
+}
+
+
+def _land_classification_expr(model):
+    """The curated classification as text; NULL where nobody curated one."""
+    return model.attributes["land_classification"].as_string()
+
+
+def _filter_by_land_classification(query, model, raw_value):
+    """Keep only rows whose curated buildability matches the request.
+
+    `classified` keeps any curated row (IS NOT NULL rather than an IN-list,
+    so a new vocabulary value is not silently dropped from its own bucket);
+    the named buckets match exactly. Unknown values hand back the same query
+    object, the `filter_bar_active` identity contract.
+    """
+    wanted = (raw_value or "").strip().lower()
+    if wanted == "classified":
+        return query.filter(_land_classification_expr(model).isnot(None))
+    values = LAND_CLASSIFICATION_FILTER_VALUES.get(wanted)
+    if not values:
+        return query
+    return query.filter(_land_classification_expr(model).in_(values))
+
+
 def _map_auto_profile_id(default_profile, profiles, focus_property=None):
     """The map's own fallback when the request names no profile.
 
@@ -1273,6 +1312,7 @@ def properties():
         favorites_filter = request.args.get("favorites", "") == "on"
         sea_view_filter = request.args.get("sea_view", "")
         sea_distance_filter = request.args.get("sea_dist", "")
+        build_filter = request.args.get("build", "")
         measured_filter = request.args.get("measured", "")
 
         # Hide removed: ON by default (similar to /lands), unless this request
@@ -1382,6 +1422,8 @@ def properties():
             query = _filter_by_sea_view(query, Property, sea_view_filter)
         if sea_distance_filter:
             query = _filter_by_sea_distance(query, Property, sea_distance_filter)
+        if build_filter:
+            query = _filter_by_land_classification(query, Property, build_filter)
         if measured_filter:
             query = _filter_by_measured(query, Property, measured_filter)
 
@@ -1582,6 +1624,7 @@ def properties():
                 "inv_metr": investment_metrics_filter,
                 "sea_view": sea_view_filter,
                 "sea_dist": sea_distance_filter,
+                "build": build_filter,
                 "measured": measured_filter,
                 "favorites": favorites_filter,
                 "hide_removed": hide_removed_filter,
@@ -3653,6 +3696,7 @@ def map_view():
         favorites_filter = filters.flag("favorites")
         sea_view_filter = filters.get("sea_view")
         sea_distance_filter = filters.get("sea_dist")
+        build_filter = filters.get("build")
         # #445. This page ignored `measured` while /properties applied it, so
         # pressing Map on a narrowed list widened it again and said nothing:
         # measured on production 2026-08-20, the list found 72 listings and the
@@ -3710,6 +3754,8 @@ def map_view():
             query = _filter_by_sea_view(query, Property, sea_view_filter)
         if sea_distance_filter:
             query = _filter_by_sea_distance(query, Property, sea_distance_filter)
+        if build_filter:
+            query = _filter_by_land_classification(query, Property, build_filter)
         # Same helper and same position as /properties, so one URL cannot
         # describe two sets across the two surfaces (#445).
         if measured_filter:
@@ -4808,6 +4854,7 @@ def export_properties_csv():
         favorites_filter = request.args.get("favorites", "") == "on"
         sea_view_filter = request.args.get("sea_view", "")
         sea_distance_filter = request.args.get("sea_dist", "")
+        build_filter = request.args.get("build", "")
         # The export did not read this one at all, so the Export CSV button on
         # a `measured=full` page exported the whole subscription: measured
         # against production 2026-08-20, the page found 72 listings and its own
@@ -4888,6 +4935,9 @@ def export_properties_csv():
 
         if sea_distance_filter:
             query = _filter_by_sea_distance(query, Property, sea_distance_filter)
+
+        if build_filter:
+            query = _filter_by_land_classification(query, Property, build_filter)
 
         if measured_filter:
             query = _filter_by_measured(query, Property, measured_filter)
