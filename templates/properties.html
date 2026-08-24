@@ -33,6 +33,7 @@
     'inv_metr': current_filters.inv_metr or None,
     'sea_view': current_filters.sea_view or None,
     'sea_dist': current_filters.sea_dist or None,
+    'build': current_filters.build or None,
     'measured': current_filters.measured or None,
     'verdict': current_filters.verdict or None,
     'action': current_filters.action or None,
@@ -932,6 +933,19 @@
                         <option value="likely" {{ 'selected' if current_filters.sea_view in ('likely', 'on') }}>{{ t('sea_view_yes_or_likely') }}</option>
                     </select>
 
+                    {# Curated buildability (`attributes.land_classification`,
+                       written by hand-run curation from planning documents and
+                       research sheets). A row nobody curated matches only
+                       "all": absence is not a classification (#98). #}
+                    <select class="form-select form-select-sm properties-filter-select" id="build" name="build"
+                            aria-label="{{ t('build_filter') }}">
+                        <option value="" {{ 'selected' if not current_filters.build }}>{{ t('build_any') }}</option>
+                        <option value="solar" {{ 'selected' if current_filters.build == 'solar' }}>{{ t('build_solar') }}</option>
+                        <option value="urbanizable" {{ 'selected' if current_filters.build == 'urbanizable' }}>{{ t('build_urbanizable') }}</option>
+                        <option value="claimed" {{ 'selected' if current_filters.build == 'claimed' }}>{{ t('build_claimed') }}</option>
+                        <option value="classified" {{ 'selected' if current_filters.build == 'classified' }}>{{ t('build_classified') }}</option>
+                    </select>
+
                     {# Straight-line metres to the coastline, cut at walking
                        reach (~5 km/h). Matches only a *measured* distance --
                        for an approximate coordinate that is the locality
@@ -1172,7 +1186,7 @@
                        export never re-derives a default the page has already
                        resolved. #}
                     <a class="btn btn-success btn-sm"
-                       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, verdict=current_filters.verdict or None, action=current_filters.action or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, sea_dist=current_filters.sea_dist or None, measured=current_filters.measured or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else 'off', sort=current_filters.sort_by, order=current_filters.order) }}"
+                       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, verdict=current_filters.verdict or None, action=current_filters.action or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, sea_dist=current_filters.sea_dist or None, build=current_filters.build or None, measured=current_filters.measured or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else 'off', sort=current_filters.sort_by, order=current_filters.order) }}"
                        title="Download filtered data as CSV">
                         <i class="fas fa-download me-1"></i>{{ t('export_csv') }}
                     </a>
