@@ -29,11 +29,21 @@ Thumbs.db
 
 # Project specific
 .last_seen_uid
-# Scratch API responses left in the repo root by an agent session — nr.json is
-# an ArcGIS municipality query result from the #298 work. Nothing reads them.
-# Ignored because several sessions share this checkout: the file turned up
-# staged once already, and a `git add -A` from any of them would commit it.
-nr.json
+# Scratch API responses left in the repo root by an agent session. Nothing
+# reads them. Ignored because several sessions share this checkout: such a file
+# turned up staged once already, and a `git add -A` from any of them would
+# commit it.
+#
+# #318 listed one name, nr.json (an ArcGIS municipality query from the #298
+# work). Four more had appeared by 2026-08-26 — portal_home.html, q_candin1.json,
+# q_candin2.json, wms_test.xml (Wikidata entities and an ArcGIS error page) —
+# so this closes the class instead of the examples: the root holds no tracked
+# .json, .html or .xml at all, only .py, .md, .yml, .toml and dotfiles. A file
+# of those types in the root is a dump by definition. Add a negation below if
+# that ever stops being true.
+/*.json
+/*.html
+/*.xml
 # data/ holds runtime artifacts (backfill snapshots, call ledgers) that must
 # never be committed — but the three importer-generated REFERENCE files below
 # are reviewed, small, and deploy with the code: the QoL card and
