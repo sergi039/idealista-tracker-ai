@@ -488,3 +488,63 @@ class TestTheVisibilityTestIsTheSameArithmeticAsTheProfile:
         assert seen is not None
         assert seen > 400.0
         assert math.isclose(seen, 800.0)
+
+
+class TestTheCardSurvivesAHandEditedBlock:
+    """`enrichment` is a JSON column and direct SQL is a supported workflow
+    here, so a geometry block is untrusted input. `routes/main_routes.py`
+    turns a template error into a flash and a second render with no rows, so
+    the assertion has to be that the page *rendered* -- an absent line looks
+    identical either way.
+    """
+
+    @pytest.fixture
+    def app(self):
+        from tests import setup_test_environment
+
+        setup_test_environment()
+        from app import create_app, db
+
+        application = create_app()
+        application.config["TESTING"] = True
+        application.config["WTF_CSRF_ENABLED"] = False
+        with application.app_context():
+            db.create_all()
+            yield application
+            db.drop_all()
+
+    def test_a_block_missing_its_distance_still_renders_the_page(self, app):
+        from app import db
+        from models import Property
+
+        listing = Property(
+            source_email_id="sea-fan-handedited",
+            title="Seiruga hand-edited",
+            municipality="Malpica",
+            location_lat=PLOT_LAT,
+            location_lon=PLOT_LON,
+            enrichment={
+                "environment": {
+                    "sea_view": "no",
+                    "sea_view_detail": {
+                        "source": "geometry",
+                        "reason": "terrain_blocks_line_of_sight",
+                        "geometry": {
+                            "distance_m": 394.7,
+                            "observer_elevation_m": 45.2,
+                            # Hand-edited: the flag arrives without its number.
+                            "shoreline_visible": False,
+                        },
+                    },
+                }
+            },
+        )
+        db.session.add(listing)
+        db.session.commit()
+
+        response = app.test_client().get(f"/properties/{listing.id}")
+        body = response.get_data(as_text=True)
+
+        assert response.status_code == 200
+        assert "terrain_blocks_line_of_sight" in body
+        assert "0.4 km to the coastline" in body

@@ -2295,7 +2295,11 @@
                                the page used to print only the first as if it were the
                                second. Absent on verdicts computed before the fan, so the
                                line simply does not appear. #}
-                            {%- if geometry.get('shoreline_visible') is sameas false %}
+                            {# `blocked_at_m` is written with `shoreline_visible`, but
+                               `enrichment` is a JSON column anything may have edited,
+                               and `None|round(0)` raises into the redirect that
+                               main_routes turns a template error into. #}
+                            {%- if geometry.get('shoreline_visible') is sameas false and geometry.get('blocked_at_m') is number %}
                                 {%- set _probe = geometry.get('sea_probe') if geometry.get('sea_probe') is mapping else {} %}
                                 <br><i class="fas fa-mountain me-1"></i>{{ t('sea_view_shoreline_hidden') }} {{ geometry.get('blocked_at_m')|round(0)|int }} m
                                 {%- if _probe.get('visible') and _probe.get('visible_at_m') is not none %}
