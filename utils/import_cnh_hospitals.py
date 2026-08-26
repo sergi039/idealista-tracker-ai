@@ -66,6 +66,7 @@ import os
 import re
 import sys
 import tempfile
+from utils.google_spend import add_spend_arguments
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -389,53 +390,65 @@ def download_xlsx(dest_path: str) -> None:
         )
 
 
-def geocode_hospitals(hospitals: List[Dict[str, Any]]) -> Tuple[int, int]:
+def geocode_hospitals(
+    hospitals: List[Dict[str, Any]], reason: str | None = None
+) -> Tuple[int, int]:
     """Fill lat/lon via the app's Google geocoding helper. Returns (ok, failed).
 
     Only entries not already ``ok`` are looked up, so a `--geocode-only` rerun
     retries failures without re-spending calls on successes.
     """
     from utils.geocoding import GeocodingService
+    from utils.google_spend import CAP_INGEST_GEOCODE, cli_authorization
 
     service = GeocodingService()
     ok = failed = 0
-    for entry in hospitals:
-        if entry.get("geocode") == "ok" and entry.get("lat") is not None:
-            ok += 1
-            continue
-        address = (
-            f"{entry['name']}, {entry['municipality']}, {entry['province']}, Spain"
-        )
-        result = service.geocode_address(address)
-        lat = result.get("lat") if result else None
-        lon = result.get("lng") if result else None
-        plausible = (
-            isinstance(lat, (int, float))
-            and isinstance(lon, (int, float))
-            and REGION_LAT_RANGE[0] <= lat <= REGION_LAT_RANGE[1]
-            and REGION_LON_RANGE[0] <= lon <= REGION_LON_RANGE[1]
-        )
-        if plausible:
-            entry["lat"] = round(float(lat), 6)
-            entry["lon"] = round(float(lon), 6)
-            entry["geocode"] = "ok"
-            accuracy = result.get("accuracy")
-            if accuracy:
-                entry["geocode_accuracy"] = accuracy
-            ok += 1
-        else:
-            if result is not None:
-                logger.warning(
-                    "Geocode for %r landed outside the region box (%r, %r): recorded as failed",
-                    address,
-                    lat,
-                    lon,
-                )
-            entry["lat"] = None
-            entry["lon"] = None
-            entry["geocode"] = "failed"
-            entry.pop("geocode_accuracy", None)
-            failed += 1
+    # A few dozen one-off geocodes to build a reference file that is then
+    # committed and read for free forever after. Cheap, rare, and still a
+    # billed call, so it asks like everything else does.
+    with cli_authorization(
+        reason,
+        actor="utils.import_cnh_hospitals",
+        rows=len(hospitals),
+        per_row=CAP_INGEST_GEOCODE,
+    ):
+        for entry in hospitals:
+            if entry.get("geocode") == "ok" and entry.get("lat") is not None:
+                ok += 1
+                continue
+            address = (
+                f"{entry['name']}, {entry['municipality']}, {entry['province']}, Spain"
+            )
+            result = service.geocode_address(address)
+            lat = result.get("lat") if result else None
+            lon = result.get("lng") if result else None
+            plausible = (
+                isinstance(lat, (int, float))
+                and isinstance(lon, (int, float))
+                and REGION_LAT_RANGE[0] <= lat <= REGION_LAT_RANGE[1]
+                and REGION_LON_RANGE[0] <= lon <= REGION_LON_RANGE[1]
+            )
+            if plausible:
+                entry["lat"] = round(float(lat), 6)
+                entry["lon"] = round(float(lon), 6)
+                entry["geocode"] = "ok"
+                accuracy = result.get("accuracy")
+                if accuracy:
+                    entry["geocode_accuracy"] = accuracy
+                ok += 1
+            else:
+                if result is not None:
+                    logger.warning(
+                        "Geocode for %r landed outside the region box (%r, %r): recorded as failed",
+                        address,
+                        lat,
+                        lon,
+                    )
+                entry["lat"] = None
+                entry["lon"] = None
+                entry["geocode"] = "failed"
+                entry.pop("geocode_accuracy", None)
+                failed += 1
     return ok, failed
 
 
@@ -528,6 +541,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="re-read --out and geocode only its non-ok entries (no Excel parse)",
     )
+    add_spend_arguments(parser)
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -557,7 +571,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
 
     if not args.skip_geocode:
-        ok, failed = geocode_hospitals(hospitals)
+        ok, failed = geocode_hospitals(hospitals, reason=args.reason)
         logger.info("geocoded: %d ok, %d failed", ok, failed)
         document["generated_at"] = datetime.now(timezone.utc).isoformat()
 

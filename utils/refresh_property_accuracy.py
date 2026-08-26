@@ -56,6 +56,7 @@ from services.coordinate_quality import is_hand_set
 
 
 from services.property_location_service import PropertyLocationService
+from utils.google_spend import add_spend_arguments, cli_authorization
 from utils.inflight import inflight
 
 logger = logging.getLogger(__name__)
@@ -249,6 +250,7 @@ def main() -> None:
         default=DEFAULT_SLEEP_S,
         help="Pause between rows (seconds).",
     )
+    add_spend_arguments(parser)
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -308,7 +310,14 @@ def main() -> None:
         # Resumable: each row commits on its own and leaves the scope by gaining
         # an enrichment["geocoding"] record, so a killed run resumes where it
         # stopped instead of paying for the same rows twice.
-        with inflight("refresh_property_accuracy", resumable=not args.dry_run):
+        with (
+            cli_authorization(
+                args.reason,
+                actor="utils.refresh_property_accuracy",
+                rows=len(rows),
+            ),
+            inflight("refresh_property_accuracy", resumable=not args.dry_run),
+        ):
             for index, prop in enumerate(rows, start=1):
                 old = (prop.location_accuracy or "unknown").lower()
                 old_lat, old_lon = prop.location_lat, prop.location_lon

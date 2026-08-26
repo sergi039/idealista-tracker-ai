@@ -171,7 +171,7 @@ class TestTheOviedoPage:
             return_value=None,
         ):
             with patch(
-                "services.property_travel_service.request_with_retries",
+                "utils.google_spend.request_with_retries",
                 side_effect=_dispatch,
             ):
                 lookup = service._nearest_place_for_preset(
@@ -199,7 +199,7 @@ class TestTheSecondCallStaysTheException:
             return_value=None,
         ):
             with patch(
-                "services.property_travel_service.request_with_retries",
+                "utils.google_spend.request_with_retries",
                 side_effect=_dispatch,
             ):
                 lookup = service._nearest_place_for_preset(
@@ -232,7 +232,7 @@ class TestTheSecondCallStaysTheException:
             return_value=None,
         ):
             with patch(
-                "services.property_travel_service.request_with_retries",
+                "utils.google_spend.request_with_retries",
                 side_effect=_dispatch,
             ):
                 lookup = service._nearest_place_for_preset(
@@ -260,7 +260,7 @@ class TestTheSecondCallStaysTheException:
             return_value=None,
         ):
             with patch(
-                "services.property_travel_service.request_with_retries",
+                "utils.google_spend.request_with_retries",
                 side_effect=_dispatch,
             ):
                 lookup = service._nearest_place_for_preset(

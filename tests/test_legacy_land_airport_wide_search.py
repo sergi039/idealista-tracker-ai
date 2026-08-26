@@ -167,7 +167,7 @@ class _Google:
 
 
 def _run(service, land, google):
-    with patch("services.enrichment_service.request_with_retries", side_effect=google):
+    with patch("utils.google_spend.request_with_retries", side_effect=google):
         with patch("services.enrichment_service.time.sleep", return_value=None):
             return service._enrich_with_google_places(land)
 

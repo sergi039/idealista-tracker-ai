@@ -2,6 +2,7 @@ import logging
 import requests
 from typing import Dict, List, Optional
 from config import Config
+from utils.google_spend import API_GEOCODING, PaidCallRefused, billed_get
 from utils.http import request_with_retries
 
 logger = logging.getLogger(__name__)
@@ -131,15 +132,17 @@ class GeocodingService:
                 logger.warning("Google Maps API key not available for geocoding")
                 return self._fallback_geocoding(address)
 
-            url = "https://maps.googleapis.com/maps/api/geocode/json"
-            params = {
-                "address": address,
-                "key": self.google_maps_key,
-                "region": "es",  # Bias results to Spain
-            }
-
-            response = request_with_retries(
-                requests.get, url, params=params, timeout=10, logger=logger
+            response = billed_get(
+                API_GEOCODING,
+                params={
+                    "address": address,
+                    "key": self.google_maps_key,
+                    "region": "es",  # Bias results to Spain
+                },
+                units=1,
+                subject=f"geocode:{address[:80]}",
+                timeout=10,
+                call_logger=logger,
             )
             if response.status_code == 200:
                 data = response.json()
@@ -188,6 +191,16 @@ class GeocodingService:
                 )
                 return self._fallback_geocoding(address)
 
+        except PaidCallRefused as refusal:
+            # Not an error, and logged as one it would send somebody to look at
+            # Google's availability for a decision this application made about
+            # its own wallet. Nominatim is free and answers the same question
+            # less precisely, so the refusal costs accuracy rather than the
+            # coordinate -- which is the whole reason `AUTO_GEOCODING` was
+            # split out from the travel flag in the first place: a row with no
+            # coordinate loses four *free* measurements downstream.
+            logger.info("Geocoding not billed for '%s': %s", address, refusal)
+            return self._fallback_geocoding(address)
         except Exception:
             logger.error("Geocoding error for '%s'", address, exc_info=True)
             return self._fallback_geocoding(address)
@@ -251,15 +264,17 @@ class GeocodingService:
             if not self.google_maps_key:
                 return self._fallback_reverse_geocoding(lat, lng)
 
-            url = "https://maps.googleapis.com/maps/api/geocode/json"
-            params = {
-                "latlng": f"{lat},{lng}",
-                "key": self.google_maps_key,
-                "language": "es",
-            }
-
-            response = request_with_retries(
-                requests.get, url, params=params, timeout=10, logger=logger
+            response = billed_get(
+                API_GEOCODING,
+                params={
+                    "latlng": f"{lat},{lng}",
+                    "key": self.google_maps_key,
+                    "language": "es",
+                },
+                units=1,
+                subject=f"reverse:{lat},{lng}",
+                timeout=10,
+                call_logger=logger,
             )
             if response.status_code == 200:
                 data = response.json()

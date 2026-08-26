@@ -1621,6 +1621,106 @@ and TODO.md; respect it if you ever run both side by side.
   `tests/conftest.py` forces `AUTO_GEOCODING` off per test — nine ingestion
   modules assert something else entirely and mock no geocoder, and left on
   they reached live Nominatim.
+- **Enrichment that spends money happens only on the owner's explicit
+  request, and never on an agent's initiative.** This is the owner's standing
+  rule (2026-08-26) and it outranks every convenience below it. "Explicit"
+  means the owner asked, in this session, for *this* run: a page's Enrich
+  button pressed by them, or a command they typed or told you to type. It does
+  not mean an agent decided a row looked incomplete, that a backfill "would be
+  cheap", that a scope was "only a few listings", or that a previous run's
+  authorization covers today's. An approval given once for one scope is not an
+  approval for the next one — the same rule the ship gates already state, in
+  the one place where getting it wrong sends an invoice. When in doubt, ask
+  and wait; a measurement not taken costs nothing and a listing can be
+  enriched tomorrow.
+
+  Announce before you spend, the way the backfill protocol already requires:
+  name the module or endpoint, the rows, and the cost. Report what was
+  actually spent afterwards, from `data/google_spend.jsonl` and not from
+  arithmetic over the price list — the second thing is what produced the
+  "$0.36 a listing" figure this file carried for weeks, which was never a
+  reading from billing.
+
+- **There is exactly one door to a billed Google API: `utils/google_spend.py`**
+  (2026-08-26). It is the only module in the tree that may name a
+  `maps.googleapis.com` URL, and `tests/test_google_spend_is_authorized.py`
+  greps for a second one. Every billed call — Places Nearby, Places Text
+  Search, Distance Matrix, Geocoding — goes through `billed_get(api, ...)`,
+  which takes an `api` constant and never a URL.
+
+  Before this there were **eleven** billed request lines across four files
+  (`property_travel_service` ×3, `travel_time_service` ×3, `enrichment_service`
+  ×3, `geocoding` ×2), reachable from three HTTP endpoints, seven CLI tools,
+  the background-job executor, both ingest paths and the scheduler. Two
+  `Config` booleans guarded exactly one of those paths.
+  `POST /api/lands/enrich-all` guarded none of it: unauthenticated,
+  CSRF-exempt, rate-limited only at 2 per 5 minutes, and it looped
+  `enrich_land` over every row with an empty enrichment column. Measured
+  2026-08-26, no template and no static asset called it — a loaded gun nobody
+  was carrying. It answers **409** now and names the CLI that does the same
+  work with a reason attached.
+
+  Four things about the design are load bearing.
+
+  **The authorization is ambient and defaults to absent.** A `contextvars`
+  value, for the reason `utils/http.lookup_budget` already gives about
+  threading a parameter through eleven call sites: "a parameter every one of
+  them has to forward is a parameter one of them will not". The difference
+  that matters is the default — an unset *budget* means no ceiling, which is
+  safe because it costs time; an unset *authorization* means no, which is safe
+  because it costs money. A path nobody thought about is refused by
+  arithmetic rather than by review.
+
+  **A refusal is a `requests.RequestException`.** All eleven call sites
+  already wrap their request and hand the exception to
+  `failure_from_exception`, so a refusal records an honest "nobody looked"
+  (#98) rather than a measurement, and refusing cost no new branch anywhere.
+  `failure_from_exception` checks `PaidCallRefused` *before* the generic
+  branch, or a decision about our own wallet would be reported as
+  `network_error` and send an operator to Google's status page.
+
+  **The routes open theirs inside the job closure, not around `_enqueue`.** A
+  `contextvars` value does not cross into a thread the background executor
+  starts, and that property is relied upon rather than tolerated: an
+  authorization that outlived the request granting it would be exactly the
+  ambient permission this removes. `tests/test_google_spend_is_authorized.py`
+  pins it with a real thread.
+
+  **Retries are charged.** `request_with_retries` may issue the same request
+  three times and each attempt is one Google may bill for, so `billed_get`
+  counts attempts rather than trusting the nominal figure — otherwise the
+  ledger under-reports in exactly the situation where somebody is reading it,
+  which is an API that is throttling.
+
+  A billed CLI tool carries `--reason` (`add_spend_arguments` /
+  `cli_authorization`) and refuses to start without one, at the top, before it
+  walks its scope — a per-row refusal would be correct and still terrible,
+  rewriting hundreds of listings to say "nobody looked" because an operator
+  forgot a flag. `GOOGLE_SPEND_ENABLED` is the second, outer lock, for a
+  machine that must never spend whatever its code does (a dev checkout, a
+  worktree); it defaults to **true** because defaulting it false would stop
+  the deployment's own Enrich button on the deploy that shipped it, which is
+  the mistake already on record for `AUTO_START_SCHEDULER`.
+
+  What it does **not** close, stated because a guard presented as complete is
+  worse than one known to be partial: it is not authentication (there is
+  none, by owner decision), so whoever can reach the per-property Enrich
+  endpoint can still cause the spend that endpoint authorizes — bounded by a
+  cap and attributed in the ledger, which is the change. And it cannot see a
+  process that never imports it: a `curl` to Google, or a script building its
+  own `requests.get`. The boundary is the transport, not the machine — the
+  same sentence `services/ingest_policy.py` has to make about the interface.
+
+- **The geocoding rule below still holds, and the gate was built not to break
+  it.** `AUTO_GEOCODING` stays on and ingestion opens its own authorization
+  for it by name, so the ingest path is unchanged. On a path that opens *no*
+  authorization the billed geocode is refused — and `geocode_address` falls
+  through to Nominatim, which is free, so the row still gets a coordinate and
+  the four free downstream measurements (sea distance, sea-view verdict, OSM
+  amenities, quality of life) still run. That is the whole reason the fallback
+  was left in place and is pinned by a test: the harm the rule names is a row
+  with *no* coordinate, and a refusal here costs precision, not the point.
+
 - External APIs cost real money (Anthropic, OpenAI, Google Places /
   Distance Matrix). Never run bulk backfills (`utils/bulk_ai_analysis.py`,
   `utils/recalc_travel_times.py`) without an explicit ticket saying so.

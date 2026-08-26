@@ -386,7 +386,17 @@ class TestNoInventedCoords:
 
         monkeypatch.setattr(geocoding_module, "GeocodingService", _RefusingService)
         out = tmp_path / "hospitals.json"
-        main(["--out", str(out), "--xlsx", fixture_xlsx])
+        main(
+            [
+                "--out",
+                str(out),
+                "--xlsx",
+                fixture_xlsx,
+                # Geocoding bills, so the importer asks for a reason.
+                "--reason",
+                "pytest: CNH import geocoding",
+            ]
+        )
         document = json.loads(out.read_text(encoding="utf-8"))
         for entry in document["hospitals"]:
             assert entry["lat"] is None
@@ -406,7 +416,17 @@ class TestNoInventedCoords:
 
         monkeypatch.setattr(geocoding_module, "GeocodingService", _WrongPlaceService)
         out = tmp_path / "hospitals.json"
-        main(["--out", str(out), "--xlsx", fixture_xlsx])
+        main(
+            [
+                "--out",
+                str(out),
+                "--xlsx",
+                fixture_xlsx,
+                # Geocoding bills, so the importer asks for a reason.
+                "--reason",
+                "pytest: CNH import geocoding",
+            ]
+        )
         document = json.loads(out.read_text(encoding="utf-8"))
         for entry in document["hospitals"]:
             assert entry["lat"] is None

@@ -32,6 +32,22 @@ REASON_UNKNOWN_ERROR = "unknown_error"
 # list must read it as "stop", never as "this instance is bad, try the next" --
 # the next one would answer the same, one gate wait later.
 REASON_BUDGET_EXHAUSTED = "budget_exhausted"
+# The three ways `utils/google_spend.billed_get` declines to make a billed
+# request. They are refusals in exactly the sense the rest of this module
+# means: nothing left the machine, so nothing was measured, and the caller
+# must record an honest absence rather than a result (#98).
+#
+# They are separate codes rather than one because they send an operator to
+# three different places. `spend_not_authorized` is a code path that opened no
+# authorization -- a defect, or a path that is correctly refusing to spend
+# unattended. `spend_cap_exceeded` is an authorization that was opened
+# honestly and sized too small; the run stopped where it said it would.
+# `spend_off_on_this_machine` is `GOOGLE_SPEND_ENABLED=false`, which is a
+# machine that has been told never to reach a billed API -- a dev checkout,
+# a worktree -- and is the one of the three that is not about this run at all.
+REASON_SPEND_NOT_AUTHORIZED = "spend_not_authorized"
+REASON_SPEND_CAP_EXCEEDED = "spend_cap_exceeded"
+REASON_SPEND_OFF_ON_THIS_MACHINE = "spend_off_on_this_machine"
 
 # Top-level payload statuses that mean "Google answered". ZERO_RESULTS is an
 # answer: there really is nothing matching nearby. An absent status is treated
@@ -91,8 +107,16 @@ def failure_from_exception(exc: BaseException) -> GoogleApiFailure:
     # Imported lazily so this module stays importable without requests.
     import requests
 
+    from utils.google_spend import PaidCallRefused
     from utils.http import LookupBudgetExceeded
 
+    if isinstance(exc, PaidCallRefused):
+        # Checked first, for `LookupBudgetExceeded`'s reason and one more: it
+        # subclasses `RequestException` too, so the branch below would report
+        # "we chose not to spend this" as a network error -- sending an
+        # operator to look at Google's availability for a decision this
+        # application made about its own wallet.
+        return GoogleApiFailure(reason=exc.reason, message=str(exc))
     if isinstance(exc, LookupBudgetExceeded):
         # Checked first: it subclasses RequestException, so the branch below
         # would otherwise call a spent clock a network error and send a

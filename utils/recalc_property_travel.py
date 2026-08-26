@@ -54,6 +54,7 @@ from services.property_travel_service import (
 )
 from utils import score_snapshot
 from utils.enrich_scope import log_scope
+from utils.google_spend import add_spend_arguments, cli_authorization
 from utils.inflight import inflight
 
 logger = logging.getLogger(__name__)
@@ -206,6 +207,7 @@ def main() -> None:
         "--report",
         help="Write a per-property before/after report of resolved places here.",
     )
+    add_spend_arguments(parser)
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -301,7 +303,14 @@ def main() -> None:
         # still routes -- and the --report file is only written at the end,
         # so that is lost outright. Narrow a restart with --ids by hand
         # (#283).
-        with inflight("recalc_property_travel", resumable=False):
+        with (
+            cli_authorization(
+                args.reason,
+                actor="utils.recalc_property_travel",
+                rows=len(properties),
+            ),
+            inflight("recalc_property_travel", resumable=False),
+        ):
             for prop in properties:
                 before = _target_places(prop.travel)
                 try:

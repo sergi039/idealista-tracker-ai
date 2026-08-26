@@ -159,7 +159,7 @@ class TestTheWideSearchFallback:
             return _routed_response(url, **kwargs)
 
         with patch(
-            "services.property_travel_service.request_with_retries",
+            "utils.google_spend.request_with_retries",
             side_effect=_capture,
         ):
             lookup = service._nearest_place_for_preset(
@@ -195,7 +195,7 @@ class TestTheWideSearchFallback:
             raise AssertionError(f"unexpected Places endpoint: {url}")
 
         with patch(
-            "services.property_travel_service.request_with_retries",
+            "utils.google_spend.request_with_retries",
             side_effect=_mixed,
         ):
             lookup = service._nearest_place_for_preset(
@@ -220,7 +220,7 @@ class TestTheWideSearchFallback:
             raise AssertionError("the wide fallback must not run here")
 
         with patch(
-            "services.property_travel_service.request_with_retries",
+            "utils.google_spend.request_with_retries",
             side_effect=_count,
         ):
             lookup = service._nearest_place_for_preset(
@@ -241,7 +241,7 @@ class TestTheWideSearchFallback:
             raise AssertionError("a refusal must not be chased with a second call")
 
         with patch(
-            "services.property_travel_service.request_with_retries",
+            "utils.google_spend.request_with_retries",
             side_effect=_denied,
         ):
             lookup = service._nearest_place_for_preset(
@@ -276,7 +276,7 @@ class TestTheWideSearchFallback:
             raise AssertionError(f"{preset} must not reach a second Places call")
 
         with patch(
-            "services.property_travel_service.request_with_retries",
+            "utils.google_spend.request_with_retries",
             side_effect=_count,
         ):
             lookup = service._nearest_place_for_preset(
@@ -379,9 +379,7 @@ class TestEndToEndPersistedTravel:
                 )
             raise AssertionError(f"Unexpected URL: {url}")
 
-        with patch(
-            "services.property_travel_service.requests.get", side_effect=mock_get
-        ):
+        with patch("utils.google_spend.requests.get", side_effect=mock_get):
             svc = PropertyTravelService(
                 google_maps_key="maps-key", google_places_key="places-key"
             )

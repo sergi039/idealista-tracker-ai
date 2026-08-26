@@ -28,6 +28,7 @@ from services.pool_service import PoolService
 from services.property_scoring_service import PropertyScoringService
 from utils.enrich_scope import log_scope, scoped_properties, window_note
 from utils import score_snapshot
+from utils.google_spend import add_spend_arguments, cli_authorization
 from utils.inflight import inflight
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--snapshot")
     parser.add_argument("--restore")
+    add_spend_arguments(parser)
     args = parser.parse_args()
 
     if not args.dry_run and not args.restore and not args.snapshot:
@@ -119,7 +121,14 @@ def main() -> None:
         # at most the property that was in flight (#283). The marker is taken
         # before the snapshot, so a rerun that stops on the "snapshot exists"
         # guard still reports the run it is a rerun of.
-        with inflight("backfill_pool", ledger=ledger_path, resumable=True):
+        with (
+            cli_authorization(
+                args.reason,
+                actor="utils.backfill_pool",
+                rows=len(to_process),
+            ),
+            inflight("backfill_pool", ledger=ledger_path, resumable=True),
+        ):
             _write_snapshot([_snapshot_row(p) for p in properties], args.snapshot)
             with open(ledger_path, "a", encoding="utf-8") as ledger:
                 for idx, prop in enumerate(to_process, start=1):

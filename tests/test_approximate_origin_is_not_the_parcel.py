@@ -358,7 +358,9 @@ class TestTravelMeasuresFromACentroidWithoutClaimingIt:
         def explode(*args, **kwargs):
             raise AssertionError("Google was called for a row with no coordinate")
 
-        monkeypatch.setattr(travel_module, "request_with_retries", explode)
+        import utils.google_spend as billed_transport
+
+        monkeypatch.setattr(billed_transport, "request_with_retries", explode)
         monkeypatch.setattr(
             travel_module.PropertyLocationService,
             "ensure_coordinates",

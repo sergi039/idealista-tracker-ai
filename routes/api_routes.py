@@ -14,6 +14,7 @@ from services.enrich_budget import poll_timeout_ms
 from services.ingest_policy import ingest_verdict
 from services.listing_verification import read_verdict as listing_verdict
 from utils.api_errors import json_http_error
+from utils.google_spend import CAP_ONE_LAND, CAP_ONE_PROPERTY, authorized_spend
 from utils.listing_search import listing_search_clause
 from services import advertiser
 from services import owner_review
@@ -373,65 +374,36 @@ def health_check():
 @api_bp.route("/lands/enrich-all", methods=["POST"])
 @limiter.limit("2 per 5 minutes")
 def bulk_enrichment():
-    """Enrich all properties that are missing extended infrastructure or environment data"""
-    try:
-        from services.enrichment_service import EnrichmentService
+    """Refused: unbounded paid enrichment has no owner behind it.
 
-        def _run():
-            lands_to_enrich = Land.query.filter(
-                (Land.infrastructure_extended.is_(None))
-                | (Land.environment.is_(None))
-                | (Land.transport.is_(None))
-                | (Land.services_quality.is_(None))
-                | (Land.infrastructure_extended == {})
-                | (Land.environment == {})
-                | (Land.transport == {})
-                | (Land.services_quality == {})
-            ).all()
+    This endpoint selected every `Land` missing any enrichment block and called
+    `enrich_land` on each. It is unauthenticated (owner decision 2026-08-08),
+    CSRF-exempt (`app.py`: `csrf.exempt(api_bp)`), and its only friction was a
+    2-per-5-minutes rate limit -- so one request spent an amount of Google
+    credit bounded by nothing except how many rows the table happened to hold.
+    Measured 2026-08-26: **no template and no static asset calls it.** It is a
+    loaded gun nobody was carrying.
 
-            enrichment_service = EnrichmentService()
-            success_count = 0
-            total_count = len(lands_to_enrich)
+    The owner's rule is that money is spent on their explicit request, and a
+    bulk run nobody can attribute is the exact opposite of one. So the endpoint
+    refuses, with 409 and the name of the path that does the same work
+    honestly -- the shape `services/ingest_policy.py` already established for
+    "this machine may not do that": refuse at the endpoint, say why, and name
+    the way that is allowed.
 
-            for land in lands_to_enrich:
-                try:
-                    if enrichment_service.enrich_land(land.id):
-                        success_count += 1
-                        logger.info(
-                            "Enriched land %s: %s", land.id, (land.title or "")[:50]
-                        )
-                except Exception as e:
-                    logger.error("Failed to enrich land %s: %s", land.id, e)
-                    continue
+    Deleting the route instead would answer 404, which reads as "this app never
+    had that" and sends whoever finds it in an old script looking for a bug.
+    """
+    from utils.google_spend import REFUSED_BULK_ENRICH_ALL
 
-            return {
-                "success": True,
-                "message": f"Successfully enriched {success_count} out of {total_count} properties",
-                "enriched_count": success_count,
-                "total_found": total_count,
-            }
-
-        if _should_run_sync():
-            return jsonify(_run())
-
-        job_id = _enqueue(_run, job_type="lands_enrich_all")
-        return jsonify(
-            {
-                "success": True,
-                "status": "queued",
-                "job_id": job_id,
-                "message": "Bulk enrichment queued",
-            }
-        ), 202
-
-    except Exception:
-        logger.error("Bulk enrichment failed", exc_info=True)
-        return jsonify(
-            {
-                "success": False,
-                "error": "An internal error occurred. Check server logs for details.",
-            }
-        ), 500
+    logger.warning("refused /lands/enrich-all: unbounded paid enrichment")
+    return jsonify(
+        {
+            "success": False,
+            "error": REFUSED_BULK_ENRICH_ALL,
+            "reason": "spend_not_authorized",
+        }
+    ), 409
 
 
 @api_bp.route("/land/<int:land_id>/enrich", methods=["POST"])
@@ -451,10 +423,19 @@ def manual_enrichment(land_id):
             refresh_coords = True
 
         def _run():
+            # Same reasoning as the property Enrich below: a press is a
+            # request, and the authorization is opened inside the job closure
+            # so it cannot outlive it.
             enrichment_service = EnrichmentService()
-            success = enrichment_service.enrich_land(
-                land_id, refresh_coords=refresh_coords
-            )
+            with authorized_spend(
+                f"Enrich pressed for land {land_id}"
+                + (" (with a coordinate refresh)" if refresh_coords else ""),
+                actor="api:manual_enrichment",
+                cap_units=CAP_ONE_LAND,
+            ):
+                success = enrichment_service.enrich_land(
+                    land_id, refresh_coords=refresh_coords
+                )
             if success:
                 return {
                     "success": True,
@@ -2257,11 +2238,24 @@ def manual_property_enrichment(property_id: int):
             if not prop_local:
                 return {"success": False, "error": "Property not found"}
 
-            ok = PropertyEnrichmentService().enrich_property(
-                prop_local,
-                refresh_coords=refresh_coords,
-                recalc_scoring=True,
-            )
+            # The owner pressing Enrich *is* the owner asking, so this is where
+            # an authorization is opened -- and it is opened **inside the job
+            # closure**, not around the enqueue. A `contextvars` value does not
+            # cross into a thread the background executor starts, and that is
+            # the property being relied on rather than worked around: an
+            # authorization that outlived the request granting it would be the
+            # ambient permission `utils/google_spend` exists to remove.
+            with authorized_spend(
+                f"Enrich pressed for property {property_id}"
+                + (" (with a coordinate refresh)" if refresh_coords else ""),
+                actor="api:manual_property_enrichment",
+                cap_units=CAP_ONE_PROPERTY,
+            ):
+                ok = PropertyEnrichmentService().enrich_property(
+                    prop_local,
+                    refresh_coords=refresh_coords,
+                    recalc_scoring=True,
+                )
 
             # The sequel, queued by the server on the numbers it just wrote.
             # Deliberately not conditional on `ok`: the page runs the analyses

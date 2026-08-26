@@ -21,7 +21,6 @@ import pytest
 
 from app import create_app, db
 from models import Property, SearchProfile
-from services import property_travel_service as travel_module
 from services.property_travel_service import PropertyTravelService
 from services.reference_places import (
     REASON_NO_REFERENCE_DATA,
@@ -112,7 +111,12 @@ def _forbid_google(monkeypatch):
         calls.append(kwargs.get("params") or args)
         raise AssertionError("paid Google request")
 
-    monkeypatch.setattr(travel_module, "request_with_retries", record)
+    import utils.google_spend as billed_transport
+
+    # Every billed Google request leaves through `utils.google_spend` now, so
+    # the recorder goes there. On the old module it would sit on an attribute
+    # nothing calls and this helper would report "no paid request" always.
+    monkeypatch.setattr(billed_transport, "request_with_retries", record)
     return calls
 
 

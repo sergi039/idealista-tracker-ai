@@ -154,7 +154,7 @@ class TestTheSalamirCase:
             return_value=None,
         ):
             with patch(
-                "services.property_travel_service.request_with_retries",
+                "utils.google_spend.request_with_retries",
                 return_value=_Response(),
             ):
                 lookup = service._nearest_place_for_preset(
@@ -288,7 +288,7 @@ class TestNothingQualifyingIsNotFoundAndNotZero:
             return_value=None,
         ):
             with patch(
-                "services.property_travel_service.request_with_retries",
+                "utils.google_spend.request_with_retries",
                 return_value=self._response(clinics),
             ):
                 lookup = service._nearest_place_for_preset(
@@ -317,7 +317,7 @@ class TestNothingQualifyingIsNotFoundAndNotZero:
                 side_effect=lambda *a, **kw: written.append(a),
             ):
                 with patch(
-                    "services.property_travel_service.request_with_retries",
+                    "utils.google_spend.request_with_retries",
                     return_value=self._response(
                         [_place("Centro de Salud - Muros de Nalon")]
                     ),
@@ -356,7 +356,7 @@ class TestTheRulesChangeInvalidatesTheOldCache:
             side_effect=lambda lat, lon, cache_type: seen.append(cache_type),
         ):
             with patch(
-                "services.property_travel_service.request_with_retries",
+                "utils.google_spend.request_with_retries",
                 return_value=_Response(),
             ):
                 service._nearest_place_for_preset(

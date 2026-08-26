@@ -155,7 +155,19 @@ def _stored(prop_id):
 def _google_fails_then_nominatim(nominatim_payload):
     """`request_with_retries` fake: Google's endpoint answers ZERO_RESULTS,
     which sends `geocode_address` down the real fallback path to Nominatim,
-    whose transport is mocked here too."""
+    whose transport is mocked here too.
+
+    One fake, dispatching on the URL, but it has to be installed at **two**
+    targets now: the billed Google request leaves through
+    `utils.google_spend` (which is the only module in the tree that may make
+    one), and the free Nominatim fallback still leaves through
+    `utils.geocoding`. Patching only the second lets the first reach the real
+    internet, which `tests/network_guard.py` catches -- but the assertion
+    below would have passed either way, because a refused Google call and a
+    ZERO_RESULTS Google call both send this code down the fallback. That is
+    the shape of a test that proves nothing while staying green, so both
+    targets are named explicitly rather than one being assumed to cover both.
+    """
 
     def fake(request_fn, url, **kwargs):
         if "nominatim.openstreetmap.org" in url:
@@ -178,10 +190,11 @@ class TestEndToEndThroughPropertyLocationService:
             # Google Maps key -- that would prove the same thing by accident.
             with patch.object(Config, "GOOGLE_MAPS_API_KEY", "fake-key-for-this-test"):
                 service = PropertyLocationService()
-                with patch("utils.geocoding.request_with_retries") as mock_request:
-                    mock_request.side_effect = _google_fails_then_nominatim(
-                        NOMINATIM_COUNTRY
-                    )
+                fake = _google_fails_then_nominatim(NOMINATIM_COUNTRY)
+                with (
+                    patch("utils.geocoding.request_with_retries", side_effect=fake),
+                    patch("utils.google_spend.request_with_retries", side_effect=fake),
+                ):
                     ok = service.ensure_coordinates(prop)
             db.session.commit()
 

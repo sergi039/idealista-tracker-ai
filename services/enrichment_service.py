@@ -22,6 +22,12 @@ from utils.google_api import (
     failure_from_exception,
     read_api_payload,
 )
+from utils.google_spend import (
+    API_DISTANCE_MATRIX,
+    API_PLACES_NEARBY,
+    API_PLACES_TEXT,
+    billed_get,
+)
 from utils.http import (
     HTTP_USER_AGENT,
     OVERPASS_BREAKERS,
@@ -970,20 +976,22 @@ class EnrichmentService:
         if not self.google_places_key:
             return [], GoogleApiFailure(reason=REASON_NO_API_KEY)
 
-        url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
-        params = {
-            "query": query,
-            "location": f"{lat},{lon}",
-            # Narrows the free-text query back to the type being looked for --
-            # without it "airport" also matches car rentals and parking lots
-            # that merely mention one.
-            "type": place_type,
-            "key": self.google_places_key,
-        }
-
         try:
-            response = request_with_retries(
-                requests.get, url, params=params, timeout=15, logger=logger
+            response = billed_get(
+                API_PLACES_TEXT,
+                params={
+                    "query": query,
+                    "location": f"{lat},{lon}",
+                    # Narrows the free-text query back to the type being looked
+                    # for -- without it "airport" also matches car rentals and
+                    # parking lots that merely mention one.
+                    "type": place_type,
+                    "key": self.google_places_key,
+                },
+                units=1,
+                subject=f"{lat},{lon}:{query[:60]}",
+                timeout=15,
+                call_logger=logger,
             )
             payload, failure = read_api_payload(response)
         except Exception as e:
@@ -1030,17 +1038,19 @@ class EnrichmentService:
         first_failure: Optional[GoogleApiFailure] = None
 
         for place_type in place_types:
-            url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
-            params = {
-                "location": f"{lat},{lon}",
-                "radius": radius,
-                "type": place_type,
-                "key": self.google_places_key,
-            }
-
             try:
-                response = request_with_retries(
-                    requests.get, url, params=params, timeout=15, logger=logger
+                response = billed_get(
+                    API_PLACES_NEARBY,
+                    params={
+                        "location": f"{lat},{lon}",
+                        "radius": radius,
+                        "type": place_type,
+                        "key": self.google_places_key,
+                    },
+                    units=1,
+                    subject=f"{lat},{lon}:{place_type}",
+                    timeout=15,
+                    call_logger=logger,
                 )
                 payload, failure = read_api_payload(response)
             except Exception as e:
@@ -1153,17 +1163,19 @@ class EnrichmentService:
         if not destinations:
             return [], None
 
-        url = "https://maps.googleapis.com/maps/api/distancematrix/json"
-        params = {
-            "origins": f"{lat},{lon}",
-            "destinations": "|".join(destinations),
-            "mode": "driving",
-            "key": self.google_maps_key,
-        }
-
         try:
-            response = request_with_retries(
-                requests.get, url, params=params, timeout=15, logger=logger
+            response = billed_get(
+                API_DISTANCE_MATRIX,
+                params={
+                    "origins": f"{lat},{lon}",
+                    "destinations": "|".join(destinations),
+                    "mode": "driving",
+                    "key": self.google_maps_key,
+                },
+                units=len(destinations),
+                subject=f"{lat},{lon}",
+                timeout=15,
+                call_logger=logger,
             )
             payload, failure = read_api_payload(response)
         except Exception as e:
