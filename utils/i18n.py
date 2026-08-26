@@ -105,6 +105,10 @@ TRANSLATIONS = {
         "sea_distance_800": "Sea ≤ 800 m (~10 min walk)",
         "sea_distance_1600": "Sea ≤ 1.6 km (~20 min walk)",
         "route_from_gijon": "Route from Gijón (Google Maps)",
+        # The dossier written about one listing, linked from the property
+        # page. Not every row has one, so the label names the thing
+        # rather than the action (services/dossier.py).
+        "dossier_link": "Dossier",
         # Curated buildability -- attributes.land_classification, written by
         # hand-run curation, never by ingestion.
         "build_filter": "Buildability",
@@ -833,6 +837,7 @@ TRANSLATIONS = {
         "sea_distance_800": "Mar ≤ 800 m (~10 min a pie)",
         "sea_distance_1600": "Mar ≤ 1,6 km (~20 min a pie)",
         "route_from_gijon": "Ruta desde Gijón (Google Maps)",
+        "dossier_link": "Dosier",
         "build_filter": "Edificabilidad",
         "build_any": "Edificable: todos",
         "build_solar": "Edificable: urbano/solar (ya)",
