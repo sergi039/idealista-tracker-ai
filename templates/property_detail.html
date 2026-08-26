@@ -2318,7 +2318,7 @@
                             {%- if geometry.get('shoreline_visible') is sameas false and geometry.get('blocked_at_m') is number %}
                                 {%- set _probe = geometry.get('sea_probe') if geometry.get('sea_probe') is mapping else {} %}
                                 <br><i class="fas fa-mountain me-1"></i>{{ t('sea_view_shoreline_hidden') }} {{ geometry.get('blocked_at_m')|round(0)|int }} m
-                                {%- if _probe.get('visible') and _probe.get('visible_at_m') is not none %}
+                                {%- if _probe.get('visible') and _probe.get('visible_at_m') is number %}
                                     &middot; <i class="fas fa-binoculars me-1"></i>{{ t('sea_view_open_water_at') }} {{ _probe.get('visible_at_m')|round(0)|int }} m
                                 {%- endif %}
                             {%- endif %}

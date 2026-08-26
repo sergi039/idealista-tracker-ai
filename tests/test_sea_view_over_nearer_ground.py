@@ -344,6 +344,165 @@ class TestTheFanCostsOneRequestAndCannotOverflowIt:
         assert rays >= 1 and per_ray >= 1
 
 
+class TestNotEveryHoleInTheModelIsTheAtlantic:
+    """EU-DEM has no value over water *generally*, not over the sea.
+
+    A reservoir, a quarry pond, a wide river or a coastal lagoon reads exactly
+    like open sea, and because a ray is walked near-to-far and returns on the
+    first qualifying run, a nearer inland gap masked the real answer about the
+    sea further out -- which might still be blocked. Found by review after the
+    change had shipped; no mutation of the code as written could have seen it,
+    because the code did exactly what it said.
+    """
+
+    def test_a_pond_nearer_than_the_coast_is_not_reported_as_sea(self, monkeypatch):
+        coast_m = 2400.0
+        monkeypatch.setattr(
+            svc,
+            "fetch_coastline_points",
+            lambda lat, lon, session=None: _coast_arc(range(0, 360, 20), coast_m),
+        )
+
+        def _pond_then_a_blocked_coast(points, session=None):
+            out = []
+            for point in points:
+                distance, _ = _distance_and_bearing(point)
+                if distance < 1.0:
+                    out.append(OBSERVER_GROUND_M)
+                elif 600.0 <= distance <= 1000.0:
+                    out.append(None)  # a reservoir, well inside the shore
+                elif distance >= 1800.0:
+                    out.append(300.0)  # a ridge hiding the real sea
+                else:
+                    out.append(5.0)
+            return out
+
+        monkeypatch.setattr(svc, "fetch_elevations", _pond_then_a_blocked_coast)
+        detail = svc.evaluate_geometry(PLOT_LAT, PLOT_LON, "precise", use_cache=False)
+
+        assert detail["state"] == svc.NO
+        assert detail["sea_probe"]["visible"] is False
+        # The bound is exact and stored, not tuned: it is the distance to the
+        # nearest mapped coastline node, which the shoreline profile already
+        # measured.
+        assert detail["sea_probe"]["min_water_distance_m"] == pytest.approx(
+            detail["distance_m"], abs=0.2
+        )
+
+    def test_the_same_water_beyond_the_coast_is_still_the_sea(self, monkeypatch):
+        """The guard must not cost the case the fan exists for."""
+        coast_m = 400.0
+        monkeypatch.setattr(
+            svc,
+            "fetch_coastline_points",
+            lambda lat, lon, session=None: _coast_arc(range(0, 360, 20), coast_m),
+        )
+
+        def _water_past_the_shore(points, session=None):
+            out = []
+            for point in points:
+                distance, _ = _distance_and_bearing(point)
+                if distance < 1.0:
+                    out.append(OBSERVER_GROUND_M)
+                elif 60.0 <= distance <= 120.0:
+                    # The brow that hides the 400 m shore, as at Seiruga. The
+                    # sight line is at 38.7 m here and the ground at 41.0.
+                    out.append(BROW_ELEVATION_M)
+                elif 600.0 <= distance <= 1000.0:
+                    out.append(None)  # the same gap, now beyond the shore
+                elif distance >= 1800.0:
+                    out.append(300.0)
+                else:
+                    out.append(5.0)
+            return out
+
+        monkeypatch.setattr(svc, "fetch_elevations", _water_past_the_shore)
+        detail = svc.evaluate_geometry(PLOT_LAT, PLOT_LON, "precise", use_cache=False)
+
+        assert detail["state"] == svc.LIKELY
+        assert detail["reason"] == "sea_visible_beyond_terrain"
+
+    def test_the_water_it_saw_is_recorded_as_a_point(self, seiruga):
+        """#334's rule, applied to the fan's own answer.
+
+        A distance and a bearing are stored rounded, so casting the ray back
+        out lands metres off -- enough to put the reconstruction on the far
+        bank of a channel. "What water is this?" is exactly the question an
+        estuary makes worth asking.
+        """
+        detail = svc.evaluate_geometry(PLOT_LAT, PLOT_LON, "precise", use_cache=False)
+        probe = detail["sea_probe"]
+
+        assert probe["visible"] is True
+        back = svc.haversine_m(
+            PLOT_LAT, PLOT_LON, probe["visible_lat"], probe["visible_lon"]
+        )
+        assert back == pytest.approx(probe["visible_at_m"], rel=0.01)
+        assert svc.bearing_deg(
+            PLOT_LAT, PLOT_LON, probe["visible_lat"], probe["visible_lon"]
+        ) == pytest.approx(probe["visible_bearing_deg"], abs=0.5)
+
+
+class TestTheLocationCapCannotProduceAWrongAnswer:
+    """`_probe_plan` promised that a lower cap costs resolution rather than
+    raising. It did not keep that promise, and the test that was supposed to
+    pin it used a cap of 26 -- a value the arithmetic happens to handle. It
+    stepped around the defect instead of at it."""
+
+    @pytest.mark.parametrize("cap", [1, 2, 3, 4, 5, 6, 7, 10, 20, 26, 50, 96, 100, 101])
+    def test_the_plan_never_asks_for_more_than_the_cap(self, monkeypatch, cap):
+        monkeypatch.setattr(svc.Config, "SEA_VIEW_ELEVATION_MAX_LOCATIONS", cap)
+        rays, per_ray = svc._probe_plan(svc.SEA_PROBE_RAYS)
+
+        if rays:
+            assert 1 + rays * per_ray <= cap
+            # A ray too short to hold a water run can only answer "no water",
+            # which is a wrong answer rather than a coarse one.
+            assert per_ray >= svc.MIN_WATER_RUN_SAMPLES
+        else:
+            assert per_ray == 0
+
+    def test_a_cap_too_small_for_a_water_run_is_unknown_not_no(self, monkeypatch):
+        """The whole point of deriving the plan. Answering `no` because the
+        request budget was small is #98 wearing a config's clothes."""
+        monkeypatch.setattr(svc.Config, "SEA_VIEW_ELEVATION_MAX_LOCATIONS", 2)
+        monkeypatch.setattr(
+            svc,
+            "fetch_coastline_points",
+            lambda lat, lon, session=None: _coast_arc(range(0, 360, 20)),
+        )
+        monkeypatch.setattr(svc, "fetch_elevations", _seiruga_terrain())
+
+        detail = svc.evaluate_geometry(PLOT_LAT, PLOT_LON, "precise", use_cache=False)
+
+        assert detail["state"] == svc.UNKNOWN
+        assert detail["reason"] == "elevation_source_unavailable"
+
+    def test_a_small_cap_still_answers_when_it_can(self, monkeypatch):
+        """Rays are given up before samples, so a tight cap narrows the fan
+        rather than blinding it."""
+        monkeypatch.setattr(svc.Config, "SEA_VIEW_ELEVATION_MAX_LOCATIONS", 26)
+        calls = []
+        original = svc.fetch_elevations
+        terrain = _seiruga_terrain()
+
+        def _count(points, session=None):
+            calls.append(len(points))
+            return terrain(points)
+
+        monkeypatch.setattr(
+            svc,
+            "fetch_coastline_points",
+            lambda lat, lon, session=None: _coast_arc(range(0, 360, 20)),
+        )
+        monkeypatch.setattr(svc, "fetch_elevations", _count)
+        detail = svc.evaluate_geometry(PLOT_LAT, PLOT_LON, "precise", use_cache=False)
+
+        assert original is not _count  # the stub really replaced it
+        assert calls[1] <= 26
+        assert detail["state"] in (svc.LIKELY, svc.NO)
+
+
 class TestAFanThatDidNotRunIsNotAFanThatFoundNothing:
     def test_a_refused_probe_is_unknown_not_no(self, monkeypatch):
         """Half a measurement is not a measurement (#98).
@@ -548,3 +707,51 @@ class TestTheCardSurvivesAHandEditedBlock:
         assert response.status_code == 200
         assert "terrain_blocks_line_of_sight" in body
         assert "0.4 km to the coastline" in body
+
+    def test_a_probe_with_a_non_numeric_distance_still_renders(self, app):
+        """The sibling guard, which the first fix missed.
+
+        `blocked_at_m` got `is number` and `visible_at_m` kept `is not none`,
+        in the same block, in the same commit -- so a string there still threw
+        into the redirect. Found by review, not by a mutation: one writer sets
+        both, so no exercise of the writer can produce the shape.
+        """
+        from app import db
+        from models import Property
+
+        listing = Property(
+            source_email_id="sea-fan-handedited-probe",
+            title="Seiruga hand-edited probe",
+            municipality="Malpica",
+            location_lat=PLOT_LAT,
+            location_lon=PLOT_LON,
+            enrichment={
+                "environment": {
+                    "sea_view": "likely",
+                    "sea_view_detail": {
+                        "source": "geometry",
+                        "reason": "sea_visible_beyond_terrain",
+                        "geometry": {
+                            "distance_m": 394.7,
+                            "observer_elevation_m": 45.2,
+                            "shoreline_visible": False,
+                            "blocked_at_m": 91.1,
+                            "sea_probe": {
+                                "visible": True,
+                                "visible_at_m": "673,1",  # hand-edited
+                            },
+                        },
+                    },
+                }
+            },
+        )
+        db.session.add(listing)
+        db.session.commit()
+
+        response = app.test_client().get(f"/properties/{listing.id}")
+        body = response.get_data(as_text=True)
+
+        assert response.status_code == 200
+        assert "sea_visible_beyond_terrain" in body
+        # The half that *is* readable is still shown.
+        assert "91 m" in body
