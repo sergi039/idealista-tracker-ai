@@ -885,6 +885,25 @@ renders it as a labeled proxy against población and never as the official
 unemployment rate. Listings whose municipality is empty or email-truncated
 (#298) are counted aside, not compared.
 
+**`/agencies` is a dated measurement, not a live feed** (owner request
+2026-08-22). The page ranks the agencies holding the most detached houses up to
+300 000 EUR in Asturias and Cantabria, and reads `data/top_agencies.json` --
+the fourth committed reference file and the only **hand-curated** one, since
+`utils/` holds no importer for it. So `measured_at` is the whole contract: it
+says when a person last counted, the page prints it beside the title, and every
+count links to the filtered idealista microsite or fotocasa agency page it was
+read from -- a number whose query nobody can re-run is not reproducible. A
+missing or unreadable file refuses the page with **503** rather than drawing an
+empty table, because an empty table reads as "no agencies", which is #98 inside
+a reference file. The ranking key is chalets independientes + casas rusticas
+together, with the independientes-only figure beside it: those are two different
+questions (MN Tu Punto is third on the first and nowhere on the second), and the
+table answers both rather than choosing for the reader.
+`services/agency_directory.py` owns the read and the ranking -- unmeasured rows
+last, the way `/municipalities` and the listing table already sort them -- and
+`tests/test_agencies_page.py` parses the **committed file itself**, so the
+deployment cannot ship a page that is a 503 by accident.
+
 **`properties.municipality` is free text, so anything that groups by it goes
 through one key.** The same place arrives under several spellings — measured
 2026-08-16, "Gijón" (57 rows) beside "Gijon" (16), "Castrillon" (28) beside
@@ -1362,13 +1381,16 @@ Three things this feature cost that are not about the feature:
   `tests/test_subscription_copy_is_translated.py` then demands a `_one` beside
   it, which is why the channel labels carry a `_label` suffix.
 
-**Three reference files are committed on purpose, and `.gitignore` re-includes
+**Four reference files are committed on purpose, and `.gitignore` re-includes
 them one at a time.** `data/*` excludes the runtime artifacts — backfill
 snapshots, ledgers, logs — and `!data/ine_municipal.json`,
 `!data/hospitals_cnh.json`, `!data/sepe_unemployment.json` bring back the small,
-reviewed, importer-generated files that the QoL card and `/municipalities` read.
+reviewed, importer-generated files that the QoL card and `/municipalities` read;
+`!data/top_agencies.json` is the odd one out, curated by hand rather than by an
+importer (`/agencies` above), so nothing can regenerate it and re-measuring is a
+person's job.
 It is `data/*` and not `data/` because git cannot re-include a file whose parent
-*directory* is excluded: the bare-directory form makes all three negations
+*directory* is excluded: the bare-directory form makes every negation
 silently dead. Regenerate with `utils/import_ine_data.py`,
 `utils/import_cnh_hospitals.py` and `utils/import_sepe_unemployment.py`; a
 missing or unreadable file reads as `no_reference_data`, never as an empty
