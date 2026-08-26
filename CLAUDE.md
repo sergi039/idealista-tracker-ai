@@ -1662,7 +1662,9 @@ and TODO.md; respect it if you ever run both side by side.
   **The budgets are `utils/http.lookup_budget`, and only the free transports
   read them.** `OSM_OVERPASS_WALK_BUDGET_S` (210 s) bounds one walk across
   every instance; `ENRICH_LOOKUP_BUDGET_S` (240 s) bounds every free lookup of
-  one Enrich press together, because a run makes up to eleven of them. 210 is
+  one Enrich press together, because a run makes a dozen of them -- eleven,
+  plus the sea-view fan's second elevation request on a row whose shoreline
+  ray was blocked. 210 is
   derived rather than chosen -- #144's patient budget on the first instance
   (~76 s with the gate) plus one complete attempt on each fallback (2 x 65 s)
   -- and the guarantee it buys is conditional and says so where the number
