@@ -95,14 +95,30 @@ def test_malformed_blocks_read_as_no_dossier(prop, block):
 
 
 @pytest.mark.parametrize(
-    "scheme",
-    ["javascript", "data", "vbscript", "file", "mailto", "JavaScript", "JAVASCRIPT"],
+    "url",
+    [
+        # Netloc-less: refused by the host check as well, so these alone do
+        # NOT prove the scheme check does anything.
+        "javascript:alert(1)",
+        "data:text/html;base64,PHNjcmlwdD4=",
+        "vbscript:msgbox(1)",
+        # **These are the cases that need the scheme check.** `urlparse`
+        # gives them a netloc, so the host check passes them and only
+        # ALLOWED_SCHEMES stands between them and the href. Measured: the
+        # first version of this file listed only the forms above, and
+        # deleting the scheme check left all 31 tests green.
+        "javascript://evil.example/%0Aalert(1)",
+        "JaVaScRiPt://evil.example/%0aalert(1)",
+        "data://evil.example/text/html,<script>",
+        "vbscript://evil.example/msgbox(1)",
+        "file://host/etc/passwd",
+    ],
 )
-def test_dangerous_schemes_are_refused(prop, scheme):
+def test_dangerous_schemes_are_refused(prop, url):
     """`javascript:` in an href is script execution on the property page."""
-    prop.enrichment = {"dossier": {"url": f"{scheme}:alert(1)"}}
+    prop.enrichment = {"dossier": {"url": url}}
     assert read_dossier(prop) is None
-    assert normalise_url(f"{scheme}:alert(1)") is None
+    assert normalise_url(url) is None
 
 
 def test_url_longer_than_the_cap_is_refused(prop):
@@ -111,7 +127,9 @@ def test_url_longer_than_the_cap_is_refused(prop):
 
 
 def test_http_and_https_are_accepted():
-    assert normalise_url("https://1282.cervantes50.com") == "https://1282.cervantes50.com"
+    assert (
+        normalise_url("https://1282.cervantes50.com") == "https://1282.cervantes50.com"
+    )
     assert normalise_url("http://127.0.0.1:5001/properties/1282") is not None
 
 
@@ -173,23 +191,40 @@ def test_clear_removes_the_pointer_and_nothing_else(prop):
 # --- wired into the page, not only into the service -------------------------
 
 
+def _hrefs(body):
+    """Every href on the page. Asserting on the raw body is not enough here.
+
+    `to_dict()` carries the whole `enrichment` column and the page ships it as
+    `window.propertyData = {{ property.to_dict() | tojson }}`, so the dossier
+    URL appears in the body whether or not the template renders a link at all.
+    Measured: an earlier version of these two tests asserted substrings and
+    stayed green through a mutation that deleted the anchor from the template
+    outright -- #309's defect, in a new place.
+    """
+    import re
+
+    return re.findall(r"""href\s*=\s*["']([^"']*)["']""", body)
+
+
 def test_property_page_renders_the_link(app, prop):
-    record_dossier(
-        prop, url="https://1282.cervantes50.com", title="Seiruga · Malpica"
-    )
+    record_dossier(prop, url="https://1282.cervantes50.com", title="Seiruga · Malpica")
     client = app.test_client()
     response = client.get(f"/properties/{prop.id}")
     assert response.status_code == 200, "a 302 here is the template failing"
     body = response.get_data(as_text=True)
-    assert "https://1282.cervantes50.com" in body
-    assert "Seiruga" in body
+    assert "https://1282.cervantes50.com" in _hrefs(body), (
+        "the dossier URL is on the page but not as a link"
+    )
+    assert "Seiruga · Malpica" in body, "the stored label is not shown anywhere"
 
 
 def test_property_page_shows_no_link_without_one(app, prop):
     client = app.test_client()
     response = client.get(f"/properties/{prop.id}")
     assert response.status_code == 200
-    assert "cervantes50" not in response.get_data(as_text=True)
+    body = response.get_data(as_text=True)
+    assert not any("cervantes50" in h for h in _hrefs(body))
+    assert "cervantes50" not in body
 
 
 def test_property_page_does_not_render_a_javascript_url(app, prop):
@@ -210,16 +245,15 @@ def test_property_page_does_not_render_a_javascript_url(app, prop):
     `dossier_link` reddens the render test above but not this one -- which is
     why both exist.
     """
-    import re
-
-    prop.enrichment = {"dossier": {"url": "javascript:alert(1)"}}
+    # The netloc-bearing form: `urlparse` gives it a host, so the host check
+    # lets it through and only ALLOWED_SCHEMES stops it reaching the href.
+    prop.enrichment = {"dossier": {"url": "javascript://evil.example/%0Aalert(1)"}}
     db.session.commit()
     client = app.test_client()
     response = client.get(f"/properties/{prop.id}")
     assert response.status_code == 200, "a malformed block must not break the page"
     body = response.get_data(as_text=True)
-    hrefs = re.findall(r"""href\s*=\s*["']([^"']*)["']""", body)
-    assert not any(h.strip().lower().startswith("javascript:") for h in hrefs), (
+    assert not any(h.strip().lower().startswith("javascript:") for h in _hrefs(body)), (
         "a stored javascript: URL reached an href"
     )
 

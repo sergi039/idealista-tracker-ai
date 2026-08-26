@@ -43,8 +43,10 @@ def _describe(prop) -> str:
     else:
         lines.append(f"  dossier     {dossier['url']}")
         lines.append(f"  label       {dossier['title']}")
-        lines.append(f"  recorded    {dossier['recorded_at'] or 'unknown'}"
-                     f" by {dossier['by'] or 'unknown'}")
+        lines.append(
+            f"  recorded    {dossier['recorded_at'] or 'unknown'}"
+            f" by {dossier['by'] or 'unknown'}"
+        )
     return "\n".join(lines)
 
 
@@ -56,9 +58,7 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--by", default="manual", help="Who recorded it (default: manual)"
     )
-    parser.add_argument(
-        "--clear", action="store_true", help="Remove the dossier link"
-    )
+    parser.add_argument("--clear", action="store_true", help="Remove the dossier link")
     parser.add_argument(
         "--apply", action="store_true", help="Write. Without it, report only."
     )
@@ -68,7 +68,12 @@ def main(argv=None) -> int:
 
     from app import create_app, db
     from models import Property
-    from services.dossier import DossierError, clear_dossier, normalise_url, record_dossier
+    from services.dossier import (
+        DossierError,
+        clear_dossier,
+        normalise_url,
+        record_dossier,
+    )
 
     app = create_app()
     with app.app_context():
@@ -84,9 +89,7 @@ def main(argv=None) -> int:
                 logger.info("\nWould clear the dossier link. Re-run with --apply.")
                 return 0
             removed = clear_dossier(prop, commit=True)
-            logger.info(
-                "\nAfter:\n%s", _describe(db.session.get(Property, args.id))
-            )
+            logger.info("\nAfter:\n%s", _describe(db.session.get(Property, args.id)))
             return 0 if removed else 0
 
         if not args.url:
