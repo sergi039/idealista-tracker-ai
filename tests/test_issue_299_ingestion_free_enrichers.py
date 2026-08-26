@@ -957,6 +957,68 @@ class TestARefusalNeverErasesAMeasuredVerdict:
             assert detail["geometry"]["reason"] == "approximate_coordinates"
             assert "reused_measurement" not in detail["geometry"]
 
+    def test_a_row_that_loses_its_coordinate_loses_its_verdict(
+        self, app, reference_files, monkeypatch
+    ):
+        """The subject going away is not a refusal either (2026-08-26).
+
+        The reproduction is six production rows a full backfill moved from a
+        measured `no` to `unknown`. The pre-run snapshot says five of them were
+        measured at 40.463667,-3.74922 -- the centre of Spain, which is what
+        geocoding a #298 truncated title fragment returns -- and their
+        coordinates have since been cleared. Keeping those would keep a claim
+        about Madrid on an Asturian listing; row 132 is Carreno, on the coast,
+        and its stored `no_coastline_in_range` was a false negative that
+        survived only because it was measured 400 km inland.
+
+        Nothing else stops this. A row with no coordinate has no origin, and
+        `origins_agree` answers "cannot tell" rather than "moved", which
+        `repaired_with_stored_geometry` reuses on -- so the *only* thing
+        keeping the stored terrain out is that `no_coordinates` is not in
+        `SOURCE_REFUSAL_REASONS`. `services/hazard_service.py` applied the
+        opposite rule to this exact shape until the same day.
+        """
+        with app.app_context():
+            prop_id = self._stored(
+                "sea_view_lost_its_coordinate",
+                self._measured_verdict(
+                    "no",
+                    geometry_state=sea_view_service.NO,
+                    geometry_reason="no_coastline_in_range",
+                    source="geometry",
+                    reason="terrain disagrees (no_coastline_in_range)",
+                ),
+                title=PLAIN_TITLE,
+                description=PLAIN_DESCRIPTION,
+            )
+            prop = db.session.get(Property, prop_id)
+            prop.location_lat = None
+            prop.location_lon = None
+            prop.location_accuracy = "unknown"
+            db.session.commit()
+
+            _mock_overpass_answering(monkeypatch)
+            # Deliberately *available*: the coastline source answering makes
+            # this a test of the coordinate rule and not of a refusal that
+            # happens to arrive alongside it.
+            _mock_coastline_empty(monkeypatch)
+            PropertyEnrichmentService().enrich_free_sources(
+                db.session.get(Property, prop_id), commit=True, use_ai=False
+            )
+
+            environment = _reload(prop_id).enrichment["environment"]
+            assert environment["sea_view"] == sea_view_service.UNKNOWN
+            detail = environment["sea_view_detail"]
+            geometry = detail["geometry"]
+            assert geometry["reason"] == "no_coordinates"
+            assert geometry["state"] == sea_view_service.UNKNOWN
+            # By value, not by state alone: a repair would hand back the stored
+            # terrain under a fresh top-level verdict, so the assertions that
+            # matter are that the measurement itself is gone.
+            assert "reused_measurement" not in geometry
+            assert "distance_m" not in geometry
+            assert "last_attempt_reason" not in detail
+
 
 class TestTheEnrichFlowComputesSeaView:
     """`enrich_property` (the Enrich button) now writes the same verdict."""

@@ -18,6 +18,27 @@ looked.** So the four states are the whole feature and not a detail of it:
   never cached, and never allowed to overwrite an earlier measurement;
 * `no_coordinates` -- there is no point to measure from.
 
+**Keep only what a silence cannot contradict.** A stored measurement survives a
+re-run on exactly one condition: the subject is unchanged *and* the new run
+learned nothing, because the source did not answer. `unavailable` is that, and
+it is the whole of it. A subject that moved, that lost the precision the stored
+claim rested on, or that disappeared is not: the stored answer is then about
+somewhere else, and this row's honest answer is that it has none.
+
+That is the rule `services/sea_view_service.py` and
+`services/sea_distance_service.py` already apply, and until 2026-08-26 this
+module applied the opposite one to a coordinate that goes NULL -- it kept the
+measurement, on the grounds that `no_coordinates` is not retryable and
+overwriting would take the row out of the backfill's scope for good. Both
+halves of that were measured and neither survived. `needs_hazards` reads
+`read_verdict`, not the stored status, so a row stored `no_coordinates` is in
+scope either way; and the kept block is invisible on every surface, because
+`read_verdict` refuses to assert a measurement whose origin the row no longer
+has. Keeping bought one free Overpass query, in the one case where the
+identical coordinate comes back -- and cost one wrong number, since
+`complete_expression` counts a row the app cannot locate as carrying a
+complete scan.
+
 Four more rules, each imported rather than reinvented:
 
 **What counts as a hazard lives in `services/hazard_rules.py`**, the sibling of
@@ -100,13 +121,14 @@ KNOWN_STATUSES = (
 # last-known-good, for the reason `sea_distance_service` keeps its own: a
 # cement works does not move, and replacing a measurement with "the network was
 # down" loses the only thing anybody looked up.
+#
+# It survives a *refusal*, and nothing else. A row whose coordinate has gone is
+# not a row whose scan refused, and the rule in this module's docstring is what
+# separates them. There was a `RETRYABLE_STATUSES` here saying `no_coordinates`
+# was not retryable; nothing read it, and `needs_hazards` -- the predicate that
+# really answers "is this row still worth scanning" -- disagreed with it, so it
+# is gone rather than left to justify a rule it never governed.
 MEASURED_STATUSES = (STATUS_OK, STATUS_NONE)
-
-# What a rerun could improve. `no_coordinates` is not here -- re-asking
-# Overpass will never invent a coordinate, and a row that gains one is a
-# different row (the geocoder writes `location_accuracy`, and the backfill's
-# scope only ever holds rows that have a coordinate at all).
-RETRYABLE_STATUSES = frozenset({STATUS_UNAVAILABLE})
 
 SOURCE = "openstreetmap"
 DISTANCE_BASIS = "straight_line"
@@ -615,31 +637,35 @@ class HazardService:
         now_iso = datetime.now(timezone.utc).isoformat()
 
         if lat is None or lon is None:
+            # A row can lose its coordinate: `refresh=True` clears it before
+            # geocoding and a refusal leaves it cleared (#393), and
+            # `enrich_property` then runs the free pass on a row with no point
+            # at all. The stored measurement does not survive that, and this
+            # branch used to be the one place in the family where it did.
+            #
+            # It is not a refusal. Overpass did not go quiet -- the *subject*
+            # went away, and a scan of a point nothing connects to this listing
+            # any more is not a measurement of it. The two things the keep was
+            # written to protect were both measured on 2026-08-26 and neither
+            # is real: the row stays in the backfill's scope either way, since
+            # `needs_hazards` reads `read_verdict` and a kept block reads
+            # `measured=False`; and no surface shows the kept measurement,
+            # since `read_verdict` refuses to assert it. What it did buy was
+            # `complete_expression` counting a row the app cannot locate as
+            # carrying a complete scan, and one saved free Overpass query in
+            # the single case where the identical coordinate returns.
+            #
+            # `previous` is deliberately not read at all. There is no decision
+            # left to make from it, and reading it would invite the keep back.
+            payload = {
+                "status": STATUS_NO_COORDINATES,
+                "source": SOURCE,
+                "distance_basis": DISTANCE_BASIS,
+                "updated_at": now_iso,
+                "last_attempt_status": STATUS_NO_COORDINATES,
+                "last_attempt_at": now_iso,
+            }
             with locked_write(prop, locked=locked, commit=commit):
-                previous = self._stored(prop)
-                # A row can lose its coordinate: `refresh=True` clears it
-                # before geocoding and a refusal leaves it cleared (#393), and
-                # `enrich_property` then runs the free pass on a row with no
-                # point at all. Overwriting here would delete a measurement
-                # that cost a round trip -- and, because `no_coordinates` is
-                # not retryable, take the row out of the backfill's scope for
-                # good. So it is kept, exactly as a network refusal is
-                # (review, 2026-08-20).
-                if previous.get("status") in MEASURED_STATUSES:
-                    payload = {
-                        **previous,
-                        "last_attempt_status": STATUS_NO_COORDINATES,
-                        "last_attempt_at": now_iso,
-                    }
-                else:
-                    payload = {
-                        "status": STATUS_NO_COORDINATES,
-                        "source": SOURCE,
-                        "distance_basis": DISTANCE_BASIS,
-                        "updated_at": now_iso,
-                        "last_attempt_status": STATUS_NO_COORDINATES,
-                        "last_attempt_at": now_iso,
-                    }
                 self._store(prop, payload)
             return payload
 
@@ -803,11 +829,15 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
     #
     # A block that *records* an origin therefore has to match the row's own
     # coordinate to be read at all -- including when the row now has none.
-    # That case arrives through this feature's own kindness: a row that loses
-    # its coordinate keeps its measurement rather than having it deleted, and
-    # a kept measurement of a place the listing may no longer be near is worth
-    # storing and not worth *asserting* (codex review, 2026-08-20). An
-    # unreadable stored origin is the only "cannot tell", and it restates.
+    # `enrich` no longer *writes* a measured block onto a coordinate-less row
+    # (see its `lat is None` branch), and this reader does not lean on that:
+    # the shape still arrives from a row whose coordinate was cleared with no
+    # enrich run since, from the stale-origin race below, and from the direct
+    # SQL that is a supported workflow here. A reader that refuses it only
+    # because the current writer cannot produce it is a reader that trusts the
+    # writer, which is the opposite of the fail-closed contract this function
+    # is under. An unreadable stored origin is the only "cannot tell", and it
+    # restates.
     base["updated_at"] = stored.get("updated_at")
     base["last_attempt_status"] = stored.get("last_attempt_status")
 
@@ -838,8 +868,7 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
     # nowhere, and saying "the listing has been re-located since the scan"
     # there put this card in direct contradiction with the travel card beside
     # it, which correctly says the listing has no coordinate (found in review,
-    # 2026-08-20). The stored measurement is still kept; only the wording of
-    # why it cannot be read changes.
+    # 2026-08-20).
     current_origin = origin_of(prop)
     if current_origin is None:
         return {**base, "status": STATUS_NO_COORDINATES}
