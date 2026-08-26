@@ -395,6 +395,13 @@ def create_app(testing: bool = False):
     app.jinja_env.globals["maps_place_url"] = maps_place_url
     app.jinja_env.globals["maps_route_from_gijon_url"] = maps_route_from_gijon_url
 
+    # The link back from a listing to the dossier written about it. Read
+    # through the service so the template never touches the raw JSON block:
+    # the value lands in an href, and the scheme check lives in one place.
+    from services.dossier import read_dossier
+
+    app.jinja_env.globals["dossier_link"] = read_dossier
+
     # Display-side cleanup of the Gmail-alert boilerplate in descriptions —
     # the raw column is never modified, and the card keeps "show original".
     from utils.description_display import clean_description_for_display

@@ -4,6 +4,7 @@ import json
 from app import db
 from services import owner_review
 from services.advertiser import read_verdict as advertiser_verdict
+from services.dossier import read_dossier
 from services.listing_verification import read_verdict as listing_verdict
 from services.search_subscription_identity import SEARCH_KEY_LENGTH
 from sqlalchemy import CheckConstraint, func
@@ -398,6 +399,11 @@ class Property(db.Model):
             # (services/advertiser.py). 'unchecked' where nobody established
             # it -- never 'agency' by default.
             "advertiser_verdict": advertiser_verdict(self)["state"],
+            # The dossier written about this listing, if there is one. A
+            # pointer, not a measurement -- `None` means nobody wrote one, and
+            # the URL is the one the page would render, validated by the same
+            # function (services/dossier.py).
+            "dossier": read_dossier(self),
             # What the owner decided, and what is still outstanding. Absent is
             # `undecided`, never `rejected`: a report built off the raw column
             # alone cannot tell "nobody looked" from "looked and said no"

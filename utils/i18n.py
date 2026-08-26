@@ -105,6 +105,10 @@ TRANSLATIONS = {
         "sea_distance_800": "Sea ≤ 800 m (~10 min walk)",
         "sea_distance_1600": "Sea ≤ 1.6 km (~20 min walk)",
         "route_from_gijon": "Route from Gijón (Google Maps)",
+        # The dossier written about one listing, linked from the property
+        # page. Not every row has one, so the label names the thing
+        # rather than the action (services/dossier.py).
+        "dossier_link": "Dossier",
         "sea_view_state_yes": "Sea view",
         "sea_view_state_likely": "Sea view likely",
         # A `likely` that rests on bare-earth terrain alone. It says the ground
@@ -818,6 +822,7 @@ TRANSLATIONS = {
         "sea_distance_800": "Mar ≤ 800 m (~10 min a pie)",
         "sea_distance_1600": "Mar ≤ 1,6 km (~20 min a pie)",
         "route_from_gijon": "Ruta desde Gijón (Google Maps)",
+        "dossier_link": "Dosier",
         "sea_view_state_yes": "Vista al mar",
         "sea_view_state_likely": "Vista al mar probable",
         "sea_view_state_likely_geometry": "El terreno permite vista al mar",

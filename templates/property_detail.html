@@ -93,6 +93,22 @@
                                 <i class="fas fa-home"></i>
                             </a>
                             {% endif %}
+                            {# The dossier written about this listing, if somebody wrote
+                               one. It is a stored pointer rather than a URL derived
+                               from the id: fewer than ten of these rows have a
+                               dossier, and a derived link would claim one for all of
+                               them. `dossier_link` validates the scheme, because this
+                               value comes out of a JSON column and lands in an href.
+                               See services/dossier.py. #}
+                            {% set _dossier = dossier_link(property) %}
+                            {% if _dossier %}
+                            <a href="{{ _dossier.url }}" target="_blank" rel="noopener"
+                               class="btn btn-sm btn-outline-info detail-link-icon"
+                               title="{{ t('dossier_link') }} — {{ _dossier.title }}"
+                               aria-label="{{ t('dossier_link') }}">
+                                <i class="fas fa-folder-open"></i>
+                            </a>
+                            {% endif %}
                             <a href="{{ url_for('main.map_view', focus=property.id) }}"
                                class="btn btn-sm btn-outline-secondary detail-link-icon"
                                title="{{ t('view_on_app_map') }}" aria-label="{{ t('view_on_app_map') }}">
