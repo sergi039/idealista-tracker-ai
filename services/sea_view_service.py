@@ -828,13 +828,29 @@ def _probe_plan(ray_count: int) -> Tuple[int, int]:
     Derived from the endpoint's own cap rather than asserted against it: a
     deployment that lowers `SEA_VIEW_ELEVATION_MAX_LOCATIONS` gets a smaller
     fan, not a `ValueError` out of `fetch_elevations` on every blocked row.
+    That promise was not kept by the first version, which derived only
+    `per_ray` from the cap and floored it at 1: below a cap of six it still
+    asked for `1 + 5 x 1` locations, `fetch_elevations` raised on every blocked
+    row, and the fan silently never ran anywhere. The test that was supposed to
+    pin this used a cap of 26, which the arithmetic happens to handle -- it
+    stepped around the defect instead of at it.
+
+    **Rays are given up before samples.** A ray with fewer than
+    `MIN_WATER_RUN_SAMPLES` samples cannot form a water run at all, so it can
+    only ever answer "no water", which is a wrong answer rather than a coarse
+    one. When even one ray cannot be afforded that, this returns `(0, 0)` and
+    the caller refuses: a fan that cannot answer must say so, not answer `no`.
     """
     cap = int(getattr(Config, "SEA_VIEW_ELEVATION_MAX_LOCATIONS", 100))
-    rays = max(1, min(SEA_PROBE_RAYS, ray_count))
     # One slot is the observer: it is re-sampled rather than carried over so
     # the request is self-describing, and it costs one location in a hundred.
-    per_ray = min(SEA_PROBE_SAMPLES_PER_RAY, max(1, (cap - 1) // rays))
-    return rays, per_ray
+    budget = cap - 1
+    widest = min(SEA_PROBE_RAYS, ray_count, budget)
+    for rays in range(max(1, widest), 0, -1):
+        per_ray = min(SEA_PROBE_SAMPLES_PER_RAY, budget // rays)
+        if per_ray >= MIN_WATER_RUN_SAMPLES:
+            return rays, per_ray
+    return 0, 0
 
 
 def probe_fractions(count: int) -> List[float]:
@@ -861,6 +877,7 @@ def _first_visible_water_m(
     distances: Sequence[float],
     elevations: Sequence[Optional[float]],
     observer_height_m: float,
+    min_water_distance_m: float = 0.0,
 ) -> Optional[float]:
     """Distance to the nearest visible open water along one ray, or None.
 
@@ -878,6 +895,23 @@ def _first_visible_water_m(
     and visible ones behind it. Requiring the run to *start* visible reported
     the whole ray as blocked; requiring only membership reports the nearest
     water the eye actually reaches.
+
+    `min_water_distance_m` is what keeps a *reservoir* from being reported as
+    the Atlantic. EU-DEM carries no value over water generally, not over the
+    sea specifically, so a lake, a quarry pond, a wide river or a coastal
+    lagoon reads exactly like open sea -- and because the ray is walked
+    near-to-far and returns on the first qualifying run, a nearer inland gap
+    masked the real, further answer about the sea, which might still be
+    blocked. The bound is the distance to the nearest mapped coastline node:
+    **no sea is nearer than the nearest sea**, so a null run inside it is some
+    other water or a hole in the model. It is exact rather than tuned, it is
+    already computed for the shoreline profile, and it is free. Measured
+    against the eleven production rows the fan flipped on 2026-08-26, every one
+    of them found its water beyond that distance, so the guard costs nothing
+    real and closes the hole. What it does not close, and cannot from
+    elevation alone: an inland body lying *beyond* the coastline distance on a
+    seaward bearing. The rays are aimed at mapped coastline nodes, which is
+    what makes that narrow, and the verdict it can reach is `likely`.
     """
     # Which samples sit in a long enough run of nulls. Independent of
     # visibility, so it is settled first and the sight line is walked once.
@@ -899,7 +933,11 @@ def _first_visible_water_m(
         if distance <= 0:
             continue
         if elevation is None:
-            if corroborated[index] and max_slope <= -observer_height_m / distance:
+            if (
+                corroborated[index]
+                and distance >= min_water_distance_m
+                and max_slope <= -observer_height_m / distance
+            ):
                 return distance
             # Sea level still occludes, and by less than any land would.
             elevation = 0.0
@@ -939,9 +977,20 @@ def probe_sea_visibility(
         return result
 
     rays, per_ray = _probe_plan(len(headings))
+    if not rays:
+        # The location cap cannot afford a ray long enough to form a water run,
+        # so this fan could only ever answer "no water" -- which is a wrong
+        # answer, not a coarse one. Refuse, and let the caller record `unknown`.
+        raise SeaViewSourceError(
+            f"elevation location cap {Config.SEA_VIEW_ELEVATION_MAX_LOCATIONS} "
+            "is too small for a sea probe"
+        )
     headings = headings[:rays]
     result["bearings_deg"] = headings
     result["samples_per_ray"] = per_ray
+    # No sea is nearer than the nearest sea: a null run inside this is some
+    # other water, or a hole in the model. See `_first_visible_water_m`.
+    result["min_water_distance_m"] = round(nearest_distance_m, 1)
 
     fractions = probe_fractions(per_ray)
     distances = [reach * fraction for fraction in fractions]
@@ -956,18 +1005,28 @@ def probe_sea_visibility(
         start = 1 + index * per_ray
         ray = list(elevations[start : start + per_ray])
         null_samples += sum(1 for value in ray if value is None)
-        seen_at = _first_visible_water_m(distances, ray, observer_height_m)
+        seen_at = _first_visible_water_m(
+            distances, ray, observer_height_m, nearest_distance_m
+        )
         # The nearest water any ray can see, not the first ray that sees any:
         # what the card reports is how far off the visible sea is, and the fan
         # is walked in bearing order, not in distance order.
         if seen_at is not None and (
             not result["visible"] or seen_at < result["visible_at_m"]
         ):
+            # The point this half of the verdict is *about*, recorded for the
+            # reason #334 records the shoreline node: a distance and a bearing
+            # are stored rounded, so casting the ray back out lands somewhere
+            # else, and "what water is this?" is exactly the question an
+            # estuary channel makes worth asking.
+            water_lat, water_lon = _destination(lat, lon, heading, seen_at)
             result.update(
                 {
                     "visible": True,
                     "visible_at_m": round(seen_at, 1),
                     "visible_bearing_deg": heading,
+                    "visible_lat": round(water_lat, 6),
+                    "visible_lon": round(water_lon, 6),
                 }
             )
     result["null_elevation_samples"] = null_samples
