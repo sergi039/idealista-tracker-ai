@@ -124,8 +124,15 @@ TRANSLATIONS = {
         # what the line reaches can be an estuary channel rather than open
         # water (#334). Named for what was computed; see state_label_key().
         "sea_view_state_likely_geometry": "Terrain allows a sea view",
+        # The other geometry `likely`: the water's edge under the house is
+        # hidden by nearer ground and open water is visible over it, which is
+        # the ordinary hillside plot and used to be reported as "No sea view".
+        "sea_view_state_likely_geometry_over_terrain": "Sea visible over nearer ground",
         "sea_view_state_no": "No sea view",
         "sea_view_state_unknown": "Sea view unknown",
+        # The two facts the geometry keeps apart, for the detail card.
+        "sea_view_shoreline_hidden": "the shore below is hidden from",
+        "sea_view_open_water_at": "open water visible from",
         # A plot inside the 500 m coastal band cannot carry a dwelling at all
         # (POLA/PESC, which outranks the municipal PGOU), so the list states
         # the verdict rather than the raw metre count alone.
@@ -840,8 +847,11 @@ TRANSLATIONS = {
         "sea_view_state_yes": "Vista al mar",
         "sea_view_state_likely": "Vista al mar probable",
         "sea_view_state_likely_geometry": "El terreno permite vista al mar",
+        "sea_view_state_likely_geometry_over_terrain": "Mar visible por encima del terreno cercano",
         "sea_view_state_no": "Sin vista al mar",
         "sea_view_state_unknown": "Vista al mar sin determinar",
+        "sea_view_shoreline_hidden": "la orilla de abajo queda oculta a",
+        "sea_view_open_water_at": "mar abierto visible a partir de",
         "plot_coast_ban": "Zona de prohibición costera",
         "plot_coast_ok": "Fuera de la franja costera",
         "plot_coast_unmeasured": "Distancia a la costa sin medir",

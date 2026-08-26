@@ -16,8 +16,12 @@ So the verdict here is deliberately not a boolean:
 ``likely``   one source says yes and nothing contradicts it. Geometry alone can
              never do better than this: EU-DEM is a *bare-earth* model, so
              trees and buildings are invisible to it.
-``no``       computed and negative -- no coastline in range, or terrain blocks
-             the line of sight.
+``no``       computed and negative -- no coastline in range, or no sea surface
+             visible from the point. The second one takes a fan of rays past
+             the shore, not one ray to it: the nearest water's edge is the
+             first thing rising ground hides, so answering on that alone made
+             120 of the 124 computable production rows negative (see the
+             comment on SEA_PROBE_RAYS).
 ``unknown``  we could not compute it. Approximate coordinates, or an external
              source that refused. Never silently folded into ``no``.
 
@@ -148,6 +152,53 @@ MIN_PROFILE_SAMPLES = 12
 MAX_PROFILE_SAMPLES = 60
 PROFILE_SAMPLE_SPACING_M = 150
 
+# --- the sea probe ----------------------------------------------------------
+#
+# The nearest coastline node is the hardest target on the whole coast, and for
+# a long time it was the only one asked about. It is the water's edge closest
+# to the house -- which from anywhere above sea level is the *first* thing the
+# intervening ground hides, because the near brow, the dune or the neighbour's
+# hillock occludes the shore under it long before it occludes the open water
+# beyond. Measured on production 2026-08-26: of the 124 rows where a profile
+# actually ran, 120 answered `terrain_blocks_line_of_sight` and 4 answered
+# `clear_line_of_sight`. A model that says "no sea view" for 97% of the coastal
+# rows it can compute is not answering the question it is asked.
+#
+# Property 1282 (Seiruga, Malpica) is the shape of it: eye at 50.2 m, the
+# water's edge 394.7 m out at bearing 21 deg, a brow of 41.0 m at 91.1 m.
+# The arithmetic is right -- the shore under the house really is hidden -- and
+# the bay and the Sisargas are in the listing's own photographs. Measured by
+# hand over 21 bearings on EU-DEM, open water is visible from ~600 m out across
+# roughly a 60-degree sector.
+#
+# So the fan asks the other question: **is any sea surface visible**, rather
+# than **is that one node visible**. It runs only where the shoreline ray was
+# blocked, so nothing that already answered is re-measured, and it fits in one
+# more OpenTopoData request because that endpoint batches locations: 1 observer
+# + 5 rays x 19 samples = 96, inside the 100-location cap.
+SEA_PROBE_RAYS = 5
+SEA_PROBE_SAMPLES_PER_RAY = 19
+
+# How far out to look. The sea is at least `distance` away, so the ray has to
+# reach past it; twice that is the sight line grazing a brow halfway up the eye
+# height, which is the geometry this exists for. The 3 km floor covers the case
+# above, where the water is close and the obstruction is closer still.
+SEA_PROBE_MIN_DISTANCE_M = 3_000
+SEA_PROBE_DISTANCE_FACTOR = 2.0
+
+# Coastline nodes a metre apart are the same ray. Collapsing them to whole
+# degrees keeps the bearing search over a few hundred candidates instead of the
+# hundred thousand a cell query can hold, and one degree at 3 km is 52 m --
+# finer than the model the rays are sampled against.
+SEA_PROBE_BEARING_BUCKET_DEG = 1.0
+
+# EU-DEM has no value over open water, which is what makes a `None` sample the
+# water detector -- the same reading `null_elevation_samples` already records.
+# `None` is also what a hole in the model looks like, so a single one is not
+# enough: a run of two consecutive nulls is several hundred metres of
+# continuous no-data, which is a sea and not a pinhole.
+MIN_WATER_RUN_SAMPLES = 2
+
 COASTLINE_CACHE_TIMEOUT_S = 60 * 60 * 24 * 30
 GEOMETRY_CACHE_TIMEOUT_S = 60 * 60 * 24 * 7
 
@@ -276,6 +327,45 @@ def _interpolate(
 
 def _curvature_drop_m(distance_m: float) -> float:
     return (distance_m**2) / (2.0 * EFFECTIVE_EARTH_RADIUS_M)
+
+
+def _destination(
+    lat: float, lon: float, heading_deg: float, distance_m: float
+) -> Tuple[float, float]:
+    """The point `distance_m` away on a compass bearing.
+
+    Equirectangular, for the same reason `_interpolate` is linear: over the
+    <=12 km these rays span the error against a great-circle projection is a
+    few metres, and the model being sampled has 25 m cells.
+    """
+    theta = math.radians(heading_deg)
+    d_lat = (distance_m * math.cos(theta)) / EARTH_RADIUS_M
+    d_lon = (distance_m * math.sin(theta)) / (
+        EARTH_RADIUS_M * math.cos(math.radians(lat))
+    )
+    return (lat + math.degrees(d_lat), lon + math.degrees(d_lon))
+
+
+def _bearing_gap_deg(a: float, b: float) -> float:
+    """The smaller of the two arcs between two compass bearings."""
+    gap = abs(a - b) % 360.0
+    return min(gap, 360.0 - gap)
+
+
+def _sight_slope(
+    elevation_m: float, distance_m: float, observer_height_m: float
+) -> float:
+    """How high this sample reaches, as a slope from the eye.
+
+    A sample blocks a target at distance `D` exactly when this slope exceeds
+    `-observer_height_m / D`, which is the same test the shoreline profile
+    applies against its endpoint: `elev - drop > H*(1 - d/D) + clearance`
+    rearranges into it once both sides are divided by `d`. Written as a slope
+    so a whole ray can be walked once, keeping a running maximum, instead of
+    comparing every pair of samples.
+    """
+    apparent = elevation_m - _curvature_drop_m(distance_m)
+    return (apparent - observer_height_m - TERRAIN_CLEARANCE_M) / distance_m
 
 
 # --- external sources -------------------------------------------------------
@@ -665,6 +755,225 @@ def _profile_sample_count(distance_m: float) -> int:
     return max(MIN_PROFILE_SAMPLES, min(MAX_PROFILE_SAMPLES, wanted))
 
 
+def probe_distance_m(nearest_distance_m: float, decisive_distance_m: float) -> float:
+    """How far out the fan looks, for a shore this far away."""
+    return min(
+        decisive_distance_m,
+        max(SEA_PROBE_MIN_DISTANCE_M, nearest_distance_m * SEA_PROBE_DISTANCE_FACTOR),
+    )
+
+
+def probe_bearings(
+    lat: float,
+    lon: float,
+    coastline: Sequence[Tuple[float, float]],
+    radius_m: float,
+    count: int,
+) -> List[float]:
+    """Bearings to aim the fan along, nearest coastline first, then spread out.
+
+    The bearings come from the coastline itself rather than from a sector
+    invented around the nearest node, because the sea is not reliably in one:
+    a house on a headland has water at 20 deg and at 200 deg with land between
+    them, and a fixed sector would look at one of them and call the other
+    absent. Every ray therefore points at a mapped water edge -- it is then
+    extended past it, since the edge is the thing that was already found to be
+    hidden.
+
+    Selection is farthest-point sampling on the circle, seeded with the nearest
+    node: the first ray is the one the shoreline profile already used, and each
+    ray after it is the one furthest in bearing from every ray chosen so far,
+    ties going to the nearer water. Spread is the objective because the fan's
+    whole failure mode is looking five times in one direction.
+    """
+    nearest_by_bucket: Dict[int, Tuple[float, float]] = {}
+    for point in coastline:
+        distance = haversine_m(lat, lon, point[0], point[1])
+        if distance > radius_m or distance <= 0:
+            continue
+        heading = bearing_deg(lat, lon, point[0], point[1])
+        bucket = int(heading // SEA_PROBE_BEARING_BUCKET_DEG)
+        current = nearest_by_bucket.get(bucket)
+        if current is None or distance < current[0]:
+            nearest_by_bucket[bucket] = (distance, heading)
+
+    candidates = sorted(nearest_by_bucket.values())
+    if not candidates:
+        return []
+
+    chosen_idx = [0]
+    while len(chosen_idx) < count and len(chosen_idx) < len(candidates):
+        best_idx = None
+        best_key = None
+        for index, (distance, heading) in enumerate(candidates):
+            if index in chosen_idx:
+                continue
+            spread = min(
+                _bearing_gap_deg(heading, candidates[picked][1])
+                for picked in chosen_idx
+            )
+            key = (spread, -distance)
+            if best_key is None or key > best_key:
+                best_key, best_idx = key, index
+        if best_idx is None:
+            break
+        chosen_idx.append(best_idx)
+
+    return [round(candidates[index][1], 1) for index in chosen_idx]
+
+
+def _probe_plan(ray_count: int) -> Tuple[int, int]:
+    """How many rays and how many samples each, inside one elevation request.
+
+    Derived from the endpoint's own cap rather than asserted against it: a
+    deployment that lowers `SEA_VIEW_ELEVATION_MAX_LOCATIONS` gets a smaller
+    fan, not a `ValueError` out of `fetch_elevations` on every blocked row.
+    """
+    cap = int(getattr(Config, "SEA_VIEW_ELEVATION_MAX_LOCATIONS", 100))
+    rays = max(1, min(SEA_PROBE_RAYS, ray_count))
+    # One slot is the observer: it is re-sampled rather than carried over so
+    # the request is self-describing, and it costs one location in a hundred.
+    per_ray = min(SEA_PROBE_SAMPLES_PER_RAY, max(1, (cap - 1) // rays))
+    return rays, per_ray
+
+
+def probe_fractions(count: int) -> List[float]:
+    """Where along a ray to sample: dense near the eye, coarse far away.
+
+    Quadratic rather than even, because the two things a ray has to do want
+    opposite spacing. Near the observer it has to *find the brow* -- 19 evenly
+    spaced samples over 3 km start at 158 m and would step straight over the
+    41 m hillock at 91 m that this whole feature exists because of. Far away it
+    only has to *find water*, and the sea is not a feature you can miss between
+    samples. Squaring the fraction puts the first four samples inside 135 m and
+    still reaches the end, which is also roughly uniform in *angle* as seen
+    from the eye -- the resolution that actually decides a sight line.
+
+    The far field stays coarse, and that is the honest cost: a narrow ridge at
+    2.5 km can fall between samples. It bounds nothing, because a fan that sees
+    water is only ever allowed to say `likely`, which already means "bare earth
+    does not rule it out".
+    """
+    return [(index / count) ** 2 for index in range(1, count + 1)]
+
+
+def _first_visible_water_m(
+    distances: Sequence[float],
+    elevations: Sequence[Optional[float]],
+    observer_height_m: float,
+) -> Optional[float]:
+    """Distance to the nearest visible open water along one ray, or None.
+
+    Walks the ray keeping the highest slope seen so far, so a sample is visible
+    when nothing closer to the eye reaches over the line to it. A `None`
+    elevation is open water at sea level; it is also what a hole in the model
+    looks like, so only a sample inside a run of `MIN_WATER_RUN_SAMPLES`
+    consecutive nulls counts as sea.
+
+    Being in the run and being *visible* are separate questions, and collapsing
+    them is wrong in exactly the case this whole feature is about. Water gets
+    easier to see the further out it is -- the line to sea level at `d` falls
+    away as `-H/d`, which rises toward zero -- so a ray that leaves the land at
+    a hidden shore and continues over open sea has an invisible first sample
+    and visible ones behind it. Requiring the run to *start* visible reported
+    the whole ray as blocked; requiring only membership reports the nearest
+    water the eye actually reaches.
+    """
+    # Which samples sit in a long enough run of nulls. Independent of
+    # visibility, so it is settled first and the sight line is walked once.
+    corroborated = [False] * len(elevations)
+    run_start: Optional[int] = None
+    # The trailing 0.0 closes a run that reaches the end of the ray.
+    for index, elevation in enumerate(list(elevations) + [0.0]):
+        if elevation is None:
+            if run_start is None:
+                run_start = index
+            continue
+        if run_start is not None and index - run_start >= MIN_WATER_RUN_SAMPLES:
+            for member in range(run_start, index):
+                corroborated[member] = True
+        run_start = None
+
+    max_slope = -math.inf
+    for index, (distance, elevation) in enumerate(zip(distances, elevations)):
+        if distance <= 0:
+            continue
+        if elevation is None:
+            if corroborated[index] and max_slope <= -observer_height_m / distance:
+                return distance
+            # Sea level still occludes, and by less than any land would.
+            elevation = 0.0
+        max_slope = max(max_slope, _sight_slope(elevation, distance, observer_height_m))
+
+    return None
+
+
+def probe_sea_visibility(
+    lat: float,
+    lon: float,
+    coastline: Sequence[Tuple[float, float]],
+    observer_height_m: float,
+    nearest_distance_m: float,
+    decisive_distance_m: float,
+    session: Optional[requests.Session] = None,
+) -> Dict[str, Any]:
+    """Is any sea surface visible from this point, past the near ground?
+
+    A different question from the one the shoreline profile answers, and the
+    one a buyer is actually asking. Raises `SeaViewSourceError` if the
+    elevation model refuses: a fan that did not run is not a fan that found
+    nothing.
+    """
+    reach = probe_distance_m(nearest_distance_m, decisive_distance_m)
+    headings = probe_bearings(lat, lon, coastline, reach, SEA_PROBE_RAYS)
+    result: Dict[str, Any] = {
+        "probe_distance_m": round(reach, 1),
+        "bearings_deg": headings,
+        "visible": False,
+    }
+    if not headings:
+        # Unreachable while a coastline node inside `decisive_distance` is what
+        # got us here -- `probe_distance_m` never returns less than that -- but
+        # a fan with nothing to aim at is "found no water", never a crash.
+        result["reason"] = "no_bearings_in_range"
+        return result
+
+    rays, per_ray = _probe_plan(len(headings))
+    headings = headings[:rays]
+    result["bearings_deg"] = headings
+    result["samples_per_ray"] = per_ray
+
+    fractions = probe_fractions(per_ray)
+    distances = [reach * fraction for fraction in fractions]
+    points: List[Tuple[float, float]] = [(lat, lon)]
+    for heading in headings:
+        points.extend(_destination(lat, lon, heading, span) for span in distances)
+
+    elevations = fetch_elevations(points, session=session)
+
+    null_samples = 0
+    for index, heading in enumerate(headings):
+        start = 1 + index * per_ray
+        ray = list(elevations[start : start + per_ray])
+        null_samples += sum(1 for value in ray if value is None)
+        seen_at = _first_visible_water_m(distances, ray, observer_height_m)
+        # The nearest water any ray can see, not the first ray that sees any:
+        # what the card reports is how far off the visible sea is, and the fan
+        # is walked in bearing order, not in distance order.
+        if seen_at is not None and (
+            not result["visible"] or seen_at < result["visible_at_m"]
+        ):
+            result.update(
+                {
+                    "visible": True,
+                    "visible_at_m": round(seen_at, 1),
+                    "visible_bearing_deg": heading,
+                }
+            )
+    result["null_elevation_samples"] = null_samples
+    return result
+
+
 def evaluate_geometry(
     lat: float,
     lon: float,
@@ -681,7 +990,12 @@ def evaluate_geometry(
     # on whether it is a surveyed address or a municipality centroid, and two
     # rows can share coordinates to four decimals while disagreeing about that.
     # A shared key would serve one row's `likely` as the other's verdict.
-    cache_type = f"sea_view_geometry_v1_{'approximate' if approximate else 'precise'}"
+    # `_v2` because the verdict itself changed: `_v1` entries were decided by
+    # the shoreline ray alone, so a cached `no` is one of the false negatives
+    # this version exists to stop serving. The #334 rule -- additive fields do
+    # not earn a bump, because re-fetching a cell costs real pacing -- cuts the
+    # other way when the answer moves.
+    cache_type = f"sea_view_geometry_v2_{'approximate' if approximate else 'precise'}"
     if use_cache:
         cached = _cache_get(lat, lon, cache_type)
         if cached is not None:
@@ -796,15 +1110,51 @@ def evaluate_geometry(
         sight_line = observer_height * (1.0 - fraction)
         apparent_terrain = elevation - _curvature_drop_m(sample_distance)
         if apparent_terrain > sight_line + TERRAIN_CLEARANCE_M:
+            # The shore under the house is hidden. That is a fact, and it is
+            # kept under the names 120 production rows already carry -- but it
+            # is *not* the verdict, because it is the answer to the easiest
+            # question to get wrong: the nearest water's edge is the first
+            # thing any rise in the ground occludes.
             detail.update(
                 {
-                    "state": NO,
-                    "reason": "terrain_blocks_line_of_sight",
+                    "shoreline_visible": False,
                     "blocked_at_m": round(sample_distance, 1),
                     "blocking_elevation_m": round(elevation, 1),
                     "null_elevation_samples": null_samples,
                 }
             )
+            try:
+                probe = probe_sea_visibility(
+                    lat,
+                    lon,
+                    coastline,
+                    observer_height,
+                    distance,
+                    decisive_distance,
+                    session=session,
+                )
+            except (SeaViewSourceError, ValueError) as exc:
+                # Half a measurement is not a measurement. The shoreline being
+                # hidden was never enough for `no` on its own, so a fan that
+                # could not run leaves this row unanswered rather than
+                # promoting the weak half into a confident negative (#98).
+                # `elevation_source_unavailable` is in SOURCE_REFUSAL_REASONS,
+                # so `repaired_with_stored_geometry` keeps whatever an earlier
+                # run measured; and nothing is cached.
+                logger.warning("Sea probe unavailable for %.5f,%.5f: %s", lat, lon, exc)
+                detail.update(
+                    {"state": UNKNOWN, "reason": "elevation_source_unavailable"}
+                )
+                return detail
+
+            detail["sea_probe"] = probe
+            if probe.get("visible"):
+                # Open water over the near ground. Bare earth again, so
+                # `likely` and never `yes` -- the same ceiling the clear
+                # shoreline gets, for the same reason.
+                detail.update({"state": LIKELY, "reason": "sea_visible_beyond_terrain"})
+            else:
+                detail.update({"state": NO, "reason": "terrain_blocks_line_of_sight"})
             if use_cache:
                 _cache_set(
                     lat, lon, cache_type, detail, timeout=GEOMETRY_CACHE_TIMEOUT_S
@@ -817,6 +1167,11 @@ def evaluate_geometry(
         {
             "state": LIKELY,
             "reason": "clear_line_of_sight",
+            # Nothing hides the water's edge itself, so both facts agree here
+            # and the fan has nothing to add. Recorded rather than left to be
+            # inferred from the reason: it is the answer to a question the
+            # blocked branch answers explicitly.
+            "shoreline_visible": True,
             "null_elevation_samples": null_samples,
         }
     )
@@ -1174,9 +1529,22 @@ def state_label_key(verdict: Dict[str, Any]) -> str:
     name. Returned as a key *suffix* so the `sea_view_state_` prefix and the
     wording stay in the presentation layer; what lives here is the
     distinction, in one place, for the three templates that draw this badge.
+
+    A geometry `likely` now covers two different sight lines and they are not
+    worth the same to a buyer. One sees the water's edge under the house; the
+    other sees open water *over* nearer ground that hides that edge, which is
+    the ordinary hillside house and is what the shoreline-only verdict used to
+    call "No sea view". Naming them alike would put the second back where it
+    started, in a label nobody would look twice at.
     """
     state = normalize_state(verdict.get("state"))
     if state == LIKELY and verdict.get("source") == "geometry":
+        detail = verdict.get("detail")
+        detail = detail if isinstance(detail, dict) else {}
+        geometry = detail.get("geometry")
+        geometry = geometry if isinstance(geometry, dict) else {}
+        if geometry.get("reason") == "sea_visible_beyond_terrain":
+            return "likely_geometry_over_terrain"
         return "likely_geometry"
     return state
 

@@ -342,6 +342,73 @@ not do is soften a `likely` the listing itself claims, or a hand-set one.
 `tests/test_sea_view_target_recorded.py` pins all of it against the real
 coastline in `tests/data/`.
 
+**The nearest coastline node is the hardest target on the coast, and for a long
+time it was the only one asked about.** One profile ran to it, and a blocked
+sight line was written down as "No sea view" — but the water's edge nearest a
+house is the *first* thing rising ground occludes, while the open sea beyond it
+stays in view. Measured on production 2026-08-26: of the 124 rows where a
+profile actually ran, **120 answered `terrain_blocks_line_of_sight` and 4
+answered `clear_line_of_sight`**, 85 of the 120 blocked before half the distance
+and 66 before a quarter. A model that says no to 97% of the coastal rows it can
+compute is not answering the question it was asked, and on this coast that is
+the question people buy houses for.
+
+Property 1282 (Seiruga, Malpica) is the shape of it: eye at 50.2 m, water's edge
+394.7 m out on bearing 21°, a 41.0 m brow at 91.1 m. Every number right — the
+sight line is at 38.6 m where the ground is at 41.0 — and the bay and the
+Sisargas are in the listing's own photographs.
+
+So a blocked shoreline ray now runs a **fan**, and the fan asks the other
+question: is any *sea surface* visible, rather than is that one node. Five rays
+out past the shore, each to a run of null EU-DEM samples — the model has no
+value over open water, which is the same reading `null_elevation_samples` has
+always recorded. Live against real OSM and EU-DEM, 1282 reproduces production's
+shoreline numbers exactly and then finds water at 673 m on bearing 21.0, inside
+the 600–650 m band the owner measured by hand over 21 bearings.
+
+Seven things about it are deliberate, and most were measured rather than
+chosen. The **bearings come from the coastline**, not from a sector invented
+around the nearest node: a house on a headland has water at 20° and at 200° with
+land between, and one extended ray or a fixed sector looks at one and calls the
+other absent. Selection is farthest-point sampling on the circle seeded with the
+nearest node, so the first ray *is* the profile that was already run and the
+rest spread — coastline nodes crowd where the shore is nearest, so picking the
+five nearest aims the whole fan down one street. It is **one extra
+OpenTopoData request and only on the path that used to answer `no`**, because
+that endpoint batches: 1 observer + 5 × 19 = 96 inside the 100-location cap, and
+`_probe_plan` *derives* the fan from `SEA_VIEW_ELEVATION_MAX_LOCATIONS` so a
+lower cap costs resolution rather than raising out of `fetch_elevations` on
+every blocked row. Sampling is **quadratic, not even**: 19 even samples over
+3 km start at 158 m and step clean over the 91 m brow this exists for, and a
+ridge stepped over is a false *positive* — the same defect mirrored. A **run of
+two nulls** is required, because `None` is also a hole in the model; and being
+in the run and being visible are separate questions, since water gets easier to
+see the further out it is (the line to sea level falls away as `-H/d`), so a ray
+that leaves the land at a hidden shore has an invisible first water sample and
+visible ones behind it — requiring the run to *start* visible reported the whole
+ray blocked, and that bug was in the first implementation. A **fan the elevation
+model refused is `unknown`, never `no`**: the shoreline half was never enough
+for a negative on its own (#98), and `elevation_source_unavailable` is already
+in `SOURCE_REFUSAL_REASONS`, so `repaired_with_stored_geometry` keeps whatever
+an earlier run measured and nothing is cached. Geometry still stops at
+`likely` — the far field stays coarse and bare earth still cannot see the pine
+wood, so the ceiling is what bounds the cost of both. And the **cache key went
+`_v1` → `_v2`**, against the #334 rule that additive fields do not earn a bump:
+that rule cuts the other way when the answer moves, and a cached `_v1` `no` is
+one of the false negatives.
+
+**"The shore below is visible" and "the sea is visible" are two facts**, and the
+page said only the first while meaning the second. `shoreline_visible` is
+recorded on every computed verdict, the fan's evidence sits beside it in
+`sea_probe`, and `state_label_key()` gives the second reading its own name —
+*"Sea visible over nearer ground"* against *"Terrain allows a sea view"*. One
+label for both would put the hillside house back exactly where it started.
+The 120 stored rows keep their `no` until re-evaluated;
+`utils/backfill_sea_view.py` is what moves them, it is free, and the announce
+rule for the mini applies. `tests/test_sea_view_over_nearer_ground.py` builds
+1282's own terrain — a near brow with open water past it — because an abstract
+ridge blocks everything and reproduces nothing.
+
 **The "to beach" sort is live** (issue #271, PR #272): the Phase-2 backfill
 put measured beach times into `travel["beaches"]`, so the old #98 placeholder
 ("not one row holds a travel time") is retired. The list sort and the CSV
@@ -1595,7 +1662,9 @@ and TODO.md; respect it if you ever run both side by side.
   **The budgets are `utils/http.lookup_budget`, and only the free transports
   read them.** `OSM_OVERPASS_WALK_BUDGET_S` (210 s) bounds one walk across
   every instance; `ENRICH_LOOKUP_BUDGET_S` (240 s) bounds every free lookup of
-  one Enrich press together, because a run makes up to eleven of them. 210 is
+  one Enrich press together, because a run makes a dozen of them -- eleven,
+  plus the sea-view fan's second elevation request on a row whose shoreline
+  ray was blocked. 210 is
   derived rather than chosen -- #144's patient budget on the first instance
   (~76 s with the gate) plus one complete attempt on each fallback (2 x 65 s)
   -- and the guarantee it buys is conditional and says so where the number

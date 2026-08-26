@@ -542,7 +542,7 @@ class TestTheWalkAcrossInstancesHasACeiling:
         """The number the owner actually feels.
 
         One walk is bounded by `OSM_OVERPASS_WALK_BUDGET_S`, but an enrichment
-        run makes up to eleven of them -- so what a total outage costs a press
+        run makes a dozen of them -- so what a total outage costs a press
         is this, not that. The first lookup learns the instances are down, the
         second spends what is left, and every one after it refuses before it
         opens a socket.
