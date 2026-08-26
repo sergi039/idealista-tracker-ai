@@ -1131,36 +1131,45 @@ class TestHonestAbsence:
         assert "no coordinate" in body
         assert "re-located" not in body
 
-    def test_losing_the_coordinate_does_not_delete_the_measurement(
+    def test_losing_the_coordinate_overwrites_the_measurement(
         self, app, client, real_fetch
     ):
-        """`refresh=True` clears the coordinate before geocoding (#393).
+        """The subject going away is not a source refusal (2026-08-26).
 
-        A refusal leaves it cleared, the free pass then runs on a row with no
-        point, and overwriting here would delete an answer that cost a round
-        trip -- and, since `no_coordinates` is not retryable, take the row out
-        of the backfill's scope for good (review, 2026-08-20).
+        `refresh=True` clears the coordinate before geocoding (#393), a refusal
+        leaves it cleared, and the free pass then runs on a row with no point.
+        This branch used to keep the stored scan, on the grounds that
+        `no_coordinates` is not retryable and overwriting would take the row
+        out of the backfill's scope for good. Both halves were measured and
+        neither is real -- see this module's docstring -- and the rule the rest
+        of the family applies (`sea_view_service`, `sea_distance_service`) is
+        that a measurement stands only while it is still a measurement *of this
+        listing*.
         """
         prop = _prop(title="LostItsCoordinate")
         service = HazardService(
             enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
         )
         service.enrich(prop, commit=True)
-        before = list(prop.enrichment["hazards"]["items"])
+        assert prop.enrichment["hazards"]["status"] == hazard_service.STATUS_OK
+        assert prop.enrichment["hazards"]["items"]
 
         prop.location_lat = None
         prop.location_lon = None
         db.session.commit()
         payload = service.enrich(prop, commit=True)
 
-        assert payload["status"] == hazard_service.STATUS_OK
-        assert payload["items"] == before
+        assert payload["status"] == hazard_service.STATUS_NO_COORDINATES
         assert payload["last_attempt_status"] == hazard_service.STATUS_NO_COORDINATES
+        # By value, and not merely "the status changed": the whole point is
+        # that the scan of somewhere else does not ride along under a status
+        # that disowns it. A block keeping its items while calling itself
+        # `no_coordinates` would pass a status-only assertion.
+        assert "items" not in payload
+        assert "item_count" not in payload
+        assert "origin" not in payload
+        assert prop.enrichment["hazards"] == payload
 
-        # Kept in storage, and *not* asserted: a measurement of a place the
-        # listing may no longer be near says nothing about its parcel, and a
-        # `none_within_radius` block read this way would be a clean
-        # neighbourhood for a listing that is nowhere (codex review).
         verdict = hazard_service.read_verdict(prop)
         # `no_coordinates`, and not `stale_origin`: a row that lost its
         # coordinate has not been *re-located*, and saying so put this card in
@@ -1169,15 +1178,42 @@ class TestHonestAbsence:
         assert verdict["status"] == hazard_service.STATUS_NO_COORDINATES
         assert verdict["measured"] is False
         assert verdict["nearest"] is None
-        # It still *carries* a complete scan, which is all the coverage line
-        # claims; that the scan is not about this listing any more is what the
-        # card says, and no badge is drawn either way.
-        assert verdict["complete"] is True
+        # And it no longer counts toward the coverage line, which is the one
+        # thing the keep really changed: a row the app cannot locate was being
+        # counted as carrying a complete scan.
+        assert verdict["complete"] is False
+
+        # Still in the backfill's scope -- it was under the keep too, which is
+        # why "not retryable" never justified anything.
+        assert hazard_service.needs_hazards(prop) is True
 
         body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
         assert response_is_the_card(body)
         assert "no coordinate" in body
         assert "re-located" not in body
+
+    def test_a_source_refusal_still_keeps_the_measurement(self, app, real_fetch):
+        """The other side of the same rule, so the change cannot over-reach.
+
+        Overpass going quiet teaches nothing about the row, so the stored scan
+        stands. Sitting beside the test above, this is what says the rule is
+        "keep only what a silence cannot contradict" and not "overwrite".
+        """
+        prop = _prop(title="RefusalKeepsIt")
+        HazardService(
+            enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
+        ).enrich(prop, commit=True)
+        before = list(prop.enrichment["hazards"]["items"])
+        assert before
+
+        payload = HazardService(
+            enrichment_service=_FakeEnrichment(failure="overpass_unavailable")
+        ).enrich(prop, commit=True)
+
+        assert payload["status"] == hazard_service.STATUS_OK
+        assert payload["items"] == before
+        assert payload["last_attempt_status"] == hazard_service.STATUS_UNAVAILABLE
+        assert hazard_service.read_verdict(prop)["measured"] is True
 
     def test_a_half_read_block_still_renders(self, app, client):
         """The page must not raise on a shape an older run could have left.

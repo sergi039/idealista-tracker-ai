@@ -82,6 +82,40 @@ MEASURED_GEOMETRY_STATES = (LIKELY, NO)
 # `no_coordinates`, `no_elevation_at_property`). Only a refusal may be barred
 # from overwriting an earlier verdict -- a computed unknown is an answer about
 # this property and must land.
+#
+# **Keep only what a silence cannot contradict.** A stored verdict survives a
+# re-run on exactly one condition: the subject is unchanged *and* this run
+# learned nothing, because a source did not answer. That is what this set is,
+# and the origin check in `repaired_with_stored_geometry` is the other half of
+# it -- a refusal on a row that has since moved reuses nothing.
+#
+# The three reasons outside it are outside it for two different arguments, and
+# the difference matters if anyone ever tries to relax one of them:
+#
+# `no_coordinates` and `approximate_coordinates` are the **subject** changing.
+# The row no longer has the place the stored verdict is a claim about, so the
+# claim is about somewhere else. Measured on production 2026-08-26: a full
+# backfill moved six rows from a measured `no` to `unknown`, and the pre-run
+# snapshot says five of them (128, 132, 170, 174, 175) were measured at
+# 40.463667,-3.74922 -- the centre of Spain, which is what geocoding a #298
+# truncated title fragment ("Finca Offers For Sale This Buildi") returns. Row
+# 132 is Carreno, on the coast, and its stored `no_coastline_in_range` was a
+# false negative that survived only because it was measured 400 km inland.
+# Preserving those would have preserved a claim about Madrid.
+#
+# `approximate_coordinates` is not the milder half of that and must not be
+# treated as one. A verdict measured at a `precise` coordinate that has since
+# decayed to `approximate` sits on the *same point*, so an origin check waves
+# it through -- and it is still wrong to keep, for #196's reason:
+# `sea_distance_service._last_known_good` refuses the identical case in the
+# identical words, "same point, different claim". The stored verdict was a
+# claim about the parcel; the row has just lost the right to one.
+#
+# `no_elevation_at_property` is neither: the subject did not move and the
+# source did not go quiet -- EU-DEM answered, and its answer was that it has no
+# ground at this point. A computed answer is not a silence, so it lands. It has
+# never fired on production (0 rows, 2026-08-26), and it is named here so that
+# its absence from this set reads as a decision rather than an oversight.
 SOURCE_REFUSAL_REASONS = frozenset(
     {"coastline_source_unavailable", "elevation_source_unavailable"}
 )
@@ -1124,6 +1158,11 @@ def evaluate_geometry(
     if approximate:
         # There *is* sea within reach of the municipality centroid, so the
         # centroid tells us nothing about this particular plot.
+        #
+        # This lands even over a stored `likely` or `no` measured at the same
+        # point while it was still `precise`: that verdict was a claim about
+        # the parcel and the row has just lost the right to one. See
+        # SOURCE_REFUSAL_REASONS for why the subject changing is not a refusal.
         detail.update({"state": UNKNOWN, "reason": "approximate_coordinates"})
         return detail
 
@@ -1644,6 +1683,11 @@ def evaluate_property(
     text_detail = evaluate_text(prop.title, prop.description, use_ai=use_ai)
 
     if prop.location_lat is None or prop.location_lon is None:
+        # Not a refusal: the subject is gone, so any stored verdict is a claim
+        # about a point nothing connects to this listing any more, and it is
+        # overwritten. `SOURCE_REFUSAL_REASONS` carries the argument and the
+        # production measurement behind it; `services/hazard_service.py` kept
+        # the measurement here until 2026-08-26 and now does not.
         geometry_detail = {"state": UNKNOWN, "reason": "no_coordinates"}
     else:
         geometry_detail = evaluate_geometry(

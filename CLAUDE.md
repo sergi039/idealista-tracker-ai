@@ -308,6 +308,69 @@ billing is not involved. Fill it with `python -m utils.backfill_sea_view`;
 keep their old boolean at `enrichment.legacy_land.environment.sea_view`, which
 reads as `likely` (it came from the same weak keyword pass) and never as `yes`.
 
+**Keep only what a silence cannot contradict.** One rule for the whole
+enrichment family — sea view, sea distance, hazards — settled on 2026-08-26
+because two of them had drifted into opposite answers for one shape of fact. A
+stored measurement survives a re-run on exactly one condition: **the subject is
+unchanged, and the run learned nothing because a source did not answer.** A
+refusal is that, and it is the whole of it. Anything else overwrites — a
+coordinate that has gone, one that has changed, one that has lost the precision
+the stored claim rested on, and a source that *did* answer even when its answer
+is "I have no data at this point".
+
+The case that split them is a row carrying a measurement taken at a coordinate
+it no longer has. `sea_view_service` and `sea_distance_service` overwrote;
+`hazard_service` kept, and its reasoning — `no_coordinates` is not retryable,
+so overwriting takes the row out of the backfill's scope for good — was the
+right worry aimed at the wrong mechanism. Measured: `needs_hazards` reads
+`read_verdict` and not the stored status, so a row stored `no_coordinates`
+stays in scope either way (the codex review that fixed *that* landed later and
+nobody went back to the keep); `RETRYABLE_STATUSES`, the constant the claim
+was written on, was dead code nothing imported; and `read_verdict` refuses to
+assert a kept measurement anyway, so it showed on no surface. Keeping bought
+one free Overpass query in the single case where the identical coordinate
+returns, and cost one wrong number — `complete_expression` counted a row the
+app cannot locate as carrying a complete scan.
+
+The reproduction is what settles it rather than the symmetry. A full
+`utils.backfill_sea_view` on 2026-08-26 moved six production rows from a
+measured `no` to `unknown`, and the pre-run snapshot
+(`data/sea_view_pre_fan_snapshot_20260826T134313Z.json` on the mini) says five
+of them — 128, 132, 170, 174, 175 — were measured at **40.463667,-3.74922**,
+the centre of Spain: what geocoding a #298 truncated title fragment ("Finca
+Offers For Sale This Buildi") returns. Their coordinates have since been
+cleared, and preserving those verdicts would have preserved a claim about
+Madrid. Row 132 is **Carreño, on the coast**, and its stored
+`no_coastline_in_range` was a false negative that survived only because it was
+measured 400 km inland. The sixth, 149, moved between two inland centroids.
+Exposure of the change itself: zero rows either side — 881 hazard blocks and
+none on a coordinate-less row, 247 measured sea-view geometries and none whose
+origin disagrees with its row.
+
+Two things the rule does **not** move, and both are load bearing. A verdict
+measured at a `precise` coordinate that has since decayed to `approximate`
+sits on the *same point*, so an origin check waves it through — and it is
+still overwritten, for #196's reason, in
+`sea_distance_service._last_known_good`'s own words: *"same point, different
+claim"*. The stored verdict was a claim about the parcel; the row has just
+lost the right to one. And sea view's `no_elevation_at_property` stays outside
+`SOURCE_REFUSAL_REASONS`: the subject did not move and the source did not go
+quiet — EU-DEM answered, and what it said was that it has no ground there. A
+computed answer is not a silence. It has never fired on production (0 rows),
+and it is named in the module so that its absence reads as a decision.
+
+Where the two modules still legitimately differ is *where* the rule is
+enforced, and that is the thing not to harmonise. A hazard block is a list of
+facilities that has to be restated on read anyway (the slack band, per item),
+so its reader is the natural place to refuse — and it still answers
+`no_coordinates` / `stale_origin` for a measured block that arrives on a row
+that moved, because direct SQL is a supported workflow and a reader that
+refuses a shape only because today's writer cannot produce it is a reader that
+trusts the writer. A sea-view verdict is one word in a column that four
+surfaces and a SQL filter read; there is nothing to restate, and `unknown` is
+precisely the state the module invented for "not computable for this
+property". **Sea view's storage is its restatement.**
+
 **The coastline does not follow the rías inland, and the verdict now records
 the point it measured to** (#334, the "Selorio report" of 2026-08-15 — it
 arrived as a direct owner request and was filed retroactively). The reported
@@ -794,10 +857,11 @@ parcel. A coordinate that has *moved* since the scan is worse than an
 imprecise one and gets no restatement at all: `read_verdict` compares the
 stored `origin` through `services/enrichment_origin.py` and answers
 `stale_origin`, because re-applying today's slack to yesterday's point printed
-a centroid's 1.1 km as an exact measurement. For the same reason a row that
-*loses* its coordinate keeps its measurement rather than having it replaced by
-`no_coordinates` -- that status is not retryable, so overwriting took the row
-out of the backfill's scope for good. And the scorer reads `truncated`: a scan
+a centroid's 1.1 km as an exact measurement. And a row that *loses* its
+coordinate has its measurement **replaced** by `no_coordinates` -- see "Keep
+only what a silence cannot contradict" above; this module kept it until
+2026-08-26, alone in the family, and the two things that keep was written to
+protect were both measured and neither was real. And the scorer reads `truncated`: a scan
 that hit Overpass's element cap and found nothing qualifying is not a clean
 neighbourhood, it is a short list, and scoring it 100 was #98 one layer under
 a card that disclosed it correctly. **The bearing is recorded and never interpreted**: whether 1.1 km
