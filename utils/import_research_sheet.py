@@ -27,13 +27,31 @@ advert's own text, and the AI analysis reads it. These are the owner's
 observations about a listing -- planning status, utilities, risks -- so they go
 in prefixed with what they are, rather than passing as words the seller wrote.
 
-Deduplication uses `utils/listing_search.py`, the module that already answers
-"does a row for this link exist": the Idealista listing id first, then the URL
-with its tracking tail dropped. Measured against production the same day, of
-the 50 rows 15 were already in the table -- every one of them an Idealista
-listing that had arrived by alert email, and only 2 of which an exact URL
-comparison would have found, because the stored links carry `?utm_...` and the
-sheet's do not.
+Deduplication asks `utils/listing_search.py`, the module that already answers
+"does a row for this link exist", for the whole reading rather than half of it
+-- `listing_id_clause`, which matches the Idealista listing id against
+`idealista_property_id` **and** against the `/inmueble/<id>/` form in the URL.
+Measured against production the same day, of the 50 rows 15 were already in the
+table -- every one of them an Idealista listing that had arrived by alert
+email, and only 2 of which an exact URL comparison would have found, because
+the stored links carry `?utm_...` and the sheet's do not.
+
+**These rows are created with `idealista_property_id` NULL, and that is not
+what closes the hole.** Writing the id here was considered and refused on
+2026-08-25, for two reasons worth stating rather than rediscovering. It fixes
+nothing that needs fixing: 48 rows written before that date already carry NULL
+(every NULL-id idealista row on production is one of ours), so `_existing` has
+to read the URL regardless, and a dedup that only recognised rows written after
+its own fix would be the defect it was written to remove. And it is not a dedup
+change at all -- `services/property_imap_service._find_properties` matches that
+column, per subscription and, for price-change and "no longer listed" emails,
+across all of them. Populating it would make an alert email for the same
+listing *update* a research row instead of creating its own (`if existing:
+continue`), so the advert's title, description and attributes would never be
+recorded for that listing in that subscription and the owner's research notes
+would stand in for them. That may well be the better behaviour; it is a
+decision about ingestion, with its own tests, and not a side effect of a
+lookup.
 """
 
 from __future__ import annotations
@@ -165,18 +183,38 @@ def _existing(row: Dict[str, Any]):
     """The row already holding this listing, or None.
 
     Two identities, and deliberately not a third. `source_email_id` recognises
-    a row this importer wrote before, so re-running the same sheet is a no-op.
-    An Idealista listing id recognises one that arrived by alert email --
-    measured against production, 14 of the sheet's 50 were already here that
-    way, and only 2 of them would have been found by comparing URLs exactly,
-    because the stored links carry a `?utm_...` tail the sheet's copy does not.
+    a row this importer wrote before *from the same sheet line*, so re-running
+    one sheet unchanged is a no-op. An Idealista listing id recognises the
+    listing however it got here -- measured against production, 14 of the
+    sheet's 50 were already here by alert email, and only 2 of them would have
+    been found by comparing URLs exactly, because the stored links carry a
+    `?utm_...` tail the sheet's copy does not.
+
+    The id is asked of `utils.listing_search.listing_id_clause`, which knows
+    the two places a row can carry it. Asking only the column was this
+    importer's own blind spot: it never writes `idealista_property_id`, so its
+    rows carry the id in the URL alone and it could not see them. Reproduced
+    on production 2026-08-24 -- property 925 held
+    `.../inmueble/81187720/` in subscription 22, and a dry run over a sheet
+    containing that very link reported 20 new rows. Nothing here can delete a
+    property, so each of those would have been permanent: on `/properties`, in
+    the `/municipalities` medians and in the subscription's comparable pool.
+
+    A changed line is a new row, and that is the honest answer rather than a
+    shortcoming. `_stable_key` mixes the price and the plot size into the key,
+    so a sheet re-exported with a corrected price no longer recognises itself
+    by `source_email_id` -- but for an Idealista link the id branch catches it,
+    and for the rest the sheet is the only thing that knows whether two lines
+    are one listing re-priced or two plots the owner listed separately.
 
     What is *not* used is a bare URL match. A category link is not an identity:
     four different Ribadesella plots share one in this sheet, and matching on
-    it would fold them into a single listing.
+    it would fold them into a single listing. A `/inmueble/<id>/` URL is safe
+    for exactly the reason a category one is not -- the id in it names one
+    listing.
     """
     from models import Property
-    from utils.listing_search import extract_listing_id
+    from utils.listing_search import extract_listing_id, listing_id_clause
 
     found = Property.query.filter_by(source_email_id=source_email_id_for(row)).first()
     if found is not None:
@@ -184,7 +222,7 @@ def _existing(row: Dict[str, Any]):
 
     listing_id = extract_listing_id(row.get("url"))
     if listing_id is not None:
-        return Property.query.filter_by(idealista_property_id=listing_id).first()
+        return Property.query.filter(listing_id_clause(Property, listing_id)).first()
     return None
 
 

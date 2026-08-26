@@ -152,6 +152,78 @@ class TestDuplicates:
             assert rows[0]["status"] == sheet_import.STATUS_DUPLICATE
             assert rows[0]["existing_id"] is not None
 
+    def test_a_row_this_importer_wrote_is_recognised_by_the_url_it_stored(
+        self, app, tmp_path
+    ):
+        """The rows this tool creates carry the listing id in the URL only.
+
+        Reproduced on production 2026-08-24: property 925 held
+        `.../inmueble/81187720/` in subscription 22 with
+        `idealista_property_id` NULL and a `research_sheet:` provenance -- a
+        row this same importer had written -- and a dry run over a sheet
+        containing that link reported 20 new rows, none of them recognised.
+        Every one would have been permanent: there is no delete route here, so
+        a duplicate stays on /properties, in the /municipalities medians and in
+        its subscription's comparable pool.
+
+        The sheet line below deliberately does not reproduce the earlier one:
+        `_stable_key` mixes in the price and the plot size, so the
+        `source_email_id` branch cannot answer this and the id branch has to.
+        """
+        with app.app_context():
+            earlier = Property(
+                # The key an earlier, differently-priced line produced.
+                source_email_id="research_sheet:9ecbcf9960b912fd460a4102",
+                title="Imported from an earlier sheet",
+                url="https://www.idealista.com/inmueble/81187720/",
+            )
+            db.session.add(earlier)
+            db.session.commit()
+            # The premise: nothing extracted the id, so the column cannot
+            # answer. Without this the test would pass on any implementation.
+            assert earlier.idealista_property_id is None
+
+            line = PLOT.replace(
+                "https://www.yaencontre.com/venta/terreno/inmueble-46389-112263617",
+                "https://www.idealista.com/es/inmueble/81187720/",
+            )
+            rows = sheet_import.read_rows(_csv(tmp_path, line), SHEET)
+            assert sheet_import.source_email_id_for(rows[0]) != earlier.source_email_id
+
+            sheet_import.mark_duplicates(rows)
+
+            assert rows[0]["status"] == sheet_import.STATUS_DUPLICATE
+            assert rows[0]["existing_id"] == earlier.id
+
+    def test_a_shorter_id_is_not_the_listing_whose_id_starts_with_it(
+        self, app, tmp_path
+    ):
+        """The trailing slash in the URL match is a boundary, not decoration.
+
+        `/inmueble/8118772` is a substring of `/inmueble/81187720/`, so without
+        it this sheet row would be discarded as a duplicate of a different
+        listing -- worse than the defect above, because a real listing would
+        never be imported at all.
+        """
+        with app.app_context():
+            db.session.add(
+                Property(
+                    source_email_id="research_sheet:earlier",
+                    title="A different listing entirely",
+                    url="https://www.idealista.com/inmueble/81187720/",
+                )
+            )
+            db.session.commit()
+
+            line = PLOT.replace(
+                "https://www.yaencontre.com/venta/terreno/inmueble-46389-112263617",
+                "https://www.idealista.com/es/inmueble/8118772/",
+            )
+            rows = sheet_import.read_rows(_csv(tmp_path, line), SHEET)
+            sheet_import.mark_duplicates(rows)
+
+            assert rows[0]["status"] == sheet_import.STATUS_NEW
+
     def test_a_link_nobody_has_is_new(self, app, tmp_path):
         with app.app_context():
             rows = sheet_import.read_rows(_csv(tmp_path, PLOT), SHEET)

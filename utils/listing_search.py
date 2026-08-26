@@ -194,6 +194,32 @@ def interpret_search(search_query: Optional[str]) -> Optional[SearchInterpretati
     )
 
 
+def listing_id_clause(model: Any, listing_id: int):
+    """The rows carrying one Idealista listing id, by either of its two homes.
+
+    `idealista_property_id` is the extracted identity and it is NULL wherever
+    nothing extracted it. Measured against production on 2026-08-24: of the
+    786 rows whose URL is an idealista listing, **48 carry no id in the
+    column** -- every one of them written by `utils/import_research_sheet.py`,
+    which stores the link and never the id. A lookup reading only the column
+    is therefore blind to a question those rows can answer, which is #98 in a
+    dedup: an absence of a *match* read as an absence of the *row*.
+
+    The trailing slash is a boundary: without it `/inmueble/9152345` would
+    also match the different listing `/inmueble/91523456/`. All 786 of those
+    stored URLs carry it (measured the same day), and none carries the id in
+    any other shape.
+
+    This is the whole reading, so a caller that has a listing id asks here
+    rather than half-remembering it -- which is exactly what
+    `import_research_sheet._existing` did until 2026-08-25.
+    """
+    return or_(
+        model.idealista_property_id == listing_id,
+        model.url.ilike(f"%/inmueble/{listing_id}/%"),
+    )
+
+
 def listing_search_clause(model: Any, search_query: Optional[str]):
     """The listing search box, as one SQLAlchemy clause (None when empty).
 
@@ -214,10 +240,7 @@ def listing_search_clause(model: Any, search_query: Optional[str]):
     ]
 
     if read.listing_id is not None:
-        clauses.append(model.idealista_property_id == read.listing_id)
-        # The trailing slash is a boundary: without it `/inmueble/9152345`
-        # would also match the different listing `/inmueble/91523456/`.
-        clauses.append(model.url.ilike(f"%/inmueble/{read.listing_id}/%"))
+        clauses.append(listing_id_clause(model, read.listing_id))
 
     if read.url_fragment:
         clauses.append(
