@@ -236,6 +236,41 @@ class TestTheFanLooksWhereTheSeaIs:
         ]
         assert len(from_cluster) == 1
 
+    def test_a_narrow_near_ridge_is_not_stepped_over(self, monkeypatch):
+        """The spacing is load bearing in the other direction too.
+
+        A ridge 60 m wide at 60-120 m out hides everything beyond it. Even
+        spacing over 3 km puts the first sample at 158 m, past the ridge and
+        into the ground behind it, and the fan would report the sea it cannot
+        actually see -- turning a false negative into a false positive, which
+        is the failure this whole file is about, mirrored.
+        """
+        monkeypatch.setattr(
+            svc,
+            "fetch_coastline_points",
+            lambda lat, lon, session=None: _coast_arc(range(0, 360, 20)),
+        )
+
+        def _narrow_ridge(points, session=None):
+            out = []
+            for point in points:
+                distance, _ = _distance_and_bearing(point)
+                if distance < 1.0:
+                    out.append(OBSERVER_GROUND_M)
+                elif 60.0 <= distance <= 120.0:
+                    out.append(80.0)  # well over the 50.2 m eye
+                elif distance >= 550.0:
+                    out.append(None)
+                else:
+                    out.append(5.0)
+            return out
+
+        monkeypatch.setattr(svc, "fetch_elevations", _narrow_ridge)
+        detail = svc.evaluate_geometry(PLOT_LAT, PLOT_LON, "precise", use_cache=False)
+
+        assert detail["state"] == svc.NO
+        assert detail["sea_probe"]["visible"] is False
+
     def test_the_near_field_is_sampled_finely_enough_to_see_the_brow(self):
         """Even spacing over 3 km starts at 158 m and steps over a 91 m brow.
 
