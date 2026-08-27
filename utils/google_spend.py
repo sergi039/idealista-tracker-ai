@@ -166,6 +166,13 @@ _URLS: Dict[str, str] = {
 # 150 is that ceiling with room, and it is a *ceiling*, not a budget: it is
 # what stops a runaway loop, not what a press is expected to cost. A press
 # that hits it has found a defect and the ledger says which API ran away.
+#
+# One consequence of reserving the worst case (`_reserve`): a cap has to cover
+# the largest single call's `units * MAX_ATTEMPTS_PER_CALL`, not its nominal
+# cost. The biggest call one press makes is a 26-element Distance Matrix
+# batch, so it must clear 78 at its peak -- which 150 does, because the calls
+# are sequential and each refunds before the next begins. Peak reservation
+# measured against the sequence above is ~79.
 CAP_ONE_PROPERTY = 150
 #: The legacy `Land` path still buys its presets from Places (it holds no copy
 #: of the OSM lookup), so it is the more expensive of the two.
@@ -354,16 +361,33 @@ def machine_may_spend() -> bool:
     """
     from config import Config
 
-    return bool(getattr(Config, "GOOGLE_SPEND_ENABLED", True))
+    value = getattr(Config, "GOOGLE_SPEND_ENABLED", True)
+    # `bool("false")` is True, and a cost control that reads the string
+    # "false" as permission is the one bug this whole module is about.
+    # `config.py` always produces a real bool, but this attribute is also set
+    # by tests, by a `docker exec` poking `Config`, and by whatever reads an
+    # environment differently next year -- so the coercion happens here, where
+    # the answer is used, rather than being assumed of every writer.
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def spend_verdict(units: int = 1) -> SpendVerdict:
-    """May `units` billed units be spent right now?
+    """Would `units` billed units be allowed right now? Advisory only.
 
-    The reader every surface shares. A route uses it to refuse before it builds
-    a service; a template uses it to leave out a button the endpoint would
-    refuse, the way `services/ingest_policy.machine_is_ingester` does -- a
-    control that is present and refuses is a control that reads as broken.
+    **This is not the gate, and must never be used as one.** It reads the cap
+    without holding the lock, so between its answer and any charge a second
+    thread may have taken the room -- which is precisely the check-then-act
+    race that made `billed_get` bill over its ceiling before `_reserve`
+    existed. The authoritative decision is `_reserve`, where the check and the
+    charge are one indivisible step.
+
+    What it is for is surfaces: a route refusing before it builds a service, a
+    template leaving out a button the endpoint would refuse, the way
+    `services/ingest_policy.machine_is_ingester` does -- a control that is
+    present and refuses reads as broken. Being briefly wrong in either
+    direction costs a redrawn button, not money.
     """
     if not machine_may_spend():
         return SpendVerdict(False, REASON_SPEND_OFF_ON_THIS_MACHINE)
@@ -508,6 +532,52 @@ MAX_LEDGER_REASON = 200
 # --------------------------------------------------------------------------
 
 
+#: What `request_with_retries` may issue for one logical call. `utils/http.py`
+#: defaults `max_attempts=3` and every billed caller here takes that default,
+#: so three is the worst case one `billed_get` can put on the invoice.
+#:
+#: It is a *constant here* rather than a value read from the transport because
+#: the reservation below has to be made before the transport is entered. If
+#: `utils/http.request_with_retries` ever changes its default, this number is
+#: what has to change with it, and `tests/test_google_spend_is_authorized.py`
+#: asserts the two agree.
+MAX_ATTEMPTS_PER_CALL = 3
+
+
+def _reserve(authorization: SpendAuthorization, worst_case: int) -> bool:
+    """Check the cap and charge the worst case in one atomic step.
+
+    The whole gate is this function being indivisible. An earlier version
+    asked `spend_verdict()` whether there was room and *then* charged under a
+    separate lock, which is a check-then-act race: with `--workers 1
+    --threads 4` two threads both read `remaining() == 1`, both passed, and
+    both billed. One unit over a cap of one is not much money; a gate whose
+    ceiling can be walked through is not a ceiling, which is the whole claim
+    this module makes.
+
+    The worst case is reserved rather than the nominal cost, because
+    `request_with_retries` may issue the same request three times and each
+    attempt is one Google may bill for. Charging the nominal figure up front
+    and the retries afterwards let a cap of one fund three requests -- the cap
+    bounded the *intention* and not the spend. What is not used is refunded by
+    the caller the moment the attempt count is known, so reserving costs
+    headroom during the call and nothing after it.
+    """
+    with _LOCK:
+        if authorization.cap_units - authorization.spent < worst_case:
+            return False
+        authorization.spent += worst_case
+        return True
+
+
+def _refund(authorization: SpendAuthorization, amount: int) -> None:
+    """Give back the reserved attempts that were never issued."""
+    if amount <= 0:
+        return
+    with _LOCK:
+        authorization.spent = max(0, authorization.spent - amount)
+
+
 def billed_get(
     api: str,
     *,
@@ -524,17 +594,25 @@ def billed_get(
     `tests/test_google_spend_is_authorized.py` fails the suite if a twelfth
     call site appears anywhere else.
 
-    `units` is what this one call costs on the invoice: 1 for Places and
-    Geocoding, `origins x destinations` for Distance Matrix. It is charged
-    against the authorization's cap *before* the request, so a cap is a
-    ceiling on what may be spent rather than a report on what was.
+    `units` is what one *attempt* costs on the invoice: 1 for Places and
+    Geocoding, `origins x destinations` for Distance Matrix. What is charged
+    against the cap before the request is `units * MAX_ATTEMPTS_PER_CALL` --
+    the worst case, reserved -- and the attempts that never happened are
+    refunded the moment the count is known.
 
-    Retries are counted, not assumed. `request_with_retries` may issue the same
-    request up to three times, and each attempt is a request Google may bill
-    for -- so the ledger records the attempts actually made, and the
-    authorization is charged for them. A caller that budgeted one unit and met
-    two 429s has spent what it spent; hiding that in the nominal figure is how
-    a ledger comes to disagree with an invoice.
+    That is a correction, and the thing it corrects is worth stating because
+    it is easy to reintroduce. Charging the nominal figure up front and the
+    retries afterwards reads as careful accounting and bounds nothing: a cap
+    of one unit funded a request `request_with_retries` issued three times,
+    because the two extra attempts were charged after they had already been
+    sent. A cap that is only checked against the cost the caller *intended*
+    is a cap on intentions. Reserving costs headroom during the call and
+    nothing after it.
+
+    The ledger still records the attempts actually issued rather than the
+    nominal figure -- a caller that budgeted one unit and met two 429s has
+    spent what it spent, and hiding that is how a ledger comes to disagree
+    with an invoice.
 
     Raises `PaidCallRefused` when the machine may not spend, no authorization
     is open, or the cap will not cover this call. Everything else -- a network
@@ -543,19 +621,41 @@ def billed_get(
     """
     if api not in BILLED_APIS:
         raise ValueError(f"unknown billed API: {api!r}")
+    if not isinstance(units, int) or units < 1:
+        # A call that costs nothing is a call that was mis-counted. `units=0`
+        # used to pass the check -- `spend_verdict` compared `max(1, units)`
+        # while the charge added the raw figure -- so a caller whose
+        # arithmetic produced 0 billed Google and charged the authorization
+        # nothing, which is the one outcome this module exists to make
+        # impossible. Refused loudly rather than clamped, because a wrong
+        # `units` is a defect at the call site and clamping hides it.
+        raise ValueError(f"a billed call must cost at least one unit, got {units!r}")
 
     log = call_logger or logger
-    verdict = spend_verdict(units)
-    if not verdict.allowed:
-        authorization = _AUTHORIZATION.get()
+
+    # The refusal path, in the order that fails closed: the machine switch, the
+    # presence of an authorization, then the cap -- and the cap check *is* the
+    # charge (`_reserve`), so nothing can pass between asking and paying.
+    authorization = _AUTHORIZATION.get()
+    worst_case = units * MAX_ATTEMPTS_PER_CALL
+    if not machine_may_spend():
+        refusal = REASON_SPEND_OFF_ON_THIS_MACHINE
+    elif authorization is None:
+        refusal = REASON_SPEND_NOT_AUTHORIZED
+    elif not _reserve(authorization, worst_case):
+        refusal = REASON_SPEND_CAP_EXCEEDED
+    else:
+        refusal = None
+
+    if refusal is not None:
         detail = (
-            f"cap {authorization.cap_units} units, {authorization.spent} already spent"
+            f"cap {authorization.cap_units} units, {authorization.spent} already "
+            f"spent, {worst_case} needed for this call and its retries"
             if authorization is not None
             else "no authorization is open"
         )
         message = (
-            f"refused to spend {units} billed unit(s) on {api}: "
-            f"{verdict.reason} ({detail})"
+            f"refused to spend {units} billed unit(s) on {api}: {refusal} ({detail})"
         )
         log.warning("google spend refused: %s", message)
         record_spend(
@@ -565,7 +665,7 @@ def billed_get(
                 "units": 0,
                 "requested_units": units,
                 "outcome": "refused",
-                "refusal": verdict.reason,
+                "refusal": refusal,
                 "subject": subject,
                 "authorization": authorization.id if authorization else None,
                 "actor": authorization.actor if authorization else None,
@@ -574,15 +674,10 @@ def billed_get(
                 ],
             }
         )
-        raise PaidCallRefused(verdict.reason, message)
+        raise PaidCallRefused(refusal, message)
 
-    authorization = _AUTHORIZATION.get()
-    # Charged up front. The alternative -- charge on the way out -- lets a cap
-    # of one unit fund an unbounded number of concurrent calls, because each
-    # one reads a cap nothing has been deducted from yet.
-    with _LOCK:
-        authorization.spent += units
-
+    # `worst_case` is already reserved by `_reserve` above. What is left is to
+    # find out how many attempts were really issued and give the rest back.
     attempts = 0
 
     def _counted_get(*args: Any, **kwargs: Any) -> requests.Response:
@@ -600,18 +695,17 @@ def billed_get(
         outcome = "error"
         raise
     finally:
-        # A retried request is a request Google saw. Charge the extra attempts
-        # and record what was really issued, not what was planned.
-        extra = max(0, attempts - 1) * units
-        if extra:
-            with _LOCK:
-                authorization.spent += extra
+        # A retried request is a request Google saw, so the ledger records the
+        # attempts really issued. The authorization was charged for three of
+        # them before the call; the ones that did not happen come back.
+        issued = max(1, attempts)
+        _refund(authorization, worst_case - issued * units)
         record_spend(
             {
                 "at": datetime.now(timezone.utc).isoformat(),
                 "api": api,
-                "units": units * max(1, attempts),
-                "requests_issued": attempts,
+                "units": units * issued,
+                "requests_issued": issued,
                 "outcome": outcome,
                 "subject": subject,
                 "authorization": authorization.id,

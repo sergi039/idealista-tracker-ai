@@ -1715,11 +1715,30 @@ and TODO.md; respect it if you ever run both side by side.
   it.** `AUTO_GEOCODING` stays on and ingestion opens its own authorization
   for it by name, so the ingest path is unchanged. On a path that opens *no*
   authorization the billed geocode is refused — and `geocode_address` falls
-  through to Nominatim, which is free, so the row still gets a coordinate and
-  the four free downstream measurements (sea distance, sea-view verdict, OSM
-  amenities, quality of life) still run. That is the whole reason the fallback
-  was left in place and is pinned by a test: the harm the rule names is a row
-  with *no* coordinate, and a refusal here costs precision, not the point.
+  through to Nominatim, which is free, so the row gets a coordinate **when
+  Nominatim answers**. That last clause is not a hedge, it is the honest
+  limit: an independent review caught this paragraph claiming the coordinate
+  unconditionally, and a Nominatim that finds nothing still returns `None`
+  exactly as it did before this gate existed. What the gate changes is
+  nothing about that path — the harm the rule names is a row with *no*
+  coordinate *because a cost control removed the call*, and a refusal here
+  costs precision rather than the attempt. Pinned by a test.
+
+- **A cap reserves the worst case, not the nominal cost** — `units *
+  MAX_ATTEMPTS_PER_CALL`, refunded the moment the attempt count is known. The
+  first version charged the nominal figure up front and the retries
+  afterwards, which reads as careful accounting and bounds nothing: a cap of
+  one unit funded a request `request_with_retries` issued three times, because
+  the two extra attempts were charged after Google had already been sent them.
+  In the same family, the check and the charge are **one** operation
+  (`_reserve`, under a single lock) — reading the remaining cap and then
+  charging it is a check-then-act race, and with `--workers 1 --threads 4` two
+  threads both read "room for one", both passed, and both billed.
+  `spend_verdict()` survives only as an advisory reader for surfaces deciding
+  whether to draw a button, and says so in its own docstring; it is not the
+  gate. All three of these were found by the Tier 2 independent review of the
+  change that introduced them, not by its tests — which is the argument for
+  the gate in one line.
 
 - External APIs cost real money (Anthropic, OpenAI, Google Places /
   Distance Matrix). Never run bulk backfills (`utils/bulk_ai_analysis.py`,

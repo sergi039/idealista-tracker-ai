@@ -291,12 +291,30 @@ class TestARefusalIsNotAnAnswer:
 
 class TestTheCapBinds:
     def test_units_are_charged_before_the_request(self):
-        with patch.object(google_spend, "requests") as transport:
-            transport.get.return_value = _ok_response()
-            with authorized_spend("owner", actor="test", cap_units=30) as grant:
+        """Asserted *during* the request, which is the only place it shows.
+
+        The charge is a reservation of the worst case taken before the
+        transport is entered, and refunded the moment the attempt count is
+        known -- so by the time `billed_get` returns, `spent` is back to the
+        nominal cost and an assertion after the call cannot tell "charged
+        before" from "charged after". The observation has to happen inside the
+        transport, so the mock is where it lives.
+        """
+        seen = {}
+
+        def observe(*args, **kwargs):
+            seen["spent"] = grant.spent
+            return _ok_response()
+
+        with patch.object(google_spend.requests, "get", side_effect=observe):
+            with authorized_spend("owner", actor="test", cap_units=100) as grant:
                 billed_get(API_DISTANCE_MATRIX, params={"key": "k"}, units=26)
-                assert grant.spent == 26
-                assert grant.remaining() == 4
+
+        assert seen["spent"] == 26 * google_spend.MAX_ATTEMPTS_PER_CALL, (
+            "the worst case must be reserved before the request is issued, or "
+            "a retried call can walk past the cap"
+        )
+        assert grant.spent == 26, "the attempts never issued must be refunded"
 
     def test_a_call_that_would_exceed_the_cap_is_refused_whole(self):
         with patch.object(google_spend, "requests") as transport:
@@ -351,8 +369,10 @@ class TestTheCapBinds:
     def test_what_a_nested_block_spends_is_charged_to_its_parent(self):
         with patch.object(google_spend, "requests") as transport:
             transport.get.return_value = _ok_response()
-            with authorized_spend("outer", actor="test", cap_units=10) as outer:
-                with authorized_spend("inner", actor="test", cap_units=10):
+            # Caps must cover the worst case a call may reserve (units x the
+            # attempt ceiling), not its nominal cost.
+            with authorized_spend("outer", actor="test", cap_units=40) as outer:
+                with authorized_spend("inner", actor="test", cap_units=40):
                     billed_get(API_GEOCODING, params={"key": "k"}, units=4)
                 assert outer.spent == 4, (
                     "an inner block whose spend vanished on return would make "
@@ -428,7 +448,7 @@ class TestTheLedger:
         with patch.object(google_spend, "requests") as transport:
             transport.get.return_value = _ok_response()
             with authorized_spend(
-                "Enrich pressed for property 793", actor="api:test", cap_units=50
+                "Enrich pressed for property 793", actor="api:test", cap_units=100
             ):
                 billed_get(
                     API_DISTANCE_MATRIX,
@@ -686,3 +706,169 @@ class TestAnOutageDoesNotBecomeABill:
             ),
         )
         assert result["status"] == "unavailable"
+
+
+# ---------------------------------------------------------------------------
+# Behavioural: what the Tier 2 review found (2026-08-26)
+# ---------------------------------------------------------------------------
+
+
+class TestTheCeilingIsReallyACeiling:
+    """The independent review's three critical findings, each pinned.
+
+    All three were the same shape: the cap bounded the *intention* to spend
+    rather than the spend. A ceiling that can be walked through is not a
+    ceiling, and that is the only claim this module makes.
+    """
+
+    def test_two_threads_cannot_both_pass_a_cap_with_room_for_one(self):
+        """The check-then-act race (review BLOCKER 1, `_reserve`).
+
+        `spend_verdict()` read `remaining()` and the charge happened under a
+        separate lock, so with `--workers 1 --threads 4` two threads could
+        both read "room for one", both pass, and both bill. Reproduced by
+        copying the context into two threads that start together.
+        """
+        import contextvars
+        import threading
+
+        issued = []
+        barrier = threading.Barrier(2)
+
+        def fake_get(*args, **kwargs):
+            issued.append(1)
+            return _ok_response()
+
+        with patch.object(google_spend.requests, "get", side_effect=fake_get):
+            # Cap is exactly one call's worst case, so exactly one of the two
+            # threads may proceed.
+            with authorized_spend(
+                "race", actor="test", cap_units=google_spend.MAX_ATTEMPTS_PER_CALL
+            ) as grant:
+                refused = []
+
+                def worker():
+                    barrier.wait()
+                    try:
+                        billed_get(API_GEOCODING, params={"key": "k"}, units=1)
+                    except PaidCallRefused:
+                        refused.append(1)
+
+                # One `Context` per thread. A single copy shared between two
+                # threads is not a smaller version of this test, it is a
+                # deadlock: `Context.run()` refuses to be entered twice, so the
+                # second thread dies before the barrier and the first waits on
+                # it forever. Both threads must carry the authorization, which
+                # a plain `threading.Thread` would not -- that is exactly the
+                # non-inheritance this module relies on elsewhere.
+                threads = [
+                    threading.Thread(
+                        target=contextvars.copy_context().run, args=(worker,)
+                    )
+                    for _ in range(2)
+                ]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+
+        assert len(issued) == 1, (
+            f"{len(issued)} billed requests were issued through a cap with room "
+            "for one: the check and the charge are not atomic"
+        )
+        assert len(refused) == 1
+        assert grant.spent <= grant.cap_units
+
+    def test_retries_cannot_carry_a_call_past_its_cap(self):
+        """Review BLOCKER 2: three attempts under a cap of one.
+
+        The worst case is reserved before the call rather than charged after
+        it, so a cap of one unit cannot fund a request that is retried twice.
+        """
+        calls = {"n": 0}
+
+        def always_429(*args, **kwargs):
+            calls["n"] += 1
+            response = Mock()
+            response.status_code = 429
+            response.json.return_value = {}
+            return response
+
+        import utils.http as http_module
+
+        with patch.object(google_spend.requests, "get", side_effect=always_429):
+            with patch.object(http_module, "_compute_backoff", return_value=0):
+                # One unit of room: not enough for a call that may be issued
+                # three times, so it must be refused before anything leaves.
+                with authorized_spend("retry", actor="test", cap_units=1):
+                    with pytest.raises(PaidCallRefused) as excinfo:
+                        billed_get(API_GEOCODING, params={"key": "k"}, units=1)
+
+        assert excinfo.value.reason == REASON_SPEND_CAP_EXCEEDED
+        assert calls["n"] == 0, (
+            "a cap of one funded a retried request: the cap bounded the "
+            "nominal cost and not what Google was actually sent"
+        )
+
+    def test_the_reservation_is_given_back_when_retries_do_not_happen(self):
+        """Reserving the worst case must not permanently cost the worst case."""
+        with patch.object(google_spend, "requests") as transport:
+            transport.get.return_value = _ok_response()
+            with authorized_spend("refund", actor="test", cap_units=100) as grant:
+                billed_get(API_GEOCODING, params={"key": "k"}, units=1)
+                assert grant.spent == 1, (
+                    "one answered attempt must cost one unit, not the three "
+                    "reserved for its retries"
+                )
+
+    def test_a_call_that_costs_nothing_is_refused_not_charged_nothing(self):
+        """Review BLOCKER 3: `units=0` passed the check and charged zero.
+
+        `spend_verdict` compared `max(1, units)` while the charge added the
+        raw figure, so a caller whose arithmetic produced 0 billed Google for
+        free. Refused loudly rather than clamped: a wrong `units` is a defect
+        at the call site and clamping hides it.
+        """
+        with patch.object(google_spend, "requests") as transport:
+            with authorized_spend("zero", actor="test", cap_units=100):
+                for bad in (0, -5):
+                    with pytest.raises(ValueError):
+                        billed_get(API_GEOCODING, params={"key": "k"}, units=bad)
+            transport.get.assert_not_called()
+
+    def test_the_attempt_ceiling_agrees_with_the_transport(self):
+        """`MAX_ATTEMPTS_PER_CALL` is a copy of `request_with_retries`'s default.
+
+        The reservation has to be made before the transport is entered, so the
+        number cannot be read from it at call time. If the transport's default
+        moves and this does not, the cap silently stops bounding the spend
+        again -- so the two are asserted equal here rather than trusted.
+        """
+        import inspect
+
+        import utils.http as http_module
+
+        default = (
+            inspect.signature(http_module.request_with_retries)
+            .parameters["max_attempts"]
+            .default
+        )
+        assert google_spend.MAX_ATTEMPTS_PER_CALL == default
+
+    @pytest.mark.parametrize("value", ["false", "False", "0", "no", "off", ""])
+    def test_a_string_machine_switch_does_not_read_as_permission(self, value):
+        """Review BLOCKER 5: `bool("false")` is True.
+
+        `config.py` produces a real bool, but this attribute is also set by
+        tests and by a `docker exec` poking `Config`. A cost control that reads
+        the string "false" as permission is the one bug this module is about.
+        """
+        from config import Config
+
+        with patch.object(Config, "GOOGLE_SPEND_ENABLED", value):
+            with patch.object(google_spend, "requests") as transport:
+                with authorized_spend("owner asked", actor="test", cap_units=100):
+                    with pytest.raises(PaidCallRefused) as excinfo:
+                        billed_get(API_GEOCODING, params={"key": "k"}, units=1)
+            assert excinfo.value.reason == REASON_SPEND_OFF_ON_THIS_MACHINE
+            transport.get.assert_not_called()
