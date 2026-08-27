@@ -36,6 +36,7 @@ from models import Property
 from services.property_scoring_service import PropertyScoringService
 from services.property_travel_service import PropertyTravelService
 from utils.enrich_scope import log_scope, scoped_properties, window_note
+from utils.google_spend import add_spend_arguments, cli_authorization
 from utils.inflight import inflight
 
 logger = logging.getLogger(__name__)
@@ -220,6 +221,7 @@ def main() -> None:
     parser.add_argument(
         "--restore", help="Restore scores and travel from a snapshot, then exit."
     )
+    add_spend_arguments(parser)
     args = parser.parse_args()
 
     if not args.dry_run and not args.restore and not args.snapshot:
@@ -268,7 +270,14 @@ def main() -> None:
         # Resumable for the reason stated at the top of this module: per-row
         # commit, an idempotent scope, and a ledger to reconcile against. That
         # claim is what lets the deploy chain kill this run knowingly (#283).
-        with inflight("backfill_beach_travel", ledger=ledger_path, resumable=True):
+        with (
+            cli_authorization(
+                args.reason,
+                actor="utils.backfill_beach_travel",
+                rows=len(properties),
+            ),
+            inflight("backfill_beach_travel", ledger=ledger_path, resumable=True),
+        ):
             _write_snapshot([_snapshot_row(p) for p in properties], args.snapshot)
             report = run(
                 properties,

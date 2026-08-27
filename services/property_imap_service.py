@@ -11,6 +11,11 @@ from app import db
 from config import Config
 from models import Property, SyncHistory
 from utils.email_headers import decode_header_value
+from utils.google_spend import (
+    CAP_INGEST_GEOCODE,
+    CAP_INGEST_TRAVEL,
+    authorized_spend,
+)
 from services.settings_service import SettingsService
 from services.search_profile_service import SearchProfileService
 from services.property_classification_service import PropertyClassificationService
@@ -838,7 +843,19 @@ class PropertyIMAPService:
                             )
 
                             travel_service = PropertyTravelService()
-                            travel_service.calculate_for_property(prop, commit=True)
+                            # `AUTO_TRAVEL_ENRICHMENT=true` is the one standing
+                            # decision that lets an unattended loop spend, and
+                            # it is off by default for what it cost. Naming it
+                            # in the authorization puts it in the ledger under
+                            # the flag that permitted it, so an invoice spike
+                            # from ingestion is attributable to a setting
+                            # rather than to a mystery.
+                            with authorized_spend(
+                                f"ingest: AUTO_TRAVEL_ENRICHMENT for property {prop.id}",
+                                actor="ingest:property_imap",
+                                cap_units=CAP_INGEST_TRAVEL,
+                            ):
+                                travel_service.calculate_for_property(prop, commit=True)
                         except Exception as enrich_error:
                             logger.warning(
                                 "Property travel enrichment failed for %s: %s",
@@ -852,7 +869,19 @@ class PropertyIMAPService:
                                 PropertyLocationService,
                             )
 
-                            PropertyLocationService().ensure_coordinates(prop)
+                            # The one paid call the free pass cannot do
+                            # without, at $0.005 a listing and about $1 a
+                            # month here. A standing owner decision, recorded
+                            # in `config.py` -- so it is authorized by name
+                            # and lands in the ledger, rather than being the
+                            # single billed call in the tree that answers to
+                            # nobody.
+                            with authorized_spend(
+                                f"ingest: AUTO_GEOCODING for property {prop.id}",
+                                actor="ingest:property_imap",
+                                cap_units=CAP_INGEST_GEOCODE,
+                            ):
+                                PropertyLocationService().ensure_coordinates(prop)
                             # `ensure_coordinates` writes to the instance and
                             # leaves the commit to its caller, exactly as
                             # `utils/refresh_property_accuracy.py` does. It

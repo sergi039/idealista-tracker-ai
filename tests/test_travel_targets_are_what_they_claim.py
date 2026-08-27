@@ -280,7 +280,7 @@ class TestTheLookupWalksPastRefusedCandidates:
         """`rankby=distance` orders them, so the first accepted one is nearest."""
         service = self._service()
         with patch(
-            "services.property_travel_service.request_with_retries",
+            "utils.google_spend.request_with_retries",
             return_value=self._payload([GLUEWAY, HOSPITAL_HELIPAD, REAL_AIRPORT]),
         ):
             lookup = service._nearest_place_for_preset(
@@ -294,7 +294,7 @@ class TestTheLookupWalksPastRefusedCandidates:
         """ "No airport near here" must not read as an API refusal (#98)."""
         service = self._service()
         with patch(
-            "services.property_travel_service.request_with_retries",
+            "utils.google_spend.request_with_retries",
             return_value=self._payload([GLUEWAY, HOSPITAL_HELIPAD, HOTEL]),
         ):
             lookup = service._nearest_place_for_preset(
@@ -310,7 +310,7 @@ class TestTheLookupWalksPastRefusedCandidates:
         service = self._service()
         school = _place("Escuela La Serena", ["school", "establishment"])
         with patch(
-            "services.property_travel_service.request_with_retries",
+            "utils.google_spend.request_with_retries",
             return_value=self._payload([school]),
         ):
             lookup = service._nearest_place_for_preset(
@@ -333,7 +333,7 @@ class TestTheLookupWalksPastRefusedCandidates:
             side_effect=_capture,
         ):
             with patch(
-                "services.property_travel_service.request_with_retries",
+                "utils.google_spend.request_with_retries",
                 return_value=self._payload([REAL_AIRPORT]),
             ):
                 service._nearest_place_for_preset(

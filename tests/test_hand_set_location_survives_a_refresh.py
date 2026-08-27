@@ -515,6 +515,9 @@ class TestTheRepairToolSaysWhatItSkipped:
                 ",".join(str(i) for i in ids),
                 "--sleep",
                 "0",
+                # Billed geocoding: the tool will not start without a reason.
+                "--reason",
+                "pytest: hand-set rows survive a refresh",
             ],
         )
         tool.main()

@@ -242,7 +242,7 @@ class TestAllPlacesRefused:
         "services.property_travel_service.SearchProfileService.get_travel_preset_defs"
     )
     @patch("services.property_travel_service.get_cached_enrichment_data")
-    @patch("services.property_travel_service.request_with_retries")
+    @patch("utils.google_spend.request_with_retries")
     def test_returns_false_when_all_places_denied(
         self, mock_request, mock_cache, mock_preset_defs, mock_travel_config, app, prop
     ):
@@ -281,7 +281,7 @@ class TestAllPlacesRefused:
         "services.property_travel_service.SearchProfileService.get_travel_preset_defs"
     )
     @patch("services.property_travel_service.get_cached_enrichment_data")
-    @patch("services.property_travel_service.request_with_retries")
+    @patch("utils.google_spend.request_with_retries")
     def test_travel_json_distinguishes_denied_from_not_found(
         self, mock_request, mock_cache, mock_preset_defs, mock_travel_config, app, prop
     ):
@@ -335,7 +335,7 @@ class TestPartialFailure:
         "services.property_travel_service.SearchProfileService.get_travel_preset_defs"
     )
     @patch("services.property_travel_service.get_cached_enrichment_data")
-    @patch("services.property_travel_service.request_with_retries")
+    @patch("utils.google_spend.request_with_retries")
     def test_places_denied_distance_matrix_ok_reports_failure(
         self, mock_request, mock_cache, mock_preset_defs, mock_travel_config, app, prop
     ):
@@ -382,7 +382,7 @@ class TestPartialFailure:
         "services.property_travel_service.SearchProfileService.get_travel_preset_defs"
     )
     @patch("services.property_travel_service.get_cached_enrichment_data")
-    @patch("services.property_travel_service.request_with_retries")
+    @patch("utils.google_spend.request_with_retries")
     def test_partial_failure_travel_json_has_error_status(
         self, mock_request, mock_cache, mock_preset_defs, mock_travel_config, app, prop
     ):
@@ -440,7 +440,7 @@ class TestGenuineNothingNearby:
         "services.property_travel_service.SearchProfileService.get_travel_preset_defs"
     )
     @patch("services.property_travel_service.get_cached_enrichment_data")
-    @patch("services.property_travel_service.request_with_retries")
+    @patch("utils.google_spend.request_with_retries")
     def test_genuine_empty_results_is_success(
         self, mock_request, mock_cache, mock_preset_defs, mock_travel_config, app, prop
     ):
@@ -480,7 +480,7 @@ class TestGenuineNothingNearby:
         "services.property_travel_service.SearchProfileService.get_travel_preset_defs"
     )
     @patch("services.property_travel_service.get_cached_enrichment_data")
-    @patch("services.property_travel_service.request_with_retries")
+    @patch("utils.google_spend.request_with_retries")
     def test_genuine_empty_results_stores_not_found(
         self, mock_request, mock_cache, mock_preset_defs, mock_travel_config, app, prop
     ):
@@ -540,7 +540,7 @@ class TestHTTPLevelFailure:
         "services.property_travel_service.SearchProfileService.get_travel_preset_defs"
     )
     @patch("services.property_travel_service.get_cached_enrichment_data")
-    @patch("services.property_travel_service.request_with_retries")
+    @patch("utils.google_spend.request_with_retries")
     def test_http_500_returns_false(
         self, mock_request, mock_cache, mock_preset_defs, mock_travel_config, app, prop
     ):
@@ -578,7 +578,7 @@ class TestHTTPLevelFailure:
         "services.property_travel_service.SearchProfileService.get_travel_preset_defs"
     )
     @patch("services.property_travel_service.get_cached_enrichment_data")
-    @patch("services.property_travel_service.request_with_retries")
+    @patch("utils.google_spend.request_with_retries")
     def test_http_500_travel_json_not_not_found(
         self, mock_request, mock_cache, mock_preset_defs, mock_travel_config, app, prop
     ):
@@ -612,7 +612,7 @@ class TestHTTPLevelFailure:
         "services.property_travel_service.SearchProfileService.get_travel_preset_defs"
     )
     @patch("services.property_travel_service.get_cached_enrichment_data")
-    @patch("services.property_travel_service.request_with_retries")
+    @patch("utils.google_spend.request_with_retries")
     def test_timeout_exception_returns_false(
         self, mock_request, mock_cache, mock_preset_defs, mock_travel_config, app, prop
     ):
@@ -666,7 +666,7 @@ class TestOverQueryLimit:
         "services.property_travel_service.SearchProfileService.get_travel_preset_defs"
     )
     @patch("services.property_travel_service.get_cached_enrichment_data")
-    @patch("services.property_travel_service.request_with_retries")
+    @patch("utils.google_spend.request_with_retries")
     def test_over_query_limit_returns_false(
         self, mock_request, mock_cache, mock_preset_defs, mock_travel_config, app, prop
     ):
@@ -702,7 +702,7 @@ class TestOverQueryLimit:
         "services.property_travel_service.SearchProfileService.get_travel_preset_defs"
     )
     @patch("services.property_travel_service.get_cached_enrichment_data")
-    @patch("services.property_travel_service.request_with_retries")
+    @patch("utils.google_spend.request_with_retries")
     def test_over_query_limit_travel_json_not_not_found(
         self, mock_request, mock_cache, mock_preset_defs, mock_travel_config, app, prop
     ):
@@ -754,7 +754,7 @@ class TestMissingAPIKey:
         "services.property_travel_service.SearchProfileService.get_travel_preset_defs"
     )
     @patch("services.property_travel_service.get_cached_enrichment_data")
-    @patch("services.property_travel_service.request_with_retries")
+    @patch("utils.google_spend.request_with_retries")
     def test_missing_key_returns_false(
         self, mock_request, mock_cache, mock_preset_defs, mock_travel_config, app, prop
     ):
@@ -801,7 +801,7 @@ class TestFullSuccessPath:
         "services.property_travel_service.SearchProfileService.get_travel_preset_defs"
     )
     @patch("services.property_travel_service.get_cached_enrichment_data")
-    @patch("services.property_travel_service.request_with_retries")
+    @patch("utils.google_spend.request_with_retries")
     def test_full_success_returns_true(
         self, mock_request, mock_cache, mock_preset_defs, mock_travel_config, app, prop
     ):
@@ -851,7 +851,7 @@ class TestFullSuccessPath:
         "services.property_travel_service.SearchProfileService.get_travel_preset_defs"
     )
     @patch("services.property_travel_service.get_cached_enrichment_data")
-    @patch("services.property_travel_service.request_with_retries")
+    @patch("utils.google_spend.request_with_retries")
     def test_full_success_travel_has_place_data(
         self, mock_request, mock_cache, mock_preset_defs, mock_travel_config, app, prop
     ):
@@ -931,7 +931,7 @@ class TestZeroResultsIsAnAnswer:
         "services.property_travel_service.SearchProfileService.get_travel_preset_defs"
     )
     @patch("services.property_travel_service.get_cached_enrichment_data")
-    @patch("services.property_travel_service.request_with_retries")
+    @patch("utils.google_spend.request_with_retries")
     def test_zero_results_is_success_and_not_a_refusal(
         self, mock_request, mock_cache, mock_preset_defs, mock_travel_config, app, prop
     ):
@@ -990,7 +990,7 @@ class TestPlacesRefusedWhileDistanceMatrixAnswers:
         "services.property_travel_service.SearchProfileService.get_travel_preset_defs"
     )
     @patch("services.property_travel_service.get_cached_enrichment_data")
-    @patch("services.property_travel_service.request_with_retries")
+    @patch("utils.google_spend.request_with_retries")
     def test_one_refusal_and_one_answer_are_both_visible(
         self, mock_request, mock_cache, mock_preset_defs, mock_travel_config, app, prop
     ):

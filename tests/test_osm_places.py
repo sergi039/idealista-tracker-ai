@@ -316,9 +316,14 @@ class TestTheResolverUsesIt:
         def explode(*args, **kwargs):
             raise AssertionError("a paid Places request was made")
 
-        import services.property_travel_service as travel_module
+        import utils.google_spend as billed_transport
 
-        monkeypatch.setattr(travel_module, "request_with_retries", explode)
+        # The billed transport moved: every Google request in the tree now
+        # leaves through `utils.google_spend.billed_get`, so that is where a
+        # "this must never be reached" guard belongs. Pointed at the old
+        # module this stub would be installed on an attribute nothing calls,
+        # and the test would pass without proving anything.
+        monkeypatch.setattr(billed_transport, "request_with_retries", explode)
         return service
 
     def test_a_shipped_preset_resolves_from_osm_without_touching_google(

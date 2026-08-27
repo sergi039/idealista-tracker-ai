@@ -158,6 +158,14 @@ class TestTheRunItself:
             str(tmp_path / "snap.json"),
             "--sleep",
             "0",
+            # This tool bills Google, so it refuses to start without a reason
+            # (utils/google_spend.cli_authorization). Supplied here the way an
+            # operator supplies it, rather than by opening an authorization
+            # around the call: the point of driving `main()` is that it is the
+            # real entry point, and an entry point that skipped its own gate
+            # in tests would be tested as something it is not.
+            "--reason",
+            "pytest: recalc_property_travel behaviour",
             *extra_args,
         ]
         monkeypatch.setattr("sys.argv", argv)

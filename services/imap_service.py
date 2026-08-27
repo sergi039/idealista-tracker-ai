@@ -761,7 +761,23 @@ class IMAPService:
                     db.session.add(land)
                     db.session.commit()  # commits the savepoint
 
-                    # Try enrichment but continue if it fails
+                    # Try enrichment but continue if it fails.
+                    #
+                    # **This opens no spend authorization, on purpose.** It is
+                    # the legacy `Land` ingestion (`INGESTION_TARGET=lands`,
+                    # dormant since the default became `properties`), and it
+                    # calls `enrich_land` unconditionally -- it never read
+                    # `AUTO_TRAVEL_ENRICHMENT`, so the sentence "travel is the
+                    # only automatic paid caller in this repository" was true
+                    # of the property path and not of this one. An unattended
+                    # loop with no flag in front of it is exactly what the
+                    # owner's rule forbids, so the billed half is refused by
+                    # `utils/google_spend` and recorded as an honest absence
+                    # (#98); the free half -- Overpass amenities -- still runs
+                    # and still writes what it measured.
+                    #
+                    # Authorizing it would mean deciding that this loop may
+                    # spend, which is the owner's call and not this file's.
                     try:
                         enrichment_service = EnrichmentService()
                         enriched = enrichment_service.enrich_land(land.id)

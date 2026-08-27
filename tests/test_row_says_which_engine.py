@@ -107,7 +107,6 @@ class TestTheResultCarriesIt:
         assert results[0].engine == ENGINE_OSRM
 
     def test_the_google_path_stamps_its_own(self, app, monkeypatch):
-        import services.property_travel_service as travel_module
 
         monkeypatch.setattr(osrm_routing, "is_enabled", lambda: False)
 
@@ -130,8 +129,12 @@ class TestTheResultCarriesIt:
                     ]
                 }
 
+        # The Google half of this test now goes through `utils.google_spend`,
+        # which is the only module in the tree that issues a billed request.
+        import utils.google_spend as billed_transport
+
         monkeypatch.setattr(
-            travel_module, "request_with_retries", lambda *a, **k: _Response()
+            billed_transport, "request_with_retries", lambda *a, **k: _Response()
         )
 
         service = PropertyTravelService(google_maps_key="key", google_places_key="key")

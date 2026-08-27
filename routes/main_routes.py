@@ -54,6 +54,11 @@ from services.profile_selection import (
     parse_profile_selection,
     resolve_profile_selection,
 )
+from utils.google_spend import (
+    CAP_INGEST_GEOCODE,
+    authorized_spend,
+    cap_for_rows,
+)
 from utils.i18n import t
 from utils.listing_filters import NON_FILTERS, FilterArgs, rebuilt_from
 from utils.listing_search import interpret_search, listing_search_clause
@@ -2068,7 +2073,15 @@ def edit_profile(profile_id):
                     lon = None
 
             if (lat is None or lon is None) and address:
-                geo = GeocodingService().geocode_address(address)
+                # One geocode, because the owner typed an address into the
+                # travel-target form and pressed Save. A single unit, capped at
+                # what the transport's retries can turn it into.
+                with authorized_spend(
+                    f"Travel target address geocoded on profile {profile_id}",
+                    actor="main:edit_profile_target",
+                    cap_units=CAP_INGEST_GEOCODE,
+                ):
+                    geo = GeocodingService().geocode_address(address)
                 if geo:
                     lat = float(geo.get("lat")) if geo.get("lat") is not None else None
                     lon = float(geo.get("lng")) if geo.get("lng") is not None else None
@@ -2649,27 +2662,39 @@ def recalculate_profile_travel(profile_id: int):
         updated = 0
         api_refused = 0
         not_located = 0
-        for prop in properties:
-            try:
-                if service.calculate_for_property(prop, commit=True):
-                    updated += 1
-                elif prop.location_lat is None or prop.location_lon is None:
-                    # The run stopped before any request: geocoding could not
-                    # place this listing, so there was no point to route from.
-                    # Counting it as a refusal would send the operator hunting
-                    # a Google outage that did not happen. (Until 2026-08-17 a
-                    # *locality centroid* was counted here too; travel measures
-                    # from one now, so the only row left unmeasured is one with
-                    # no coordinate at all.)
-                    not_located += 1
-                elif travel_api_state(prop) == TRAVEL_STATE_UNAVAILABLE:
-                    api_refused += 1
-            except Exception as inner:
-                logger.warning(
-                    "Travel recalculation failed for property %s: %s", prop.id, inner
-                )
-                db.session.rollback()
-                continue
+        # An owner-pressed recalculation over a bounded, already-selected
+        # set of rows. The cap is arithmetic on that set rather than a round
+        # number, so the ceiling moves with the scope the operator chose and
+        # a runaway loop stops at what this many listings can honestly cost.
+        with authorized_spend(
+            f"Travel recalculation pressed for profile {profile.id} "
+            f"({mode}, {len(properties)} listings)",
+            actor="main:recalculate_profile_travel",
+            cap_units=cap_for_rows(len(properties)),
+        ):
+            for prop in properties:
+                try:
+                    if service.calculate_for_property(prop, commit=True):
+                        updated += 1
+                    elif prop.location_lat is None or prop.location_lon is None:
+                        # The run stopped before any request: geocoding could not
+                        # place this listing, so there was no point to route from.
+                        # Counting it as a refusal would send the operator hunting
+                        # a Google outage that did not happen. (Until 2026-08-17 a
+                        # *locality centroid* was counted here too; travel measures
+                        # from one now, so the only row left unmeasured is one with
+                        # no coordinate at all.)
+                        not_located += 1
+                    elif travel_api_state(prop) == TRAVEL_STATE_UNAVAILABLE:
+                        api_refused += 1
+                except Exception as inner:
+                    logger.warning(
+                        "Travel recalculation failed for property %s: %s",
+                        prop.id,
+                        inner,
+                    )
+                    db.session.rollback()
+                    continue
 
         # A run where Google refused everything used to flash the same green
         # count as a real one (#98); the refusals get their own number now.

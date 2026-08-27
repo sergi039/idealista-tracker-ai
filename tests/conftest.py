@@ -111,6 +111,40 @@ def pytest_runtest_setup(item) -> None:
 
     Config.AUTO_GEOCODING = False
 
+    # An authorization to spend is open for the whole suite, and that is a
+    # decision worth reading twice before changing.
+    #
+    # `utils/google_spend` refuses every billed Google request that is not
+    # inside an authorization somebody opened on purpose. In production that is
+    # the point. In this suite it would be a lie: roughly forty modules mock
+    # `requests.get` and assert what the *service* does with Google's answer --
+    # the #98 refusal semantics, the airport rules, the beach filter, the
+    # Distance Matrix chunking -- and none of them is about who authorized the
+    # call. Left closed, every one of them would exercise the refusal branch
+    # instead of the code it was written for, and would still be green,
+    # because a refusal is recorded as an honest absence. That is the worst
+    # possible outcome: forty suites passing while testing nothing they name.
+    #
+    # So the suite grants one, generously capped, and the tests that are
+    # *about* the gate close it or narrow it for themselves
+    # (tests/test_google_spend_is_authorized.py). The cap is finite rather than
+    # enormous so that a runaway loop in a test still stops.
+    #
+    # Reset per test, like the breakers above and for the same measured
+    # reason: a test that narrows this for itself must not leave every test
+    # after it narrowed.
+    import utils.google_spend as _google_spend
+
+    _suite_authorization = _google_spend.SpendAuthorization(
+        reason="pytest suite",
+        actor="tests.conftest",
+        cap_units=10_000,
+    )
+    # Stashed on the item and reset in `pytest_runtest_teardown` below. Not an
+    # `addfinalizer`: this is a hook, not a fixture, and there is no `request`
+    # here to hang one on.
+    item._google_spend_token = _google_spend._AUTHORIZATION.set(_suite_authorization)
+
     # Overpass answers "nothing here" unless a test says otherwise, and it is
     # reset *per test* for the same reason the breaker above is: a test that
     # points this at a refusal (tests/test_issue_98_...) would otherwise leave
@@ -200,6 +234,23 @@ def pytest_runtest_teardown(item, nextitem):
         result = yield
     except BaseException as exc:
         teardown_error = exc
+
+    # Give back the suite's spend authorization (set in
+    # `pytest_runtest_setup`), so a test that narrowed it for itself does not
+    # leave every test after it narrowed -- the same per-test reset the
+    # breakers and the Overpass stub get, for the same measured reason.
+    token = getattr(item, "_google_spend_token", None)
+    if token is not None:
+        import utils.google_spend as _google_spend
+
+        try:
+            _google_spend._AUTHORIZATION.reset(token)
+        except ValueError:
+            # The token was created in another context (a test that ran its
+            # body in a thread). Clearing outright is still the right end
+            # state: no ambient authorization between tests.
+            _google_spend._AUTHORIZATION.set(None)
+        item._google_spend_token = None
 
     leaked = 0
     # Request contexts first: popping one also pops the app context it
@@ -382,6 +433,31 @@ def pytest_configure(config: pytest.Config) -> None:
         }
     network_guard.install()
     skip_guard.reset()
+
+    # The spend ledger goes to a throwaway file for the whole session.
+    #
+    # `utils.google_spend.record_spend` appends to `DATA_DIR/
+    # google_spend.jsonl`, and in a checkout `DATA_DIR` is the working tree's
+    # own `data/` -- the same bind mount the deployment keeps its real ledger
+    # in. Measured: one suite run wrote 893 lines of `actor: tests.conftest`
+    # into it. Gitignored is not the same as harmless, because the question
+    # that file answers is "what did this machine pay Google for", and test
+    # traffic is a wrong answer to it.
+    #
+    # Redirected here rather than by moving `Config.DATA_DIR`, which would
+    # also move the committed reference files `services/reference_places.py`
+    # and `/municipalities` read (`data/hospitals_cnh.json`,
+    # `data/ine_municipal.json`) and break suites that have nothing to do with
+    # spending. One function, one file.
+    import os
+    import tempfile
+
+    import utils.google_spend as google_spend
+
+    _ledger = os.path.join(
+        tempfile.mkdtemp(prefix="idealista-spend-ledger-"), "google_spend.jsonl"
+    )
+    google_spend.ledger_path = lambda: _ledger
 
 
 def _skip_reason(report: Any) -> str:

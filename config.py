@@ -172,6 +172,28 @@ class Config:
     # all" (yes). Setting this to false makes ingestion reach no Google API
     # whatsoever.
     AUTO_GEOCODING = os.environ.get("AUTO_GEOCODING", "true").lower() == "true"
+    # May this machine reach a billed Google API *at all*?
+    #
+    # The second of two locks, and the outer one. The inner lock is
+    # `utils/google_spend`: no billed request is made outside an authorization
+    # somebody opened on purpose, and the default is no authorization. That is
+    # what closed the paths the two flags above never covered -- three HTTP
+    # endpoints, six CLI tools and the background executor, of which
+    # `POST /api/lands/enrich-all` is the one that loops the table
+    # unauthenticated on a single unbounded request.
+    #
+    # This flag exists for a machine that must never spend whatever its code
+    # does: a dev checkout, a `git worktree`, a throwaway clone. Set it false
+    # *there*. It defaults to **true**, which is a decision rather than an
+    # oversight -- defaulting it false would stop the deployment's own Enrich
+    # button on the deploy that shipped it, which is precisely the mistake
+    # already on record for `AUTO_START_SCHEDULER` ("that mistake was made here
+    # and nearly stopped production ingestion on deploy"). A cost control that
+    # breaks production on arrival gets switched off, and then there is no
+    # control.
+    GOOGLE_SPEND_ENABLED = (
+        os.environ.get("GOOGLE_SPEND_ENABLED", "true").lower() == "true"
+    )
     AUTO_PROPERTY_SCORING = (
         os.environ.get("AUTO_PROPERTY_SCORING", "true").lower() == "true"
     )

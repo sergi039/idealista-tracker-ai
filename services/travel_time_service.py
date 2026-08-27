@@ -2,11 +2,14 @@ import logging
 import hashlib
 from datetime import datetime, timezone
 
-import requests
 from typing import Dict, Optional, List
 from config import Config
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
-from utils.http import request_with_retries
+from utils.google_spend import (
+    API_DISTANCE_MATRIX,
+    API_PLACES_NEARBY,
+    billed_get,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -307,7 +310,6 @@ class TravelTimeService:
             return None
 
         try:
-            url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
             params: Dict[str, str] = {
                 "key": self.google_places_key,
                 "location": f"{lat},{lon}",
@@ -318,8 +320,13 @@ class TravelTimeService:
             if keyword:
                 params["keyword"] = str(keyword)
 
-            resp = request_with_retries(
-                requests.get, url, params=params, timeout=15, logger=logger
+            resp = billed_get(
+                API_PLACES_NEARBY,
+                params=params,
+                units=1,
+                subject=f"{lat},{lon}:{place_type or keyword or ''}",
+                timeout=15,
+                call_logger=logger,
             )
             if resp.status_code != 200:
                 return None
@@ -402,17 +409,19 @@ class TravelTimeService:
     def _get_google_travel_time(self, origin: str, destination: str) -> Optional[Dict]:
         """Get travel time using Google Maps API"""
         try:
-            url = "https://maps.googleapis.com/maps/api/distancematrix/json"
-            params = {
-                "origins": origin,
-                "destinations": destination,
-                "mode": "driving",
-                "units": "metric",
-                "key": self.google_maps_key,
-            }
-
-            response = request_with_retries(
-                requests.get, url, params=params, timeout=15, logger=logger
+            response = billed_get(
+                API_DISTANCE_MATRIX,
+                params={
+                    "origins": origin,
+                    "destinations": destination,
+                    "mode": "driving",
+                    "units": "metric",
+                    "key": self.google_maps_key,
+                },
+                units=1,
+                subject=origin,
+                timeout=15,
+                call_logger=logger,
             )
             if response.status_code == 200:
                 data = response.json()
@@ -450,17 +459,19 @@ class TravelTimeService:
             return [None for _ in destinations]
 
         try:
-            url = "https://maps.googleapis.com/maps/api/distancematrix/json"
-            params = {
-                "origins": origin,
-                "destinations": "|".join(destinations),
-                "mode": "driving",
-                "units": "metric",
-                "key": self.google_maps_key,
-            }
-
-            response = request_with_retries(
-                requests.get, url, params=params, timeout=15, logger=logger
+            response = billed_get(
+                API_DISTANCE_MATRIX,
+                params={
+                    "origins": origin,
+                    "destinations": "|".join(destinations),
+                    "mode": "driving",
+                    "units": "metric",
+                    "key": self.google_maps_key,
+                },
+                units=len(destinations),
+                subject=origin,
+                timeout=15,
+                call_logger=logger,
             )
             if response.status_code != 200:
                 return [None for _ in destinations]

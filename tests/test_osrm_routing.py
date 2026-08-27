@@ -218,8 +218,6 @@ class TestTheTravelServiceUsesIt:
     ):
         from services.property_travel_service import PropertyTravelService
 
-        import services.property_travel_service as travel_module
-
         # Recorded, not raised. `_distance_matrix_batch` wraps its request in
         # `except Exception` and turns anything thrown into a tidy failure, so
         # a stub that raises is answered by the very code it is meant to catch
@@ -231,7 +229,12 @@ class TestTheTravelServiceUsesIt:
             billed_calls.append(url)
             raise AssertionError("Distance Matrix was called while OSRM was on")
 
-        monkeypatch.setattr(travel_module, "request_with_retries", _record_google)
+        # `utils.google_spend` is where a billed Google request leaves from
+        # since the spend gate landed, so that is the module a "Distance
+        # Matrix must not be called" guard has to be installed on.
+        import utils.google_spend as billed_transport
+
+        monkeypatch.setattr(billed_transport, "request_with_retries", _record_google)
         monkeypatch.setattr(
             osrm_routing,
             "table",

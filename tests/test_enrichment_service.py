@@ -178,7 +178,7 @@ class TestEnrichmentService:
             assert result is not None
             assert any("La Faza" in addr for addr in called)
 
-    @patch("services.enrichment_service.request_with_retries")
+    @patch("utils.google_spend.request_with_retries")
     def test_enrich_with_google_places_success(
         self, mock_get, app, enrichment_service, test_land
     ):
@@ -225,7 +225,7 @@ class TestEnrichmentService:
             # Should not change anything without API key
             assert land.infrastructure_extended == original_infrastructure
 
-    @patch("services.enrichment_service.request_with_retries")
+    @patch("utils.google_spend.request_with_retries")
     def test_enrich_with_google_maps_success(
         self, mock_get, app, enrichment_service, test_land
     ):
@@ -358,7 +358,7 @@ class TestEnrichmentService:
 
         assert distance == 0.0
 
-    @patch("services.enrichment_service.request_with_retries")
+    @patch("utils.google_spend.request_with_retries")
     def test_search_nearby_places_success(self, mock_get, enrichment_service):
         """Test successful nearby places search"""
         # Mock successful response
@@ -390,7 +390,7 @@ class TestEnrichmentService:
         assert places[0]["rating"] == 4.5
         assert "distance" in places[0]
 
-    @patch("services.enrichment_service.request_with_retries")
+    @patch("utils.google_spend.request_with_retries")
     def test_get_distance_matrix_success(self, mock_get, enrichment_service):
         """Test successful distance matrix request"""
         mock_response = Mock()
@@ -421,7 +421,7 @@ class TestEnrichmentService:
         assert result["distance"] == 15000
         assert result["duration"] == 1200
 
-    @patch("services.enrichment_service.request_with_retries")
+    @patch("utils.google_spend.request_with_retries")
     def test_get_distance_matrix_failure(self, mock_get, enrichment_service):
         """Test distance matrix request failure"""
         mock_response = Mock()

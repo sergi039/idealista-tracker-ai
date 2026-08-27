@@ -6,6 +6,11 @@ from typing import Optional, Tuple
 from app import create_app, db
 from models import Land
 from services.enrichment_service import EnrichmentService
+from utils.google_spend import (
+    CAP_INGEST_GEOCODE,
+    add_spend_arguments,
+    cli_authorization,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +41,7 @@ def refresh_all(
     limit: Optional[int] = None,
     dry_run: bool = False,
     min_move_m: float = 150.0,
+    reason: Optional[str] = None,
 ) -> None:
     service = EnrichmentService()
 
@@ -51,66 +57,76 @@ def refresh_all(
     skipped = 0
     failed = 0
 
-    for land in lands:
-        checked += 1
-        old_lat, old_lon = _as_float_pair(land)
-        old_acc = (land.location_accuracy or "unknown").lower()
+    # Every row in scope here is one that has no coordinate or a coarse one,
+    # so each is a billed Geocoding call. The authorization is opened around
+    # the whole walk rather than per row: a run that stops halfway because its
+    # ceiling was reached has stopped, and it says so once.
+    with cli_authorization(
+        reason,
+        actor="utils.refresh_coordinates",
+        rows=total,
+        per_row=CAP_INGEST_GEOCODE,
+    ):
+        for land in lands:
+            checked += 1
+            old_lat, old_lon = _as_float_pair(land)
+            old_acc = (land.location_accuracy or "unknown").lower()
 
-        needs = (old_lat is None or old_lon is None) or old_acc != "precise"
-        if not needs:
-            skipped += 1
-            continue
-
-        try:
-            coords = service._geocode_with_accuracy(land)
-            if not coords:
-                failed += 1
+            needs = (old_lat is None or old_lon is None) or old_acc != "precise"
+            if not needs:
+                skipped += 1
                 continue
 
-            new_lat = float(coords["lat"])
-            new_lon = float(coords["lng"])
-            new_acc = (coords.get("accuracy") or "unknown").lower()
+            try:
+                coords = service._geocode_with_accuracy(land)
+                if not coords:
+                    failed += 1
+                    continue
 
-            move_ok = True
-            if old_lat is not None and old_lon is not None:
-                move_m = _delta_m(old_lat, old_lon, new_lat, new_lon)
-                move_ok = move_m >= min_move_m or (
-                    old_acc != "precise" and new_acc == "precise"
+                new_lat = float(coords["lat"])
+                new_lon = float(coords["lng"])
+                new_acc = (coords.get("accuracy") or "unknown").lower()
+
+                move_ok = True
+                if old_lat is not None and old_lon is not None:
+                    move_m = _delta_m(old_lat, old_lon, new_lat, new_lon)
+                    move_ok = move_m >= min_move_m or (
+                        old_acc != "precise" and new_acc == "precise"
+                    )
+
+                better = old_acc != "precise" and new_acc == "precise"
+                should_apply = (old_lat is None or old_lon is None) or better or move_ok
+
+                if should_apply:
+                    if not dry_run:
+                        land.location_lat = new_lat
+                        land.location_lon = new_lon
+                        land.location_accuracy = new_acc
+                        db.session.add(land)
+
+                    updated += 1
+                    if better:
+                        upgraded += 1
+                else:
+                    skipped += 1
+
+            except Exception as e:
+                failed += 1
+                logger.warning("Failed to refresh coords for land %s: %s", land.id, e)
+
+            if not dry_run and checked % 10 == 0:
+                db.session.commit()
+                logger.info(
+                    "Progress: %s/%s checked, %s updated (%s upgraded), %s failed",
+                    checked,
+                    total,
+                    updated,
+                    upgraded,
+                    failed,
                 )
 
-            better = old_acc != "precise" and new_acc == "precise"
-            should_apply = (old_lat is None or old_lon is None) or better or move_ok
-
-            if should_apply:
-                if not dry_run:
-                    land.location_lat = new_lat
-                    land.location_lon = new_lon
-                    land.location_accuracy = new_acc
-                    db.session.add(land)
-
-                updated += 1
-                if better:
-                    upgraded += 1
-            else:
-                skipped += 1
-
-        except Exception as e:
-            failed += 1
-            logger.warning("Failed to refresh coords for land %s: %s", land.id, e)
-
-        if not dry_run and checked % 10 == 0:
-            db.session.commit()
-            logger.info(
-                "Progress: %s/%s checked, %s updated (%s upgraded), %s failed",
-                checked,
-                total,
-                updated,
-                upgraded,
-                failed,
-            )
-
-        if sleep_s:
-            time.sleep(sleep_s)
+            if sleep_s:
+                time.sleep(sleep_s)
 
     if not dry_run:
         db.session.commit()
@@ -152,6 +168,7 @@ def main() -> None:
         default=150.0,
         help="Minimum movement (meters) to accept update.",
     )
+    add_spend_arguments(parser)
     args = parser.parse_args()
 
     app = create_app()
@@ -161,6 +178,7 @@ def main() -> None:
             limit=(args.limit or None),
             dry_run=bool(args.dry_run),
             min_move_m=float(args.min_move_m),
+            reason=args.reason,
         )
 
 

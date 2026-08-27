@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-import requests
 
 from app import db
 from config import Config
@@ -24,7 +23,12 @@ from utils.google_api import (
     failure_from_exception,
     read_api_payload,
 )
-from utils.http import request_with_retries
+from utils.google_spend import (
+    API_DISTANCE_MATRIX,
+    API_PLACES_NEARBY,
+    API_PLACES_TEXT,
+    billed_get,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1013,7 +1017,6 @@ class PropertyTravelService:
         if not self.google_places_key:
             return [], GoogleApiFailure(reason=REASON_NO_API_KEY)
 
-        url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
         params = {
             "location": f"{lat},{lon}",
             "rankby": "distance",
@@ -1024,8 +1027,13 @@ class PropertyTravelService:
             params["keyword"] = keyword
 
         try:
-            response = request_with_retries(
-                requests.get, url, params=params, timeout=12, logger=logger
+            response = billed_get(
+                API_PLACES_NEARBY,
+                params=params,
+                units=1,
+                subject=f"{lat},{lon}:{place_type}",
+                timeout=12,
+                call_logger=logger,
             )
         except Exception as e:
             failure = failure_from_exception(e)
@@ -1242,7 +1250,6 @@ class PropertyTravelService:
         if not self.google_places_key:
             return PlaceLookup(failure=GoogleApiFailure(reason=REASON_NO_API_KEY))
 
-        url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
         params = {
             "query": query,
             "location": f"{lat},{lon}",
@@ -1254,8 +1261,13 @@ class PropertyTravelService:
             # and parking lots that merely mention one.
             params["type"] = place_type
         try:
-            response = request_with_retries(
-                requests.get, url, params=params, timeout=12, logger=logger
+            response = billed_get(
+                API_PLACES_TEXT,
+                params=params,
+                units=1,
+                subject=f"{lat},{lon}:{query[:60]}",
+                timeout=12,
+                call_logger=logger,
             )
         except Exception as e:
             failure = failure_from_exception(e)
@@ -1491,16 +1503,22 @@ class PropertyTravelService:
                 for leg in (legs or [])
             ]
 
-        url = "https://maps.googleapis.com/maps/api/distancematrix/json"
-        params = {
-            "origins": f"{lat},{lon}",
-            "destinations": "|".join(destinations),
-            "mode": mode,
-            "key": self.google_maps_key,
-        }
         try:
-            response = request_with_retries(
-                requests.get, url, params=params, timeout=15, logger=logger
+            # One origin against N destinations is N billed *elements*, which
+            # is what the invoice counts and therefore what the authorization
+            # is charged -- not one unit for "a request". A batch of 25 is 25.
+            response = billed_get(
+                API_DISTANCE_MATRIX,
+                params={
+                    "origins": f"{lat},{lon}",
+                    "destinations": "|".join(destinations),
+                    "mode": mode,
+                    "key": self.google_maps_key,
+                },
+                units=len(destinations),
+                subject=f"{lat},{lon}",
+                timeout=15,
+                call_logger=logger,
             )
         except Exception as e:
             failure = failure_from_exception(e)

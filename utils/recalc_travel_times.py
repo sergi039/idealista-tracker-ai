@@ -5,6 +5,7 @@ import time
 from app import create_app
 from models import Land
 from services.travel_time_service import TravelTimeService
+from utils.google_spend import add_spend_arguments, cli_authorization
 from utils.inflight import inflight
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ def main() -> None:
         default=0,
         help="Limit number of lands processed (0 = all).",
     )
+    add_spend_arguments(parser)
     args = parser.parse_args()
 
     app = create_app()
@@ -53,7 +55,14 @@ def main() -> None:
         # every land again, so an interrupted run re-bills Distance Matrix for
         # everything it already did. The marker says so rather than guessing,
         # and a deploy that reads `resumable: false` can be told to wait (#283).
-        with inflight("recalc_travel_times", resumable=bool(args.only_missing)):
+        with (
+            cli_authorization(
+                args.reason,
+                actor="utils.recalc_travel_times",
+                rows=len(lands),
+            ),
+            inflight("recalc_travel_times", resumable=bool(args.only_missing)),
+        ):
             for idx, land in enumerate(lands, start=1):
                 if not land.location_lat or not land.location_lon:
                     continue

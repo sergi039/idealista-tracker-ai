@@ -343,9 +343,7 @@ class TestDistanceMatrixValidation:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = api_response
-        with patch(
-            "services.travel_time_service.request_with_retries", return_value=mock_resp
-        ):
+        with patch("utils.google_spend.request_with_retries", return_value=mock_resp):
             result = svc._get_google_travel_time("43.36,-5.85", "43.53,-5.66")
             assert result is None
 
@@ -365,9 +363,7 @@ class TestDistanceMatrixValidation:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = api_response
-        with patch(
-            "services.travel_time_service.request_with_retries", return_value=mock_resp
-        ):
+        with patch("utils.google_spend.request_with_retries", return_value=mock_resp):
             result = svc._get_google_travel_time("43.36,-5.85", "43.53,-5.66")
             assert result is None
 
@@ -393,9 +389,7 @@ class TestDistanceMatrixValidation:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = api_response
-        with patch(
-            "services.travel_time_service.request_with_retries", return_value=mock_resp
-        ):
+        with patch("utils.google_spend.request_with_retries", return_value=mock_resp):
             results = svc._get_google_travel_times("43.36,-5.85", ["d1", "d2", "d3"])
             assert len(results) == 3
             assert results[0] == {"time": 10, "distance": 10}
@@ -422,9 +416,7 @@ class TestDistanceMatrixValidation:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = api_response
-        with patch(
-            "services.travel_time_service.request_with_retries", return_value=mock_resp
-        ):
+        with patch("utils.google_spend.request_with_retries", return_value=mock_resp):
             result = svc._get_google_travel_time("43.36,-5.85", "43.53,-5.66")
             assert result == {"time": 30, "distance": 25}
 

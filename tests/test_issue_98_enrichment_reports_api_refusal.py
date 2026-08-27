@@ -221,9 +221,7 @@ class TestTravelRefusalIsNotAResult:
             return _denied_response()
 
         with caplog.at_level(logging.ERROR):
-            with patch(
-                "services.property_travel_service.requests.get", side_effect=mock_get
-            ):
+            with patch("utils.google_spend.requests.get", side_effect=mock_get):
                 svc = PropertyTravelService(
                     google_maps_key="maps", google_places_key="places"
                 )
@@ -287,7 +285,7 @@ class TestTravelRefusalIsNotAResult:
         prop = _make_property(profile, "issue98_cache")
 
         with patch(
-            "services.property_travel_service.requests.get",
+            "utils.google_spend.requests.get",
             side_effect=lambda *a, **k: _denied_response(),
         ):
             svc = PropertyTravelService(
@@ -301,9 +299,7 @@ class TestTravelRefusalIsNotAResult:
             calls.append(url)
             return _matrix_response((params or {}).get("destinations", "").split("|"))
 
-        with patch(
-            "services.property_travel_service.requests.get", side_effect=answering_get
-        ):
+        with patch("utils.google_spend.requests.get", side_effect=answering_get):
             svc = PropertyTravelService(
                 google_maps_key="maps", google_places_key="places"
             )
@@ -341,9 +337,7 @@ class TestTravelRefusalIsNotAResult:
             raise AssertionError(f"Unexpected URL: {url}")
 
         with caplog.at_level(logging.ERROR):
-            with patch(
-                "services.property_travel_service.requests.get", side_effect=mock_get
-            ):
+            with patch("utils.google_spend.requests.get", side_effect=mock_get):
                 svc = PropertyTravelService(
                     google_maps_key="maps", google_places_key="places"
                 )
@@ -418,9 +412,7 @@ class TestTravelRefusalIsNotAResult:
             raise AssertionError(f"Unexpected URL: {url}")
 
         with caplog.at_level(logging.ERROR):
-            with patch(
-                "services.property_travel_service.requests.get", side_effect=mock_get
-            ):
+            with patch("utils.google_spend.requests.get", side_effect=mock_get):
                 svc = PropertyTravelService(
                     google_maps_key="maps", google_places_key="places"
                 )
@@ -454,7 +446,7 @@ class TestTravelRefusalIsNotAResult:
         # 500 is retried by request_with_retries; the final response still fails.
         with patch("utils.http.time.sleep", return_value=None):
             with patch(
-                "services.property_travel_service.requests.get",
+                "utils.google_spend.requests.get",
                 side_effect=lambda *a, **k: Mock(
                     status_code=500, json=lambda: {"status": "UNKNOWN_ERROR"}
                 ),
@@ -478,7 +470,7 @@ class TestTravelRefusalIsNotAResult:
 
         with patch("utils.http.time.sleep", return_value=None):
             with patch(
-                "services.property_travel_service.requests.get",
+                "utils.google_spend.requests.get",
                 side_effect=requests.ConnectionError("name resolution failed"),
             ):
                 svc = PropertyTravelService(
@@ -504,9 +496,7 @@ class TestTravelRefusalIsNotAResult:
         def mock_get(url, params=None, timeout=0, headers=None):
             raise AssertionError("no request may be made without a key")
 
-        with patch(
-            "services.property_travel_service.requests.get", side_effect=mock_get
-        ):
+        with patch("utils.google_spend.requests.get", side_effect=mock_get):
             svc = PropertyTravelService(google_maps_key="maps", google_places_key="")
             assert svc.calculate_for_property(prop, commit=True) is False
 
@@ -533,7 +523,7 @@ class TestTravelRefusalIsNotAResult:
         db.session.commit()
 
         with patch(
-            "services.property_travel_service.requests.get",
+            "utils.google_spend.requests.get",
             side_effect=lambda *a, **k: _denied_response(),
         ):
             svc = PropertyTravelService(
@@ -568,7 +558,7 @@ class TestLandEnrichmentRefusal:
 
         with caplog.at_level(logging.ERROR):
             with patch(
-                "services.enrichment_service.request_with_retries",
+                "utils.google_spend.request_with_retries",
                 side_effect=lambda *a, **k: _denied_response(),
             ):
                 with patch("services.enrichment_service.time.sleep", return_value=None):
@@ -612,9 +602,7 @@ class TestLandEnrichmentRefusal:
                 status_code=200, json=lambda: {"status": "ZERO_RESULTS", "results": []}
             )
 
-        with patch(
-            "services.enrichment_service.request_with_retries", side_effect=_answer
-        ):
+        with patch("utils.google_spend.request_with_retries", side_effect=_answer):
             with patch("services.enrichment_service.time.sleep", return_value=None):
                 failure = service._enrich_with_google_places(land)
 
@@ -631,7 +619,7 @@ class TestLandEnrichmentRefusal:
         service.google_maps_key = "maps"
 
         with patch(
-            "services.enrichment_service.request_with_retries",
+            "utils.google_spend.request_with_retries",
             side_effect=lambda *a, **k: _denied_response(),
         ):
             with patch("services.enrichment_service.time.sleep", return_value=None):

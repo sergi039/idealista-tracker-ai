@@ -533,9 +533,7 @@ def test_property_travel_service_populates_travel_for_enabled_presets(app):
 
             raise AssertionError(f"Unexpected URL: {url}")
 
-        with patch(
-            "services.property_travel_service.requests.get", side_effect=mock_get
-        ):
+        with patch("utils.google_spend.requests.get", side_effect=mock_get):
             svc = PropertyTravelService(
                 google_maps_key="maps", google_places_key="places"
             )
