@@ -646,6 +646,23 @@ def _coastline_round_trip(
             points = _parse_coastline_payload(json.loads(_read_bounded_body(response)))
         except SeaViewSourceError:
             raise
+        except requests.RequestException as exc:
+            # A socket-level failure while the body was still arriving. The
+            # #438 rule -- a spent clock is not the host saying no -- lives in
+            # `request_with_retries`, but with `stream=True` that returns at
+            # the headers and the body is read out here, past its sight. So
+            # the same classification has to be made on this side: when the
+            # walk's deadline has passed, the clamped read is what cut the
+            # body short, and recording the host would arm the shared breaker
+            # against a healthy instance for every Overpass client in the
+            # process (#480 review, reproduced against a live server).
+            if deadline is not None and time.monotonic() >= deadline:
+                raise SeaViewBudgetExceeded(
+                    f"the walk budget expired while the body was arriving: {exc}"
+                ) from exc
+            raise SeaViewSourceError(
+                f"Overpass returned an unreadable body: {exc}"
+            ) from exc
         except Exception as exc:
             raise SeaViewSourceError(
                 f"Overpass returned an unreadable body: {exc}"

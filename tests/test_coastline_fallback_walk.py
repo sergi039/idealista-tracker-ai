@@ -223,3 +223,73 @@ class TestTheBreakerAndTheClock:
             svc.fetch_coastline_points(COAST_LAT, COAST_LON)
 
         assert OVERPASS_BREAKERS.for_url(PRIMARY).state()["consecutive_refusals"] == 0
+
+    def test_a_body_cut_short_by_the_spent_clock_is_the_budgets_not_the_hosts(
+        self, monkeypatch
+    ):
+        """The #438 rule, applied to the streamed half `request_with_retries`
+        cannot see: it returns at the headers, the body is read out here, and
+        a read the walk's clock clamped fails mid-body as an ordinary socket
+        error. Recording that against the host armed the shared breaker
+        against the one healthy instance -- for the amenity, pool and hazard
+        clients too (#480 review, reproduced against a live server)."""
+
+        class _CutShort(_Reply):
+            def iter_content(self, chunk_size=1):
+                raise requests.ConnectionError("read timed out mid-body")
+
+        monkeypatch.setattr(Config, "OSM_OVERPASS_WALK_BUDGET_S", 0.0)
+        _transport(monkeypatch, {PRIMARY: _CutShort(GOOD_BODY)})
+
+        with pytest.raises(svc.SeaViewBudgetExceeded):
+            svc.fetch_coastline_points(COAST_LAT, COAST_LON)
+
+        assert OVERPASS_BREAKERS.for_url(PRIMARY).state()["consecutive_refusals"] == 0
+
+    def test_the_same_body_failure_with_time_in_hand_is_still_the_hosts(
+        self, monkeypatch
+    ):
+        """The control, so the guard above cannot rot into "no body failure
+        ever arms a breaker": with the clock nowhere near spent, a mid-body
+        socket error is the host's own refusal and is counted."""
+
+        class _CutShort(_Reply):
+            def iter_content(self, chunk_size=1):
+                raise requests.ConnectionError("connection reset mid-body")
+
+        _transport(
+            monkeypatch,
+            {
+                PRIMARY: _CutShort(GOOD_BODY),
+                FALLBACK_1: _Reply(GOOD_BODY),
+            },
+        )
+
+        points = svc.fetch_coastline_points(COAST_LAT, COAST_LON)
+
+        assert points, "a host refusal must still let the walk continue"
+        assert OVERPASS_BREAKERS.for_url(PRIMARY).state()["consecutive_refusals"] == 1
+
+    def test_the_walk_deadline_actually_reaches_the_transport(self, monkeypatch):
+        """Review finding: nothing pinned the deadline wiring -- the walk
+        could stop passing its computed deadline into the round trip and
+        every test stayed green, leaving the whole #434 ceiling decorative.
+        With no ambient lookup budget the transport must still receive
+        `deadline` = now + OSM_OVERPASS_WALK_BUDGET_S, give or take."""
+        import time as _time
+
+        seen = {}
+
+        def _spy(post, url, **kwargs):
+            seen.update(kwargs)
+            raise requests.ConnectionError("stop here")
+
+        monkeypatch.setattr(svc, "request_with_retries", _spy)
+        before = _time.monotonic()
+        with pytest.raises(svc.SeaViewSourceError):
+            svc.fetch_coastline_points(COAST_LAT, COAST_LON)
+
+        deadline = seen.get("deadline")
+        assert deadline is not None, "the walk dialled with no deadline at all"
+        budget = float(Config.OSM_OVERPASS_WALK_BUDGET_S)
+        assert before < deadline <= before + budget + 5.0
