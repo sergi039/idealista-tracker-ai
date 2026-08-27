@@ -872,3 +872,140 @@ class TestTheCeilingIsReallyACeiling:
                         billed_get(API_GEOCODING, params={"key": "k"}, units=1)
             assert excinfo.value.reason == REASON_SPEND_OFF_ON_THIS_MACHINE
             transport.get.assert_not_called()
+
+
+class TestTheSecondReviewRound:
+    """What the re-audit found after the first round's fixes landed.
+
+    Two of its five BLOCKERs required `asyncio` or `contextvars.copy_context`
+    to share one authorization between concurrent callers. Neither appears
+    anywhere in this repository and no call site nests, so they are not
+    reachable here -- but the nested path is hardened anyway (below), because
+    "no caller does that yet" is a fact about today and not a property of the
+    gate.
+    """
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), 1.5, "10", None, True])
+    def test_a_cap_that_is_not_a_whole_number_of_units_is_refused(self, bad):
+        """`float("nan") <= 0` is False, so a NaN cap used to open cleanly.
+
+        Every comparison in `_reserve` is then false as well, so the
+        authorization had no ceiling at all -- the one thing a cap exists to
+        prevent. `True` is in the list because `bool` subclasses `int`.
+        """
+        with pytest.raises(ValueError):
+            with authorized_spend("owner", actor="test", cap_units=bad):
+                pass
+
+    def test_two_nested_blocks_cannot_each_take_the_whole_parent_cap(self):
+        """The nested cap is reserved from the parent, not snapshotted.
+
+        Sequentially here, because that is what production could ever do --
+        but the property being asserted is the one that also makes the
+        concurrent case safe: the parent's room is debited when the child
+        opens, so a second child cannot be handed the same room.
+        """
+        with authorized_spend("outer", actor="test", cap_units=10) as outer:
+            with authorized_spend("a", actor="test", cap_units=10) as a:
+                assert a.cap_units == 10
+                assert outer.remaining() == 0, (
+                    "the parent must be debited when a child opens, or two "
+                    "children can each be granted the full remaining cap"
+                )
+            # `a` spent nothing, so the room comes back.
+            assert outer.remaining() == 10
+            with authorized_spend("b", actor="test", cap_units=4) as b:
+                assert b.cap_units == 4
+                assert outer.remaining() == 6
+
+    def test_a_child_that_spends_leaves_the_parent_charged(self):
+        with patch.object(google_spend, "requests") as transport:
+            transport.get.return_value = _ok_response()
+            with authorized_spend("outer", actor="test", cap_units=40) as outer:
+                with authorized_spend("inner", actor="test", cap_units=40):
+                    billed_get(API_GEOCODING, params={"key": "k"}, units=2)
+                assert outer.spent == 2
+
+    def test_an_exhausted_parent_hands_a_child_no_room_rather_than_raising(self):
+        """A child of a spent parent opens and refuses, it does not explode.
+
+        Opening is not the moment to fail: `PaidCallRefused` is the contract
+        every caller already degrades on, and raising `ValueError` out of a
+        `with` statement would crash an enrichment run instead of recording an
+        honest absence.
+        """
+        with patch.object(google_spend, "requests") as transport:
+            with authorized_spend("outer", actor="test", cap_units=3) as outer:
+                outer.spent = 3
+                with authorized_spend("inner", actor="test", cap_units=100) as inner:
+                    assert inner.cap_units == 0
+                    with pytest.raises(PaidCallRefused) as excinfo:
+                        billed_get(API_GEOCODING, params={"key": "k"}, units=1)
+            assert excinfo.value.reason == REASON_SPEND_CAP_EXCEEDED
+            transport.get.assert_not_called()
+
+    def test_more_attempts_than_reserved_are_charged_not_ignored(self):
+        """A negative settlement must charge, not be silently dropped.
+
+        Unreachable while `MAX_ATTEMPTS_PER_CALL` matches the transport's
+        default, which another test asserts. Pinned because ignoring it would
+        mean under-charging in exactly the case where Google was sent more
+        requests than budgeted.
+        """
+        with patch.object(google_spend, "MAX_ATTEMPTS_PER_CALL", 1):
+            calls = {"n": 0}
+
+            def twice(*args, **kwargs):
+                calls["n"] += 1
+                if calls["n"] < 2:
+                    response = Mock()
+                    response.status_code = 429
+                    response.json.return_value = {}
+                    return response
+                return _ok_response()
+
+            import utils.http as http_module
+
+            with patch.object(google_spend.requests, "get", side_effect=twice):
+                with patch.object(http_module, "_compute_backoff", return_value=0):
+                    with authorized_spend("x", actor="test", cap_units=50) as grant:
+                        billed_get(API_GEOCODING, params={"key": "k"}, units=1)
+
+            assert calls["n"] == 2
+            assert grant.spent == 2, (
+                "two requests were issued against a one-attempt reservation "
+                "and only one was charged"
+            )
+
+    def test_the_ledger_subject_is_bounded_and_normalised(self, tmp_path, monkeypatch):
+        """`subject` is caller-supplied text that lands in a file."""
+        monkeypatch.setattr(
+            google_spend, "ledger_path", lambda: str(tmp_path / "l.jsonl")
+        )
+        with patch.object(google_spend, "requests") as transport:
+            transport.get.return_value = _ok_response()
+            with authorized_spend("owner", actor="test", cap_units=50):
+                billed_get(
+                    API_GEOCODING,
+                    params={"key": "k"},
+                    units=1,
+                    subject="x" * 500 + "\n\nnewlines   and   spaces",
+                )
+        entry = json.loads((tmp_path / "l.jsonl").read_text().splitlines()[0])
+        assert len(entry["subject"]) <= google_spend.MAX_LEDGER_SUBJECT
+        assert "\n" not in entry["subject"]
+
+    def test_the_ledger_never_writes_the_request_parameters(
+        self, tmp_path, monkeypatch
+    ):
+        """The API key travels in `params`, which is never recorded."""
+        monkeypatch.setattr(
+            google_spend, "ledger_path", lambda: str(tmp_path / "l.jsonl")
+        )
+        secret = "not-a-real-key-just-a-marker"
+        with patch.object(google_spend, "requests") as transport:
+            transport.get.return_value = _ok_response()
+            with authorized_spend("owner", actor="test", cap_units=50):
+                billed_get(API_GEOCODING, params={"key": secret}, units=1)
+        text = (tmp_path / "l.jsonl").read_text()
+        assert secret not in text

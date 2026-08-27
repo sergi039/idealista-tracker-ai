@@ -295,11 +295,36 @@ def authorized_spend(
     """
     if not reason or not str(reason).strip():
         raise ValueError("an authorization to spend money must say what asked for it")
+    if isinstance(cap_units, bool) or not isinstance(cap_units, int):
+        # `float("nan") <= 0` is False, so a NaN cap passed the old check and
+        # then made every comparison in `_reserve` false as well -- an
+        # authorization with no ceiling at all, which is the one thing a cap
+        # exists to prevent. Requiring a real `int` refuses NaN, infinity and
+        # a string in one line, and every caller in the tree already passes
+        # one. (`bool` is excluded explicitly: it is a subclass of `int`, and
+        # `cap_units=True` would otherwise authorize exactly one unit.)
+        raise ValueError(
+            f"a spend cap must be a whole number of units, got {cap_units!r}"
+        )
     if cap_units <= 0:
         raise ValueError("an authorization to spend money must carry a positive cap")
 
     outer = _AUTHORIZATION.get()
-    effective_cap = cap_units if outer is None else min(cap_units, outer.remaining())
+    if outer is None:
+        effective_cap = cap_units
+    else:
+        # A nested block takes its cap *out of* the parent's remaining room,
+        # atomically, rather than merely being capped by a snapshot of it.
+        # The snapshot version was correct while only one child could be open
+        # at a time -- which is all production does, since no call site nests
+        # and neither `asyncio` nor `contextvars.copy_context` appears in this
+        # tree -- and wrong the moment two children share one parent, because
+        # both would read the same remaining and both receive a full cap.
+        # Reserving makes that impossible by construction instead of by
+        # nobody having written the second caller yet.
+        with _LOCK:
+            effective_cap = max(0, min(cap_units, outer.cap_units - outer.spent))
+            outer.spent += effective_cap
 
     authorization = SpendAuthorization(
         reason=str(reason).strip(), actor=actor, cap_units=effective_cap
@@ -316,12 +341,15 @@ def authorized_spend(
         yield authorization
     finally:
         _AUTHORIZATION.reset(token)
-        # The outer authorization pays for what the inner one spent: two
-        # nested blocks are one owner request, and a cap the inner block could
-        # reset by returning would bound nothing.
-        if outer is not None and authorization.spent:
+        # The parent already paid `effective_cap` when this block opened, so
+        # what comes back is the part the child did not use. Two nested blocks
+        # are one owner request, and a cap a child could reset by returning
+        # would bound nothing.
+        if outer is not None:
             with _LOCK:
-                outer.spent += authorization.spent
+                outer.spent = max(
+                    0, outer.spent - (effective_cap - authorization.spent)
+                )
         logger.info(
             "google spend closed [%s] spent=%d/%d units",
             authorization.id,
@@ -519,6 +547,26 @@ def record_spend(entry: Dict[str, Any]) -> None:
         )
 
 
+#: How much of a caller-supplied `subject` reaches the ledger.
+#:
+#: `subject` says which listing or coordinate a call was about, so an operator
+#: reading the file can tell one row's spend from another's. It is
+#: caller-supplied text landing in a file, exactly like `reason`, and the
+#: review that prompted this bound observed that today's geocoding subject is
+#: the address string itself. Bounded for the same reason `reason` is, and
+#: documented so the next caller knows what this field is for: an identifier,
+#: never a payload, and never anything secret -- the API key travels in
+#: `params`, which is never written here.
+MAX_LEDGER_SUBJECT = 120
+
+
+def _ledger_subject(subject: Optional[str]) -> Optional[str]:
+    """One short identifying string, or nothing."""
+    if subject is None:
+        return None
+    return " ".join(str(subject).split())[:MAX_LEDGER_SUBJECT]
+
+
 #: `reason` is free text typed by whoever opened the authorization. It rides
 #: into a file read back by eye or with `jq` -- there is deliberately no
 #: reporting tool here, because one would be a second place that decides what
@@ -666,7 +714,7 @@ def billed_get(
                 "requested_units": units,
                 "outcome": "refused",
                 "refusal": refusal,
-                "subject": subject,
+                "subject": _ledger_subject(subject),
                 "authorization": authorization.id if authorization else None,
                 "actor": authorization.actor if authorization else None,
                 "reason": (authorization.reason if authorization else "")[
@@ -699,7 +747,18 @@ def billed_get(
         # attempts really issued. The authorization was charged for three of
         # them before the call; the ones that did not happen come back.
         issued = max(1, attempts)
-        _refund(authorization, worst_case - issued * units)
+        settlement = worst_case - issued * units
+        if settlement >= 0:
+            _refund(authorization, settlement)
+        else:
+            # More attempts than the reservation covered. Unreachable while
+            # `MAX_ATTEMPTS_PER_CALL` matches the transport's default (a test
+            # asserts it does), but silently ignoring a negative refund would
+            # mean under-charging in exactly the case where Google was sent
+            # more requests than budgeted -- the failure this whole function
+            # exists to prevent, arriving through its own arithmetic.
+            with _LOCK:
+                authorization.spent += -settlement
         record_spend(
             {
                 "at": datetime.now(timezone.utc).isoformat(),
@@ -707,7 +766,7 @@ def billed_get(
                 "units": units * issued,
                 "requests_issued": issued,
                 "outcome": outcome,
-                "subject": subject,
+                "subject": _ledger_subject(subject),
                 "authorization": authorization.id,
                 "actor": authorization.actor,
                 "reason": authorization.reason[:MAX_LEDGER_REASON],
