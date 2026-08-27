@@ -56,6 +56,7 @@ from utils.http import (
     OVERPASS_GATE,
     LookupBudgetExceeded,
     RateGate,
+    earliest_deadline,
     lookup_deadline,
     request_with_retries,
 )
@@ -431,7 +432,16 @@ class SeaViewSourceError(RuntimeError):
 
     Raised rather than returned so a refusal can never be mistaken for a
     computed negative -- the mistake #98 is about.
+
+    `http_status` carries the HTTP status where the refusal has one, so the
+    fallback walk can tell a 406 -- our User-Agent being refused, which every
+    instance would repeat -- from a status worth asking another instance
+    about (#480). It is data about the refusal, never part of the message.
     """
+
+    def __init__(self, message: str = "", http_status: Optional[int] = None):
+        super().__init__(message)
+        self.http_status = http_status
 
 
 def coastline_cell(lat: float, lon: float) -> Tuple[float, float]:
@@ -473,43 +483,98 @@ def fetch_coastline_points(
     if cached is not None:
         return [tuple(point) for point in cached]
 
-    # This client dials one instance -- it never adopted #415's fallback list --
-    # so a primary that is down costs its whole budget with no chance of
-    # success. Until that is fixed the breaker is what bounds it: three
-    # refusals and later calls answer immediately for five minutes, and the
-    # registry is shared with the amenity client, so whichever of the two
-    # learns the outage first spares the other from re-discovering it.
+    # Since #480 this client walks the same fallback list as the amenity
+    # client (#415). Four episodes in eight days -- 19.08, 20.08, 24.08,
+    # 26.08 -- of overpass-api.de refusing this machine's IP while every
+    # fallback answered made "the breaker bounds the damage" the wrong
+    # consolation: the damage was a cell that stayed unmeasurable however
+    # healthy the rest of the list was, and both sea_view and sea_distance
+    # ride on this one client.
     #
-    # A skip raises rather than returning `[]`, because this function's whole
-    # contract is that an empty list means "Overpass answered and there is no
-    # coastline in range". A refusal that read as an empty coastline is the
-    # #98 defect this module was built around.
-    breaker = OVERPASS_BREAKERS.for_url(Config.OSM_OVERPASS_URL)
-    if breaker.should_skip():
-        raise SeaViewSourceError(
-            f"{OVERPASS_BREAKERS.host_of(Config.OSM_OVERPASS_URL)} refused the "
-            f"last {OVERPASS_BREAKERS.threshold} attempts; not dialled"
-        )
-    try:
-        points = _coastline_round_trip(cell_lat, cell_lon, session)
-    except SeaViewBudgetExceeded:
-        # Neither a refusal nor a success: this instance was never asked.
-        raise
-    except SeaViewSourceError:
-        breaker.record_refusal("coastline")
-        raise
-    breaker.record_success()
-
-    _cache_set(
-        cell_lat, cell_lon, cache_type, points, timeout=COASTLINE_CACHE_TIMEOUT_S
+    # The walk keeps the amenity client's rules, translated into this
+    # client's exception idiom. Per-host breakers from the shared registry,
+    # and a skip tries the *next* instance rather than ending the walk -- a
+    # skip that stopped it would quietly reinstate the single point of
+    # failure #415 removed. A 406 is terminal: it is our User-Agent being
+    # refused, and every instance runs the same software (#144). The failure
+    # raised is the **first** one, because it names the instance this
+    # deployment is configured against. The shared gate stays shared --
+    # moving to a second instance because the first is loaded is no reason
+    # to be less polite to the second. And one wall-clock deadline bounds
+    # the whole walk (`OSM_OVERPASS_WALK_BUDGET_S`, or what is left of the
+    # caller's own lookup budget if that is sooner, #434). What is
+    # deliberately NOT unified with the amenity transport is the round trip
+    # itself: this one streams its body against a size ceiling and a
+    # total-read clock, and keeps the longer read budget a coastline query
+    # over a 25 km box genuinely needs.
+    #
+    # A refusal raises rather than returning `[]`, because this function's
+    # whole contract is that an empty list means "Overpass answered and
+    # there is no coastline in range". A refusal that read as an empty
+    # coastline is the #98 defect this module was built around.
+    deadline = earliest_deadline(
+        lookup_deadline(),
+        time.monotonic() + float(getattr(Config, "OSM_OVERPASS_WALK_BUDGET_S", 120.0)),
     )
-    return points
+    urls = [Config.OSM_OVERPASS_URL] + [
+        url
+        for url in getattr(Config, "OSM_OVERPASS_FALLBACK_URLS", [])
+        if url and url != Config.OSM_OVERPASS_URL
+    ]
+    first_failure: Optional[SeaViewSourceError] = None
+    for index, url in enumerate(urls):
+        breaker = OVERPASS_BREAKERS.for_url(url)
+        if breaker.should_skip():
+            if first_failure is None:
+                first_failure = SeaViewSourceError(
+                    f"{OVERPASS_BREAKERS.host_of(url)} refused the last "
+                    f"{OVERPASS_BREAKERS.threshold} attempts; not dialled"
+                )
+            continue
+        try:
+            points = _coastline_round_trip(
+                cell_lat, cell_lon, session, url=url, deadline=deadline
+            )
+        except SeaViewBudgetExceeded as exc:
+            # The clock, not the host: never counted against the breaker,
+            # and the next instance would answer the same one gate wait
+            # later. A host that already answered outranks the clock (#434),
+            # so an earlier real refusal is what the caller hears about.
+            if first_failure is not None:
+                raise first_failure from exc
+            raise
+        except SeaViewSourceError as exc:
+            breaker.record_refusal("coastline")
+            if first_failure is None:
+                first_failure = exc
+            if getattr(exc, "http_status", None) == 406:
+                # Asking the remaining instances would repeat the same
+                # refusal for nothing (#144).
+                break
+            continue
+        breaker.record_success()
+        if index:
+            logger.info("Coastline answered from the fallback %s", url)
+        _cache_set(
+            cell_lat, cell_lon, cache_type, points, timeout=COASTLINE_CACHE_TIMEOUT_S
+        )
+        return points
+    if first_failure is None:  # pragma: no cover -- urls always holds the primary
+        first_failure = SeaViewSourceError("no Overpass instance configured")
+    raise first_failure
 
 
 def _coastline_round_trip(
-    cell_lat: float, cell_lon: float, session: Optional[requests.Session] = None
+    cell_lat: float,
+    cell_lon: float,
+    session: Optional[requests.Session] = None,
+    *,
+    url: Optional[str] = None,
+    deadline: Optional[float] = None,
 ) -> List[Tuple[float, float]]:
-    """The trip itself. Every refusal here is observed by the caller above."""
+    """The trip to one instance. Every refusal here is observed by the walk
+    above, which is also where the breaker for `url` lives -- one place
+    records outcomes, not every exit (#438's shape)."""
     query = (
         "[out:json][timeout:90];"
         f"way(around:{COASTLINE_QUERY_RADIUS_M},{cell_lat:.4f},{cell_lon:.4f})"
@@ -521,7 +586,7 @@ def _coastline_round_trip(
     try:
         response = request_with_retries(
             http.post,
-            Config.OSM_OVERPASS_URL,
+            url or Config.OSM_OVERPASS_URL,
             data={"data": query},
             headers={"User-Agent": HTTP_USER_AGENT},
             # A 504 here means "both slots are busy", not a broken request.
@@ -540,12 +605,13 @@ def _coastline_round_trip(
                 120,
             ),
             # A `504` is worth all five attempts -- the instance is alive and
-            # busy. Silence is not: this client has no fallback instance to
-            # move to, so the only thing a second attempt buys is another
-            # 120 s of the caller's clock (#434).
+            # busy. Silence is not: since #480 this caller has more instances
+            # to ask, so one attempt, then move on -- the same rule the
+            # amenity transport states (#434).
             silence_max_attempts=1,
-            # Bounded by whatever budget the run that asked opened, if any.
-            deadline=lookup_deadline(),
+            # The walk's deadline when the walk is driving; the caller's own
+            # lookup budget when this trip is dialled standalone.
+            deadline=deadline if deadline is not None else lookup_deadline(),
             # Streamed so the size ceiling is enforced as the body arrives,
             # not after it is already in memory.
             stream=True,
@@ -572,11 +638,31 @@ def _coastline_round_trip(
     # wrapper for exactly that reason.
     try:
         if response.status_code != 200:
-            raise SeaViewSourceError(f"Overpass returned HTTP {response.status_code}")
+            raise SeaViewSourceError(
+                f"Overpass returned HTTP {response.status_code}",
+                http_status=response.status_code,
+            )
         try:
             points = _parse_coastline_payload(json.loads(_read_bounded_body(response)))
         except SeaViewSourceError:
             raise
+        except requests.RequestException as exc:
+            # A socket-level failure while the body was still arriving. The
+            # #438 rule -- a spent clock is not the host saying no -- lives in
+            # `request_with_retries`, but with `stream=True` that returns at
+            # the headers and the body is read out here, past its sight. So
+            # the same classification has to be made on this side: when the
+            # walk's deadline has passed, the clamped read is what cut the
+            # body short, and recording the host would arm the shared breaker
+            # against a healthy instance for every Overpass client in the
+            # process (#480 review, reproduced against a live server).
+            if deadline is not None and time.monotonic() >= deadline:
+                raise SeaViewBudgetExceeded(
+                    f"the walk budget expired while the body was arriving: {exc}"
+                ) from exc
+            raise SeaViewSourceError(
+                f"Overpass returned an unreadable body: {exc}"
+            ) from exc
         except Exception as exc:
             raise SeaViewSourceError(
                 f"Overpass returned an unreadable body: {exc}"

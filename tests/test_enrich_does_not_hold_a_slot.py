@@ -302,37 +302,64 @@ class TestTheBreakerStopsRedialingADeadHost:
 
     def test_the_coastline_client_shares_the_registry(self, app, monkeypatch):
         """Both transports dial the same instances, so one learning that a host
-        is down must spare the other from re-discovering it."""
+        is down must spare the other from re-discovering it.
+
+        Since #480 the sparing is per host, not per client: the primary that
+        the amenity client already found down is not dialled, and the walk
+        carries on to the fallbacks -- which here refuse too, so what is
+        raised is still the *primary's* skip, the first failure."""
         from services import sea_view_service as module
         from utils.http import OVERPASS_BREAKERS
 
+        monkeypatch.setattr(module, "_cache_get", lambda *a, **kw: None)
         OVERPASS_BREAKERS.for_url(module.Config.OSM_OVERPASS_URL).record_refusal("x")
         OVERPASS_BREAKERS.for_url(module.Config.OSM_OVERPASS_URL).record_refusal("x")
         OVERPASS_BREAKERS.for_url(module.Config.OSM_OVERPASS_URL).record_refusal("x")
 
-        calls = []
-        monkeypatch.setattr(
-            module,
-            "request_with_retries",
-            lambda *a, **kw: calls.append(1) or _dead(),
-        )
+        dialled = []
+
+        def _refuse(fn, url, *a, **kw):
+            dialled.append(url)
+            _dead()
+
+        monkeypatch.setattr(module, "request_with_retries", _refuse)
 
         with pytest.raises(module.SeaViewSourceError) as caught:
             module.fetch_coastline_points(43.5, -5.9)
 
-        assert not calls, "the coastline client dialled a host already known down"
+        assert module.Config.OSM_OVERPASS_URL not in dialled, (
+            "the coastline client dialled a host already known down"
+        )
+        assert dialled == list(module.Config.OSM_OVERPASS_FALLBACK_URLS), (
+            "an open breaker on the primary must not end the walk"
+        )
         assert "not dialled" in str(caught.value)
 
     def test_a_skip_never_reads_as_an_empty_coastline(self, app, monkeypatch):
         """The contract this module was built around: an empty list means
-        Overpass answered and there is no coastline in range."""
+        Overpass answered and there is no coastline in range.
+
+        Since #480 one open breaker no longer decides alone, so the whole
+        list is armed here -- every instance known down, nothing dialled, and
+        the answer must still be a raise, never an empty coast."""
         from services import sea_view_service as module
         from utils.http import OVERPASS_BREAKERS
 
-        for _ in range(3):
-            OVERPASS_BREAKERS.for_url(module.Config.OSM_OVERPASS_URL).record_refusal(
-                "x"
-            )
+        monkeypatch.setattr(module, "_cache_get", lambda *a, **kw: None)
+        for url in [module.Config.OSM_OVERPASS_URL] + list(
+            module.Config.OSM_OVERPASS_FALLBACK_URLS
+        ):
+            for _ in range(3):
+                OVERPASS_BREAKERS.for_url(url).record_refusal("x")
+
+        dialled = []
+        monkeypatch.setattr(
+            module,
+            "request_with_retries",
+            lambda fn, url, *a, **kw: dialled.append(url) or _dead(),
+        )
 
         with pytest.raises(module.SeaViewSourceError):
             module.fetch_coastline_points(43.5, -5.9)
+
+        assert not dialled, "a host already known down was dialled anyway"
