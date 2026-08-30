@@ -215,6 +215,9 @@ class TestScoringABatch:
         assert prop.taste["scorer_version"] == taste_service.TASTE_SCORER_VERSION
         assert prop.taste["closest_reference_id"] == ref.id
         assert prop.taste["reasons_ru"] == ["Похоже на эталон."]
+        assert prop.taste["facts_fingerprint"] == taste_service.facts_fingerprint(
+            taste_service.gather_facts(prop)
+        )
 
     @pytest.mark.parametrize(
         "mangle, why",
@@ -308,6 +311,50 @@ class TestScoringABatch:
             outcome = taste_service.score_batch([prop], profile, overwrite_current=True)
         assert outcome["rows"] == {prop.id: "scored"}
         assert float(prop.taste_score) == 10.0
+
+    def test_a_facts_stale_row_is_repaired_not_superseded_forever(
+        self, app, profile_row
+    ):
+        """The codex-verify finding: scope selects a facts-stale row, the
+        settled guard bounced it as superseded, and every run burned a
+        bridge call on a row that could never change. The repair must land."""
+        ref, profile = self._built_profile(profile_row)
+        prop = _mk_property(profile_row)
+        with patch.object(
+            subscription_transport,
+            "complete",
+            return_value=_bridge_answer({"results": [_score_result(prop.id, 55.0)]}),
+        ):
+            taste_service.score_batch([prop], profile)
+        # The facts move; the stored score is now stale by fingerprint.
+        prop.price = 111111
+        db.session.commit()
+        assert taste_service.read_taste(prop, profile["version"])["state"] == "stale"
+        with patch.object(
+            subscription_transport,
+            "complete",
+            return_value=_bridge_answer({"results": [_score_result(prop.id, 77.0)]}),
+        ):
+            outcome = taste_service.score_batch([prop], profile)
+        assert outcome["rows"] == {prop.id: "scored"}
+        assert float(prop.taste_score) == 77.0
+        assert taste_service.read_taste(prop, profile["version"])["state"] == "ok"
+
+    def test_a_future_version_orphan_is_not_current(self, app, profile_row):
+        prop = _mk_property(profile_row)
+        prop.taste = {
+            "status": "ok",
+            "score": 88.0,
+            "reasons_ru": ["ok"],
+            "profile_version": 999,
+            "scorer_version": taste_service.TASTE_SCORER_VERSION,
+            "facts_fingerprint": taste_service.facts_fingerprint(
+                taste_service.gather_facts(prop)
+            ),
+        }
+        prop.taste_score = 88.0
+        db.session.commit()
+        assert taste_service.read_taste(prop, 3)["state"] == "stale"
 
     def test_the_outcome_says_whether_the_bridge_was_asked(self, app, profile_row):
         ref, profile = self._built_profile(profile_row)

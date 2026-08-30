@@ -558,6 +558,7 @@ def build_profile(provider: str = "claude") -> Dict[str, Any]:
     # answer to yesterday's question (the codex-review reproduction: change
     # OLD REASON to NEW REASON mid-build, get a "current" profile carrying
     # the old one).
+    db.session.expire_all()
     if signals_fingerprint(collect_signals()) != basis_fingerprint:
         return {
             "status": "failed",
@@ -830,15 +831,22 @@ def score_batch(
             current = prop.taste if isinstance(prop.taste, dict) else None
             if current and isinstance(current.get("profile_version"), int):
                 newer = current["profile_version"] > profile_data["version"]
-                # A row that already carries an ok score for THIS profile is
-                # not overwritten by default: two callers racing one row would
-                # otherwise end with whichever call finished last, silently
-                # discarding the other's answer. A deliberate re-score
-                # (--force) sets overwrite_current; a NEWER version wins
-                # regardless.
+                # A row that already carries a CURRENT ok score — same
+                # profile, same scorer, same facts — is not overwritten by
+                # default: two callers racing one row would otherwise end
+                # with whichever call finished last, silently discarding the
+                # other's answer. "Settled" is exactly what `read_taste`
+                # calls `ok`: a same-version score whose facts or scorer
+                # moved is what the backfill came to REPAIR, and treating it
+                # as settled sent every run home `superseded` with a bridge
+                # call burned (the codex-verify finding). A deliberate
+                # re-score (--force) sets overwrite_current; a NEWER version
+                # wins regardless.
                 same_and_settled = (
                     current["profile_version"] == profile_data["version"]
                     and current.get("status") == "ok"
+                    and current.get("scorer_version") == TASTE_SCORER_VERSION
+                    and current.get("facts_fingerprint") == fingerprints[prop.id]
                     and not overwrite_current
                 )
                 if newer or same_and_settled:
@@ -913,7 +921,9 @@ def read_taste(prop: Property, current_version: Optional[int] = None) -> Dict[st
         # database no longer knows, and presenting it as current would be a
         # claim nobody can check.
         state = "stale"
-    elif block["profile_version"] < current_version:
+    elif block["profile_version"] != current_version:
+        # `!=`, not `<`: a version the ledger has not minted yet is a hand
+        # write about a profile nobody can check, not a fresher answer.
         state = "stale"
     # A rubric change moves what the number means; an old scorer's 78 is not
     # today's 78, so it presents as stale too.

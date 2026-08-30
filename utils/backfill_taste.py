@@ -142,7 +142,7 @@ def main() -> None:
             f"(built {profile_data['built_at']}, provider {profile_data['provider']})"
         )
         print(
-            f"scope: {len(rows)} rows -> {n_batches} bridge calls "
+            f"scope: {len(rows)} rows -> up to {n_batches} bridge calls "
             f"(batch {args.batch}, provider {args.provider})"
         )
         if not rows:
