@@ -72,7 +72,7 @@ def source_email_id_for(listing_id: int) -> str:
     return f"{SOURCE_NAME}:{listing_id}"
 
 
-def _existing_by_listing_id(listing_id: int):
+def existing_by_listing_id(listing_id: int):
     """The row already holding this listing, whichever way it got here.
 
     Two lookups because two importers exist. `source_email_id` catches
@@ -181,7 +181,7 @@ def read_urls(urls: List[str], *, session=None) -> List[Dict[str, Any]]:
             rows.append(rejected_row(raw, "not a fotocasa listing link"))
             continue
 
-        existing = _existing_by_listing_id(listing_id)
+        existing = existing_by_listing_id(listing_id)
         if existing is not None:
             rows.append(
                 {
@@ -204,7 +204,7 @@ def read_urls(urls: List[str], *, session=None) -> List[Dict[str, Any]]:
     return rows
 
 
-def _classify(row: Dict[str, Any], profile_id: Optional[int]):
+def classify_row(row: Dict[str, Any], profile_id: Optional[int]):
     """Category and subtype, from the classifier every other row goes through.
 
     Fotocasa states its own `buildingType`, and it would be easy to map it
@@ -231,6 +231,119 @@ def _classify(row: Dict[str, Any], profile_id: Optional[int]):
     )
 
 
+def build_property(
+    row: Dict[str, Any],
+    *,
+    profile_id: Optional[int],
+    classification: Optional[tuple] = None,
+    method: str = "portal_payload",
+    email_date: Optional[datetime] = None,
+    email_subject: Optional[str] = None,
+    email_sender: Optional[str] = None,
+):
+    """One Property from one read fotocasa listing, not yet in any session.
+
+    Both doors into the table go through here -- the paste-links import and
+    the alert-email ingestion (`services/property_imap_service.py`) -- because
+    two builders would be one incident away from disagreeing about the dedup
+    key, the NULL `listing_status_source` or the portal pin, and a listing
+    that arrives through both doors must land as one row either way: the
+    `fotocasa:<id>` `source_email_id` is that guarantee, so both writers must
+    construct it identically.
+
+    `method` records which door it was; `email_date` overrides the portal's
+    `creationDate` for a row that arrived by mail, because for an ingested row
+    that column means "when the email arrived" everywhere else in this table.
+    """
+    from models import Property
+
+    listing_id = int(row["listing_id"])
+    if classification is None:
+        classification = classify_row(row, profile_id)
+    category, subtype = classification
+
+    prop = Property()
+    prop.source_email_id = source_email_id_for(listing_id)
+    prop.url = row.get("url")
+    prop.title = row.get("title")
+    prop.description = row.get("description")
+    prop.price = row.get("price")
+    prop.area = row.get("area")
+    prop.area_type = row.get("area_type") or "unknown"
+    prop.deal_type = row.get("deal_type") or "sale"
+    prop.municipality = row.get("municipality")
+    prop.search_profile_id = profile_id
+    prop.property_category = category
+    prop.property_subtype = subtype
+    prop.attributes = row.get("attributes") or {}
+    prop.email_date = email_date or _parse_published(row.get("published_at"))
+    prop.email_subject = email_subject
+    prop.email_sender = email_sender
+
+    # The portal's own coordinate, recorded as approximate whatever it
+    # says. `services/coordinate_quality.py` grants `precise` zero slack,
+    # which unlocks a paid travel run; the only fotocasa page measured so
+    # far declares `isExact: false`, so nothing here has ever seen the
+    # evidence that would justify the stronger label.
+    if row.get("latitude") is not None and row.get("longitude") is not None:
+        prop.location_lat = row["latitude"]
+        prop.location_lon = row["longitude"]
+        prop.location_accuracy = "approximate"
+
+    # Not `manual`, and not `ingest`. See the module docstring.
+    #
+    # `null()` and not `None`: the column carries a Python-side default of
+    # `"ingest"` (models.py), and SQLAlchemy applies a Python default to
+    # any attribute that is None at flush -- so the plain assignment reads
+    # like the intent and stores the opposite. A SQL expression is a value,
+    # so the default does not fire. Measured by the test that asserts this
+    # column, which failed with `'ingest' is not None` before this line.
+    prop.listing_status_source = null()
+
+    prop.enrichment = {
+        # Who is selling, recorded on the way past. The page has been
+        # fetched already, so this costs nothing and spares the row the one
+        # thing this deployment cannot do later on demand for every site --
+        # go back and read the advert. `services/advertiser.py` owns what
+        # the portal's word is taken to mean.
+        advertiser.ENRICHMENT_KEY: advertiser.portal_verdict(
+            portal_type=row.get("publisher_type"),
+            client_type_id=row.get("client_type_id"),
+            client_name=row.get("agency"),
+            site=SOURCE_NAME,
+        ),
+        "import": {
+            "source": SOURCE_NAME,
+            "method": method,
+            "listing_id": listing_id,
+            "imported_at": datetime.utcnow().isoformat(),
+            "agency": row.get("agency"),
+            "publisher_type": row.get("publisher_type"),
+            "client_type_id": row.get("client_type_id"),
+            "province": row.get("province"),
+            "postal_code": row.get("postal_code"),
+            "district": row.get("district"),
+            "building_type": row.get("building_type"),
+            # Verbatim, so the day somebody measures a page that claims an
+            # exact coordinate, the evidence for revisiting the label above
+            # is already in the row rather than needing a re-fetch.
+            "portal_accuracy": row.get("portal_accuracy") or {},
+        },
+    }
+
+    # The portal's own pin, through the writer that lives beside the reader
+    # in `services/coordinate_quality.py`, so a re-geocode cannot silently
+    # replace it with something derived from the title (#393).
+    prop.enrichment = record_portal_coordinate(
+        prop.enrichment,
+        source=SOURCE_NAME,
+        lat=row.get("latitude"),
+        lon=row.get("longitude"),
+    )
+
+    return prop
+
+
 def insert_rows(
     rows: List[Dict[str, Any]], *, profile_id: Optional[int]
 ) -> Dict[str, Any]:
@@ -242,7 +355,6 @@ def insert_rows(
     imported in another tab.
     """
     from app import db
-    from models import Property
 
     created: List[Dict[str, Any]] = []
     skipped: List[Dict[str, Any]] = []
@@ -254,84 +366,17 @@ def insert_rows(
         if not listing_id:
             continue
 
-        existing = _existing_by_listing_id(int(listing_id))
+        existing = existing_by_listing_id(int(listing_id))
         if existing is not None:
             skipped.append({"url": row.get("url"), "existing_id": existing.id})
             continue
 
-        category, subtype = _classify(row, profile_id)
-
-        prop = Property()
-        prop.source_email_id = source_email_id_for(int(listing_id))
-        prop.url = row.get("url")
-        prop.title = row.get("title")
-        prop.description = row.get("description")
-        prop.price = row.get("price")
-        prop.area = row.get("area")
-        prop.area_type = row.get("area_type") or "unknown"
-        prop.deal_type = row.get("deal_type") or "sale"
-        prop.municipality = row.get("municipality")
-        prop.search_profile_id = profile_id
-        prop.property_category = category
-        prop.property_subtype = subtype
-        prop.attributes = row.get("attributes") or {}
-        prop.email_date = _parse_published(row.get("published_at"))
-
-        # The portal's own coordinate, recorded as approximate whatever it
-        # says. `services/coordinate_quality.py` grants `precise` zero slack,
-        # which unlocks a paid travel run; the only fotocasa page measured so
-        # far declares `isExact: false`, so nothing here has ever seen the
-        # evidence that would justify the stronger label.
-        if row.get("latitude") is not None and row.get("longitude") is not None:
-            prop.location_lat = row["latitude"]
-            prop.location_lon = row["longitude"]
-            prop.location_accuracy = "approximate"
-
-        # Not `manual`, and not `ingest`. See the module docstring.
-        #
-        # `null()` and not `None`: the column carries a Python-side default of
-        # `"ingest"` (models.py), and SQLAlchemy applies a Python default to
-        # any attribute that is None at flush -- so the plain assignment reads
-        # like the intent and stores the opposite. A SQL expression is a value,
-        # so the default does not fire. Measured by the test that asserts this
-        # column, which failed with `'ingest' is not None` before this line.
-        prop.listing_status_source = null()
-
-        prop.enrichment = {
-            # Who is selling, recorded on the way past. The page has been
-            # fetched already, so this costs nothing and spares the row the one
-            # thing this deployment cannot do later on demand for every site --
-            # go back and read the advert. `services/advertiser.py` owns what
-            # the portal's word is taken to mean.
-            advertiser.ENRICHMENT_KEY: advertiser.portal_verdict(
-                portal_type=row.get("publisher_type"),
-                client_type_id=row.get("client_type_id"),
-                client_name=row.get("agency"),
-                site=SOURCE_NAME,
-            ),
-            "import": {
-                "source": SOURCE_NAME,
-                "method": "portal_payload",
-                "listing_id": int(listing_id),
-                "imported_at": datetime.utcnow().isoformat(),
-                "agency": row.get("agency"),
-                "publisher_type": row.get("publisher_type"),
-                "client_type_id": row.get("client_type_id"),
-                "province": row.get("province"),
-                "postal_code": row.get("postal_code"),
-                "district": row.get("district"),
-                "building_type": row.get("building_type"),
-                # Verbatim, so the day somebody measures a page that claims an
-                # exact coordinate, the evidence for revisiting the label above
-                # is already in the row rather than needing a re-fetch.
-                "portal_accuracy": row.get("portal_accuracy") or {},
-            },
-        }
+        prop = build_property(row, profile_id=profile_id)
 
         # Each row lands inside its own SAVEPOINT, so a collision costs that
         # row and not the batch.
         #
-        # The `_existing_by_listing_id` check above is a plain SELECT and
+        # The `existing_by_listing_id` check above is a plain SELECT and
         # cannot see a row another transaction has inserted but not committed,
         # so two confirms overlapping on one listing both pass it -- a double
         # click on the Add button is enough, and two tabs certainly are. The
@@ -342,16 +387,6 @@ def insert_rows(
         # valid, was discarded while the page said "Import failed". The
         # docstring promised exactly this could not happen; it was true only
         # of the sequential case the test exercised.
-        # The portal's own pin, through the writer that lives beside the reader
-        # in `services/coordinate_quality.py`, so a re-geocode cannot silently
-        # replace it with something derived from the title (#393).
-        prop.enrichment = record_portal_coordinate(
-            prop.enrichment,
-            source=SOURCE_NAME,
-            lat=row.get("latitude"),
-            lon=row.get("longitude"),
-        )
-
         try:
             with db.session.begin_nested():
                 db.session.add(prop)
@@ -359,7 +394,7 @@ def insert_rows(
         except IntegrityError:
             # The other transaction has committed it by now, so this is the
             # ordinary duplicate outcome arriving a moment late.
-            existing = _existing_by_listing_id(int(listing_id))
+            existing = existing_by_listing_id(int(listing_id))
             skipped.append(
                 {
                     "url": row.get("url"),
