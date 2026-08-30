@@ -9,18 +9,16 @@ are recognized, the row is written with the exact dedup key and NULL
 `listing_status_source` the paste-links import writes, and a page fotocasa
 refuses holds the UID cursor instead of being consumed.
 
-**The alert email in here is synthetic.** As of 2026-08-30 the 19 fotocasa
-municipality alerts had just been created and no real alert had arrived in
-the owner's mailbox, so the sender address and the template are modeled, not
-measured: the listing links use the `/<id>/d` shape every one of the 56
-stored fotocasa URLs has, and the sender uses the fotocasa.es domain the
-Gmail query matches by default. When the first real alert arrives, check its
-sender against `FOTOCASA_ALERT_SENDERS` and its link shape against
-`listing_urls_in_text` -- a template this parser cannot read is consumed
-with a warning in the log (`property_imap_service.py`), not held.
+The alert email built in here is synthetic but no longer unverified: the
+first real fotocasa alert arrived the same afternoon this shipped
+(2026-08-30, sender enviosfotocasa@fotocasa.es), its body is committed
+token-redacted as `tests/data/fotocasa_alert_arteixo.html`, and
+`tests/test_portal_alert_ingestion.py` runs the recognizer over it. The
+synthetic builder stays for the multi-listing and refusal shapes one real
+single-listing alert cannot exercise.
 
-The listing page itself is not synthetic: the fetch stub answers with the
-real 40 KB payload of listing 190280914 committed under `tests/data/`.
+The listing page itself is not synthetic either: the fetch stub answers with
+the real 40 KB payload of listing 190280914 committed under `tests/data/`.
 """
 
 import pathlib
@@ -40,7 +38,7 @@ from services.fotocasa_source import (
     parse_listing,
 )
 from services.property_imap_service import (
-    FOTOCASA_MAX_CONSECUTIVE_REFUSALS,
+    PORTAL_MAX_CONSECUTIVE_REFUSALS,
     PropertyIMAPService,
 )
 from tests import setup_test_environment
@@ -207,30 +205,43 @@ class TestGmailQuery:
                 return call[1]
         raise AssertionError("Expected a Gmail X-GM-RAW search call")
 
-    def test_the_query_asks_for_fotocasa_mail_too(self, imap, monkeypatch):
+    def test_the_query_asks_for_portal_mail_without_the_label(self, imap, monkeypatch):
+        """The label gates only the idealista term.
+
+        Measured 2026-08-30: every portal mail in the mailbox -- 65 fotocasa,
+        26 milanuncios, 29 yaencontre -- carried no label, because the
+        owner's Gmail filter labels idealista mail alone. A query that
+        demanded the label for the portal senders fetched none of them, ever.
+        The ORs are explicit and parenthesised: two adjacent from: terms mean
+        AND to Gmail and would match no mail at all.
+        """
         setup_test_environment()
         monkeypatch.setattr(Config, "FOTOCASA_ALERT_SENDERS", "fotocasa.es")
+        monkeypatch.setattr(Config, "MILANUNCIOS_ALERT_SENDERS", "milanuncios.com")
+        monkeypatch.setattr(Config, "YAENCONTRE_ALERT_SENDERS", "yaencontre.com")
         service = _service()
         service.host = "imap.gmail.com"
         service.get_idealista_emails(max_results=1)
 
         raw = self._raw_query(_FakeIMAPClient.last_instance)
-        # An explicit parenthesised OR: two adjacent from: terms mean AND to
-        # Gmail and would match no mail at all.
-        assert "(from:noresponder@idealista.com OR from:fotocasa.es)" in raw
-        assert "label:IdealistaProperties" in raw
+        assert raw == (
+            "(from:noresponder@idealista.com label:IdealistaProperties)"
+            " OR from:fotocasa.es"
+            " OR from:milanuncios.com"
+            " OR from:yaencontre.com"
+        )
 
     def test_no_senders_means_the_old_idealista_only_query(self, imap, monkeypatch):
         setup_test_environment()
         monkeypatch.setattr(Config, "FOTOCASA_ALERT_SENDERS", "")
+        monkeypatch.setattr(Config, "MILANUNCIOS_ALERT_SENDERS", "")
+        monkeypatch.setattr(Config, "YAENCONTRE_ALERT_SENDERS", "")
         service = _service()
         service.host = "imap.gmail.com"
         service.get_idealista_emails(max_results=1)
 
         raw = self._raw_query(_FakeIMAPClient.last_instance)
-        assert "from:noresponder@idealista.com" in raw
-        assert "fotocasa" not in raw
-        assert " OR " not in raw
+        assert raw == "from:noresponder@idealista.com label:IdealistaProperties"
 
 
 class TestAlertEmailCreatesTheRow:
@@ -426,7 +437,7 @@ class TestRefusalsHoldTheCursor:
         with app.app_context():
             service = _service()
             assert service.run_ingestion(sync_type="test") == 0
-            assert len(calls) == FOTOCASA_MAX_CONSECUTIVE_REFUSALS
+            assert len(calls) == PORTAL_MAX_CONSECUTIVE_REFUSALS
             assert service.last_seen_uid == 0
 
     def test_a_held_fotocasa_email_does_not_lose_the_idealista_mail_around_it(

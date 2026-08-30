@@ -1170,33 +1170,63 @@ search page would have been recorded as live — #136's false confirmation at a
 second host. All 56 stored fotocasa URLs end in `/<id>/d`, which is what the
 second anchor matches.
 
-**Fotocasa alerts arrive by email too, and the email contributes only the
-links** (2026-08-30). The Gmail query asks for `from:fotocasa.es` beside
-idealista's sender (`FOTOCASA_ALERT_SENDERS`; empty turns the whole path off),
-`listing_urls_in_text` in `services/fotocasa_source.py` reads the `/<id>/d`
-links out of the body, and every listing field then comes off the listing page
-through the same `preview_row`/`build_property` pair the paste-links import
-uses -- one builder (`services/fotocasa_import.py`), so the two doors write
-the same `fotocasa:<id>` dedup key and the same NULL `listing_status_source`,
-and a listing arriving through both lands once, checked *before* the fetch so
-a known listing costs no request. Three things are load bearing. The fetches
-run in `run_ingestion`, never inside the open IMAP connection, paced by
-`FOTOCASA_GATE`. A refusal -- the 200 "SENTIMOS LA INTERRUPCIÓN" block page, a
-timeout, an unreadable payload -- **holds the UID cursor** so the email is
-re-read when the block lifts, and three refusals in a row stop the run's
-fetching outright (`FOTOCASA_MAX_CONSECUTIVE_REFUSALS`, the
-`backfill_advertiser` pattern); only `not_the_listing_page` -- the server
-answering "gone" -- is consumed, because tomorrow's answer is the same.
-And profile resolution is the existing chain (matchers, then the catch-all):
-no real alert email had been read when this shipped -- the 19 municipality
-alerts were created the same day -- so the sender default and the template
-shape in `tests/test_fotocasa_email_ingestion.py` are *modeled*, and the
-first real alert must be checked against both (a fotocasa-sender email whose
-links the parser cannot read is consumed with a warning in the log, which is
-where a template mismatch will show). Two owner-side prerequisites, or the
-mail is never fetched at all: the Gmail filter must put the `IMAP_FOLDER`
-label on fotocasa alert mail, and the real sender must be under fotocasa.es
-or named in `FOTOCASA_ALERT_SENDERS`.
+**Portal alerts arrive by email too -- fotocasa, milanuncios and yaencontre --
+and the email contributes only what the portal cannot** (2026-08-30, two PRs
+the same day). The Gmail query is
+`(from:noresponder@idealista.com label:...) OR from:fotocasa.es OR
+from:milanuncios.com OR from:yaencontre.com`: **the label gates the idealista
+term alone**, because the owner's Gmail filter labels idealista mail only --
+measured that day, all 65 fotocasa, 26 milanuncios and 29 yaencontre mails in
+the mailbox carried no label, so the first version of this feature, which
+demanded the label for portal senders too, would never have fetched one. The
+UID cursor is what keeps historical portal mail out (only UIDs past it are
+fetched); a `run_full_sync` deliberately re-reads everything, portal promos
+included. Per-portal senders live in `FOTOCASA_ALERT_SENDERS` /
+`MILANUNCIOS_ALERT_SENDERS` / `YAENCONTRE_ALERT_SENDERS` (defaults are the
+bare domains; the real senders were read off the real mail:
+enviosfotocasa@fotocasa.es, no-responder@milanuncios.com,
+no-reply@envios.yaencontre.com); empty turns that portal off.
+
+The three portals differ in what the email can say, and each got the model
+its measurements dictate. **Fotocasa**: direct `/<id>/d` links, page answers
+the honest UA -- email names the listing, page supplies every field
+(validated against the first real alert, committed token-redacted as
+`tests/data/fotocasa_alert_arteixo.html`). **Milanuncios**: the digest
+carries *no direct links at all* -- every anchor is an opaque SparkPost
+tracker -- so `services/milanuncios_source.py` resolves only the *card*
+trackers (anchors wrapping an `images*.milanuncios.com` photo; the same
+template wraps Eliminar/Desactívala/Dar de baja in identical trackers, and
+resolving those would knock on alert-management doors), redirects OFF,
+`Location` only, then fetches the ad page, which answers 200 with
+`window.__INITIAL_PROPS__` -- price, surface, **coordinates**, and
+`sellerType` (`private` -> the advertiser verdict for free). Two payload
+traps are measured and pinned: `sellType: demand` is somebody *searching*
+and is refused, and `location.city.name` is the locality with the
+municipality in parentheses ("Los Quintanales (Mieres)" -> Mieres).
+**Yaencontre**: the portal answers DataDome to every request from both
+machines (403 even for robots.txt), so `services/yaencontre_source.py` reads
+the email card itself -- title, price, hab/baños/m², municipality from the
+title's last comma -- and the row gets no coordinate (the geocoder fills it
+at ingest) and **no advertiser block** (`record_advertiser=False`: an
+absent key reads "not established", which is true). The listing identity is
+the *second* number in `inmueble-<a>-<b>` -- the first repeats across one
+seller's adverts.
+
+One builder for every portal row: `fotocasa_import.build_property` (the
+module keeps its historical name; the writers are portal-generic) writes the
+`<source>:<id>` dedup key -- ids are only unique within a portal, so the
+LIKE patterns in `PORTAL_URL_PATTERNS` are anchored per source -- the NULL
+`listing_status_source`, and the portal pin. Dedup runs *before* any fetch.
+All fetches run in `run_ingestion`, never inside the open IMAP connection,
+each portal paced by its own gate and counted by its own refusal counter
+(`PORTAL_MAX_CONSECUTIVE_REFUSALS`, the `backfill_advertiser` pattern): a
+refusal **holds the UID cursor** so the email is re-read when the block
+lifts; only an *answered* "gone" (`not_the_listing_page`, a 404, a demand
+ad) is consumed, because tomorrow's answer is the same. Profile resolution
+is the existing chain (matchers, then the catch-all). The fixtures under
+`tests/data/` -- both alert bodies, the milanuncios payload -- are the real
+2026-08-30 artifacts, token-redacted; `tests/test_portal_alert_ingestion.py`
+and `tests/test_fotocasa_email_ingestion.py` pin all of it.
 
 **Who is selling is a four-state verdict too, and most of it was already in
 the table** (`services/advertiser.py`). The owner asked to see the listings
