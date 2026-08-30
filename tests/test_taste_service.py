@@ -340,6 +340,33 @@ class TestScoringABatch:
         assert float(prop.taste_score) == 77.0
         assert taste_service.read_taste(prop, profile["version"])["state"] == "ok"
 
+    def test_garbage_lists_in_a_hand_block_read_as_empty_not_a_crash(
+        self, app, profile_row
+    ):
+        """The gate reviewer's failing input: a valid current block whose
+        matched_likes is the integer 1 crashed every surface that iterated
+        it. The reader is total: garbage reads as empty."""
+        prop = _mk_property(profile_row)
+        prop.taste = {
+            "status": "ok",
+            "score": 50.0,
+            "reasons_ru": 7,
+            "matched_likes": 1,
+            "matched_dislikes": {"a": 1},
+            "profile_version": 3,
+            "scorer_version": taste_service.TASTE_SCORER_VERSION,
+            "facts_fingerprint": taste_service.facts_fingerprint(
+                taste_service.gather_facts(prop)
+            ),
+        }
+        prop.taste_score = 50.0
+        db.session.commit()
+        verdict = taste_service.read_taste(prop, 3)
+        assert verdict["state"] == "ok"
+        assert verdict["matched_likes"] == []
+        assert verdict["matched_dislikes"] == []
+        assert verdict["reasons_ru"] == []
+
     def test_a_future_version_orphan_is_not_current(self, app, profile_row):
         prop = _mk_property(profile_row)
         prop.taste = {

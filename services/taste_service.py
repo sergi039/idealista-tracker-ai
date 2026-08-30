@@ -892,6 +892,17 @@ def score_property(
 # --------------------------------------------------------------------------
 
 
+def _string_list(value: Any) -> List[str]:
+    """The strings in `value`, or nothing. Total: a hand-edited block can
+    hold an int where a list belongs, and a reader that iterates it takes
+    the CSV, the list and the page down with one row (the gate's reviewer
+    proved it with `"matched_likes": 1`). Garbage reads as empty, never as
+    a crash."""
+    if not isinstance(value, list):
+        return []
+    return [t for t in value if isinstance(t, str) and t.strip()]
+
+
 def read_taste(prop: Property, current_version: Optional[int] = None) -> Dict[str, Any]:
     """The row's taste state for a template: none / ok / stale.
 
@@ -940,19 +951,12 @@ def read_taste(prop: Property, current_version: Optional[int] = None) -> Dict[st
     stored_fingerprint = block.get("facts_fingerprint")
     if stored_fingerprint != facts_fingerprint(gather_facts(prop)):
         state = "stale"
-    reasons = [
-        r for r in (block.get("reasons_ru") or []) if isinstance(r, str) and r.strip()
-    ]
     return {
         "state": state,
         "score": float(block["score"]),
-        "reasons_ru": reasons,
-        "matched_likes": [
-            t for t in (block.get("matched_likes") or []) if isinstance(t, str)
-        ],
-        "matched_dislikes": [
-            t for t in (block.get("matched_dislikes") or []) if isinstance(t, str)
-        ],
+        "reasons_ru": _string_list(block.get("reasons_ru")),
+        "matched_likes": _string_list(block.get("matched_likes")),
+        "matched_dislikes": _string_list(block.get("matched_dislikes")),
         "closest_reference_id": block.get("closest_reference_id"),
         "confidence": block.get("confidence"),
         "profile_version": block.get("profile_version"),
