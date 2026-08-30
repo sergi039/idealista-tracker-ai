@@ -1170,6 +1170,34 @@ search page would have been recorded as live — #136's false confirmation at a
 second host. All 56 stored fotocasa URLs end in `/<id>/d`, which is what the
 second anchor matches.
 
+**Fotocasa alerts arrive by email too, and the email contributes only the
+links** (2026-08-30). The Gmail query asks for `from:fotocasa.es` beside
+idealista's sender (`FOTOCASA_ALERT_SENDERS`; empty turns the whole path off),
+`listing_urls_in_text` in `services/fotocasa_source.py` reads the `/<id>/d`
+links out of the body, and every listing field then comes off the listing page
+through the same `preview_row`/`build_property` pair the paste-links import
+uses -- one builder (`services/fotocasa_import.py`), so the two doors write
+the same `fotocasa:<id>` dedup key and the same NULL `listing_status_source`,
+and a listing arriving through both lands once, checked *before* the fetch so
+a known listing costs no request. Three things are load bearing. The fetches
+run in `run_ingestion`, never inside the open IMAP connection, paced by
+`FOTOCASA_GATE`. A refusal -- the 200 "SENTIMOS LA INTERRUPCIÓN" block page, a
+timeout, an unreadable payload -- **holds the UID cursor** so the email is
+re-read when the block lifts, and three refusals in a row stop the run's
+fetching outright (`FOTOCASA_MAX_CONSECUTIVE_REFUSALS`, the
+`backfill_advertiser` pattern); only `not_the_listing_page` -- the server
+answering "gone" -- is consumed, because tomorrow's answer is the same.
+And profile resolution is the existing chain (matchers, then the catch-all):
+no real alert email had been read when this shipped -- the 19 municipality
+alerts were created the same day -- so the sender default and the template
+shape in `tests/test_fotocasa_email_ingestion.py` are *modeled*, and the
+first real alert must be checked against both (a fotocasa-sender email whose
+links the parser cannot read is consumed with a warning in the log, which is
+where a template mismatch will show). Two owner-side prerequisites, or the
+mail is never fetched at all: the Gmail filter must put the `IMAP_FOLDER`
+label on fotocasa alert mail, and the real sender must be under fotocasa.es
+or named in `FOTOCASA_ALERT_SENDERS`.
+
 **Who is selling is a four-state verdict too, and most of it was already in
 the table** (`services/advertiser.py`). The owner asked to see the listings
 sold by their owners rather than through an agency, from the list. Idealista
