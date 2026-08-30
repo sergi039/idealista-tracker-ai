@@ -64,15 +64,27 @@ STATUS_REFUSED = "refused"
 STATUS_REJECTED = "rejected"
 
 
+# Every portal-sourced row goes through the writers below, so the per-portal
+# knowledge they need lives in one table: how a listing id appears in that
+# portal's stored URL. Ids are only unique *within* a portal -- fotocasa and
+# milanuncios can both have a listing 190280914 -- which is why the pattern
+# is per source and the dash/`.htm`/`/d` anchors are part of it.
+PORTAL_URL_PATTERNS = {
+    "fotocasa": "%/{listing_id}/d%",
+    "milanuncios": "%-{listing_id}.htm",
+    "yaencontre": "%-{listing_id}",
+}
+
+
 # `source_email_id` is the only NOT NULL + UNIQUE column on `Property`, so it
 # is both the bookkeeping fact "where this row came from" and, for free, the
 # constraint that a listing cannot be imported twice. The prefix is the source
 # rather than the word `manual`: see the module docstring.
-def source_email_id_for(listing_id: int) -> str:
-    return f"{SOURCE_NAME}:{listing_id}"
+def source_email_id_for(listing_id: int, source: str = SOURCE_NAME) -> str:
+    return f"{source}:{listing_id}"
 
 
-def existing_by_listing_id(listing_id: int):
+def existing_by_listing_id(listing_id: int, source: str = SOURCE_NAME):
     """The row already holding this listing, whichever way it got here.
 
     Two lookups because two importers exist. `source_email_id` catches
@@ -80,16 +92,19 @@ def existing_by_listing_id(listing_id: int):
     out-of-band script wrote, whose ids sit in a `manual:<batch>:<id>`
     string this module would never construct. Measured 2026-08-17: all 56
     stored fotocasa URLs end in `/<id>/d`, so the pattern really does reach
-    every one of them.
+    every one of them. The other portals have no out-of-band rows, but the
+    URL half stays for them too: it is what keeps a hand-inserted row from
+    being re-ingested the day one exists.
     """
     from models import Property
 
     row = Property.query.filter_by(
-        source_email_id=source_email_id_for(listing_id)
+        source_email_id=source_email_id_for(listing_id, source)
     ).first()
     if row is not None:
         return row
-    return Property.query.filter(Property.url.ilike(f"%/{listing_id}/d%")).first()
+    pattern = PORTAL_URL_PATTERNS[source].format(listing_id=listing_id)
+    return Property.query.filter(Property.url.ilike(pattern)).first()
 
 
 def _parse_published(value: Optional[str]) -> Optional[datetime]:
@@ -240,20 +255,29 @@ def build_property(
     email_date: Optional[datetime] = None,
     email_subject: Optional[str] = None,
     email_sender: Optional[str] = None,
+    source: str = SOURCE_NAME,
+    record_advertiser: bool = True,
 ):
-    """One Property from one read fotocasa listing, not yet in any session.
+    """One Property from one read portal listing, not yet in any session.
 
-    Both doors into the table go through here -- the paste-links import and
-    the alert-email ingestion (`services/property_imap_service.py`) -- because
-    two builders would be one incident away from disagreeing about the dedup
-    key, the NULL `listing_status_source` or the portal pin, and a listing
-    that arrives through both doors must land as one row either way: the
-    `fotocasa:<id>` `source_email_id` is that guarantee, so both writers must
-    construct it identically.
+    Every door into the table for a portal-sourced row goes through here --
+    the fotocasa paste-links import, and the alert-email ingestion for
+    fotocasa, milanuncios and yaencontre (`services/property_imap_service.py`)
+    -- because parallel builders would be one incident away from disagreeing
+    about the dedup key, the NULL `listing_status_source` or the portal pin,
+    and a listing that arrives through two doors must land as one row either
+    way: the `<source>:<id>` `source_email_id` is that guarantee, so every
+    writer must construct it identically. The module keeps its historical
+    fotocasa name because the paste-links UI and its tests live on it; the
+    writers themselves are portal-generic.
 
     `method` records which door it was; `email_date` overrides the portal's
     `creationDate` for a row that arrived by mail, because for an ingested row
     that column means "when the email arrived" everywhere else in this table.
+    `record_advertiser=False` is for a source that never read who is selling
+    (yaencontre rows come off the email card alone): an advertiser block with
+    all-None evidence would store "the source did not say" for a source
+    nobody asked, where an absent key honestly reads "not established".
     """
     from models import Property
 
@@ -263,7 +287,7 @@ def build_property(
     category, subtype = classification
 
     prop = Property()
-    prop.source_email_id = source_email_id_for(listing_id)
+    prop.source_email_id = source_email_id_for(listing_id, source)
     prop.url = row.get("url")
     prop.title = row.get("title")
     prop.description = row.get("description")
@@ -301,19 +325,8 @@ def build_property(
     prop.listing_status_source = null()
 
     prop.enrichment = {
-        # Who is selling, recorded on the way past. The page has been
-        # fetched already, so this costs nothing and spares the row the one
-        # thing this deployment cannot do later on demand for every site --
-        # go back and read the advert. `services/advertiser.py` owns what
-        # the portal's word is taken to mean.
-        advertiser.ENRICHMENT_KEY: advertiser.portal_verdict(
-            portal_type=row.get("publisher_type"),
-            client_type_id=row.get("client_type_id"),
-            client_name=row.get("agency"),
-            site=SOURCE_NAME,
-        ),
         "import": {
-            "source": SOURCE_NAME,
+            "source": source,
             "method": method,
             "listing_id": listing_id,
             "imported_at": datetime.utcnow().isoformat(),
@@ -323,6 +336,7 @@ def build_property(
             "province": row.get("province"),
             "postal_code": row.get("postal_code"),
             "district": row.get("district"),
+            "locality": row.get("locality"),
             "building_type": row.get("building_type"),
             # Verbatim, so the day somebody measures a page that claims an
             # exact coordinate, the evidence for revisiting the label above
@@ -330,13 +344,25 @@ def build_property(
             "portal_accuracy": row.get("portal_accuracy") or {},
         },
     }
+    if record_advertiser:
+        # Who is selling, recorded on the way past. The page has been
+        # fetched already, so this costs nothing and spares the row the one
+        # thing this deployment cannot do later on demand for every site --
+        # go back and read the advert. `services/advertiser.py` owns what
+        # the portal's word is taken to mean.
+        prop.enrichment[advertiser.ENRICHMENT_KEY] = advertiser.portal_verdict(
+            portal_type=row.get("publisher_type"),
+            client_type_id=row.get("client_type_id"),
+            client_name=row.get("agency"),
+            site=source,
+        )
 
     # The portal's own pin, through the writer that lives beside the reader
     # in `services/coordinate_quality.py`, so a re-geocode cannot silently
     # replace it with something derived from the title (#393).
     prop.enrichment = record_portal_coordinate(
         prop.enrichment,
-        source=SOURCE_NAME,
+        source=source,
         lat=row.get("latitude"),
         lon=row.get("longitude"),
     )
