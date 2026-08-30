@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+from dataclasses import asdict
 from datetime import datetime, timezone
 from email import message_from_bytes
 from typing import Any, Dict, List, Optional
@@ -17,7 +18,7 @@ from utils.google_spend import (
     CAP_INGEST_TRAVEL,
     authorized_spend,
 )
-from services import fotocasa_source
+from services import fotocasa_source, milanuncios_source, yaencontre_source
 from services.settings_service import SettingsService
 from services.search_profile_service import SearchProfileService
 from services.property_classification_service import PropertyClassificationService
@@ -43,11 +44,23 @@ logger = logging.getLogger(__name__)
 # handful of closely spaced requests (measured 2026-08-17 during the
 # advertiser backfill: five requests at 3 s were enough), and the block then
 # stands for several minutes. After this many refusals in a row the run stops
-# fetching fotocasa pages instead of walking the rest of the batch into the
-# same wall -- the pattern `utils/backfill_advertiser.py` already uses. The
-# emails whose pages were never read hold the UID cursor and are re-read next
-# run, so stopping early loses nothing.
-FOTOCASA_MAX_CONSECUTIVE_REFUSALS = 3
+# fetching that portal's pages instead of walking the rest of the batch into
+# the same wall -- the pattern `utils/backfill_advertiser.py` already uses.
+# The emails whose pages were never read hold the UID cursor and are re-read
+# next run, so stopping early loses nothing. One counter per portal host
+# (`HostBreakers`' lesson): fotocasa refusing must not stop a milanuncios
+# fetch that would have answered.
+PORTAL_MAX_CONSECUTIVE_REFUSALS = 3
+
+# The portals whose alert email this loop can read, beside idealista itself:
+# which Config key names their senders, and which email_data type their
+# entries carry. `services/ingest_policy.py` still governs who may run this
+# at all; this table only says what an already-authorized run recognizes.
+PORTAL_SENDER_KEYS = {
+    "fotocasa": "FOTOCASA_ALERT_SENDERS",
+    "milanuncios": "MILANUNCIOS_ALERT_SENDERS",
+    "yaencontre": "YAENCONTRE_ALERT_SENDERS",
+}
 
 
 class PropertyIMAPService:
@@ -73,32 +86,115 @@ class PropertyIMAPService:
         # Set by get_idealista_emails(); run_ingestion() advances it per email
         # only after that email's DB work is committed (issue #24).
         self._uid_cursor: Optional[UidBatchCursor] = None
-        # Consecutive fotocasa page refusals in this run; a success resets it
-        # and FOTOCASA_MAX_CONSECUTIVE_REFUSALS stops the run's fetching.
-        self._fotocasa_refusals = 0
+        # Consecutive page refusals per portal in this run; a success resets
+        # its portal and PORTAL_MAX_CONSECUTIVE_REFUSALS stops that portal's
+        # fetching for the rest of the run.
+        self._portal_refusals: Dict[str, int] = {}
 
     @staticmethod
-    def _fotocasa_senders() -> List[str]:
-        """The senders fotocasa alert mail is expected from, or [] when off.
+    def _portal_senders(portal: str) -> List[str]:
+        """The senders a portal's alert mail is expected from, or [] when off.
 
         Read from Config at call time rather than frozen in __init__, the way
         `_excluded_categories` already is, so a test or a settings change does
         not need a fresh service instance to be seen.
         """
-        raw = getattr(Config, "FOTOCASA_ALERT_SENDERS", "") or ""
+        raw = getattr(Config, PORTAL_SENDER_KEYS[portal], "") or ""
         return [part.strip() for part in raw.split(",") if part.strip()]
 
-    def _gmail_from_query(self) -> str:
-        """The sender half of the Gmail X-GM-RAW query.
+    def _all_portal_senders(self) -> List[str]:
+        return [
+            s for portal in PORTAL_SENDER_KEYS for s in self._portal_senders(portal)
+        ]
 
-        One sender stays the bare `from:` term the query has always been;
-        more than one is an explicit parenthesised OR, because two adjacent
-        `from:` terms mean AND to Gmail and match nothing.
+    def _portal_email_entry(
+        self,
+        *,
+        uid: int,
+        subject: str,
+        body: str,
+        email_source_id: str,
+        internal_date: Any,
+        email_sender: str,
+    ) -> Optional[Dict[str, Any]]:
+        """One email_data entry for a portal alert email, or None.
+
+        Recognition is by what the email carries, not by its sender: the
+        sender lists gate each portal on/off and shape the Gmail query, and
+        the link shapes decide the rest -- the same order idealista's own
+        recognition runs in. Fotocasa and milanuncios entries carry only
+        what to fetch; yaencontre entries carry the parsed cards, because
+        its portal answers DataDome to every request from these machines
+        (measured 2026-08-30) and the email is the whole source.
         """
-        senders = ["noresponder@idealista.com", *self._fotocasa_senders()]
-        if len(senders) == 1:
-            return f"from:{senders[0]}"
-        return "(" + " OR ".join(f"from:{s}" for s in senders) + ")"
+        base: Dict[str, Any] = {
+            "uid": uid,
+            "source_email_id": email_source_id,
+            "email_received_at": internal_date,
+            "email_subject": subject,
+            "email_sender": email_sender,
+        }
+
+        if self._portal_senders("fotocasa"):
+            fotocasa_urls = fotocasa_source.listing_urls_in_text(
+                body
+            ) or fotocasa_source.listing_urls_in_text(subject)
+            if fotocasa_urls:
+                profile = SearchProfileService.resolve_profile(subject, body)
+                return {
+                    **base,
+                    "type": "fotocasa_listings",
+                    "urls": fotocasa_urls,
+                    "search_profile_id": profile.id if profile else None,
+                }
+
+        if self._portal_senders("yaencontre"):
+            cards = yaencontre_source.cards_in_email(body)
+            if cards:
+                profile = SearchProfileService.resolve_profile(subject, body)
+                return {
+                    **base,
+                    "type": "yaencontre_listings",
+                    "cards": [asdict(card) for card in cards],
+                    "search_profile_id": profile.id if profile else None,
+                }
+
+        if self._portal_senders("milanuncios"):
+            tracker_urls = milanuncios_source.card_tracker_urls(body)
+            if tracker_urls:
+                profile = SearchProfileService.resolve_profile(subject, body)
+                return {
+                    **base,
+                    "type": "milanuncios_listings",
+                    "tracker_urls": tracker_urls,
+                    "search_profile_id": profile.id if profile else None,
+                }
+
+        return None
+
+    def _gmail_search_query(self) -> str:
+        """The whole Gmail X-GM-RAW query.
+
+        The label applies to the idealista term alone. It exists to keep two
+        builds off one mailbox (docs/DEV_RULES.md), and the owner's Gmail
+        filter puts it on idealista mail only -- measured 2026-08-30, all 65
+        fotocasa, 26 milanuncios and 29 yaencontre mails in the mailbox
+        carried no label, so a query that demanded it for the portal senders
+        fetched none of them, ever. The portal terms therefore stand on the
+        sender alone; the UID cursor is what keeps historical portal mail
+        from being reprocessed (only UIDs past it are fetched), and a
+        `run_full_sync` deliberately re-reads everything, portal mail
+        included. ORs are explicit and parenthesised: two adjacent `from:`
+        terms mean AND to Gmail and match nothing.
+        """
+        idealista = "from:noresponder@idealista.com"
+        label_part = self._gmail_label_query(self.folder)
+        portal_terms = [f"from:{s}" for s in self._all_portal_senders()]
+        if not portal_terms:
+            return f"{idealista} {label_part}" if label_part else idealista
+        if label_part:
+            idealista = f"({idealista} {label_part})"
+        return " OR ".join([idealista, *portal_terms])
 
     @staticmethod
     def _gmail_label_query(label: Optional[str]) -> Optional[str]:
@@ -396,10 +492,7 @@ class PropertyIMAPService:
                         client.select_folder("[Gmail]/All Mail", readonly=True)
                     except Exception:
                         client.select_folder("INBOX", readonly=True)
-                    gm_query = self._gmail_from_query()
-                    label_part = self._gmail_label_query(self.folder)
-                    if label_part:
-                        gm_query = f"{gm_query} {label_part}"
+                    gm_query = self._gmail_search_query()
                     try:
                         uids = client.search(["X-GM-RAW", gm_query])
                     except Exception:
@@ -470,60 +563,47 @@ class PropertyIMAPService:
 
                         url = extract_url(body) or extract_url(subject)
                         if not url:
-                            # Not an idealista email. A fotocasa alert names
-                            # its listings by URL and nothing else this
-                            # pipeline needs: every field comes off the
-                            # listing page itself (services/fotocasa_source
-                            # .py), so the email contributes the links, the
-                            # arrival date and the profile, and the page
-                            # fetches happen in run_ingestion() -- never here,
-                            # inside an open IMAP connection, where a batch of
-                            # gated fetches would hold the mailbox session for
-                            # minutes.
-                            if self._fotocasa_senders():
-                                fotocasa_urls = fotocasa_source.listing_urls_in_text(
-                                    body
-                                ) or fotocasa_source.listing_urls_in_text(subject)
-                                if fotocasa_urls:
-                                    profile = SearchProfileService.resolve_profile(
-                                        subject, body
-                                    )
-                                    emitted = True
-                                    email_data.append(
-                                        {
-                                            "type": "fotocasa_listings",
-                                            "uid": uid,
-                                            "source_email_id": email_source_id,
-                                            "email_received_at": internal_date,
-                                            "email_subject": subject,
-                                            "email_sender": email_sender,
-                                            "urls": fotocasa_urls,
-                                            "search_profile_id": profile.id
-                                            if profile
-                                            else None,
-                                        }
-                                    )
-                                    continue
-                                if any(
-                                    s.lower() in (email_sender or "").lower()
-                                    for s in self._fotocasa_senders()
-                                ):
-                                    # A fotocasa sender whose links this
-                                    # parser cannot read is either a welcome/
-                                    # confirmation mail (fine to consume) or
-                                    # an alert template whose link shape is
-                                    # not the /<id>/d one this recognizes --
-                                    # and that second case must be visible in
-                                    # the log, because the email is consumed
-                                    # either way and would otherwise vanish.
-                                    logger.warning(
-                                        "UID %s from fotocasa sender %r carries "
-                                        "no recognizable listing URL; consuming "
-                                        "it (subject: %r)",
-                                        uid,
-                                        email_sender,
-                                        subject[:120],
-                                    )
+                            # Not an idealista email. A portal alert names its
+                            # listings and nothing else this loop needs: the
+                            # email contributes the links (and, for
+                            # yaencontre, the card fields, since that portal's
+                            # pages cannot be read at all), the arrival date
+                            # and the profile. Any network work happens in
+                            # run_ingestion() -- never here, inside an open
+                            # IMAP connection, where a batch of gated fetches
+                            # would hold the mailbox session for minutes.
+                            portal_entry = self._portal_email_entry(
+                                uid=uid,
+                                subject=subject,
+                                body=body,
+                                email_source_id=email_source_id,
+                                internal_date=internal_date,
+                                email_sender=email_sender,
+                            )
+                            if portal_entry is not None:
+                                emitted = True
+                                email_data.append(portal_entry)
+                                continue
+                            if any(
+                                s.lower() in (email_sender or "").lower()
+                                for s in self._all_portal_senders()
+                            ):
+                                # A portal sender whose links this parser
+                                # cannot read is either a welcome/confirmation
+                                # mail (fine to consume) or an alert template
+                                # whose link shape is not the one this
+                                # recognizes -- and that second case must be
+                                # visible in the log, because the email is
+                                # consumed either way and would otherwise
+                                # vanish.
+                                logger.warning(
+                                    "UID %s from portal sender %r carries no "
+                                    "recognizable listing; consuming it "
+                                    "(subject: %r)",
+                                    uid,
+                                    email_sender,
+                                    subject[:120],
+                                )
                             continue
                         if not self._is_listing_url(url):
                             # Nothing downstream can dedupe such a row, so this
@@ -872,8 +952,6 @@ class PropertyIMAPService:
 
         from services import fotocasa_import
 
-        profile_id = email_data.get("search_profile_id")
-        email_date = self._parse_email_received_at(email_data.get("email_received_at"))
         http = requests.Session()
         created = 0
         all_done = True
@@ -889,13 +967,7 @@ class PropertyIMAPService:
             if fotocasa_import.existing_by_listing_id(listing_id) is not None:
                 continue
 
-            if self._fotocasa_refusals >= FOTOCASA_MAX_CONSECUTIVE_REFUSALS:
-                logger.warning(
-                    "Skipping the remaining fotocasa fetches this run after %s "
-                    "refusals in a row; UID %s is held and re-read next run",
-                    self._fotocasa_refusals,
-                    email_data.get("uid"),
-                )
+            if self._portal_fetching_stopped("fotocasa", email_data):
                 all_done = False
                 break
 
@@ -909,49 +981,228 @@ class PropertyIMAPService:
                         email_data.get("source_email_id"),
                     )
                     continue
-                self._fotocasa_refusals += 1
-                all_done = False
-                logger.warning(
-                    "Fotocasa refused listing %s (%s); holding UID %s for the next run",
-                    listing_id,
-                    listing.refusal,
-                    email_data.get("uid"),
+                self._count_portal_refusal(
+                    "fotocasa", listing_id, listing.refusal, email_data
                 )
+                all_done = False
                 continue
 
-            self._fotocasa_refusals = 0
+            self._portal_refusals["fotocasa"] = 0
 
-            deal_type = (listing.deal_type or "sale").strip().lower()
-            if deal_type == "rent" and sale_only:
+            if self._create_portal_row(
+                fotocasa_import.preview_row(listing),
+                source="fotocasa",
+                email_data=email_data,
+                sale_only=sale_only,
+                excluded_categories=excluded_categories,
+            ):
+                created += 1
+
+        return created, all_done
+
+    def _portal_fetching_stopped(self, portal: str, email_data: Dict[str, Any]) -> bool:
+        """True when this run has already given up on the portal's host."""
+        refusals = self._portal_refusals.get(portal, 0)
+        if refusals < PORTAL_MAX_CONSECUTIVE_REFUSALS:
+            return False
+        logger.warning(
+            "Skipping the remaining %s fetches this run after %s refusals in "
+            "a row; UID %s is held and re-read next run",
+            portal,
+            refusals,
+            email_data.get("uid"),
+        )
+        return True
+
+    def _count_portal_refusal(
+        self, portal: str, listing_id: Any, reason: Any, email_data: Dict[str, Any]
+    ) -> None:
+        self._portal_refusals[portal] = self._portal_refusals.get(portal, 0) + 1
+        logger.warning(
+            "%s refused listing %s (%s); holding UID %s for the next run",
+            portal,
+            listing_id,
+            reason,
+            email_data.get("uid"),
+        )
+
+    def _create_portal_row(
+        self,
+        row: Dict[str, Any],
+        *,
+        source: str,
+        email_data: Dict[str, Any],
+        sale_only: bool,
+        excluded_categories: set[str],
+        record_advertiser: bool = True,
+    ) -> bool:
+        """The shared tail of every portal ingest: filter, build, commit, enrich.
+
+        Returns True when a row landed. The rent and excluded-category skips
+        are deliberate filters (a consumed email, never a held one), and the
+        IntegrityError branch is the ordinary duplicate outcome arriving a
+        moment late from a concurrent writer -- the import page, another run.
+        """
+        from services import fotocasa_import
+
+        profile_id = email_data.get("search_profile_id")
+        email_date = self._parse_email_received_at(email_data.get("email_received_at"))
+
+        deal_type = (row.get("deal_type") or "sale").strip().lower()
+        if deal_type == "rent" and sale_only:
+            return False
+
+        classification = fotocasa_import.classify_row(row, profile_id)
+        category = (classification[0] or "").strip().lower()
+        if category and category in excluded_categories:
+            return False
+
+        prop = fotocasa_import.build_property(
+            row,
+            profile_id=profile_id,
+            classification=classification,
+            method="alert_email",
+            email_date=email_date,
+            email_subject=email_data.get("email_subject"),
+            email_sender=email_data.get("email_sender"),
+            source=source,
+            record_advertiser=record_advertiser,
+        )
+        try:
+            db.session.add(prop)
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            return False
+
+        self._enrich_new_property(prop)
+        return True
+
+    def _ingest_yaencontre_email(
+        self,
+        email_data: Dict[str, Any],
+        *,
+        sale_only: bool,
+        excluded_categories: set[str],
+    ) -> tuple[int, bool]:
+        """Create rows for the yaencontre cards one alert email carries.
+
+        No network at all: the portal answers DataDome to these machines
+        (measured 2026-08-30, module docstring of
+        `services/yaencontre_source.py`), so the card fields ARE the row --
+        no coordinates, no seller verdict (`record_advertiser=False`), and
+        the geocoder fills the location from the title at ingest. With no
+        fetches there are no refusals, so `all_done` is always True; an
+        exception is #24's territory and holds the cursor through the
+        caller's own except branch.
+        """
+        from services import fotocasa_import
+
+        created = 0
+        for card in email_data.get("cards") or []:
+            listing_id = card.get("listing_id")
+            if not listing_id:
+                continue
+            if (
+                fotocasa_import.existing_by_listing_id(
+                    int(listing_id), yaencontre_source.SOURCE_NAME
+                )
+                is not None
+            ):
+                continue
+            if self._create_portal_row(
+                dict(card),
+                source=yaencontre_source.SOURCE_NAME,
+                email_data=email_data,
+                sale_only=sale_only,
+                excluded_categories=excluded_categories,
+                record_advertiser=False,
+            ):
+                created += 1
+        return created, True
+
+    def _ingest_milanuncios_email(
+        self,
+        email_data: Dict[str, Any],
+        *,
+        sale_only: bool,
+        excluded_categories: set[str],
+    ) -> tuple[int, bool]:
+        """Create rows for the milanuncios cards one digest email names.
+
+        The email carries no direct listing URLs -- every card anchor is an
+        opaque SparkPost tracker -- so identity costs one redirect read per
+        card (`resolve_tracker`, redirects OFF) before the dedup check, and
+        the page fetch after it supplies every field, fotocasa-style. The
+        refusal semantics are fotocasa's too: a tracker or page that did not
+        answer holds the UID cursor; a page that answered "gone" (404, a
+        redirect to a different ad) or "this is a demand ad, not a property
+        for sale" is consumed, because tomorrow's answer is the same.
+        """
+        import requests
+
+        from services import fotocasa_import
+
+        http = requests.Session()
+        created = 0
+        all_done = True
+        seen_ids: set = set()
+
+        for tracker in email_data.get("tracker_urls") or []:
+            if self._portal_fetching_stopped("milanuncios", email_data):
+                all_done = False
+                break
+
+            target = milanuncios_source.resolve_tracker(tracker, session=http)
+            if target is None:
+                self._count_portal_refusal(
+                    "milanuncios", "unresolved-tracker", "no_redirect", email_data
+                )
+                all_done = False
                 continue
 
-            row = fotocasa_import.preview_row(listing)
-            classification = fotocasa_import.classify_row(row, profile_id)
-            category = (classification[0] or "").strip().lower()
-            if category and category in excluded_categories:
+            listing_id = milanuncios_source.listing_id_from_url(target)
+            if listing_id is None or listing_id in seen_ids:
+                continue
+            seen_ids.add(listing_id)
+            if (
+                fotocasa_import.existing_by_listing_id(
+                    listing_id, milanuncios_source.SOURCE_NAME
+                )
+                is not None
+            ):
                 continue
 
-            prop = fotocasa_import.build_property(
+            row = milanuncios_source.fetch_listing(target, session=http)
+            if row.get("status") == "refused":
+                reason = row.get("reason")
+                if reason in (
+                    milanuncios_source.REFUSAL_NOT_A_LISTING,
+                    milanuncios_source.REFUSAL_NOT_SUPPLY,
+                ):
+                    logger.info(
+                        "Milanuncios listing %s from %s is %s; skipping it for good",
+                        listing_id,
+                        email_data.get("source_email_id"),
+                        reason,
+                    )
+                    continue
+                self._count_portal_refusal(
+                    "milanuncios", listing_id, reason, email_data
+                )
+                all_done = False
+                continue
+
+            self._portal_refusals["milanuncios"] = 0
+
+            if self._create_portal_row(
                 row,
-                profile_id=profile_id,
-                classification=classification,
-                method="alert_email",
-                email_date=email_date,
-                email_subject=email_data.get("email_subject"),
-                email_sender=email_data.get("email_sender"),
-            )
-            try:
-                db.session.add(prop)
-                db.session.commit()
-            except IntegrityError:
-                # A concurrent writer (the import page, another run) landed
-                # this listing between the SELECT above and the flush: the
-                # ordinary duplicate outcome arriving a moment late.
-                db.session.rollback()
-                continue
-
-            created += 1
-            self._enrich_new_property(prop)
+                source=milanuncios_source.SOURCE_NAME,
+                email_data=email_data,
+                sale_only=sale_only,
+                excluded_categories=excluded_categories,
+            ):
+                created += 1
 
         return created, all_done
 
@@ -971,7 +1222,7 @@ class PropertyIMAPService:
 
         try:
             self._uid_cursor = None
-            self._fotocasa_refusals = 0
+            self._portal_refusals = {}
             emails = self.get_idealista_emails()
             sync_history.total_emails_found = len(emails)
 
@@ -990,10 +1241,16 @@ class PropertyIMAPService:
                         )
                         if category and category in excluded_categories:
                             continue
-                    if (
-                        email_data.get("type") or ""
-                    ).strip().lower() == "fotocasa_listings":
-                        created_here, all_done = self._ingest_fotocasa_email(
+                    portal_handlers = {
+                        "fotocasa_listings": self._ingest_fotocasa_email,
+                        "yaencontre_listings": self._ingest_yaencontre_email,
+                        "milanuncios_listings": self._ingest_milanuncios_email,
+                    }
+                    handler = portal_handlers.get(
+                        (email_data.get("type") or "").strip().lower()
+                    )
+                    if handler is not None:
+                        created_here, all_done = handler(
                             email_data,
                             sale_only=sale_only,
                             excluded_categories=excluded_categories,
