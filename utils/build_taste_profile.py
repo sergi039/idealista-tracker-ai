@@ -11,8 +11,9 @@ for tools that write data the app cannot recompute is report-and-exit
 
 A rebuild inserts a new `taste_profile` row (the ledger is insert-only, the
 version is the primary key) and every previously scored listing becomes
-*stale by version* — visible on the surfaces, and re-scored by
-`python -m utils.backfill_taste --stale`. A failed build inserts nothing.
+*stale by version* — visible on the surfaces, and back in the scope of
+`python -m utils.backfill_taste` (its default scope is every row whose
+score is not current). A failed build inserts nothing.
 """
 
 import argparse

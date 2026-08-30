@@ -509,6 +509,8 @@ def build_profile(provider: str = "claude") -> Dict[str, Any]:
             "verdict with a reason",
         }
 
+    basis_fingerprint = signals_fingerprint(signals)
+
     prompt = _build_profile_prompt(signals)
     model = Config.ANTHROPIC_MODEL if provider == "claude" else Config.OPENAI_MODEL
     try:
@@ -550,6 +552,20 @@ def build_profile(provider: str = "claude") -> Dict[str, Any]:
         # every reader of the profile will see it.
         "provisional": len(usable) < 5,
     }
+    # The owner may have edited a comment while the bridge call ran; a
+    # profile published over that edit would wear a fingerprint its own
+    # signals no longer produce. Re-read and refuse rather than publish an
+    # answer to yesterday's question (the codex-review reproduction: change
+    # OLD REASON to NEW REASON mid-build, get a "current" profile carrying
+    # the old one).
+    if signals_fingerprint(collect_signals()) != basis_fingerprint:
+        return {
+            "status": "failed",
+            "error": "the owner's comments changed while the profile was being "
+            "built; rebuild against the new comments",
+            "failure_kind": "superseded",
+        }
+
     row = TasteProfile(
         built_at=datetime.now(timezone.utc).replace(tzinfo=None),
         provider=provider,
@@ -676,15 +692,26 @@ def score_batch(
     profile_data: Optional[Dict[str, Any]] = None,
     provider: str = "claude",
     commit: bool = True,
+    overwrite_current: bool = False,
 ) -> Dict[str, Any]:
     """Score up to DEFAULT_BATCH_SIZE listings in one bridge call.
 
     Returns `{"status": "ok", "rows": {id: row_status}}` where row_status is
-    `scored` or `superseded`, or `{"status": "failed", ...}` when the call
-    itself failed — in which case NOTHING was written for any row.
+    `scored` or `superseded` or `insufficient_evidence`, or
+    `{"status": "failed", ...}` when the call itself failed — in which case
+    NOTHING was written for any row. `bridge_called` says whether the bridge
+    was actually asked: a batch gated away entirely, an oversized prompt or a
+    missing profile cost no call, and a caller counting refusals must not
+    count those as one (the backfill's consecutive-refusal stop reads it).
+
+    `overwrite_current=False` refuses to replace a row's existing `ok` score
+    for the SAME profile version: two callers racing one row would otherwise
+    end with whichever call finished last, silently discarding the other's
+    answer. `--force` in the backfill is what sets it True — a deliberate
+    re-score — and even then a score for a NEWER profile is never replaced.
     """
     if not props:
-        return {"status": "ok", "rows": {}}
+        return {"status": "ok", "rows": {}, "bridge_called": False}
     if profile_data is None:
         profile_data = load_current_profile()
     if profile_data is None:
@@ -692,6 +719,7 @@ def score_batch(
             "status": "failed",
             "error": "no taste profile",
             "failure_kind": "no_profile",
+            "bridge_called": False,
         }
     for prop in props:
         check_writable(prop, commit)
@@ -713,7 +741,7 @@ def score_batch(
             judgeable.append(prop)
     props = judgeable
     if not props:
-        return {"status": "ok", "rows": gated}
+        return {"status": "ok", "rows": gated, "bridge_called": False}
 
     facts_by_id = {prop.id: gather_facts(prop) for prop in props}
     fingerprints = {pid: facts_fingerprint(f) for pid, f in facts_by_id.items()}
@@ -722,6 +750,7 @@ def score_batch(
         return {
             "status": "failed",
             "error": f"prompt too large ({len(prompt)} chars) — lower the batch size",
+            "bridge_called": False,
         }
     reference_ids = [
         s["property_id"] for s in profile_data["source"].get("signals", [])
@@ -745,15 +774,28 @@ def score_batch(
             kind,
             message,
         )
-        return {"status": "failed", "error": message, "failure_kind": kind}
+        return {
+            "status": "failed",
+            "error": message,
+            "failure_kind": kind,
+            "bridge_called": True,
+        }
 
     try:
         payload = json.loads(_clean_json_text(result.get("text", "")))
     except ValueError:
-        return {"status": "failed", "error": "bridge returned malformed JSON"}
+        return {
+            "status": "failed",
+            "error": "bridge returned malformed JSON",
+            "bridge_called": True,
+        }
     validated = _validate_batch_payload(payload, [p.id for p in props], reference_ids)
     if isinstance(validated, str):
-        return {"status": "failed", "error": f"batch rejected: {validated}"}
+        return {
+            "status": "failed",
+            "error": f"batch rejected: {validated}",
+            "bridge_called": True,
+        }
 
     scored_at = datetime.now(timezone.utc).isoformat()
     rows: Dict[int, str] = {}
@@ -786,13 +828,22 @@ def score_batch(
             # Re-read under the lock (#339): the bridge call took tens of
             # seconds and this row may have been scored meanwhile.
             current = prop.taste if isinstance(prop.taste, dict) else None
-            if (
-                current
-                and isinstance(current.get("profile_version"), int)
-                and current["profile_version"] > profile_data["version"]
-            ):
-                rows[prop.id] = "superseded"
-                continue
+            if current and isinstance(current.get("profile_version"), int):
+                newer = current["profile_version"] > profile_data["version"]
+                # A row that already carries an ok score for THIS profile is
+                # not overwritten by default: two callers racing one row would
+                # otherwise end with whichever call finished last, silently
+                # discarding the other's answer. A deliberate re-score
+                # (--force) sets overwrite_current; a NEWER version wins
+                # regardless.
+                same_and_settled = (
+                    current["profile_version"] == profile_data["version"]
+                    and current.get("status") == "ok"
+                    and not overwrite_current
+                )
+                if newer or same_and_settled:
+                    rows[prop.id] = "superseded"
+                    continue
             if facts_fingerprint(gather_facts(prop)) != fingerprints[prop.id]:
                 # The facts changed under the call; a score of yesterday's
                 # row must not wear today's fingerprint. Write nothing — the
@@ -803,7 +854,12 @@ def score_batch(
             prop.taste = block
             rows[prop.id] = "scored"
     rows.update(gated)
-    return {"status": "ok", "rows": rows, "model": result.get("model")}
+    return {
+        "status": "ok",
+        "rows": rows,
+        "model": result.get("model"),
+        "bridge_called": True,
+    }
 
 
 def score_property(
@@ -849,13 +905,30 @@ def read_taste(prop: Property, current_version: Optional[int] = None) -> Dict[st
     if current_version is None:
         current_version = current_profile_version()
     state = "ok"
-    if current_version is not None and block["profile_version"] < current_version:
+    if current_version is None:
+        # A stored score with NO readable profile in the ledger: the app's
+        # own writers cannot produce this (scores are written against a
+        # ledger row and the ledger is insert-only), so it is direct SQL or
+        # a dropped table — either way the score describes a profile this
+        # database no longer knows, and presenting it as current would be a
+        # claim nobody can check.
+        state = "stale"
+    elif block["profile_version"] < current_version:
         state = "stale"
     # A rubric change moves what the number means; an old scorer's 78 is not
-    # today's 78, so it presents as stale too (SQL sorting checks only the
-    # profile version — a scorer bump is a deploy, and the re-run is part of
-    # shipping it).
+    # today's 78, so it presents as stale too.
     if block.get("scorer_version") != TASTE_SCORER_VERSION:
+        state = "stale"
+    # And so does a row whose FACTS moved since the score was taken: a price
+    # drop or a newly measured sea view makes yesterday's judgement about a
+    # listing that no longer exists. Recomputed here rather than stored as a
+    # second flag, because the facts are the row and a flag would need every
+    # writer of the row to maintain it. A block with no fingerprint (a hand
+    # write) cannot prove it is about today's row and is stale too. SQL
+    # sorting cannot see this reading — the state column beside the number
+    # is the disclosure, and the backfill re-scores what it names stale.
+    stored_fingerprint = block.get("facts_fingerprint")
+    if stored_fingerprint != facts_fingerprint(gather_facts(prop)):
         state = "stale"
     reasons = [
         r for r in (block.get("reasons_ru") or []) if isinstance(r, str) and r.strip()
@@ -908,11 +981,21 @@ def scored_current_expression(model, current_version: int):
     # while PostgreSQL's ->> is already text — so the version is compared as
     # text on both, and the cast is text→text on PostgreSQL, which cannot
     # raise on a hand-edited value the way a ::int would (the hazard-service
-    # lesson). A malformed version simply fails to match.
+    # lesson). A malformed version simply fails to match. The scorer version
+    # rides the same comparison so a rubric bump moves the SQL reading the
+    # way it moves `read_taste`.
+    #
+    # What SQL deliberately does NOT see, and the reader does: a facts
+    # fingerprint that no longer matches the row (recomputable only in
+    # Python), and a hand-edited block whose types lie (the reader is
+    # fail-closed, this predicate is a count). The coverage line built on it
+    # is a disclosure, not a guarantee — `history_out_of_sync`'s wording.
     from sqlalchemy import String, func
 
     return db.and_(
         model.taste_score.isnot(None),
         func.cast(model.taste["profile_version"].as_string(), String)
         == str(current_version),
+        func.cast(model.taste["scorer_version"].as_string(), String)
+        == str(TASTE_SCORER_VERSION),
     )

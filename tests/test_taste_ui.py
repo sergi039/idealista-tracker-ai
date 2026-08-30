@@ -63,7 +63,7 @@ def _mk_property(profile_row, **overrides):
     return prop
 
 
-def _taste_block(version, score, scorer=None):
+def _taste_block(version, score, prop, scorer=None):
     return {
         "status": "ok",
         "score": score,
@@ -76,6 +76,9 @@ def _taste_block(version, score, scorer=None):
         "scorer_version": scorer
         if scorer is not None
         else taste_service.TASTE_SCORER_VERSION,
+        "facts_fingerprint": taste_service.facts_fingerprint(
+            taste_service.gather_facts(prop)
+        ),
         "scored_at": "2026-08-30T12:00:00+00:00",
     }
 
@@ -111,10 +114,10 @@ def ranked_rows(app, profile_row):
     """One current score (40), one stale-but-higher (99), one unscored."""
     version = _insert_profile_version()
     current = _mk_property(profile_row, title="Current forty")
-    current.taste = _taste_block(version, 40.0)
+    current.taste = _taste_block(version, 40.0, current)
     current.taste_score = 40.0
     stale = _mk_property(profile_row, title="Stale ninetynine")
-    stale.taste = _taste_block(version - 1 if version > 1 else 0, 99.0)
+    stale.taste = _taste_block(version - 1 if version > 1 else 0, 99.0, stale)
     stale.taste_score = 99.0
     unscored = _mk_property(profile_row, title="Unscored")
     db.session.commit()
@@ -157,6 +160,24 @@ class TestTheList:
         html = client.get("/properties").data.decode()
         assert 'value="taste_score"' in html
         assert "mode-taste-btn" in html
+
+    def test_two_current_scores_really_reverse_between_desc_and_asc(
+        self, client, app, profile_row
+    ):
+        """One current score cannot tell a reversed order from an ignored
+        one (the codex finding); two can."""
+        version = _insert_profile_version()
+        low = _mk_property(profile_row, title="Lowtwenty")
+        low.taste = _taste_block(version, 20.0, low)
+        low.taste_score = 20.0
+        high = _mk_property(profile_row, title="Highninety")
+        high.taste = _taste_block(version, 90.0, high)
+        high.taste_score = 90.0
+        db.session.commit()
+        desc = client.get("/properties?mode=taste&order=desc").data.decode()
+        asc = client.get("/properties?mode=taste&order=asc").data.decode()
+        assert desc.index("Highninety") < desc.index("Lowtwenty")
+        assert asc.index("Lowtwenty") < asc.index("Highninety")
 
 
 class TestTheCsv:

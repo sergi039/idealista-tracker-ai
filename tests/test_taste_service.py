@@ -278,6 +278,75 @@ class TestScoringABatch:
         assert float(prop.taste_score) == 60.0
         assert prop.taste == kept
 
+    def test_a_same_version_answer_does_not_overwrite_a_settled_score(
+        self, app, profile_row
+    ):
+        """The codex reproduction: v7 score 90 lands, a late v7 call answers
+        10 — the 90 must survive, and only --force may replace it."""
+        ref, profile = self._built_profile(profile_row)
+        prop = _mk_property(profile_row)
+        with patch.object(
+            subscription_transport,
+            "complete",
+            return_value=_bridge_answer({"results": [_score_result(prop.id, 90.0)]}),
+        ):
+            taste_service.score_batch([prop], profile)
+        with patch.object(
+            subscription_transport,
+            "complete",
+            return_value=_bridge_answer({"results": [_score_result(prop.id, 10.0)]}),
+        ):
+            outcome = taste_service.score_batch([prop], profile)
+        assert outcome["rows"] == {prop.id: "superseded"}
+        assert float(prop.taste_score) == 90.0
+
+        with patch.object(
+            subscription_transport,
+            "complete",
+            return_value=_bridge_answer({"results": [_score_result(prop.id, 10.0)]}),
+        ):
+            outcome = taste_service.score_batch([prop], profile, overwrite_current=True)
+        assert outcome["rows"] == {prop.id: "scored"}
+        assert float(prop.taste_score) == 10.0
+
+    def test_the_outcome_says_whether_the_bridge_was_asked(self, app, profile_row):
+        ref, profile = self._built_profile(profile_row)
+        empty = _mk_property(
+            profile_row, title="Bare", price=None, area=None, description=None
+        )
+        with patch.object(subscription_transport, "complete") as transport:
+            outcome = taste_service.score_batch([empty], profile)
+        transport.assert_not_called()
+        assert outcome["bridge_called"] is False
+        assert taste_service.score_batch([], profile)["bridge_called"] is False
+
+        prop = _mk_property(profile_row)
+        with patch.object(
+            subscription_transport,
+            "complete",
+            side_effect=subscription_transport.SubscriptionTransportError("down"),
+        ):
+            outcome = taste_service.score_batch([prop], profile)
+        assert outcome["bridge_called"] is True
+
+    def test_a_build_over_an_edited_comment_publishes_nothing(self, app, profile_row):
+        """The codex reproduction: the owner edits a reason mid-build and the
+        published profile carries the old one. The build must refuse."""
+        ref = _seed_reference(profile_row)
+
+        def _answer_and_edit_the_reason(*args, **kwargs):
+            ref.owner_verdict_reason = "СОВСЕМ ДРУГАЯ ПРИЧИНА"
+            db.session.commit()
+            return _bridge_answer(_profile_payload([ref.id]))
+
+        with patch.object(
+            subscription_transport, "complete", side_effect=_answer_and_edit_the_reason
+        ):
+            outcome = taste_service.build_profile()
+        assert outcome["status"] == "failed"
+        assert outcome.get("failure_kind") == "superseded"
+        assert taste_service.current_profile_version() is None
+
     def test_a_slow_answer_cannot_overwrite_a_newer_profiles_score(
         self, app, profile_row
     ):
@@ -350,8 +419,8 @@ class TestScoringABatch:
 
 
 class TestReadingAndSorting:
-    def _score_block(self, version, score=50.0, scorer=None):
-        return {
+    def _score_block(self, version, score=50.0, scorer=None, prop=None):
+        block = {
             "status": "ok",
             "score": score,
             "reasons_ru": ["ok"],
@@ -360,26 +429,72 @@ class TestReadingAndSorting:
             if scorer is not None
             else taste_service.TASTE_SCORER_VERSION,
         }
+        if prop is not None:
+            block["facts_fingerprint"] = taste_service.facts_fingerprint(
+                taste_service.gather_facts(prop)
+            )
+        return block
 
     def test_read_taste_states(self, app, profile_row):
         prop = _mk_property(profile_row)
         assert taste_service.read_taste(prop, 3)["state"] == "none"
 
-        prop.taste = self._score_block(3, score=0.0)
+        prop.taste = self._score_block(3, score=0.0, prop=prop)
         prop.taste_score = 0.0
         verdict = taste_service.read_taste(prop, 3)
         # Zero is a measured answer, never an absence.
         assert verdict["state"] == "ok"
         assert verdict["score"] == 0.0
 
-        prop.taste = self._score_block(2)
+        prop.taste = self._score_block(2, prop=prop)
         assert taste_service.read_taste(prop, 3)["state"] == "stale"
 
-        prop.taste = self._score_block(3, scorer=0)
+        prop.taste = self._score_block(3, scorer=0, prop=prop)
+        assert taste_service.read_taste(prop, 3)["state"] == "stale"
+
+        # A block with no facts fingerprint (a hand write) cannot prove it is
+        # about today's row.
+        prop.taste = self._score_block(3)
         assert taste_service.read_taste(prop, 3)["state"] == "stale"
 
         prop.taste = {"status": "ok", "score": "high", "profile_version": 3}
         assert taste_service.read_taste(prop, 3)["state"] == "none"
+
+    def test_facts_that_change_after_scoring_read_as_stale(self, app, profile_row):
+        prop = _mk_property(profile_row)
+        prop.taste = self._score_block(3, prop=prop)
+        prop.taste_score = 50.0
+        db.session.commit()
+        assert taste_service.read_taste(prop, 3)["state"] == "ok"
+        # The price moves after the score was taken — the codex reproduction:
+        # 90 at 100k stayed "ok" at 999k.
+        prop.price = 999999
+        db.session.commit()
+        assert taste_service.read_taste(prop, 3)["state"] == "stale"
+
+    def test_a_score_with_an_empty_ledger_is_not_current(self, app, profile_row):
+        prop = _mk_property(profile_row)
+        prop.taste = self._score_block(1, prop=prop)
+        prop.taste_score = 60.0
+        db.session.commit()
+        # No taste_profile row exists at all: the score describes a profile
+        # this database does not know, and must not read as current.
+        assert taste_service.read_taste(prop)["state"] == "stale"
+
+    def test_sql_agrees_with_the_reader_about_an_old_scorer(self, app, profile_row):
+        prop = _mk_property(profile_row)
+        prop.taste = self._score_block(2, scorer=0, prop=prop)
+        prop.taste_score = 70.0
+        db.session.commit()
+        counted = (
+            db.session.query(Property)
+            .filter(taste_service.scored_current_expression(Property, 2))
+            .count()
+        )
+        assert counted == 0, (
+            "an old-scorer score must not count as current in SQL while the "
+            "reader calls it stale"
+        )
 
     def test_stale_and_unscored_rows_sort_last_in_both_directions(
         self, app, profile_row
