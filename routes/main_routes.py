@@ -32,6 +32,7 @@ from sqlalchemy.orm import defer
 from models import Land, Property, SearchProfile
 from app import db, limiter
 from services import sea_view_service
+from services import taste_service
 from services.coordinate_quality import shared_coordinate_peers
 from services import advertiser
 from services.hazard_service import (
@@ -80,6 +81,10 @@ PROPERTY_MODE_SORT_DEFAULTS = {
     "combined": "score_total",
     "investment": "score_investment",
     "lifestyle": "score_lifestyle",
+    # The owner's taste (issue #498). A fourth display mode rather than a
+    # twelfth table column: the score cell shows the taste score, so the
+    # documented tablet layout keeps its width.
+    "taste": "taste_score",
 }
 PROPERTY_VIEW_TYPES = ("cards", "list")
 # The table is what a bare /properties opens on (owner decision, 2026-08-09):
@@ -1491,6 +1496,21 @@ def properties():
             hazard_complete_expression(Property)
         ).count()
 
+        # And for the taste ranking (#498): the version once per request, so
+        # every row is judged against the same profile, and the disclosure
+        # count beside the result count -- "K of N scored against the current
+        # profile" -- from the same predicate the sort reads, so the header
+        # and the ordering cannot disagree. None means no profile exists yet
+        # and the taste surfaces stay dormant.
+        taste_version = taste_service.current_profile_version()
+        taste_scored_count = (
+            query.filter(
+                taste_service.scored_current_expression(Property, taste_version)
+            ).count()
+            if taste_version is not None
+            else None
+        )
+
         # Sorting (safe allow-list). An unknown sort -- an old /lands bookmark
         # asking for travel_time_nearest_beach, say -- falls back to the
         # default *and says so*, so the page never claims an order it did not
@@ -1504,6 +1524,12 @@ def properties():
             "score_investment": Property.score_investment,
             "score_lifestyle": Property.score_lifestyle,
             "travel_time_nearest_beach": _nearest_beach_minutes(Property),
+            # NULL for a row whose score is stale (older profile version) or
+            # missing, so both sort last in either direction -- a v1 score
+            # must not rank interleaved with v3 ones (issue #498).
+            "taste_score": taste_service.sortable_score_expression(
+                Property, taste_version
+            ),
         }
         if sort_by not in sort_columns and sort_by != "investment_metrics":
             sort_by = default_sort
@@ -1533,6 +1559,8 @@ def properties():
             active_mode = "lifestyle"
         elif sort_by == "score_total":
             active_mode = "combined"
+        elif sort_by == "taste_score":
+            active_mode = "taste"
         else:
             active_mode = mode
 
@@ -1605,6 +1633,8 @@ def properties():
             travel_display_targets=travel_display_targets,
             listing_verified_count=listing_verified_count,
             hazard_scanned_count=hazard_scanned_count,
+            taste_version=taste_version,
+            taste_scored_count=taste_scored_count,
             # How the search box entry was read, so an empty result can say
             # what it looked for instead of leaving "0 properties found" to
             # mean both "no such listing" and "not understood as you typed it".
@@ -4978,6 +5008,8 @@ def export_properties_csv():
         # Same ordering as /properties, tiebreaker included: the export link
         # forwards whatever the page is sorted by, so an allow-list that does
         # not know a value would hand back the same rows in another order.
+        # The same version the page sorts against, read once for the export.
+        taste_version = taste_service.current_profile_version()
         sort_columns = {
             "title": Property.title,
             "created_at": Property.created_at,
@@ -4987,6 +5019,12 @@ def export_properties_csv():
             "score_investment": Property.score_investment,
             "score_lifestyle": Property.score_lifestyle,
             "travel_time_nearest_beach": _nearest_beach_minutes(Property),
+            # Same expression as the page (#498), so the export link carrying
+            # sort=taste_score hands back the page's order and not a silent
+            # fall-back to created_at.
+            "taste_score": taste_service.sortable_score_expression(
+                Property, taste_version
+            ),
         }
         if sort_by == "investment_metrics":
             rank = _investment_rating_rank(Property)
@@ -5135,6 +5173,14 @@ def export_properties_csv():
             "Next Action",
             "Next Action Due",
             "Next Action State",
+            # The taste ranking (#498). State says whether the score is about
+            # the CURRENT profile (`ok`), an earlier one (`stale`) or absent
+            # (`none`) -- a spreadsheet sorting the score column could not
+            # tell a v1 number from a v3 one without it.
+            "Taste Score",
+            "Taste State",
+            "Taste Profile Version",
+            "Taste Scored At",
             "Created At",
         ]
 
@@ -5173,6 +5219,8 @@ def export_properties_csv():
             # The request's one date, so a row exported at 23:59 Madrid is
             # described against the same day the filter selected it on.
             review_action = owner_review.read_action(prop, review_today)
+            # The export's one profile version, threaded per row the same way.
+            taste_row = taste_service.read_taste(prop, taste_version)
 
             row = [
                 prop.id,
@@ -5224,6 +5272,10 @@ def export_properties_csv():
                 prop.next_action or "",
                 prop.next_action_due_on.isoformat() if prop.next_action_due_on else "",
                 review_action["state"],
+                taste_row["score"] if taste_row["state"] != "none" else None,
+                taste_row["state"],
+                taste_row.get("profile_version"),
+                taste_row.get("scored_at") or "",
                 prop.created_at.isoformat() if prop.created_at else "",
             ]
 

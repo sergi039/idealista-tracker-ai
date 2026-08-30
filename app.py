@@ -319,6 +319,13 @@ def create_app(testing: bool = False):
 
     app.jinja_env.globals["listing_verdict_for"] = listing_verdict_for
 
+    # The owner's taste (#498): templates read the stored score through the
+    # same fail-closed reader the CSV uses, passing the request's one profile
+    # version so 300 rows are judged against one profile, not 300 lookups.
+    from services.taste_service import read_taste as taste_for
+
+    app.jinja_env.globals["taste_for"] = taste_for
+
     # Which site a listing is on, derived from its URL. The templates get the
     # same two functions the filter clause is built from, so a badge cannot
     # say one thing while the dropdown beside it counts another.
