@@ -18,6 +18,7 @@ from utils.google_spend import CAP_ONE_LAND, CAP_ONE_PROPERTY, authorized_spend
 from utils.listing_search import listing_search_clause
 from services import advertiser
 from services import owner_review
+from services import taste_service
 from utils.listing_source import source_filter_clause
 from utils.municipality_grouping import municipality_filter_clause
 from app import db
@@ -1788,6 +1789,8 @@ def get_properties():
         # day from the query that selected it disagrees with itself once a day
         # (services/owner_review.py).
         review_today = owner_review.today()
+        # And one taste-profile version, for the same reason (#498).
+        taste_version = taste_service.current_profile_version()
         verdict_clause = owner_review.decision_filter_clause(
             Property, request.args.get("verdict", "")
         )
@@ -1881,6 +1884,15 @@ def get_properties():
                         # here -- and the compact payload is the default one.
                         "owner_verdict": owner_review.read_decision(p)["state"],
                         "next_action_state": owner_review.read_action(p, review_today)[
+                            "state"
+                        ],
+                        # `is not None`: a taste score of 0 is a measured
+                        # answer, not an absence. The state says whether the
+                        # number is about the current profile (#498).
+                        "taste_score": float(p.taste_score)
+                        if p.taste_score is not None
+                        else None,
+                        "taste_state": taste_service.read_taste(p, taste_version)[
                             "state"
                         ],
                         "created_at": p.created_at.isoformat()

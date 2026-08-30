@@ -310,6 +310,16 @@ class Property(db.Model):
     # written under the same lock (services/cadastre_service.py).
     cadastral_reference = db.Column(db.String(20))
 
+    # How well this listing matches the owner's taste, scored by AI against
+    # the profile distilled from their own review comments (issue #498).
+    # NUMERIC like the three score columns above, because the list sorts on
+    # it; NULL means nobody scored the row — a bridge refusal writes nothing
+    # (services/taste_service.py), so the row stays in the backfill's scope.
+    # `taste` is the evidence beside the number: reasons, matched traits, the
+    # profile_version it was scored against, and a fingerprint of the facts.
+    taste_score = db.Column(db.Numeric(5, 2))
+    taste = db.Column(JSON)
+
     created_at = db.Column(db.DateTime, default=utcnow)
     email_date = db.Column(db.DateTime)
     updated_at = db.Column(db.DateTime, default=utcnow, onupdate=utcnow)
@@ -366,6 +376,12 @@ class Property(db.Model):
             "score_lifestyle": float(self.score_lifestyle)
             if self.score_lifestyle
             else None,
+            # `is not None`, not truthiness: a taste score of 0 is a measured
+            # answer ("nothing the owner values"), not an absence.
+            "taste_score": float(self.taste_score)
+            if self.taste_score is not None
+            else None,
+            "taste": self.taste or {},
             "previous_price": float(self.previous_price)
             if self.previous_price
             else None,
@@ -1613,3 +1629,34 @@ class BackgroundJob(db.Model):
 
     def __repr__(self):
         return f"<BackgroundJob {self.id} type={self.job_type} status={self.status}>"
+
+
+class TasteProfile(db.Model):
+    """One distilled version of the owner's taste (issue #498).
+
+    INSERT-ONLY: the primary key IS the version, assigned transactionally by
+    the sequence, so two concurrent builds cannot mint the same version — the
+    property a data/-file design could not have. "Current" is the greatest
+    id; a failed rebuild inserts nothing and therefore changes nothing, and
+    prior versions are retained by construction, which is what keeps a stored
+    score's `profile_version` readable after the profile moves on.
+
+    `source` holds the signals the profile was built from — property ids,
+    verdicts, the owner's reason texts and the facts fed to the model — so a
+    stored profile explains itself without re-querying rows that may since
+    have changed. `signals_fingerprint` is the sha256 of that basis; an
+    unchanged fingerprint means a rebuild would answer the same question.
+    """
+
+    __tablename__ = "taste_profile"
+
+    id = db.Column(db.Integer, primary_key=True)
+    built_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    provider = db.Column(db.String(16), nullable=False)
+    model = db.Column(db.String(120))
+    signals_fingerprint = db.Column(db.String(64), nullable=False)
+    source = db.Column(JSON, nullable=False)
+    profile = db.Column(JSON, nullable=False)
+
+    def __repr__(self):
+        return f"<TasteProfile v{self.id} built_at={self.built_at}>"

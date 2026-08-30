@@ -175,6 +175,11 @@ def _create_historical_schema(engine):
             "next_action_due_on",
             # Migration 022 (issue #430) added the cadastral reference.
             "cadastral_reference",
+            # Migration 024 (issue #498) added the taste score and its
+            # evidence block. Its index lives only in the PostgreSQL
+            # migration, not the model, so SQLite has none to drop first.
+            "taste_score",
+            "taste",
         ):
             connection.execute(
                 text(f"ALTER TABLE properties DROP COLUMN {column}")  # noqa: S608
@@ -183,6 +188,9 @@ def _create_historical_schema(engine):
         # property_activity, so it goes first.
         connection.execute(text("DROP TABLE property_attachment"))
         connection.execute(text("DROP TABLE property_activity"))
+        # Migration 024 (issue #498) added the taste-profile ledger -- a new
+        # table with no pre-ledger equivalent, like background_jobs.
+        connection.execute(text("DROP TABLE taste_profile"))
 
 
 def test_the_stated_historical_table_matches_the_runners_fingerprint(tmp_path):
