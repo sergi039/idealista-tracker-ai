@@ -2077,7 +2077,7 @@ def test_024_creates_the_taste_ledger_and_the_bounded_score(postgres_url):
     file ran; a syntactically valid no-op would pass them (the codex review's
     finding). This one asserts what the file must MAKE: the insert-only
     ledger whose SERIAL id is the version, the NUMERIC score with its range
-    CHECK actually refusing 150, and the sort's index.
+    CHECK actually refusing 150, and the deliberate ABSENCE of an index.
     """
     from sqlalchemy.exc import IntegrityError as PgIntegrityError
 
@@ -2105,8 +2105,11 @@ def test_024_creates_the_taste_ledger_and_the_bounded_score(postgres_url):
         # asserted by name so a silent drift back to DOUBLE PRECISION fails.
         assert type(props["taste_score"]["type"]).__name__ == "NUMERIC"
 
+        # Deliberately NO taste_score index — see the migration's comment:
+        # at this table's size the sort is a scan, and the plain CREATE INDEX
+        # was the one write-blocking statement in the file.
         indexes = {i["name"] for i in inspector.get_indexes("properties")}
-        assert "ix_properties_taste_score" in indexes
+        assert "ix_properties_taste_score" not in indexes
 
         # Two ledger inserts get two distinct, increasing versions.
         with engine.begin() as connection:

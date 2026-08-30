@@ -44,7 +44,9 @@ ALTER TABLE properties
 ALTER TABLE properties
     ADD COLUMN IF NOT EXISTS taste JSON;
 
--- The list sorts on it with NULLS LAST; an index keeps that sort off a
--- sequential scan once the column is mostly filled.
-CREATE INDEX IF NOT EXISTS ix_properties_taste_score
-    ON properties(taste_score);
+-- Deliberately NO index on taste_score: at this table's size (~1,600 rows) a
+-- sequential scan answers the sort in under a millisecond, and the gate's
+-- independent reviewer correctly flagged a plain CREATE INDEX as the one
+-- statement here that takes a write-blocking lock. An index that buys
+-- nothing is not worth the one lock in the file; if the table ever grows
+-- past what a scan serves, a later migration adds it CONCURRENTLY.
