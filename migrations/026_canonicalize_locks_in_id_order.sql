@@ -43,15 +43,33 @@
 -- same serialization 025 wanted, obtained in an order that agrees with
 -- everyone else.
 --
--- WHAT THIS DOES NOT CLOSE, stated because a guard presented as complete is
--- worse than one known to be partial. If a route writer commits a DIFFERENT
--- target in the window between the unlocked read and the ordered lock, the
--- re-read names a row this statement did not lock, and the foreign key will
--- lock it afterwards — out of order if it sorts below the stub. Closing that
--- would mean holding a lock before knowing which row to take. It needs two
--- concurrent route writers to become a cycle, and `route_profile()` has no
--- caller outside the tests today; the systematic inversion on the path that
--- runs on every ingested listing is what this removes.
+-- WHAT THIS DOES NOT CLOSE — narrowed, not removed, and the difference is
+-- the whole point of writing it down. The Tier 2 independent review found the
+-- window and named the interleaving; it was then built, on 15.18, and it
+-- deadlocks. Ids new-target=4, old-target=5, stub=6:
+--
+--   1. B begins an INSERT on the stub; its trigger reads routed_to = 5.
+--   2. A route writer commits 6 -> 4 inside B's read-to-lock gap.
+--   3. An ascending locker takes 4.
+--   4. B locks {5, 6} ascending, re-reads 4, and its FK waits on 4.
+--   5. The ascending locker asks for 6 and the cycle closes.
+--
+-- So the honest claim is NOT "cannot deadlock against an ascending locker".
+-- It is: the inversion that needed no special conditions at all — every
+-- insert against every route change — is gone, and what remains needs a route
+-- change to land inside a gap that is microseconds wide AND a second
+-- concurrent route writer. The natural-scheduling attempt did not reproduce;
+-- only forcing the order with pg_sleep inside a copy of this body did.
+--
+-- It is not closed here because ordering cannot close it. The trigger's
+-- stub-then-target order is forced by causality — the route cannot be trusted
+-- until the stub is held, so the target lock is always second — which means
+-- no ordering scheme resolving the route from inside the insert is fully
+-- correct. Closing it needs a serialization primitive outside row locks, with
+-- a granularity decision that trades the constant path's throughput against a
+-- pair of writers that does not exist yet: `route_profile()` has no caller
+-- outside the tests today. That decision is issue #513, by owner decision of
+-- 2026-08-31 to ship the narrowing now and close the window separately.
 
 CREATE OR REPLACE FUNCTION canonicalize_search_profile() RETURNS trigger AS $$
 DECLARE
