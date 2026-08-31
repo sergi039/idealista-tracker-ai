@@ -27,6 +27,7 @@ import pytest
 
 from app import create_app, db
 from models import Property, SearchProfile
+from services.property_scoring_service import PropertyScoringService
 from tests import setup_test_environment
 from utils import repair_yaencontre_municipality as repair_tool
 
@@ -60,8 +61,8 @@ def _row(app, *, title, municipality, url=YAE, **kwargs):
         url=url,
         title=title,
         municipality=municipality,
-        price=205000,
-        area=205,
+        price=kwargs.pop("price", 205000),
+        area=kwargs.pop("area", 205),
         search_profile_id=app.config["TEST_PROFILE_ID"],
         **kwargs,
     )
@@ -82,6 +83,12 @@ def test_a_district_is_replaced_by_its_municipality(app):
     assert outcome["repaired"] == 1
     db.session.expire_all()
     assert db.session.get(Property, prop.id).municipality == "Vigo"
+    # The report of what changed has to describe a change. The rename pass runs
+    # before the scoring pass, so a `before` read inside the second pass would
+    # be the new name -- the record saying the row already held what it was
+    # given, which is the only record of this run there is.
+    assert outcome["rows"][0]["before"]["municipality"] == "Teis en Vigo"
+    assert outcome["rows"][0]["after"]["municipality"] == "Vigo"
 
 
 def test_a_row_the_old_reading_left_blank_is_named(app):
@@ -231,3 +238,80 @@ def test_restore_is_a_dry_run_by_default(app, tmp_path):
 
     db.session.expire_all()
     assert db.session.get(Property, prop.id).municipality == "Vigo"
+
+
+def test_every_row_is_scored_against_the_finished_table(app):
+    """The rescore must not judge a row against a half-repaired table.
+
+    Scoring reaches `property_comparables.same_municipality()`, which asks the
+    table which spellings exist -- a live query, and the session autoflushes
+    before it. Renaming and scoring one row at a time therefore scored each row
+    against the rows renamed so far: the early ones found no municipality peers,
+    fell through the comparables ladder to a wider scope, and were written a
+    number the app does not produce from the committed table. Reproduced on six
+    rows sharing one municipality, five moved on a plain re-score afterwards.
+
+    Every other test in this file repairs a single row, which is exactly why
+    none of them could see it.
+
+    Three details of this fixture are load bearing and were measured, not
+    chosen. `property_subtype` must be set, because the comparables ladder
+    offers the municipality tier only for a row that has one
+    (`property_comparables.py`) -- without it the rename cannot change the peer
+    pool and this test passes over the defect instead of at it, which is what
+    the first version of it did. There must be **more** rows sharing the
+    municipality than the ladder's `min_peers`, so the late rows reach the tier
+    the early ones could not. And the peers elsewhere must be the same subtype,
+    or the wider scope the early rows fall through to is empty too and every
+    row agrees by accident. Against the interleaved form this fixture moves 5
+    of 6 rows, the first by 16.56 points.
+    """
+    districts = ["Teis", "Lavadores", "Cabral", "Coruxo", "Matamá", "Bouzas"]
+    for index, district in enumerate(districts):
+        _row(
+            app,
+            title=f"Casa adosada en venta en calle {index}, {district} en Vigo",
+            municipality=f"{district} en Vigo",
+            source_email_id=f"yaencontre:vigo-{index}",
+            url=f"https://www.yaencontre.com/venta/casa/inmueble-1-{index}",
+            price=200000 + index * 20000,
+            area=200 + index * 10,
+            property_category="housing",
+            property_subtype="house",
+        )
+    for index in range(20):
+        _row(
+            app,
+            title=f"Casa en venta en calle Larga {index}, Boiro",
+            municipality="Boiro",
+            source_email_id=f"peer:{index}",
+            url=f"https://www.idealista.com/inmueble/{9000 + index}/",
+            price=120000 + index * 9000,
+            area=190 + index * 6,
+            property_category="housing",
+            property_subtype="house",
+        )
+
+    repair_tool.repair(apply=True, backup=False)
+
+    db.session.expire_all()
+    written = {
+        prop.id: prop.score_total
+        for prop in db.session.query(Property).filter(Property.municipality == "Vigo")
+    }
+    assert len(written) == len(districts)
+
+    # Re-score every one of them against the table as it now stands. A row
+    # written against the finished table cannot move.
+    scorer = PropertyScoringService()
+    for prop_id in written:
+        scorer.calculate_for_property(db.session.get(Property, prop_id))
+    db.session.commit()
+
+    db.session.expire_all()
+    moved = {
+        prop_id: (written[prop_id], db.session.get(Property, prop_id).score_total)
+        for prop_id in written
+        if db.session.get(Property, prop_id).score_total != written[prop_id]
+    }
+    assert not moved, f"scored against a half-repaired table: {moved}"
