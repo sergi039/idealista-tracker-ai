@@ -5306,6 +5306,15 @@ def export_properties_csv():
             # never "no plot": on production 2026-08-31 that is 436 of the 443
             # rows of the one subscription that carries criteria, which is why
             # `unknown` is the common verdict and not a disappointing `fail`.
+            #
+            # Blank is NOT, however, "the criteria could not judge the plot".
+            # On a bare-land row the module makes `area` the parcel when
+            # `plot_area` is absent, so this cell can be empty beside a
+            # measured `fail` -- property 1458 on production is exactly that
+            # (`area_type=plot, area=150, plot_area NULL -> fail`). The
+            # recompute this column exists to support therefore keys on
+            # `Criteria`, and reading a blank here as "unjudged" is the
+            # mistake the sentence above invites.
             "Plot Area (m²)",
             # This export APPLIES the criteria filter, so by default it omits
             # the measured fails the owner has not judged -- and until this
