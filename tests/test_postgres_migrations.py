@@ -2465,11 +2465,17 @@ def test_026_the_insert_path_no_longer_inverts_against_an_ascending_locker(
         a_holds_the_low_row = threading.Event()
         b_has_started = threading.Event()
         failures: dict[str, str] = {}
+        inserter_pid: dict[str, int] = {}
 
         def insert_on_the_stub() -> None:
             try:
                 with engine.connect() as connection:
                     connection.execute(text("SET lock_timeout = '20s'"))
+                    # Its own backend pid, so the waiter the other side polls
+                    # for is THIS transaction and not merely somebody.
+                    inserter_pid["v"] = connection.execute(
+                        text("SELECT pg_backend_pid()")
+                    ).scalar_one()
                     a_holds_the_low_row.wait(15)
                     b_has_started.set()
                     connection.execute(
@@ -2494,20 +2500,24 @@ def test_026_the_insert_path_no_longer_inverts_against_an_ascending_locker(
                 )
                 a_holds_the_low_row.set()
                 assert b_has_started.wait(15), "the inserting thread never ran"
-                # NOT a sleep. The reviewer's finding: a descheduled inserter
-                # lets the locker take the stub and commit before the insert
-                # even starts, so the choreography completes without ever
-                # forming the cycle and the test stays green on the reverted
-                # lock order. Wait for the inserter's backend to actually be
-                # blocked on a lock instead of assuming two seconds is enough.
+                # NOT a sleep, and NOT "somebody is waiting". Two findings
+                # from the independent review, in order: a descheduled
+                # inserter walks past a fixed sleep, so the locker takes the
+                # stub and commits and the choreography never forms the cycle
+                # — green on the reverted lock order, the one thing this test
+                # exists to catch. And counting any lock-waiting backend in
+                # the database accepts an unrelated waiter as proof that THIS
+                # inserter is blocked, which reopens exactly that hole. So it
+                # polls for the inserter's own backend pid.
+                assert inserter_pid.get("v"), "the inserter never reported a pid"
                 deadline = time.monotonic() + 20
                 while True:
                     waiting = connection.execute(
                         text(
                             "SELECT count(*) FROM pg_stat_activity WHERE "
-                            "datname = current_database() AND wait_event_type "
-                            "= 'Lock' AND pid <> pg_backend_pid()"
-                        )
+                            "pid = :pid AND wait_event_type = 'Lock'"
+                        ),
+                        {"pid": inserter_pid["v"]},
                     ).scalar_one()
                     if waiting:
                         break
