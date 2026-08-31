@@ -90,6 +90,14 @@ class PropertyIMAPService:
         # its portal and PORTAL_MAX_CONSECUTIVE_REFUSALS stops that portal's
         # fetching for the rest of the run.
         self._portal_refusals: Dict[str, int] = {}
+        # What MAX_EMAILS_PER_RUN left behind, or None when it did not bite.
+        # Set by get_idealista_emails(), read by run_ingestion() so a capped
+        # run says so instead of looking like a complete one.
+        self._truncation: Optional[Dict[str, int]] = None
+        # The exception class name when the IMAP read failed, or None. Same
+        # reason: that read swallows its failure so the emails it did parse
+        # survive, and the run must not then report itself complete.
+        self._fetch_error: Optional[str] = None
 
     @staticmethod
     def _portal_senders(portal: str) -> List[str]:
@@ -449,6 +457,12 @@ class PropertyIMAPService:
 
         email_data: List[Dict[str, Any]] = []
         self._uid_cursor = None
+        # Reset here and not at the truncation site: this function returns
+        # early on missing credentials and can raise before ever reaching the
+        # search, and a stale value from an earlier run would report a backlog
+        # that is not there.
+        self._truncation = None
+        self._fetch_error = None
         limit = max_results or self.max_emails
         excluded_categories = self._excluded_categories()
         sale_only = SettingsService.get_sale_only()
@@ -504,7 +518,40 @@ class PropertyIMAPService:
                 if self.last_seen_uid > 0:
                     uids = [u for u in uids if u > self.last_seen_uid]
 
-                uids = sorted(uids)[:limit]
+                # Oldest first, and that is not the defect it looks like.
+                # `UidBatchCursor.watermark` advances only through *contiguous*
+                # resolved UIDs from the start of the batch, so taking the
+                # newest N would leave the older ones unresolved forever and
+                # the cursor would never move at all. Ascending is the only
+                # order that drains.
+                #
+                # What was wrong is that it said nothing. A capped run reported
+                # the same shape as a run that had read the whole mailbox --
+                # `total_emails_found` is the number *taken*, not the number
+                # that matched -- so a backlog was invisible to the operator,
+                # to the sync history and to the page that renders it. #98, in
+                # the ingest: an absence of measurement drawn as a measurement.
+                matched = sorted(uids)
+                uids = matched[:limit]
+                if len(matched) > len(uids):
+                    self._truncation = {
+                        "matched": len(matched),
+                        "taken": len(uids),
+                        "left": len(matched) - len(uids),
+                        "oldest_left_uid": matched[len(uids)],
+                        "newest_left_uid": matched[-1],
+                    }
+                    logger.warning(
+                        "MAX_EMAILS_PER_RUN=%d capped this run: %d messages "
+                        "matched, %d taken (oldest first, so the cursor can "
+                        "advance), %d left for the next run — UIDs %d..%d",
+                        limit,
+                        self._truncation["matched"],
+                        self._truncation["taken"],
+                        self._truncation["left"],
+                        self._truncation["oldest_left_uid"],
+                        self._truncation["newest_left_uid"],
+                    )
                 if not uids:
                     return []
 
@@ -744,7 +791,17 @@ class PropertyIMAPService:
                         if not emitted and not failed:
                             self._advance_uid_cursor({"uid": uid})
         except Exception as e:
+            # Swallowed on purpose -- whatever was parsed before the failure is
+            # still worth ingesting, and the UID cursor only advances over rows
+            # that committed. But it must not be swallowed *silently*: this
+            # handler catches a login failure and a dead connection too, so a
+            # run that never read the mailbox at all used to reach
+            # run_ingestion()'s success branch and write `completed` with
+            # `total_emails_found = 0` -- indistinguishable, in the one table
+            # that records these runs, from "no new mail". #98, one layer above
+            # the cap this ticket is about.
             logger.error("Failed to fetch via IMAP: %s", e)
+            self._fetch_error = type(e).__name__
 
         return email_data
 
@@ -1223,6 +1280,10 @@ class PropertyIMAPService:
         try:
             self._uid_cursor = None
             self._portal_refusals = {}
+            # `_truncation` and `_fetch_error` are deliberately NOT reset here:
+            # `get_idealista_emails` is their only writer and resets them at its
+            # top, and a second reset makes each individually unfalsifiable --
+            # measured, dropping either one alone left the suite green.
             emails = self.get_idealista_emails()
             sync_history.total_emails_found = len(emails)
 
@@ -1492,7 +1553,34 @@ class PropertyIMAPService:
             sync_history.new_properties_added = processed_count
             sync_history.price_updated_count = price_updated_count
             sync_history.expired_count = expired_count
-            sync_history.status = "completed"
+            # `partial` is this table's existing word for "did what it could",
+            # and a capped run is exactly that: the mail it did not read is
+            # still there and the next run takes it. Recorded rather than only
+            # logged, because the log is not what anyone reads afterwards --
+            # and `total_emails_found` above counts what was *taken*, so
+            # without this the row is indistinguishable from a full sweep.
+            if self._fetch_error:
+                # The read did not finish, so whatever came back is not the
+                # mailbox. This outranks the cap's disclosure: a capped run is
+                # one that stopped where it was told to, and this one stopped
+                # where it broke.
+                sync_history.status = "failed"
+                sync_history.error_message = (
+                    f"The IMAP read did not complete ({self._fetch_error}); "
+                    f"{len(emails)} message(s) were parsed before it stopped"
+                )
+            elif self._truncation:
+                sync_history.status = "partial"
+                sync_history.error_message = (
+                    f"MAX_EMAILS_PER_RUN={self.max_emails} capped this run: "
+                    f"{self._truncation['matched']} matched, "
+                    f"{self._truncation['taken']} read, "
+                    f"{self._truncation['left']} left for the next run "
+                    f"(UIDs {self._truncation['oldest_left_uid']}.."
+                    f"{self._truncation['newest_left_uid']})"
+                )
+            else:
+                sync_history.status = "completed"
             sync_history.completed_at = datetime.now(timezone.utc)
             sync_history.sync_duration = int(
                 (datetime.now(timezone.utc) - start_time).total_seconds()

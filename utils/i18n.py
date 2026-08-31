@@ -480,6 +480,8 @@ TRANSLATIONS = {
         "taste_profile_version_label": "profile",
         "taste_closest_reference": "closest to",
         "hazards_coverage": "Industrial neighbours: %s of %s listings hold a complete scan",
+        "score_basis_coverage": "Score: %s of %s rest on every enabled criterion",
+        "score_basis_coverage_tooltip": "The score is a weighted average over the criteria that answered, renormalised past the ones that did not \u2014 so it is honest per listing and comparable only among listings measured alike. A coordinate that is not the parcel makes the drive times and the sea distance abstain, which for most of this table leaves price-per-m\u00b2 and size carrying the number. The rest of the rows either rest on fewer criteria or were scored before this was recorded; the listing page names which criteria are missing.",
         "hazards_coverage_tooltip": "The rest were never scanned, or their scan came back incomplete. A listing that holds a complete scan may still have been re-located since it was taken — the listing page says so. A listing with no scan is not a listing with nothing near it.",
         "hazards_searched": "Scanned %s km around the stored coordinate",
         "hazards_guaranteed": "guaranteed within %s km of the parcel",
@@ -914,6 +916,8 @@ TRANSLATIONS = {
         "listing_unchecked_tooltip": "Nunca verificado en el sitio de origen — es el valor por defecto de un anuncio nuevo",
         "listing_checked_ago": "comprobado hace %s d",
         "listing_status_coverage": "Estado del anuncio: %s de %s verificados en el sitio de origen",
+        "score_basis_coverage": "Puntuaci\u00f3n: %s de %s se apoyan en todos los criterios activos",
+        "score_basis_coverage_tooltip": "La puntuaci\u00f3n es una media ponderada de los criterios que respondieron, renormalizada sin los que no \u2014 honesta por anuncio y comparable solo entre anuncios medidos igual. Una coordenada que no es la parcela hace que los tiempos de viaje y la distancia al mar se abstengan, lo que en la mayor parte de esta tabla deja el precio por m\u00b2 y la superficie sosteniendo el n\u00famero. El resto de las filas se apoyan en menos criterios o se puntuaron antes de registrarse esto; la ficha del anuncio nombra los criterios que faltan.",
         # La barra de filtros ha acotado el resultado y la línea del total lo
         # dice -- el primer %s es el total filtrado, el segundo las mismas
         # suscripciones sin la barra de filtros.
