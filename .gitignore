@@ -94,3 +94,23 @@ static/all_code.txt
 .mcp.json
 .worktrees/
 .kimi-code/mcp.json
+# Wrangler's cache, which this project never asked for: there is no wrangler
+# config anywhere in the tree. It appears because `wrangler` writes
+# `.wrangler/` into whatever directory it is run from, and this machine has ten
+# of them across the owner's other sites — so any session that ever runs it
+# with this checkout as its cwd leaves one here, with nobody at fault.
+#
+# Ignored rather than tidied away by hand, because 54 bytes of it disabled the
+# Tier 2 final gate for every session at once on 2026-08-27: the gate refuses
+# *every* action — tests, review, consume — on a worktree that is not clean
+# including untracked files, and answers `target repository worktree is not
+# clean` with no hint as to which file it means.
+#
+# It has to be here rather than in the machine's `~/.config/git/ignore`, and
+# that was measured after the global rule was tried first and did not work.
+# `final_gate.py:_git` runs git with `env={"PATH": ..., "LANG": "C", "LC_ALL":
+# "C"}` and deliberately no `HOME`, so a global ignore is invisible to it —
+# the same isolation that stops anyone feeding the gate rules from outside.
+# A repository `.gitignore` needs no `HOME` and is therefore the only form
+# that works.
+.wrangler/
