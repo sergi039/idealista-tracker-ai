@@ -17,6 +17,21 @@ creates the row, and cannot drift out of agreement with itself.
 site, and a row with no URL at all -- possible, since `url` is nullable --
 is `UNKNOWN`, which the filter offers and never silently folds into another
 source.
+
+**Milanuncios and yaencontre joined the list when their mail did** (2026-08-31).
+The 2026-08-17 measurement above described a table of two portals; by today it
+is `www.idealista.com` 1127, `www.yaencontre.com` 253, `www.fotocasa.es` 96,
+`www.pisos.com` 32, `www.milanuncios.com` 10 and eight agency sites. So 303
+rows were reading as "Other site" -- an answer that was never wrong and had
+stopped being useful, since the largest single group under it was a portal
+this app ingests alert mail from and knows by name.
+
+`www.pisos.com` stays `OTHER` deliberately, and the difference is the point:
+the two that were added have an ingest door, a source module and a
+`source_email_id` prefix of their own, so naming them is restating something
+the app already knows. The 32 pisos.com rows arrived by hand, and giving a
+hand-typed host its own filter option would claim a source this app has no
+reading of.
 """
 
 from __future__ import annotations
@@ -28,6 +43,8 @@ from sqlalchemy import and_, func, not_, or_
 
 IDEALISTA = "idealista"
 FOTOCASA = "fotocasa"
+MILANUNCIOS = "milanuncios"
+YAENCONTRE = "yaencontre"
 OTHER = "other"
 UNKNOWN = "unknown"
 
@@ -55,6 +72,10 @@ _HOSTS: Dict[str, str] = {
     "fotocasa.es": FOTOCASA,
     "www.fotocasa.es": FOTOCASA,
     "m.fotocasa.es": FOTOCASA,
+    "milanuncios.com": MILANUNCIOS,
+    "www.milanuncios.com": MILANUNCIOS,
+    "yaencontre.com": YAENCONTRE,
+    "www.yaencontre.com": YAENCONTRE,
 }
 
 # The schemes a stored URL can start with. The host sits immediately after one
@@ -64,11 +85,20 @@ _HOSTS: Dict[str, str] = {
 _SCHEMES: Tuple[str, ...] = ("http", "https")
 
 # The order the filter offers them in, and the only values it accepts.
-SOURCES: Tuple[str, ...] = (IDEALISTA, FOTOCASA, OTHER, UNKNOWN)
+SOURCES: Tuple[str, ...] = (
+    IDEALISTA,
+    FOTOCASA,
+    MILANUNCIOS,
+    YAENCONTRE,
+    OTHER,
+    UNKNOWN,
+)
 
 _LABELS: Dict[str, str] = {
     IDEALISTA: "Idealista",
     FOTOCASA: "Fotocasa",
+    MILANUNCIOS: "Milanuncios",
+    YAENCONTRE: "yaencontre",
     OTHER: "Other site",
     UNKNOWN: "No link",
 }

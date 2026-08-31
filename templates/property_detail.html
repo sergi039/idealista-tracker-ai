@@ -1,5 +1,15 @@
 {% extends "base.html" %}
 
+{# The site THIS listing is on, from utils/listing_source.py -- the same reading
+   the list badge, the source filter and its counts take, so they cannot
+   disagree. The page hardcoded "Idealista" in nine user-facing strings, which
+   was true of every row when they were written and is now false of 391 of the
+   1526 with a URL: it offered to "Check status on Idealista" for a fotocasa
+   listing and told the owner "Nobody has read this listing off Idealista yet"
+   about a yaencontre one. That is the string `utils/listing_source.py` was
+   written to remove from the list, arriving one page over. #}
+{% set _site = listing_source_label(listing_source_for(property)) %}
+
 {% block title %}{{ property.title or ('Property #' ~ property.id) }}{% endblock %}
 
 {% block content %}
@@ -8,6 +18,7 @@
    button reads it too. #}
 {% set _targets = (property.travel.get('targets') if property.travel is mapping else {}) or {} %}
 {% set has_enrichment = (property.location_lat and property.location_lon and _targets and (_targets|length > 0)) %}
+
 
 {# One band definition for every 0-100 score on the page (proposal D7). The
    thresholds are the ones the page always used for the score badge — 70/50 —
@@ -89,7 +100,7 @@
                             {% if property.url %}
                             <a href="{{ property.url }}" target="_blank" rel="noopener"
                                class="btn btn-sm btn-outline-success detail-link-icon"
-                               title="Idealista" aria-label="Idealista">
+                               title="{{ _site }}" aria-label="{{ _site }}">
                                 <i class="fas fa-home"></i>
                             </a>
                             {% endif %}
@@ -122,8 +133,8 @@
                             <button type="button" id="check-listing-status-btn"
                                     class="btn btn-sm btn-outline-primary detail-link-icon"
                                     onclick="checkPropertyListingStatus({{ property.id }})"
-                                    title="Check status on Idealista"
-                                    aria-label="Check status on Idealista">
+                                    title="Check status on {{ _site }}"
+                                    aria-label="Check status on {{ _site }}">
                                 <i class="fas fa-rotate"></i>
                             </button>
                             {# Setting the status by hand is back (owner decision,
@@ -333,7 +344,7 @@
                                 </button>
                             </span>
                         {% endif %}
-                        {# When the listing was last read off Idealista, next to
+                        {# When the listing was last read off its own site, next to
                            the button that reads it. "never" is the honest answer
                            for a row nobody has checked, and it is not the same as
                            an old date (issue #136); a blocked fetch leaves this
@@ -345,7 +356,7 @@
                                 Checked: {{ property.listing_last_checked.strftime('%Y-%m-%d') }}
                             {%- else %}
                                 <span class="fst-italic"
-                                      title="Nobody has read this listing off Idealista yet">Checked: never</span>
+                                      title="Nobody has read this listing off {{ _site }} yet">Checked: never</span>
                             {%- endif %}
                             </span>
                         </span>
@@ -386,7 +397,7 @@
             <div>
                 <h5 class="mb-1">
                     {% if _verdict.state == 'removed' %}
-                        This listing is no longer available on Idealista
+                        This listing is no longer available on {{ _site }}
                     {% else %}
                         This property has been sold
                     {% endif %}
@@ -2548,13 +2559,28 @@
 
 {% block scripts %}
 <script>
+// The site this listing is on, for the sentences the status check writes at
+// runtime. It is the server's reading (utils/listing_source.py) handed over as
+// data, never re-derived from the URL in JavaScript: a second reading of a host
+// is exactly what that module exists to prevent, and it would be the one nobody
+// updates when a portal is added. `tojson` does the escaping, so a label can
+// never close this element.
+//
+// It is a window assignment rather than a const because that is the one shape
+// `tests/test_issue_23_xss_and_prompt_injection.py::_extract_inline_script`
+// neutralizes before running this block in node -- a const carrying Jinja is a
+// syntax error there and took 15 tests down with it. (And a JS line comment is
+// not a Jinja comment: naming that shape here with its real braces made Jinja
+// evaluate them and cost the page a second time.)
+window.LISTING_SITE = {{ _site|tojson }};
+
 // Record a status the owner decided, which is not the same thing as one the
 // scraper observed: the endpoint marks it `manual` and leaves
 // listing_last_checked alone, so the header keeps saying when the listing was
 // last actually read. Reloads on success because the badge, the banner and the
 // removal date all change together.
 async function setPropertyListingStatus(propertyId, status) {
-    if (!confirm(`Set this listing to "${status}" by hand? Idealista is not consulted.`)) {
+    if (!confirm(`Set this listing to "${status}" by hand? ${window.LISTING_SITE} is not consulted.`)) {
         return;
     }
     try {
@@ -2575,7 +2601,7 @@ async function setPropertyListingStatus(propertyId, status) {
     }
 }
 
-// Ask Idealista whether this listing is still up and record the answer.
+// Ask the listing's own site whether it is still up and record the answer.
 // A blocked or failed fetch reports "error" and deliberately leaves the stored
 // status alone, so this must not claim "no change" -- say we could not verify
 // it (issue #136). Since 2026-08-09 the control is an icon next to the title
@@ -2604,7 +2630,7 @@ async function checkPropertyListingStatus(propertyId) {
         restore();
     };
 
-    // The header line says when this listing was last read off Idealista, and
+    // The header line says when this listing was last read off its site, and
     // the button that updates it is right beside it. A check that observed
     // something moves that date, so paint the new one rather than leave the
     // reader looking at "never" until they reload. A refused check does not
@@ -2637,17 +2663,17 @@ async function checkPropertyListingStatus(propertyId) {
                 : null;
             let message;
             if (result.refusal === 'backing_off') {
-                message = `Not checked: Idealista has refused the last ${breaker.consecutive_refusals} checks from this machine, so the checker is paused${until ? ` until ${until}` : ''}. Set the status by hand if you have looked at the listing yourself.`;
+                message = `Not checked: ${window.LISTING_SITE} has refused the last ${breaker.consecutive_refusals} checks from this machine, so the checker is paused${until ? ` until ${until}` : ''}. Set the status by hand if you have looked at the listing yourself.`;
             } else if (result.refusal === 'blocked' || result.refusal === 'not_the_listing_page') {
-                message = 'Could not verify: Idealista answered with bot protection instead of the listing page. Status left unchanged.';
+                message = `Could not verify: ${window.LISTING_SITE} answered with bot protection instead of the listing page. Status left unchanged.`;
             } else if (result.refusal === 'timeout') {
-                message = 'Could not verify: Idealista did not answer in time. Status left unchanged — worth retrying.';
+                message = `Could not verify: ${window.LISTING_SITE} did not answer in time. Status left unchanged — worth retrying.`;
             } else {
-                message = 'Could not verify: Idealista did not answer with the listing page. Status left unchanged.';
+                message = `Could not verify: ${window.LISTING_SITE} did not answer with the listing page. Status left unchanged.`;
             }
             report('fas fa-ban', message, 'error');
         } else {
-            report('fas fa-check', 'Checked on Idealista: no change.', 'success');
+            report('fas fa-check', `Checked on ${window.LISTING_SITE}: no change.`, 'success');
         }
     };
 
@@ -2801,8 +2827,13 @@ function renderSimilarProperties(similarProperties) {
                         ${propId ? `<a href="${detailsHref}" class="btn btn-outline-primary btn-sm">
                             <i class="fas fa-eye me-1"></i>View Details
                         </a>` : ''}
-                        ${isSafeHttpUrl(prop.url) ? `<a href="${prop.url}" target="_blank" rel="noopener" class="btn btn-outline-secondary btn-sm">
-                            <i class="fas fa-external-link-alt me-1"></i>Idealista
+                        ${/* Not LISTING_SITE: a comparable is a different row and
+                              may be on a different portal, and the comparables
+                              payload carries no source of its own. Naming one
+                              would be a guess with a brand on it, so the link
+                              says what it does instead. */
+                          isSafeHttpUrl(prop.url) ? `<a href="${prop.url}" target="_blank" rel="noopener" class="btn btn-outline-secondary btn-sm">
+                            <i class="fas fa-external-link-alt me-1"></i>Open listing
                         </a>` : ''}
                     </div>
                     <small class="text-muted">Similar property</small>
