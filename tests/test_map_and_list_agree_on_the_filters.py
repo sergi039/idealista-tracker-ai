@@ -68,6 +68,10 @@ FILTERS = [
     ("advertiser", "owner"),
     ("search", "Findable"),
     ("measured", "full"),
+    # The subscription-criteria verdict (#498 follow-up): "fail" is the
+    # value that selects rows the default view hides, so a surface that
+    # dropped the parameter would disagree exactly where it matters.
+    ("criteria", "fail"),
     ("favorites", "on"),
     # Added the morning of the day #445 was written (#430), which is exactly
     # why the sweep matters more than the named cases: a hand-written list is
@@ -190,6 +194,10 @@ def listings(app):
             is_active=True,
             is_default=True,
             travel_targets={"presets": {}, "custom": []},
+            # The criteria sweep row below needs a subscription that carries
+            # criteria, or criteria=fail selects nothing and the matrix
+            # rightly calls it toothless.
+            criteria={"min_house_m2": 150},
         )
         db.session.add(profile)
         db.session.commit()
@@ -211,6 +219,9 @@ def listings(app):
             # The two review filters need a row each that answers them, or
             # `test_the_matrix_bites` correctly reports them as toothless.
             "rejected": _make(pid, "rejected", owner_verdict="rejected"),
+            # The one row criteria=fail keeps — and the one the DEFAULT view
+            # hides, which every other filter's baseline then agrees on.
+            "criteria_fail": _make(pid, "criteria_fail", area=100, area_type="built"),
             "sea_yes": _make(
                 pid,
                 "sea_yes",

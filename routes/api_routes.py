@@ -1892,6 +1892,9 @@ def get_properties():
                         "taste_score": float(p.taste_score)
                         if p.taste_score is not None
                         else None,
+                        "plot_area": float(p.plot_area)
+                        if p.plot_area is not None
+                        else None,
                         "taste_state": taste_service.read_taste(p, taste_version)[
                             "state"
                         ],

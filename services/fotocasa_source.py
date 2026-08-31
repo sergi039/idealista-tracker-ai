@@ -220,6 +220,10 @@ class FotocasaListing:
     price: Optional[float] = None
     area: Optional[float] = None
     area_type: str = "unknown"
+    # The parcel, where the payload states one (surfaceLand / groundSurface,
+    # 0-as-blank). Carried separately from `area` because a house's `area`
+    # is its BUILT surface and the criteria verdict needs both (#498).
+    plot_area: Optional[float] = None
     deal_type: Optional[str] = None
     municipality: Optional[str] = None
     province: Optional[str] = None
@@ -379,6 +383,7 @@ def parse_listing(html: str, url: str) -> FotocasaListing:
     land = _positive_number(features.get("surfaceLand")) or _positive_number(
         detail.get("groundSurface")
     )
+    listing.plot_area = land
     if (listing.building_type or "").lower() in ("land", "terreno", "terreny"):
         listing.area = land or built
         listing.area_type = "plot" if listing.area is not None else "unknown"

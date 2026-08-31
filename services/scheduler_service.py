@@ -153,6 +153,31 @@ def init_scheduler(app):
             replace_existing=True,
         )
 
+        # The daily taste auto-score (#498 follow-up; owner opt-in of
+        # 2026-08-31). Registered only when the machine's own environment
+        # says so — AUTO_TASTE_SCORING is fail-closed in config.py AND in
+        # both compose files (#376's lesson), so a dev checkout's scheduler
+        # never spends the owner's bridge credit. Bounded per run
+        # (TASTE_SCORING_MAX_CALLS); never Google.
+        if getattr(Config, "AUTO_TASTE_SCORING", False):
+            taste_time = getattr(Config, "TASTE_SCORING_TIME", "06:30")
+            try:
+                hour_str, minute_str = taste_time.split(":", 1)
+                taste_hour = int(hour_str)
+                taste_minute = int(minute_str)
+            except Exception:
+                taste_hour = 6
+                taste_minute = 30
+            scheduler.add_job(
+                func=run_scheduled_taste_scoring,
+                trigger=CronTrigger(
+                    hour=taste_hour, minute=taste_minute, timezone=timezone
+                ),
+                id="taste_scoring",
+                name="Daily Taste Scoring",
+                replace_existing=True,
+            )
+
         # Issue #203: reconcile_orphaned_jobs() (services/background_jobs.py)
         # used to run only once per create_app() plus a point sweep of one
         # dedupe_key when enqueue_job meets it again -- so a job abandoned by
@@ -188,6 +213,41 @@ def init_scheduler(app):
         # Release lock so other instances can try
         cleanup()
         raise
+
+
+def run_scheduled_taste_scoring():
+    """Score new and stale visible listings against the taste profile.
+
+    The same contract as run_scheduled_ingestion: the whole body inside the
+    app context, failures logged AND re-raised (a swallowed failure reads
+    as "executed successfully" in APScheduler, #14's lesson). No profile is
+    a quiet no-op, not an error — the feature is dormant until the owner
+    builds one. Bounded by TASTE_SCORING_MAX_CALLS bridge calls; the run
+    stops early on three consecutive bridge refusals (the shared
+    rescore_pending loop owns both rules).
+    """
+    from services import taste_service
+
+    with job_app_context():
+        try:
+            outcome = taste_service.rescore_pending(
+                cap_calls=getattr(Config, "TASTE_SCORING_MAX_CALLS", 10)
+            )
+            if outcome.get("status") != "ok":
+                logger.info("Scheduled taste scoring: %s", outcome.get("error"))
+                return
+            logger.info(
+                "Scheduled taste scoring: %s scored, %s calls (%s failed%s), "
+                "%s still pending",
+                outcome.get("scored", 0),
+                outcome.get("calls", 0),
+                outcome.get("failed_calls", 0),
+                ", stopped on refusals" if outcome.get("stopped_on_refusals") else "",
+                outcome.get("pending_left", 0),
+            )
+        except Exception:
+            logger.error("Scheduled taste scoring failed", exc_info=True)
+            raise
 
 
 def run_scheduled_ingestion():
