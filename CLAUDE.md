@@ -357,8 +357,18 @@ example.** `.with_for_update().count()` passes every SQLite test and
 PostgreSQL refuses it outright ("FOR UPDATE is not allowed with aggregate
 functions"), so the one writer of `routed_to` would have been dead on
 arrival in production — **migration-touching code is proven against real
-PostgreSQL 15, the version `idealista-db` runs** (`tools/ci/
-migration_test_db.sh`), and a green SQLite suite is not evidence about it.
+PostgreSQL 15, the version `idealista-db` runs**, and a green SQLite suite
+is not evidence about it. Both paths reach that same 15: CI's `pytest` job
+runs `postgres:15-alpine` as a service with `REQUIRE_POSTGRES_TESTS=1`, so
+a missing server fails the job instead of skipping it, and
+`tools/ci/migration_test_db.sh` raises a throwaway of the same image for a
+local run. One asymmetry between them is deliberate and should not be
+"fixed": CI pins that image **by digest** while the script and
+`docker-compose.yml` use the bare `postgres:15-alpine` tag, because the
+throwaway exists to reproduce `idealista-db` and therefore has to move when
+the deployment moves. Digest-pinning the script without pinning compose
+would make the test server *more* frozen than production — the same
+divergence this rule exists to prevent, pointed the other way.
 A compact form that snapshots a field into hidden inputs erases whatever
 another tab set in the meantime, so the comment card sends `keep_action`
 and `set_review` re-reads the action under its own lock. And a test can
