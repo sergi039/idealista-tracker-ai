@@ -237,9 +237,12 @@ def run_scheduled_taste_scoring():
                 logger.info("Scheduled taste scoring: %s", outcome.get("error"))
                 return
             logger.info(
-                "Scheduled taste scoring: %s scored, %s calls, %s still pending",
+                "Scheduled taste scoring: %s scored, %s calls (%s failed%s), "
+                "%s still pending",
                 outcome.get("scored", 0),
                 outcome.get("calls", 0),
+                outcome.get("failed_calls", 0),
+                ", stopped on refusals" if outcome.get("stopped_on_refusals") else "",
                 outcome.get("pending_left", 0),
             )
         except Exception:

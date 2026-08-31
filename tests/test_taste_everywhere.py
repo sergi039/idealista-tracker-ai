@@ -138,32 +138,37 @@ class TestTheCommentCard:
         writes all four fields, so the compact card carries the current
         action as hidden inputs — posting only a verdict+reason must leave
         the action standing."""
+        from datetime import date
+
         from services import owner_review
 
         profile = _profile()
         prop = _mk(profile.id)
+        # The stale-form shape the review reproduced: the card was opened
+        # while the action was BLANK, another tab then set it, and the
+        # card's save must not erase it. keep_action reads the current
+        # action under the service's own lock, so the card carries no
+        # snapshot to go stale.
         owner_review.set_review(
             prop,
             decision="waiting",
             reason="жду ответа",
             action="позвонить архитектору",
+            due_on=date(2026, 9, 15),
         )
-        page = client.get(f"/properties/{prop.id}").data.decode()
-        assert 'name="next_action" value="позвонить архитектору"' in page
-
         response = client.post(
             f"/properties/{prop.id}/review",
             data={
                 "verdict": "interested",
                 "reason": "нравится участок",
-                "next_action": "позвонить архитектору",
-                "due_on": "",
+                "keep_action": "1",
             },
         )
         assert response.status_code == 302
         assert prop.owner_verdict == "interested"
         assert prop.owner_verdict_reason == "нравится участок"
         assert prop.next_action == "позвонить архитектору"
+        assert prop.next_action_due_on == date(2026, 9, 15)
 
 
 class TestRetrain:
@@ -242,7 +247,9 @@ class TestRescorePending:
         assert outcome["calls"] == 2
         assert outcome["pending_left"] > 0
 
-    def test_three_refusals_stop_and_no_profile_is_a_named_no_op(self, app):
+    def test_three_refusals_stop_and_the_report_is_honest(self, app):
+        """The review's finding 9: a refused run used to answer
+        "ok, zero pending". A refused batch stays pending."""
         _ledger()
         profile = _profile()
         for _ in range(40):
@@ -258,6 +265,51 @@ class TestRescorePending:
         with patch.object(taste_service, "score_batch", side_effect=_refuse):
             outcome = taste_service.rescore_pending()
         assert outcome["calls"] == 3
+        assert outcome["failed_calls"] == 3
+        assert outcome["stopped_on_refusals"] is True
+        assert outcome["scored"] == 0
+        assert outcome["pending_left"] == outcome["pending_total"], (
+            "a refused batch must still read as pending"
+        )
+
+    def test_only_one_rescore_runs_at_a_time(self, app):
+        """The review's finding 8: a daily tick landing during a retrain
+        bought the same batch twice. The loser reports busy, spends nothing."""
+        import threading
+
+        _ledger()
+        profile = _profile()
+        for _ in range(8):
+            _mk(profile.id)
+
+        release = threading.Event()
+        started = threading.Event()
+        outcomes = {}
+
+        def _slow_batch(batch, *a, **kw):
+            started.set()
+            release.wait(timeout=5)
+            return {
+                "status": "ok",
+                "rows": {p.id: "scored" for p in batch},
+                "bridge_called": True,
+            }
+
+        with patch.object(taste_service, "score_batch", side_effect=_slow_batch):
+
+            def _first():
+                with app.app_context():
+                    outcomes["first"] = taste_service.rescore_pending()
+
+            worker = threading.Thread(target=_first)
+            worker.start()
+            assert started.wait(timeout=5)
+            outcomes["second"] = taste_service.rescore_pending()
+            release.set()
+            worker.join(timeout=10)
+
+        assert outcomes["second"]["status"] == "busy"
+        assert outcomes["first"]["status"] == "ok"
 
         TasteProfile.query.delete()
         db.session.commit()

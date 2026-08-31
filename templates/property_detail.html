@@ -432,8 +432,12 @@
                 <form method="POST" action="{{ url_for('main.set_review', property_id=property.id) }}"
                       class="row g-2 align-items-end">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                    <input type="hidden" name="next_action" value="{{ property.next_action or '' }}"/>
-                    <input type="hidden" name="due_on" value="{{ property.next_action_due_on.isoformat() if property.next_action_due_on else '' }}"/>
+                    {# keep_action, NOT a snapshot of the action in hidden
+                       inputs: a snapshot taken when this page loaded erases
+                       whatever another tab set in the meantime — the review's
+                       stale-form reproduction. The service reads the current
+                       action under its own row lock instead. #}
+                    <input type="hidden" name="keep_action" value="1"/>
                     <div class="col-12 col-md-3">
                         <label class="form-label small mb-1 fw-bold" for="owner-comment-verdict">
                             <i class="fas fa-heart text-danger me-1"></i>{{ t('owner_comment_title') }}

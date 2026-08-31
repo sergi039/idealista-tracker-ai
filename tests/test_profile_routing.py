@@ -112,6 +112,42 @@ class TestRouteProfile:
             == "source_is_a_route_target"
         )
 
+    def test_a_routed_source_cannot_be_re_pointed(self, app):
+        """The review's split reproduction: re-pointing S from B to C left
+        S's history on B while its future went to C — "ok, moved 0" over a
+        silent fork."""
+        b = _profile("B")
+        c = _profile("C")
+        s = _profile("S")
+        _listing(s.id)
+        assert SearchProfileService.route_profile(s.id, b.id)["status"] == "ok"
+        outcome = SearchProfileService.route_profile(s.id, c.id)
+        assert outcome["status"] == "refused"
+        assert outcome["reason"] == "source_already_routed"
+
+    def test_the_paste_door_cannot_land_a_listing_on_a_stub(self, app):
+        """The review's SQLite reproduction: build_property took the
+        profile id verbatim, and without the PostgreSQL trigger a stale
+        form naming a stub kept the row there."""
+        from services.fotocasa_import import build_property
+
+        target = _profile("Target")
+        stub = _profile("Stub")
+        SearchProfileService.route_profile(stub.id, target.id)
+        prop = build_property(
+            {
+                "url": "https://www.fotocasa.es/es/comprar/vivienda/x/9/d",
+                "listing_id": 9,
+                "title": "Pasted",
+                "price": 1,
+                "area": 100,
+            },
+            profile_id=stub.id,
+        )
+        db.session.add(prop)
+        db.session.commit()
+        assert prop.search_profile_id == target.id
+
     def test_a_pattern_carrier_cannot_become_a_stub(self, app):
         target = _profile("Target")
         carrier = _profile("Carrier", auto_route_from_pattern="^Galicia ")

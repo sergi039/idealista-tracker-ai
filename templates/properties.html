@@ -1105,7 +1105,7 @@
                         <span id="filter-bar-narrowing-note" class="text-body-secondary small">
                             <i class="fas fa-filter me-1"></i>{{ t('filter_bar_narrowing')|format(pagination.total, filter_bar_scope_total) }}
                             (<a id="clear-filters-link"
-                                href="{{ url_for('main.properties', **dict(base_args, search=None, category=None, subtype=None, municipality=None, source=None, advertiser=None, verdict=None, action=None, inv_metr=None, sea_view=None, measured=None, page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">{{ t('clear_filters_link') }}</a>)
+                                href="{{ url_for('main.properties', **dict(base_args, search=None, category=None, subtype=None, municipality=None, source=None, advertiser=None, verdict=None, action=None, inv_metr=None, sea_view=None, sea_dist=None, build=None, measured=None, criteria=None, page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">{{ t('clear_filters_link') }}</a>)
                         </span>
                     {% endif %}
                     {# Whether that total covers the listings with no subscription

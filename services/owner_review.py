@@ -403,6 +403,7 @@ def set_review(
     reason: Optional[str] = None,
     action: Optional[str] = None,
     due_on: Optional[date] = None,
+    keep_action: bool = False,
 ) -> Dict[str, Any]:
     """Record the decision and the outstanding action. The one writer.
 
@@ -416,6 +417,14 @@ def set_review(
     `decision=None` clears the decision. Clearing is not `rejected`: a row
     nobody has judged and a row somebody rejected are different facts, and the
     only way back to the first is for this to write NULL.
+
+    `keep_action=True` says this caller does not MANAGE the action: the
+    outstanding action and its due date are read off the freshly locked row
+    and written back unchanged, whatever the caller passed. It exists for
+    the compact comment card, whose first version snapshotted the action
+    into hidden inputs — and a form opened before another tab set the action
+    then erased it on save (the implementation review's reproduction). A
+    stale snapshot cannot erase what it never carries.
     """
     from app import db
 
@@ -438,6 +447,12 @@ def set_review(
 
     try:
         db.session.refresh(prop, with_for_update=True)
+        if keep_action:
+            # Read under the lock, not from the caller's snapshot: the
+            # whole point is that this caller's view of the action may be
+            # stale.
+            action = prop.next_action
+            due_on = prop.next_action_due_on
         result = _apply_review_locked(
             prop, decision=wanted, reason=reason, action=action, due_on=due_on
         )

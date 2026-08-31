@@ -1395,6 +1395,14 @@ class SearchProfileService:
             if target.routed_to is not None:
                 db.session.rollback()
                 return {"status": "refused", "reason": "target_is_routed"}
+            if source.routed_to is not None:
+                # Re-pointing a routed stub would SPLIT its listings: the
+                # ones already moved stay on the old target while future
+                # ones go to the new — "ok, moved 0" over a silent fork
+                # (the implementation review's reproduction). Clearing the
+                # old route is a deliberate act this writer does not offer.
+                db.session.rollback()
+                return {"status": "refused", "reason": "source_already_routed"}
             if source.auto_route_from_pattern:
                 db.session.rollback()
                 return {"status": "refused", "reason": "source_carries_a_pattern"}

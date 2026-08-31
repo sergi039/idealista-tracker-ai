@@ -76,6 +76,9 @@ MATRIX = [
     (800, "plot", None, "unknown"),  # bare land: area IS the plot, house unknown
     (650, "plot", None, "fail"),  # bare land, plot short
     (650, "plot", 900, "pass_or_unknown_house"),  # plot_area wins over area
+    # Zero plot_area on bare land is a BLANK, so `area` answers — both
+    # languages (the implementation review's 650/plot/0 reproduction).
+    (650, "plot", 0, "fail"),
     (0, "built", 800, "unknown"),  # zero is a blank, never a tiny house
     (200, "built", 0, "unknown"),  # zero plot is a blank too
 ]
@@ -130,11 +133,31 @@ class TestTheTwoReadingsAgree:
         negative = SearchProfile(
             name="Negative", is_active=True, criteria={"min_plot_m2": -5}
         )
-        db.session.add_all([clean, broken, negative])
+        # A typo key must reject the WHOLE block — half-applying the half
+        # that parsed hid listings on the strength of a misspelling; and a
+        # bound float() cannot represent must not 500 the page (both from
+        # the implementation review).
+        typo = SearchProfile(
+            name="Typo",
+            is_active=True,
+            criteria={"min_house_m2": 150, "min_plto_m2": 700},
+        )
+        overflow = SearchProfile(
+            name="Overflow", is_active=True, criteria={"min_house_m2": 10**400}
+        )
+        infinite = SearchProfile(
+            name="Infinite",
+            is_active=True,
+            criteria={"min_house_m2": float("inf")},
+        )
+        db.session.add_all([clean, broken, negative, typo, overflow, infinite])
         db.session.commit()
         assert subscription_criteria.read_criteria(clean) is None
         assert subscription_criteria.read_criteria(broken) is None
         assert subscription_criteria.read_criteria(negative) is None
+        assert subscription_criteria.read_criteria(typo) is None
+        assert subscription_criteria.read_criteria(overflow) is None
+        assert subscription_criteria.read_criteria(infinite) is None
 
     def test_the_owner_judgement_is_never_hidden(self, app, profile_row):
         failing = _mk(profile_row.id, area=100, area_type="built")
@@ -213,6 +236,17 @@ class TestTheSurfaces:
         assert "Failing tiny" not in " ".join(titles)
         wide = client.get("/properties/export.csv?criteria=all").data.decode()
         assert "Failing tiny" in wide
+
+    def test_an_unassigned_listing_is_never_hidden_by_anybodys_criteria(
+        self, client, app, profile_row
+    ):
+        """The review's NULL reproduction: `search_profile_id == pid` on an
+        unassigned row is NULL, and `~NULL` used to drop it from its own
+        page."""
+        orphan = _mk(None, title="Orphan tiny", area=100, area_type="built")
+        html = client.get("/properties?profile_id=unassigned").data.decode()
+        assert "Orphan tiny" in html
+        assert orphan.search_profile_id is None
 
     def test_without_criteria_the_control_is_absent_and_nothing_hides(
         self, client, app

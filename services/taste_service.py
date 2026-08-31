@@ -50,6 +50,7 @@ import hashlib
 import json
 import logging
 import re
+import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -887,6 +888,15 @@ def score_property(
     }
 
 
+# One rescore at a time, process-wide: the daily tick and the retrain
+# button run in the same gunicorn process (one worker on the deployment),
+# and without this a tick landing during a retrain bought the same batch
+# twice — the write lock stopped the second WRITE, not the second CHARGE
+# (the implementation review's two-thread reproduction). Non-blocking: the
+# loser reports `busy` instead of queueing a second spend.
+_RESCORE_LOCK = threading.Lock()
+
+
 def rescore_pending(
     cap_calls: Optional[int] = None, provider: str = "claude"
 ) -> Dict[str, Any]:
@@ -901,6 +911,19 @@ def rescore_pending(
     spends credit on nothing. Three failed bridge CALLS in a row stop the
     run — the backfill CLI's rule, one home over.
     """
+
+    if not _RESCORE_LOCK.acquire(blocking=False):
+        return {
+            "status": "busy",
+            "error": "another rescore is already running in this process",
+        }
+    try:
+        return _rescore_pending_locked(cap_calls=cap_calls, provider=provider)
+    finally:
+        _RESCORE_LOCK.release()
+
+
+def _rescore_pending_locked(cap_calls: Optional[int], provider: str) -> Dict[str, Any]:
     from services.search_profile_service import SearchProfileService
 
     profile_data = load_current_profile()
@@ -922,20 +945,27 @@ def rescore_pending(
     tally = {"scored": 0, "superseded": 0, "insufficient_evidence": 0}
     calls_made = 0
     consecutive_refusals = 0
+    failed_calls = 0
+    stopped_on_refusals = False
     index = 0
     while index < len(pending):
         if cap_calls is not None and calls_made >= cap_calls:
             break
         batch = pending[index : index + DEFAULT_BATCH_SIZE]
-        index += DEFAULT_BATCH_SIZE
         outcome = score_batch(batch, profile_data, provider=provider, commit=True)
         bridge_called = bool(outcome.get("bridge_called"))
         if bridge_called:
             calls_made += 1
         if outcome.get("status") != "ok":
+            # The batch was NOT done — `index` stays, so `pending_left`
+            # counts it as still pending instead of reporting a refused
+            # run as "ok, zero pending" (the review's finding 9). Retrying
+            # the same batch is bounded by the three-refusal stop.
             if bridge_called:
+                failed_calls += 1
                 consecutive_refusals += 1
                 if consecutive_refusals >= 3:
+                    stopped_on_refusals = True
                     logger.warning(
                         "Taste rescore stopping after %d failed bridge calls "
                         "in a row: %s",
@@ -943,17 +973,22 @@ def rescore_pending(
                         outcome.get("error"),
                     )
                     break
-            continue
+                continue
+            # A no-call failure (the profile vanished mid-run) cannot
+            # improve by retrying the same batch forever.
+            break
+        index += len(batch)
         if bridge_called:
             consecutive_refusals = 0
         for state in outcome["rows"].values():
             tally[state] = tally.get(state, 0) + 1
-    # Informational: what a next run would still find (it re-derives the
-    # scope itself, so an attempted-but-refused batch comes back anyway).
+    # What a next run would still find: everything not successfully done.
     pending_left = max(0, len(pending) - index)
     return {
         "status": "ok",
         "calls": calls_made,
+        "failed_calls": failed_calls,
+        "stopped_on_refusals": stopped_on_refusals,
         "pending_total": len(pending),
         "pending_left": pending_left,
         **tally,

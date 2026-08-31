@@ -328,9 +328,18 @@ def _criteria_context():
         return None
 
     def _across(builder):
+        # `search_profile_id.isnot(None)` first: on an UNASSIGNED row the
+        # bare `== pid` is NULL, the OR of NULLs is NULL, and `~NULL` drops
+        # the row from the default view — the review's reproduction. The
+        # definite guard makes the whole clause FALSE there, so unassigned
+        # rows are never touched by anybody's criteria.
         return or_(
             *[
-                and_(Property.search_profile_id == pid, builder(Property, crit))
+                and_(
+                    Property.search_profile_id.isnot(None),
+                    Property.search_profile_id == pid,
+                    builder(Property, crit),
+                )
                 for pid, crit in pairs
             ]
         )
@@ -1509,20 +1518,6 @@ def properties():
         # never applied.
         filter_bar_active = query is not filter_bar_scope
 
-        # The subscription's own criteria (#498 follow-up): by default a
-        # measured fail the owner has not judged is hidden, and the count of
-        # what was hidden renders beside the result count — a filter that
-        # hides silently reads as "these listings do not exist". Applied
-        # AFTER the narrowing check on purpose: the default hide is the
-        # page's standing policy, not the user's filter-bar action, and it
-        # must not flip the "narrowed" disclosure on every load (an explicit
-        # criteria=... choice is a filter, but the scope-total line does not
-        # count it — stated here rather than discovered).
-        criteria_ctx = _criteria_context()
-        query, criteria_hidden_count = _apply_criteria_filter(
-            query, criteria_ctx, criteria_filter, count_hidden=True
-        )
-
         # Listings with no subscription at all (issue #111). They are invisible
         # to every profile selection including `all`, so the page has to say
         # whether its total covers them -- and the number it discloses has to
@@ -1541,6 +1536,20 @@ def properties():
             query, Property.search_profile_id, profile_selection
         )
 
+        # The subscription's own criteria (#498 follow-up): by default a
+        # measured fail the owner has not judged is hidden, and the count of
+        # what was hidden renders beside the result count — a filter that
+        # hides silently reads as "these listings do not exist". Applied
+        # AFTER the narrowing check (the default hide is the page's standing
+        # policy, not a filter-bar action) and AFTER the profile filter, so
+        # the disclosure counts what was hidden FROM THIS SELECTION — a
+        # count over other subscriptions' hidden rows would be a number
+        # about a different page (the review's finding 6).
+        criteria_ctx = _criteria_context()
+        query, criteria_hidden_count = _apply_criteria_filter(
+            query, criteria_ctx, criteria_filter, count_hidden=True
+        )
+
         # What the same subscription selection holds *without* the filter bar
         # -- the number the "clear filters" link lands on, so the count line
         # can say "23 of 511" instead of presenting a narrowed set as the
@@ -1549,9 +1558,16 @@ def properties():
         # spent on the common unfiltered page.
         filter_bar_scope_total = None
         if filter_bar_active:
-            filter_bar_scope_total = apply_profile_filter(
+            # Under the same standing criteria hide as the page itself:
+            # the "N of M" disclosure describes the set clearing the bar
+            # lands on, and that set is also criteria-filtered (finding 6b).
+            scope_query = apply_profile_filter(
                 filter_bar_scope, Property.search_profile_id, profile_selection
-            ).count()
+            )
+            scope_query, _ = _apply_criteria_filter(
+                scope_query, criteria_ctx, criteria_filter
+            )
+            filter_bar_scope_total = scope_query.count()
 
         # How much of what the page is about to draw was ever verified against
         # idealista. `listing_status` is 'active' by default and nothing
@@ -3212,6 +3228,10 @@ def set_review(property_id):
             reason=request.form.get("reason"),
             action=request.form.get("next_action"),
             due_on=due_on,
+            # The compact comment card does not manage the action; the
+            # service reads the current one under its own lock, so a form
+            # opened before another tab set the action cannot erase it.
+            keep_action=bool(request.form.get("keep_action")),
         )
     except owner_review_service.ReviewError as exc:
         # A rejected write, not a crash: the message names the field.

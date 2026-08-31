@@ -28,6 +28,7 @@ finding, round 1).
 """
 
 import logging
+import math
 from typing import Any, Dict, Optional
 
 from sqlalchemy import and_, or_
@@ -42,6 +43,20 @@ def read_criteria(profile: Any) -> Optional[Dict[str, float]]:
     block = getattr(profile, "criteria", None)
     if not isinstance(block, dict):
         return None
+    unknown_keys = set(block) - set(CRITERIA_KEYS)
+    if unknown_keys:
+        # A typo ("min_plto_m2") silently ignored would half-apply the
+        # block and hide listings on the strength of the half that parsed
+        # (the implementation review's reproduction). Unknown keys reject
+        # the whole block; there is no schema version to be forward-
+        # compatible with.
+        logger.warning(
+            "Profile %s criteria %r carries unknown keys %s; reading as no criteria",
+            getattr(profile, "id", "?"),
+            block,
+            sorted(unknown_keys),
+        )
+        return None
     cleaned: Dict[str, float] = {}
     for key in CRITERIA_KEYS:
         value = block.get(key)
@@ -54,15 +69,21 @@ def read_criteria(profile: Any) -> Optional[Dict[str, float]]:
                 block,
             )
             return None
-        if value <= 0:
+        try:
+            number = float(value)
+        except (OverflowError, ValueError):
+            # 10**400 is a perfectly good Python int and float() of it
+            # raises — a hand-edited block must not 500 the listing page.
+            number = math.inf
+        if not math.isfinite(number) or number <= 0:
             logger.warning(
-                "Profile %s criteria %r has a non-positive bound; reading as "
-                "no criteria",
+                "Profile %s criteria %r has a non-finite or non-positive "
+                "bound; reading as no criteria",
                 getattr(profile, "id", "?"),
                 block,
             )
             return None
-        cleaned[key] = float(value)
+        cleaned[key] = number
     return cleaned or None
 
 
@@ -151,9 +172,14 @@ def failing_expression(model, criteria: Dict[str, float]):
             model.plot_area > 0,
             model.plot_area < bound,
         )
+        # `plot_area <= 0` counts as absent, exactly as the Python
+        # reader's `_positive()` does — zero is fotocasa's blank, and a
+        # bare-land row carrying it falls back to `area`, both languages
+        # (the review's 650/plot/0 reproduction).
+        plot_absent = or_(model.plot_area.is_(None), model.plot_area <= 0)
         bare_land_short = and_(
             is_plot,
-            model.plot_area.is_(None),
+            plot_absent,
             model.area.isnot(None),
             model.area > 0,
             model.area < bound,
@@ -191,7 +217,7 @@ def passing_expression(model, criteria: Dict[str, float]):
                 ),
                 and_(
                     is_plot,
-                    model.plot_area.is_(None),
+                    or_(model.plot_area.is_(None), model.plot_area <= 0),
                     model.area.isnot(None),
                     model.area > 0,
                     model.area >= bound,
