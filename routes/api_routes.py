@@ -18,6 +18,7 @@ from utils.google_spend import CAP_ONE_LAND, CAP_ONE_PROPERTY, authorized_spend
 from utils.listing_search import listing_search_clause
 from services import advertiser
 from services import owner_review
+from services import subscription_criteria
 from services import taste_service
 from utils.listing_source import source_filter_clause
 from utils.municipality_grouping import municipality_filter_clause
@@ -1733,6 +1734,19 @@ def get_properties():
         hide_removed_raw = (request.args.get("hide_removed") or "").strip().lower()
         hide_removed = hide_removed_raw not in ("0", "false", "off", "no")
 
+        # The subscription's own criteria. This endpoint ACCEPTED this
+        # parameter and ignored it: measured against production 2026-08-31,
+        # `?profile_id=24` and `?profile_id=24&criteria=fail` both answered
+        # `total: 443`, while `/properties`, `/map` and the CSV export all
+        # read it -- a fifth listing surface disagreeing with the other four,
+        # which is #445. The raw spelling is kept beside the mode for the same
+        # reason `profile_id` keeps its own: `criteria=failing` is not a mode,
+        # and the reading it falls back to is the one that HIDES rows.
+        criteria_raw = request.args.get("criteria")
+        criteria_mode, criteria_recognized = subscription_criteria.read_filter_mode(
+            criteria_raw
+        )
+
         sort_by = (request.args.get("sort") or "created_at").strip()
         sort_order = (request.args.get("order") or "desc").strip().lower()
         limit = request.args.get("limit", 100, type=int)
@@ -1813,6 +1827,21 @@ def get_properties():
         if hide_removed:
             query = query.filter(Property.listing_status.notin_(["removed", "sold"]))
 
+        # The same clauses `/properties` narrows with, from the same module.
+        # Applied BEFORE `total` and the subscription mix below, or the scope
+        # block would describe a population the payload is not a page of.
+        # `count_hidden` is asked only under the default reading, where the
+        # narrowing is the one nobody requested and therefore the one that has
+        # to be disclosed; the other modes are the caller's own and cost no
+        # extra COUNT.
+        criteria_ctx = subscription_criteria.profile_context(Property)
+        query, criteria_hidden = subscription_criteria.apply_filter(
+            query,
+            criteria_ctx,
+            criteria_raw,
+            count_hidden=(criteria_mode == "default"),
+        )
+
         # Sorting allow-list
         sort_columns = {
             "created_at": Property.created_at,
@@ -1850,7 +1879,21 @@ def get_properties():
         props = query.offset(offset).limit(limit).all()
 
         if full:
-            properties_data = [p.to_dict(review_today=review_today) for p in props]
+            properties_data = []
+            for p in props:
+                data = p.to_dict(review_today=review_today)
+                # Set here rather than inside `to_dict`, which is a row reader
+                # with no subscription context: threading the bounds into it
+                # would leave every other caller of `to_dict` answering
+                # `no_criteria` for rows that have criteria, which is #98's
+                # defect in a field invented to remove it. Both payload shapes
+                # carry the key, because the compact one below is the default
+                # and a field added to only one of them is missing exactly
+                # where the consumer looks.
+                data["criteria_state"] = subscription_criteria.row_verdict(
+                    p, criteria_ctx
+                )["state"]
+                properties_data.append(data)
         else:
             properties_data = []
             for p in props:
@@ -1895,6 +1938,13 @@ def get_properties():
                         "plot_area": float(p.plot_area)
                         if p.plot_area is not None
                         else None,
+                        # The verdict that decided whether this row is in the
+                        # answer at all. `unknown` is never folded into
+                        # `fail`: a plot nobody has stated is not a plot that
+                        # is too small (services/subscription_criteria.py).
+                        "criteria_state": subscription_criteria.row_verdict(
+                            p, criteria_ctx
+                        )["state"],
                         "taste_state": taste_service.read_taste(p, taste_version)[
                             "state"
                         ],
@@ -1942,6 +1992,51 @@ def get_properties():
                 f"profile_id={raw_profile_id!r} names no subscription; the "
                 f"default subscription ({profile_id}) was used instead."
             )
+
+        # The criteria narrowing, said out loud. A smaller number with nothing
+        # saying what it excluded reads as "that is all there is", so each of
+        # these is a fact the caller cannot see from the rows they were handed.
+        if not criteria_recognized:
+            notes.append(
+                f"criteria={criteria_raw!r} is not a criteria mode; the default "
+                "reading was applied, which HIDES the measured fails. The modes "
+                f"are {', '.join(subscription_criteria.FILTER_MODES)}."
+            )
+        if criteria_ctx is None:
+            # The dormant state: no subscription sets bounds, so no row has a
+            # verdict. `/properties` does not draw the control at all here;
+            # this endpoint cannot help being asked, and an unfiltered answer
+            # to `criteria=fail` would read as "every one of these fails".
+            if criteria_mode != "default":
+                notes.append(
+                    f"criteria={criteria_mode} selected nothing: no subscription "
+                    "carries criteria, so no listing has a verdict and every row "
+                    "was returned unfiltered."
+                )
+        elif criteria_mode == "default":
+            # Counted on this endpoint's own selection, after every other
+            # filter, so it describes what was withheld from THIS answer and
+            # not what some wider set holds.
+            notes.append(
+                f"criteria: {criteria_hidden} listing(s) failing their "
+                "subscription's criteria are hidden by the default reading and "
+                "are not counted in `total`; pass criteria=all to include them. "
+                "A favorited, reviewed or still-actioned listing is never "
+                "hidden, and `unknown` is not `fail`."
+            )
+        elif criteria_mode == "all":
+            notes.append(
+                "criteria=all: the default hide of measured fails was lifted, so "
+                "every listing in scope is here whatever its verdict."
+            )
+        else:
+            notes.append(
+                f"criteria={criteria_mode}: only listings whose verdict against "
+                f"their subscription's criteria is `{criteria_mode}` are in this "
+                "answer. A listing of a subscription that sets no criteria has "
+                "no verdict and is in none of these three modes."
+            )
+
         population = Population(
             label="one_subscription"
             if profile_id is not None
@@ -1966,6 +2061,19 @@ def get_properties():
                     "profile_id_requested": raw_profile_id,
                     "profile_id_applied": profile_id,
                     "profile_id_source": profile_id_source,
+                    # The same four facts about `criteria` that the notes say
+                    # in prose, in a shape a consumer can branch on. Parallel
+                    # to the `profile_id` trio above deliberately: one fact
+                    # under two names in one object is what this block exists
+                    # to stop happening between objects.
+                    "criteria_requested": criteria_raw,
+                    "criteria_applied": criteria_mode,
+                    "criteria_recognized": criteria_recognized,
+                    # Rows the DEFAULT reading withheld from `total`. `null`
+                    # under every other mode and where no subscription carries
+                    # criteria -- nothing was hidden by a rule nobody asked
+                    # for, and a `0` there would claim a count somebody took.
+                    "criteria_hidden_by_default": criteria_hidden,
                     # `offset` only: the page size is already here as `cap`,
                     # and one fact under two names in one object is what this
                     # block exists to stop happening between objects.

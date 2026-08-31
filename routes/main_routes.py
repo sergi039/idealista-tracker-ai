@@ -26,7 +26,7 @@ from flask import (
 # below would answer 500 for it: every one of them re-raises it first so an
 # unknown id stays a 404 (issue #136).
 from werkzeug.exceptions import HTTPException
-from sqlalchemy import and_, or_, case, func
+from sqlalchemy import or_, case, func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import defer
 from models import Land, Property, SearchProfile
@@ -313,63 +313,14 @@ def _nearest_beach_minutes(model):
 
 
 def _criteria_context():
-    """The subscriptions carrying criteria, with their SQL clauses.
+    """This page family's criteria clauses, over `Property`.
 
-    None when no profile has criteria — the filter control is then not drawn
-    and no query is touched, so the feature is dormant until the owner sets
-    criteria on a subscription (services/subscription_criteria.py). The
-    clauses are per-profile ORs: a row fails only against ITS OWN
-    subscription's bounds, and rows of criteria-less subscriptions are never
-    touched by any of them.
+    The reading itself lives in `services/subscription_criteria.py` — the
+    same module `routes/api_routes.py` reaches, because a filter one surface
+    keeps and another drops is #445's regression and that is precisely what
+    `GET /api/properties` was doing with this parameter.
     """
-    from services.search_profile_service import SearchProfileService
-
-    pairs = []
-    for profile in SearchProfileService.list_profiles(active_only=False):
-        criteria = subscription_criteria.read_criteria(profile)
-        if criteria:
-            pairs.append((profile.id, criteria))
-    if not pairs:
-        return None
-
-    def _across(builder):
-        # `search_profile_id.isnot(None)` first: on an UNASSIGNED row the
-        # bare `== pid` is NULL, the OR of NULLs is NULL, and `~NULL` drops
-        # the row from the default view — the review's reproduction. The
-        # definite guard makes the whole clause FALSE there, so unassigned
-        # rows are never touched by anybody's criteria.
-        return or_(
-            *[
-                and_(
-                    Property.search_profile_id.isnot(None),
-                    Property.search_profile_id == pid,
-                    builder(Property, crit),
-                )
-                for pid, crit in pairs
-            ]
-        )
-
-    # Membership in SOME criteria-carrying subscription, for the `unknown`
-    # mode: unknown is ~fail AND ~pass, and without this clause a row whose
-    # subscription has NO criteria answered both negations TRUE and leaked
-    # into a verdict it never had (its reading is `no_criteria`) — the gate
-    # review's finding.
-    member = or_(
-        *[
-            and_(
-                Property.search_profile_id.isnot(None),
-                Property.search_profile_id == pid,
-            )
-            for pid, _ in pairs
-        ]
-    )
-    return {
-        "pairs": pairs,
-        "member": member,
-        "hidden_default": _across(subscription_criteria.hidden_by_default_expression),
-        "fail": _across(subscription_criteria.failing_expression),
-        "pass": _across(subscription_criteria.passing_expression),
-    }
+    return subscription_criteria.profile_context(Property)
 
 
 def _shows_rows_the_default_hides(query, ctx):
@@ -385,32 +336,6 @@ def _shows_rows_the_default_hides(query, ctx):
     if ctx is None:
         return False
     return query.filter(ctx["hidden_default"]).first() is not None
-
-
-def _apply_criteria_filter(query, ctx, raw_value, count_hidden=False):
-    """One reading of the `criteria` parameter for the list, the map and the
-    CSV — a surface that kept the parameter while another dropped it is the
-    #445 regression, one filter over.
-
-    Default ('' or 'default') hides measured fails the owner has not judged
-    (never a favorited or reviewed row); `all` shows everything; `pass`,
-    `fail`, `unknown` select one verdict. Returns (query, hidden_count) —
-    the count only when asked, because it costs a COUNT(*) and only the list
-    page draws the disclosure.
-    """
-    if ctx is None:
-        return query, None
-    mode = (raw_value or "").strip().lower()
-    if mode == "all":
-        return query, None
-    if mode == "fail":
-        return query.filter(ctx["fail"]), None
-    if mode == "pass":
-        return query.filter(ctx["pass"]), None
-    if mode == "unknown":
-        return query.filter(ctx["member"], ~ctx["fail"], ~ctx["pass"]), None
-    hidden = query.filter(ctx["hidden_default"]).count() if count_hidden else None
-    return query.filter(~ctx["hidden_default"]), hidden
 
 
 def _filter_by_investment_rating(query, model, raw_value):
@@ -1588,7 +1513,7 @@ def properties():
         # count over other subscriptions' hidden rows would be a number
         # about a different page (the review's finding 6).
         criteria_ctx = _criteria_context()
-        query, criteria_hidden_count = _apply_criteria_filter(
+        query, criteria_hidden_count = subscription_criteria.apply_filter(
             query, criteria_ctx, criteria_filter, count_hidden=True
         )
 
@@ -1633,7 +1558,9 @@ def properties():
             scope_query = apply_profile_filter(
                 filter_bar_scope, Property.search_profile_id, profile_selection
             )
-            scope_query, _ = _apply_criteria_filter(scope_query, criteria_ctx, "")
+            scope_query, _ = subscription_criteria.apply_filter(
+                scope_query, criteria_ctx, ""
+            )
             filter_bar_scope_total = scope_query.count()
 
         # How much of what the page is about to draw was ever verified against
@@ -4031,7 +3958,7 @@ def map_view():
         # surface keeps and another drops is the regression, one filter over)
         # -- pressing Map on the default view must not widen it with the
         # hidden fails.
-        query, _ = _apply_criteria_filter(
+        query, _ = subscription_criteria.apply_filter(
             query, _criteria_context(), filters.get("criteria")
         )
 
@@ -5219,8 +5146,14 @@ def export_properties_csv():
 
         # The same criteria reading as the page and the map: an export of the
         # visible list must not smuggle the hidden fails back in, and
-        # criteria=all must widen it the same way.
-        query, _ = _apply_criteria_filter(query, _criteria_context(), criteria_filter)
+        # criteria=all must widen it the same way. The context is kept, not
+        # discarded, because the rows below have to SAY which verdict they
+        # carry -- the filter alone leaves a file that dropped 59 of 443 rows
+        # (production, 2026-08-31) and cannot be used to work out which.
+        criteria_ctx = _criteria_context()
+        query, _ = subscription_criteria.apply_filter(
+            query, criteria_ctx, criteria_filter
+        )
 
         if favorites_filter:
             query = query.filter(Property.is_favorite.is_(True))
@@ -5331,6 +5264,36 @@ def export_properties_csv():
             "Price (EUR)",
             "Area (m²)",
             "Area Type",
+            # The parcel, where a portal stated one (migration 025). It is the
+            # figure the criteria verdict beside it rests on and it was in no
+            # column at all, so the export could neither state the verdict nor
+            # let a reader recompute it. Blank is "nobody stated a plot",
+            # never "no plot": on production 2026-08-31 that is 436 of the 443
+            # rows of the one subscription that carries criteria, which is why
+            # `unknown` is the common verdict and not a disappointing `fail`.
+            "Plot Area (m²)",
+            # This export APPLIES the criteria filter, so by default it omits
+            # the measured fails the owner has not judged -- and until this
+            # column it said nothing about having done so. Four states, from
+            # the one reading the page and the map use
+            # (services/subscription_criteria.py): `fail` is a MEASURED
+            # shortfall, `pass` needs every bound measured and met, `unknown`
+            # is a figure nobody stated, and `no_criteria` is a subscription
+            # that sets no bounds. `unknown` is never folded into `fail` -- a
+            # plot nobody has stated is not a plot that is too small.
+            #
+            # With this column an export taken at `criteria=all` says which
+            # rows the default drops: `fail`, minus the ones Favorite, Owner
+            # Verdict and Next Action State exempt -- all three already
+            # columns here. That arithmetic is a disclosure and not a
+            # guarantee, in one known direction: the hide reads
+            # `owner_verdict IS NULL` while the column states the *verdict*,
+            # which is `undecided` for a NULL and for a string no writer of
+            # this application produces alike. A row carrying such a string is
+            # KEPT and the recompute would name it as dropped -- over-naming,
+            # which is the safe direction for a reader checking what is
+            # missing.
+            "Criteria",
             "Price per m²",
             "Bedrooms",
             "Bathrooms",
@@ -5446,6 +5409,10 @@ def export_properties_csv():
             review_action = owner_review.read_action(prop, review_today)
             # The export's one profile version, threaded per row the same way.
             taste_row = taste_service.read_taste(prop, taste_version)
+            # The row's verdict against ITS OWN subscription's bounds, from
+            # the context the filter above was built from -- so the column and
+            # the row set it explains cannot be answers to two questions.
+            criteria_row = subscription_criteria.row_verdict(prop, criteria_ctx)
 
             row = [
                 prop.id,
@@ -5455,6 +5422,14 @@ def export_properties_csv():
                 price,
                 area,
                 prop.area_type,
+                # `is not None`, not truthiness: fotocasa writes 0 where it
+                # has no figure, and the criteria reader treats that 0 as a
+                # blank -- but the export states what is STORED and lets the
+                # verdict column say how it was read. Blanking it here would
+                # make "the portal said nothing" and "the portal said zero"
+                # the same cell.
+                float(prop.plot_area) if prop.plot_area is not None else None,
+                criteria_row["state"],
                 price_per_m2,
                 bedrooms,
                 bathrooms,
