@@ -269,15 +269,24 @@ class TestTheSurfaces:
         assert "Failing tiny" in wide
 
     def test_the_scope_total_describes_what_clearing_lands_on(self, client, rows):
-        """The gate review's finding: under criteria=fail the clear link
-        resets criteria, so its disclosed total must be the DEFAULT view's
-        count (what clearing lands on), never the fail-filtered one."""
+        """The gate review's finding: the clear link resets criteria, so the
+        disclosed total must be the DEFAULT view's count (what clearing lands
+        on), never the count under the criteria mode currently applied.
+
+        Asked under `unknown` rather than the `fail` this first used. The
+        invariant is the same and it is the one the review was protecting;
+        what changed is that the note no longer renders under `fail` at all,
+        because "N of M shown" is a subset claim and a failing row is not in
+        the M the clear link lands on (see the sibling assertion in
+        tests/test_criteria_recovery_links.py). Under `unknown` the row on
+        screen really is one of those 2, so the sentence is true and the
+        total is still the thing being pinned."""
         import re
 
-        # Narrow by search so the filter bar is genuinely active, in fail
-        # mode: the page shows 1 (the failing row), clearing lands on the
-        # default view of 2 (pass + unknown).
-        html = client.get("/properties?criteria=fail&search=Failing").data.decode()
+        # Narrow by search so the filter bar is genuinely active: the page
+        # shows 1 (the unknown row), clearing lands on the default view of 2
+        # (pass + unknown) — and that 1 is one of the 2.
+        html = client.get("/properties?criteria=unknown&search=Unknown").data.decode()
         note = re.search(r"filter-bar-narrowing-note.*?</span>", html, re.S)
         assert note is not None, "the narrowing note must render"
         text = note.group(0)
