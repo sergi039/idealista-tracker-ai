@@ -404,3 +404,26 @@ class TestTheProfilesColumnOpensItsOwnNumber:
         link = html.unescape(match.group(1))
         assert "criteria=all" in link and "hide_removed=off" in link
         assert _total(client, link) == int(match.group(2)) == 1
+
+
+class TestTheControlOffersWhatTheCodeApplies:
+    """The reviewer's finding: CRITERIA_MODES' docstring claimed to be the one
+    home "so a surface DRAWING the control and the code APPLYING it cannot
+    disagree", while templates/municipalities.html carried a literal copy of
+    the list. A constant that claims to be a single home and is not is worse
+    than no constant, because the next reader acts on the claim."""
+
+    def test_the_dropdown_offers_exactly_the_modes_that_are_applied(
+        self, client, world
+    ):
+        import re
+
+        from routes.main_routes import CRITERIA_MODES
+
+        html = client.get("/municipalities").data.decode()
+        offered = set(re.findall(r'data-criteria="([^"]+)"', html))
+        assert offered, "the criteria control must render on /municipalities"
+        assert offered == {"default"} | set(CRITERIA_MODES), (
+            f"the control offers {sorted(offered)} while the code applies "
+            f"{sorted(CRITERIA_MODES)} plus the default"
+        )

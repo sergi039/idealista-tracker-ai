@@ -391,7 +391,22 @@ def _shows_rows_the_default_hides(query, ctx):
 # bookmark, a typo, the explicit spelling `default` — is the default reading,
 # and `criteria_mode()` is where that is decided so a surface DRAWING the
 # control and the code APPLYING it cannot disagree about which mode is on.
+# The drawing surfaces read `criteria_choices` (below) rather than repeating
+# the list: a template that spells its own options is exactly how the two come
+# to disagree, and this constant claimed to be their one home while
+# templates/municipalities.html still carried a literal copy.
 CRITERIA_MODES = ("all", "pass", "fail", "unknown")
+
+# What a control offers, in the order a reader meets them: the default first
+# (the empty string IS the default reading, not a fifth mode), then everything,
+# then the verdicts from most to least welcome. The order is a display choice
+# and differs from CRITERIA_MODES, so the two are tied by an assertion rather
+# than by hope — a template that grew a fifth option nobody applies, or lost
+# one nobody could reach, is the disagreement this pair exists to prevent.
+CRITERIA_CHOICES = ("", "all", "pass", "unknown", "fail")
+assert set(CRITERIA_CHOICES) == {""} | set(CRITERIA_MODES), (
+    "the control must offer exactly the modes the code applies"
+)
 
 
 def criteria_mode(raw_value):
@@ -412,8 +427,11 @@ def _apply_criteria_filter(query, ctx, raw_value, count_hidden=False):
     page draws the disclosure.
 
     Returning `query` **itself** when nothing was applied is relied upon by
-    `_split_by_criteria` and by /properties' `filter_bar_active`, the same
-    identity test; do not wrap the untouched case in a `filter()`.
+    `_split_by_criteria`, which reads it as "this reading excluded nothing"
+    and skips a COUNT. It is NOT what `/properties`' `filter_bar_active`
+    tests: that is computed before this function runs, deliberately, because
+    the default hide is the page's standing policy and not a filter-bar
+    action. Do not wrap the untouched case in a `filter()`.
     """
     if ctx is None:
         return query, None
@@ -447,10 +465,11 @@ def _split_by_criteria(query, ctx, raw_value):
     would be a second home for it — the defect this codebase keeps naming.
 
     `_apply_criteria_filter` returns the query object *itself* when nothing is
-    applied (no subscription carries criteria, or the mode is `all`), which is
-    the same identity test `/properties` uses for `filter_bar_active`. That
-    branch costs no extra query and reports nothing excluded, which is the
-    truth: the reading excluded nothing.
+    applied (no subscription carries criteria, or the mode is `all`), and this
+    function is that identity test's only consumer — `/properties`'
+    `filter_bar_active` is a different test taken earlier, over the filter bar
+    alone. That branch costs no extra query and reports nothing excluded,
+    which is the truth: the reading excluded nothing.
     """
     kept_query, _ = _apply_criteria_filter(query, ctx, raw_value)
     rows = query.all()
@@ -3923,6 +3942,7 @@ def municipalities():
             unassigned_available=unassigned_available,
             listing_total=len(properties),
             unnamed_listings=unnamed,
+            criteria_choices=CRITERIA_CHOICES,
             criteria_filter=criteria_filter,
             criteria_enabled=criteria_ctx is not None,
             criteria_excluded=criteria_excluded,

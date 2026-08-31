@@ -105,7 +105,7 @@
                             <i class="fas fa-filter me-1"></i>{{ t('criteria_' ~ (criteria_filter or 'default')) }}
                         </button>
                         <ul class="dropdown-menu dropdown-menu-end">
-                            {% for value in ['', 'all', 'pass', 'unknown', 'fail'] %}
+                            {% for value in criteria_choices %}
                                 <li><a class="dropdown-item {{ 'active' if (criteria_filter or '') == value }}"
                                        data-criteria="{{ value or 'default' }}"
                                        href="{{ url_for('main.municipalities', **dict(base_args, criteria=value or none)) }}">
