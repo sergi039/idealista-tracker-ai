@@ -134,6 +134,41 @@ def _host_of(url: Optional[str]) -> str:
         return ""
 
 
+# The type segment of a canonical fotocasa path -- `/es/comprar/terreno/...`
+# against `/es/comprar/vivienda/...`. Only the land words are read, and only
+# ever to say "this is land": fotocasa states the type in its own URL, which
+# is the one place it cannot be talking about the building a buyer might put
+# there. `vivienda` is deliberately NOT read as housing, because that segment
+# is the portal's catch-all for everything with a roof and reading it would
+# overrule the profile's own rules on rows nobody has shown to be wrong.
+# One entry per language fotocasa serves the path in: `/es/comprar/terreno/`,
+# `/en/buy/land/`, `/ca/comprar/terreny/`. Missing a language would put that
+# locale's links straight back into the defect.
+_PLOT_URL_TYPES = ("terreno", "terreny", "land", "solar", "parcela")
+
+
+def url_says_plot(url: Optional[str]) -> bool:
+    """True when fotocasa's own canonical path says this listing is land.
+
+    Measured on production 2026-08-31: 75 rows sit on a `/comprar/terreno/`
+    URL, and 10 of them were stored as built house area because the payload's
+    `buildingSubtype` reads `Residential` -- fotocasa's word for *residential
+    land*, which the advert then describes as somewhere to "construir la casa
+    de tus sueños". One of them, a 21,472 m² field, was a "house" passing the
+    owner's "at least 150 m² of house" filter. The URL was never read; the
+    sibling reader written a week later does read it
+    (`services/yaencontre_source.py:_area_type_for`).
+    """
+    if not is_fotocasa_url(url):
+        return False
+    try:
+        parts = [p for p in urlsplit((url or "").strip()).path.split("/") if p]
+    except ValueError:
+        return False
+    # `/es/comprar/terreno/...` -- language, transaction, then the type.
+    return len(parts) >= 3 and parts[2].lower() in _PLOT_URL_TYPES
+
+
 def listing_id_from_url(url: Optional[str]) -> Optional[int]:
     """The listing id a fotocasa detail URL names, or None.
 
@@ -384,7 +419,14 @@ def parse_listing(html: str, url: str) -> FotocasaListing:
         detail.get("groundSurface")
     )
     listing.plot_area = land
-    if (listing.building_type or "").lower() in ("land", "terreno", "terreny"):
+    # The URL is read beside `buildingType` rather than after it: a plot whose
+    # subtype reads `Residential` states its type in the path and nowhere else,
+    # and `surface` on such a payload is the parcel, not a building.
+    if (listing.building_type or "").lower() in (
+        "land",
+        "terreno",
+        "terreny",
+    ) or url_says_plot(url):
         listing.area = land or built
         listing.area_type = "plot" if listing.area is not None else "unknown"
     elif built is not None:
