@@ -121,18 +121,33 @@ class PropertyClassificationService:
             prop.property_subtype = None
             changed = True
 
-        if update_area_type:
-            if (prop.property_category or "").strip().lower() == "land":
-                if prop.area_type != "plot":
-                    prop.area_type = "plot"
-                    changed = True
-            elif prop.area is not None:
-                if (prop.area_type or "unknown").strip().lower() in ("", "unknown"):
-                    prop.area_type = "built"
-                    changed = True
-            else:
-                if not prop.area_type:
-                    prop.area_type = "unknown"
-                    changed = True
+        if update_area_type and cls.reconcile_area_type(prop):
+            changed = True
 
         return changed
+
+    @staticmethod
+    def reconcile_area_type(prop: Property) -> bool:
+        """Make `area_type` agree with `property_category`, in place.
+
+        Land is measured as a plot, whatever anyone wrote in `area_type`
+        first. Kept as its own method because the portal doors build a
+        Property without ever calling `apply_classification`, and a second
+        copy of the rule is how the two came to disagree: production carried
+        rows classified `land` still holding `area_type='built'`, so the
+        parcel was counted as floor space.
+        """
+        if (prop.property_category or "").strip().lower() == "land":
+            if prop.area_type != "plot":
+                prop.area_type = "plot"
+                return True
+            return False
+        if prop.area is not None:
+            if (prop.area_type or "unknown").strip().lower() in ("", "unknown"):
+                prop.area_type = "built"
+                return True
+            return False
+        if not prop.area_type:
+            prop.area_type = "unknown"
+            return True
+        return False
