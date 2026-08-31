@@ -608,6 +608,72 @@
             </div>
         </div>
 
+        {# Why the listing page may not be showing this row (#98, in copy).
+           Property 995 misses its subscription's house bound by 13 m² and is
+           therefore absent from /properties, /map, the CSV and the API, while
+           its own page said nothing about it -- the only "criteria" here was
+           the scoring-weights card, a different word for a different thing.
+           The verdict, the bounds and the hide are all read in the route from
+           services/subscription_criteria.py, so this card and the list's
+           "N failing hidden" are one answer. Rendered only when the row's
+           subscription actually carries criteria; values are asserted BY
+           VALUE in the tests (the None×None lesson). #}
+        {% if criteria_reading %}
+        <div class="card mb-4" id="subscription-criteria-card">
+            <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
+                <h2 class="h6 mb-0">
+                    <i class="fas fa-ruler-combined me-2"></i>{{ t('criteria_filter') }}
+                    {% if criteria_reading.subscription %}
+                        <span class="text-body-secondary fw-normal">&mdash; {{ criteria_reading.subscription }}</span>
+                    {% endif %}
+                </h2>
+            </div>
+            <div class="card-body py-2">
+                <p class="mb-2 small" id="subscription-criteria-state">
+                    {% if criteria_reading.hidden %}
+                        <i class="fas fa-eye-slash me-1 text-warning"></i>{{ t('criteria_card_hidden') }}
+                    {% elif criteria_reading.verdict.state == 'fail' %}
+                        {# Favorited, reviewed or carrying an open action: the
+                           owner has judged it, so the filter does not overrule
+                           them. Saying "hidden" here would be a false claim
+                           about a row the list is drawing. #}
+                        <i class="fas fa-circle-exclamation me-1 text-warning"></i>{{ t('criteria_card_fail_shown') }}
+                    {% elif criteria_reading.verdict.state == 'pass' %}
+                        <i class="fas fa-circle-check me-1 text-success"></i>{{ t('criteria_card_pass') }}
+                    {% else %}
+                        <i class="fas fa-circle-question me-1 text-body-secondary"></i>{{ t('criteria_card_unknown') }}
+                    {% endif %}
+                </p>
+                <ul class="list-unstyled small mb-0" id="subscription-criteria-bounds">
+                    {% if criteria_reading.bounds.min_house_m2 %}
+                        <li>
+                            <strong>{{ t('criteria_bound_house')|format('%g'|format(criteria_reading.bounds.min_house_m2)) }}:</strong>
+                            {% if criteria_reading.verdict.figures.house_m2 is none %}
+                                {{ t('criteria_not_stated') }}
+                            {% elif criteria_reading.verdict.checks.house %}
+                                {{ t('criteria_measured_meets')|format('%g'|format(criteria_reading.verdict.figures.house_m2)) }}
+                            {% else %}
+                                {{ t('criteria_measured_below')|format('%g'|format(criteria_reading.verdict.figures.house_m2)) }}
+                            {% endif %}
+                        </li>
+                    {% endif %}
+                    {% if criteria_reading.bounds.min_plot_m2 %}
+                        <li>
+                            <strong>{{ t('criteria_bound_plot')|format('%g'|format(criteria_reading.bounds.min_plot_m2)) }}:</strong>
+                            {% if criteria_reading.verdict.figures.plot_m2 is none %}
+                                {{ t('criteria_not_stated') }}
+                            {% elif criteria_reading.verdict.checks.plot %}
+                                {{ t('criteria_measured_meets')|format('%g'|format(criteria_reading.verdict.figures.plot_m2)) }}
+                            {% else %}
+                                {{ t('criteria_measured_below')|format('%g'|format(criteria_reading.verdict.figures.plot_m2)) }}
+                            {% endif %}
+                        </li>
+                    {% endif %}
+                </ul>
+            </div>
+        </div>
+        {% endif %}
+
         <div class="card mb-4">
             <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
                 <h2 class="h6 mb-0">

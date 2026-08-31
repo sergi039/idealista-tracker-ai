@@ -1080,12 +1080,30 @@
                        itself. Read from utils/listing_search.py, the same
                        reading the filter was built from, so this cannot claim
                        a search that did not happen. #}
+                    {# "nothing here carries that id" was a claim about the
+                       TABLE made from a FILTERED query, so it said a row that
+                       exists does not: measured on production 2026-08-31,
+                       ?search=35241157 printed it for property 1458 four
+                       lines above this page's own "Criteria: 1 failing
+                       hidden", and ?search=112408790&municipality=Gijón
+                       printed it for 1537, which no criteria touch. The route
+                       asks the table (`_search_reveal_notice`) and this
+                       branches on the answer; `absent` keeps the old
+                       sentence, which is the true one there. #}
                     {% if pagination and pagination.total == 0
                           and search_interpretation is defined and search_interpretation
                           and search_interpretation.is_listing_reference %}
-                        <span id="search-read-as" class="text-body-secondary small">
-                            <i class="fas fa-circle-info me-1"></i>{% if search_interpretation.listing_id %}{{ t('search_read_as_listing')|format(search_interpretation.listing_id) }}{% else %}{{ t('search_read_as_link')|format(search_interpretation.url_fragment|truncate(80, True)) }}{% endif %}
-                        </span>
+                        {% if search_reveal is defined and search_reveal and search_reveal.state == 'hidden' %}
+                            <span id="search-read-as" class="text-body-secondary small">
+                                <i class="fas fa-circle-info me-1"></i>{% if search_interpretation.listing_id %}{{ t('search_reads_as_listing')|format(search_interpretation.listing_id) }}{% else %}{{ t('search_reads_as_link')|format(search_interpretation.url_fragment|truncate(80, True)) }}{% endif %}
+                                {% if search_reveal.by_subscription %}{{ t('search_hidden_by_subscription')|format(search_reveal.property_id) }}{% else %}{{ t('search_hidden_by_filters')|format(search_reveal.property_id) }}{% endif %}
+                                (<a id="search-reveal-link" href="{{ search_reveal.href }}">{{ t('search_reveal_link') }}</a>)
+                            </span>
+                        {% else %}
+                            <span id="search-read-as" class="text-body-secondary small">
+                                <i class="fas fa-circle-info me-1"></i>{% if search_interpretation.listing_id %}{{ t('search_read_as_listing')|format(search_interpretation.listing_id) }}{% else %}{{ t('search_read_as_link')|format(search_interpretation.url_fragment|truncate(80, True)) }}{% endif %}
+                            </span>
+                        {% endif %}
                     {% endif %}
                     {# The filter bar narrowed this count, and the chips above
                        carry unfiltered badges beside it -- so without this
@@ -1791,10 +1809,26 @@
             <div class="text-center py-5" id="properties-empty-state">
                 <i class="fas fa-search fa-3x text-muted mb-3"></i>
                 <h4>No properties found</h4>
+                {# The one remedy this state used to name was "run a manual
+                   sync to fetch new listings", for rows that are already in
+                   the table: measured on production 2026-08-31,
+                   ?profile_id=24&search=Brantuas offered it for a phrase out
+                   of property 995's own title. The count and the link come
+                   from `_empty_state_scope`, which asks the table what
+                   clearing would land on -- so the line appears only when it
+                   is a real offer, and its link states `criteria=all` and
+                   `hide_removed=off` rather than dropping them, because for
+                   those two an absent parameter is not an absent filter
+                   (utils/listing_filters.CLEARED_NOT_ABSENT). #}
+                {% if empty_state_scope_total is defined and empty_state_scope_total %}
+                <p class="text-muted" id="empty-state-filters-note">
+                    {{ t('empty_state_filters_hide_all')|format(tn('listings_count', empty_state_scope_total)) }}
+                    (<a id="empty-state-clear-link" href="{{ empty_state_clear_url }}">{{ t('empty_state_clear_link') }}</a>)
+                </p>
+                {% endif %}
                 {% if machine_is_ingester() %}
                 <p class="text-muted">
-                    Try adjusting your filters, or run a manual sync to fetch new listings.
-                    If this is a fresh database but the ingestion cursor already advanced, run
+                    {{ t('empty_state_sync_note') }}
                     <a href="{{ url_for('main.property_settings') }}" class="link-secondary">Full Sync</a>.
                 </p>
                 <button class="btn btn-primary"
@@ -1811,9 +1845,7 @@
                    mailbox, which is a divergent database and a second Google
                    bill per listing (#376). #}
                 <p class="text-muted">
-                    Try adjusting your filters. Listings arrive on the machine that
-                    ingests, and this is not it &mdash; a second machine reading the
-                    same mailbox would build a database of its own.
+                    {{ t('empty_state_not_ingester') }}
                 </p>
                 {% endif %}
             </div>

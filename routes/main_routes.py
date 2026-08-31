@@ -801,6 +801,121 @@ def _map_focus_notice(focus_id, focus_property, props, query_without_profile):
     }
 
 
+def _listing_reveal_link(prop, search_query):
+    """A `/properties` URL guaranteed to put `prop` on the page.
+
+    Built the way `_map_focus_link(keep_filters=False)` is, and for the same
+    reason: clearing is expressed as "keep the non-filters", never as a list
+    of filters to remove, so a filter added tomorrow is unknown here and
+    therefore dropped (#445). `search` is then restated deliberately -- it is
+    what names the listing, exactly as `focus` does on the map, and the row
+    matches it by construction.
+
+    Two values are stated out loud because their ABSENCE is not their off
+    position. `criteria` is the one `utils/listing_filters.CLEARED_NOT_ABSENT`
+    exists for: dropping it re-issues the default hide, which is how a
+    criteria-hidden listing came to be offered a link back to the notice that
+    sent the reader. `hide_removed` is the second: it defaults ON, and
+    `NON_FILTERS` carries `mode` and `view_type` across, which is precisely
+    what `resolve_hide_removed` reads as "this came from the filter form" and
+    answers OFF to -- so leaving it unsaid makes the promise depend on which
+    link the reader arrived by. It is relaxed only for a row that is actually
+    withdrawn, because `off` also puts every other delisted listing back.
+    """
+    args = rebuilt_from(
+        request.args,
+        drop={"profile_id"},
+        keep=NON_FILTERS - {"profile_id"},
+    )
+    args.update(CLEARED_NOT_ABSENT)
+    args["hide_removed"] = (
+        "off" if prop.listing_status in DELISTED_LISTING_STATUSES else "on"
+    )
+    args["search"] = search_query
+    args["page"] = 1
+    profile_id = (
+        prop.search_profile_id
+        if prop.search_profile_id is not None
+        else PROFILE_UNASSIGNED_SENTINEL
+    )
+    return url_for("main.properties", profile_id=profile_id, **args)
+
+
+def _search_reveal_notice(read, shown_total, profile_selection):
+    """What an empty result really means when the query named a listing.
+
+    "0 properties found" under a listing id has two readings, and the page
+    printed only one of them: `search_read_as_listing` says "nothing here
+    carries that id", which is a claim about the TABLE made from a FILTERED
+    query. Measured on production 2026-08-31:
+    `/properties?search=35241157` printed it for property 1458 four lines
+    above its own "Criteria: 1 failing hidden", and
+    `/properties?search=112408790&municipality=Gijón` printed it for property
+    1537, which no criteria hide at all. So this is not a criteria defect --
+    ANY narrowing produces it, and the fix is to ask the table.
+
+    Returns None when there is nothing to explain (rows on screen, or a query
+    that names no listing). `absent` keeps the old sentence, which is true
+    there. `hidden` names the row and carries a link that reveals it.
+    """
+    if shown_total or read is None or not read.is_listing_reference:
+        return None
+    clause = listing_search_clause(Property, read.query)
+    prop = (
+        Property.query.filter(clause).order_by(Property.id.asc()).first()
+        if clause is not None
+        else None
+    )
+    if prop is None:
+        return {"state": "absent"}
+
+    # Whether the subscription selection is what excludes it, asked through
+    # the page's own rule rather than by re-deriving one -- a second reading
+    # of "is this row in the selection" is how two surfaces come to disagree.
+    in_selection = (
+        apply_profile_filter(
+            Property.query.filter(Property.id == prop.id),
+            Property.search_profile_id,
+            profile_selection,
+        ).first()
+        is not None
+    )
+    return {
+        "state": "hidden",
+        "property_id": prop.id,
+        "by_subscription": not in_selection,
+        "href": _listing_reveal_link(prop, read.query),
+    }
+
+
+def _empty_state_scope(profile_selection, criteria_ctx):
+    """What the reader's subscription selection holds with nothing narrowing.
+
+    The empty state named one remedy -- ingest more listings -- for a page
+    whose rows were already in the table: measured on production 2026-08-31,
+    `/properties?profile_id=24&search=Brantuas` offered "run a manual sync"
+    for a phrase out of property 995's own title. So the page asks how many
+    listings clearing everything would land on, and says so only when that is
+    a real offer. Counted on the zero-result path alone, where an extra
+    COUNT(*) costs nothing anybody is waiting for.
+
+    Returns (total, url). The count is taken under `criteria=all` and with
+    both toolbar switches off, which is exactly what the link states.
+    """
+    query = apply_profile_filter(
+        Property.query, Property.search_profile_id, profile_selection
+    )
+    query, _ = _apply_criteria_filter(query, criteria_ctx, "all")
+    args = rebuilt_from(request.args, keep=NON_FILTERS)
+    args.update(CLEARED_NOT_ABSENT)
+    # Named for the same reason as in `_listing_reveal_link`: `hide_removed`
+    # is on unless something says otherwise, and "clear every filter" has to
+    # mean the switches too or the count and the page it lands on disagree.
+    args["hide_removed"] = "off"
+    args["page"] = 1
+    return query.count(), url_for("main.properties", **args)
+
+
 class ProfileListingCount(NamedTuple):
     """What the subscription controls need to know about one profile's rows.
 
@@ -1734,6 +1849,20 @@ def properties():
             page = pagination.pages
             pagination = query.paginate(page=page, per_page=per_page, error_out=False)
 
+        # Nothing on screen: the two things the page used to get wrong about
+        # its own emptiness. Both ask the table rather than the parameters,
+        # and both run only here, where an extra query costs nothing.
+        search_interpretation = interpret_search(search_query)
+        search_reveal = _search_reveal_notice(
+            search_interpretation, pagination.total, profile_selection
+        )
+        empty_state_scope_total = None
+        empty_state_clear_url = None
+        if not pagination.total:
+            empty_state_scope_total, empty_state_clear_url = _empty_state_scope(
+                profile_selection, criteria_ctx
+            )
+
         # Travel columns for whatever subscriptions are on screen: presets for
         # all of them, plus the custom destinations when exactly one is shown.
         shown_profile_ids = (
@@ -1801,7 +1930,16 @@ def properties():
             # How the search box entry was read, so an empty result can say
             # what it looked for instead of leaving "0 properties found" to
             # mean both "no such listing" and "not understood as you typed it".
-            search_interpretation=interpret_search(search_query),
+            search_interpretation=search_interpretation,
+            # And whether the listing it names is really absent or merely
+            # filtered off this page -- two facts the one sentence claimed as
+            # one. None when there is nothing to explain.
+            search_reveal=search_reveal,
+            # What clearing everything would land on, and the link that does
+            # it. None unless the page is empty; 0 means the empty result is
+            # genuine and no recovery is offered for it.
+            empty_state_scope_total=empty_state_scope_total,
+            empty_state_clear_url=empty_state_clear_url,
             # The page's one date. Every badge that asks whether an action is
             # late is handed this value; a template calling `date.today()` per
             # row would disagree with the query that selected the rows.
@@ -1982,9 +2120,32 @@ def property_detail(property_id):
             prop
         )
 
+        # Why the listing page may not be showing this row. Property 995 is
+        # invisible on /properties, /map, the CSV and the API because it
+        # misses its subscription's house bound by 13 m², and its own page
+        # said nothing at all about that -- its only "criteria" was the
+        # scoring-weights card, which is a different word for a different
+        # thing. The verdict and the hide are both read from
+        # services/subscription_criteria.py, never re-derived here, so this
+        # card and the list's "N failing hidden" cannot disagree.
+        criteria_bounds = subscription_criteria.read_criteria(prop.search_profile)
+        criteria_reading = None
+        if criteria_bounds:
+            criteria_reading = {
+                "bounds": criteria_bounds,
+                "verdict": subscription_criteria.read_verdict(prop, criteria_bounds),
+                "hidden": subscription_criteria.hidden_by_default(
+                    prop, criteria_bounds
+                ),
+                "subscription": getattr(prop.search_profile, "name", None),
+            }
+
         return render_template(
             "property_detail.html",
             property=prop,
+            # None when the row's subscription carries no criteria: there is
+            # no verdict to draw, and an empty card would invent one.
+            criteria_reading=criteria_reading,
             openai_configured=bool(getattr(Config, "AI_BRIDGE_TOKEN", None)),
             openai_analysis=(openai_variant.analysis if openai_variant else None),
             openai_model=(openai_variant.model if openai_variant else None),
