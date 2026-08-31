@@ -37,6 +37,16 @@ logger = logging.getLogger(__name__)
 
 CRITERIA_KEYS = ("min_house_m2", "min_plot_m2")
 
+# A surface no parcel has. It is a NaN filter first and a sanity bound
+# second: PostgreSQL orders `NUMERIC 'NaN'` ABOVE every number, so
+# `plot_area > 0 AND plot_area >= 700` is TRUE for a NaN and SQL called it
+# `pass` while Python (where `nan > 0` is False) called it `unknown` — the
+# gate review's reproduction. `< MAX_CREDIBLE_M2` excludes NaN on
+# PostgreSQL and keeps every real value, in a form SQLite reads too, and
+# both languages apply it so a value this absurd reads as unmeasured on
+# both. 1e9 m2 is a thousand square kilometres.
+MAX_CREDIBLE_M2 = 1e9
+
 
 def read_criteria(profile: Any) -> Optional[Dict[str, float]]:
     """The profile's validated criteria, or None (no verdicts, no filter)."""
@@ -97,11 +107,15 @@ def _effective_figures(prop: Any) -> Dict[str, Optional[float]]:
     """
 
     def _positive(value: Any) -> Optional[float]:
+        """A credible surface, or None. NaN, inf and absurd values are not
+        measurements — see MAX_CREDIBLE_M2 for why SQL needs the ceiling."""
         try:
             number = float(value)
         except (TypeError, ValueError):
             return None
-        return number if number > 0 else None
+        if not math.isfinite(number):
+            return None
+        return number if 0 < number < MAX_CREDIBLE_M2 else None
 
     area = _positive(prop.area)
     plot = _positive(getattr(prop, "plot_area", None))
@@ -134,6 +148,32 @@ def read_verdict(prop: Any, criteria: Optional[Dict[str, float]]) -> Dict[str, A
     else:
         state = "unknown"
     return {"state": state, "checks": checks, "figures": figures}
+
+
+def _credible(column):
+    """The SQL twin of `_positive()`: present, positive and credible.
+
+    The upper bound is what excludes `NUMERIC 'NaN'` on PostgreSQL, where
+    NaN compares GREATER than every number — without it a NaN satisfied
+    both `> 0` and `>= bound` and SQL alone answered `pass`. Definite for
+    every row (no NULL third value), so negating it stays sound.
+    """
+    return and_(
+        column.isnot(None),
+        column > 0,
+        column < MAX_CREDIBLE_M2,
+    )
+
+
+def db_not_credible(column):
+    """`~_credible`, written positively so it is definite for every row:
+    NULL, non-positive, or past the credible ceiling (which is where a
+    PostgreSQL NaN lands)."""
+    return or_(
+        column.is_(None),
+        column <= 0,
+        column >= MAX_CREDIBLE_M2,
+    )
 
 
 def _definite_shapes(model):
@@ -169,28 +209,25 @@ def failing_expression(model, criteria: Dict[str, float]):
         clauses.append(
             and_(
                 not_plot,
-                model.area.isnot(None),
-                model.area > 0,
+                _credible(model.area),
                 model.area < criteria["min_house_m2"],
             )
         )
     if "min_plot_m2" in criteria:
         bound = criteria["min_plot_m2"]
         plot_known_and_short = and_(
-            model.plot_area.isnot(None),
-            model.plot_area > 0,
+            _credible(model.plot_area),
             model.plot_area < bound,
         )
         # `plot_area <= 0` counts as absent, exactly as the Python
         # reader's `_positive()` does — zero is fotocasa's blank, and a
         # bare-land row carrying it falls back to `area`, both languages
         # (the review's 650/plot/0 reproduction).
-        plot_absent = or_(model.plot_area.is_(None), model.plot_area <= 0)
+        plot_absent = db_not_credible(model.plot_area)
         bare_land_short = and_(
             is_plot,
             plot_absent,
-            model.area.isnot(None),
-            model.area > 0,
+            _credible(model.area),
             model.area < bound,
         )
         clauses.append(or_(plot_known_and_short, bare_land_short))
@@ -210,8 +247,7 @@ def passing_expression(model, criteria: Dict[str, float]):
         clauses.append(
             and_(
                 not_plot,
-                model.area.isnot(None),
-                model.area > 0,
+                _credible(model.area),
                 model.area >= criteria["min_house_m2"],
             )
         )
@@ -219,16 +255,11 @@ def passing_expression(model, criteria: Dict[str, float]):
         bound = criteria["min_plot_m2"]
         clauses.append(
             or_(
-                and_(
-                    model.plot_area.isnot(None),
-                    model.plot_area > 0,
-                    model.plot_area >= bound,
-                ),
+                and_(_credible(model.plot_area), model.plot_area >= bound),
                 and_(
                     is_plot,
-                    or_(model.plot_area.is_(None), model.plot_area <= 0),
-                    model.area.isnot(None),
-                    model.area > 0,
+                    db_not_credible(model.plot_area),
+                    _credible(model.area),
                     model.area >= bound,
                 ),
             )

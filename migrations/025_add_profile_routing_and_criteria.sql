@@ -67,10 +67,20 @@ ALTER TABLE search_profiles
     ADD CONSTRAINT ck_search_profiles_stub_has_no_pattern
         CHECK (routed_to IS NULL OR auto_route_from_pattern IS NULL);
 
+-- `<> 'NaN'` is not decoration: PostgreSQL orders `NUMERIC 'NaN'` ABOVE
+-- every number, so a NaN satisfies both `> 0` and `>= 700` and the
+-- criteria SQL would call it a pass while Python calls it unmeasured
+-- (`nan > 0` is False). Refusing the write is the cheaper half of the
+-- fix; `services/subscription_criteria.py` carries the read-side ceiling
+-- for `area`, an older column this migration cannot retroactively
+-- constrain without validating every existing row.
 ALTER TABLE properties
     ADD COLUMN IF NOT EXISTS plot_area NUMERIC(10,2)
         CONSTRAINT ck_properties_plot_area_nonnegative
-        CHECK (plot_area IS NULL OR plot_area >= 0);
+        CHECK (
+            plot_area IS NULL
+            OR (plot_area >= 0 AND plot_area <> 'NaN'::numeric)
+        );
 
 CREATE OR REPLACE FUNCTION canonicalize_search_profile() RETURNS trigger AS $$
 DECLARE

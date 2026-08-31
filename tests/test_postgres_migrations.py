@@ -2308,3 +2308,65 @@ def test_025_route_profile_actually_runs_on_postgres(postgres_url, monkeypatch):
         _db.session.refresh(second)
         assert second.search_profile_id == target.id
         _db.session.remove()
+
+
+def test_025_nan_is_refused_and_never_reads_as_a_measurement(postgres_url, monkeypatch):
+    """PostgreSQL's `NUMERIC 'NaN'` sorts ABOVE every number.
+
+    So `plot_area > 0 AND plot_area >= 700` is TRUE for a NaN, and the
+    criteria SQL called such a row a `pass` while Python — where
+    `nan > 0` is False — called it unmeasured (the gate review's
+    reproduction). Two halves: the column CHECK refuses the write, and
+    the read-side credibility ceiling covers `area`, an older column no
+    CHECK guards. Both are asserted here because SQLite cannot express
+    either hazard.
+    """
+    from sqlalchemy.exc import DataError, IntegrityError as PgIntegrityError
+
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+
+        # The write is refused outright.
+        with pytest.raises((PgIntegrityError, DataError)):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO properties (source_email_id, title, plot_area) "
+                        "VALUES ('nan-plot', 'x', 'NaN'::numeric)"
+                    )
+                )
+
+        # And a NaN in the OLDER `area` column — which this migration cannot
+        # retroactively constrain — reads as unmeasured on both sides.
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO properties (source_email_id, title, area, "
+                    "area_type) VALUES ('nan-area', 'x', 'NaN'::numeric, 'built')"
+                )
+            )
+            # House bound ONLY: with both bounds the plot clause is false
+            # for this row whatever the area says, and the assertion below
+            # would pass without ever exercising the NaN — a test green for
+            # the wrong reason (caught by mutating the ceiling away).
+            criteria = {"min_house_m2": 150.0}
+            from services import subscription_criteria
+            from models import Property as _P
+
+            passing_sql = str(
+                subscription_criteria.passing_expression(_P, criteria).compile(
+                    compile_kwargs={"literal_binds": True}
+                )
+            )
+            selected = connection.execute(
+                text(
+                    "SELECT count(*) FROM properties WHERE source_email_id = "
+                    "'nan-area' AND (" + passing_sql + ")"
+                )
+            ).scalar_one()
+        assert selected == 0, "a NaN area must never be selected as a pass"
+    finally:
+        engine.dispose()
