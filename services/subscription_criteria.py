@@ -25,6 +25,18 @@ The default view hides only measured fails, and NEVER a row the owner has
 favorited or reviewed — hiding a listing somebody already judged would
 contradict their own judgement with a filter (the plan-gate reviewer's
 finding, round 1).
+
+**The `criteria` parameter is read here too**, by every surface that answers
+over `properties`. It used to be read in `routes/main_routes.py`, where the
+list, the map and the CSV could reach it and `routes/api_routes.py` could
+not — so `GET /api/properties?criteria=fail` accepted the parameter and
+ignored it, and answered `total: 443` for a subscription whose measured
+fails are 59 of that number (measured against production 2026-08-31). That
+is #445's regression in the one filter whose absence is not its off
+position: a surface that keeps a filter while another drops it disagrees
+about which listings exist. `profile_context()`, `apply_filter()` and
+`row_verdict()` are that one reading, in SQL for the query and in Python for
+a row that has already been loaded.
 """
 
 import logging
@@ -295,3 +307,142 @@ def hidden_by_default_expression(model, criteria: Dict[str, float]):
         model.owner_verdict.is_(None),
         ~open_action_expression(model),
     )
+
+
+# The vocabulary of the `criteria` parameter. `default` is what an ABSENT
+# parameter means, and it is the one filter in this application that narrows
+# when nobody asked for it — `utils/listing_filters.CLEARED_NOT_ABSENT`
+# records what that costs a "clear the filters" link.
+FILTER_MODES = ("default", "all", "pass", "fail", "unknown")
+
+
+def read_filter_mode(raw_value):
+    """`(mode, recognised)` for a raw `criteria` parameter.
+
+    An unrecognised spelling falls back to `default`, which HIDES the
+    measured fails — so a caller who typed `criteria=failing` gets a narrower
+    answer than the one they asked for. `recognised` is what lets a surface
+    say so instead of leaving that to be discovered, the shape
+    `routes/api_routes.py` already uses for an unreadable `profile_id`.
+
+    One reading, so the surface that DESCRIBES the mode and the surface that
+    APPLIES it cannot disagree about which one ran.
+    """
+    mode = (raw_value or "").strip().lower()
+    if mode in ("", "default"):
+        return "default", True
+    if mode in FILTER_MODES:
+        return mode, True
+    return "default", False
+
+
+def profile_context(model):
+    """The subscriptions carrying criteria, with their SQL clauses.
+
+    None when no profile has criteria — the filter control is then not drawn
+    and no query is touched, so the feature is dormant until the owner sets
+    criteria on a subscription. The clauses are per-profile ORs: a row fails
+    only against ITS OWN subscription's bounds, and rows of criteria-less
+    subscriptions are never touched by any of them.
+    """
+    from services.search_profile_service import SearchProfileService
+
+    pairs = []
+    for profile in SearchProfileService.list_profiles(active_only=False):
+        criteria = read_criteria(profile)
+        if criteria:
+            pairs.append((profile.id, criteria))
+    if not pairs:
+        return None
+
+    def _across(builder):
+        # `search_profile_id.isnot(None)` first: on an UNASSIGNED row the
+        # bare `== pid` is NULL, the OR of NULLs is NULL, and `~NULL` drops
+        # the row from the default view — the review's reproduction. The
+        # definite guard makes the whole clause FALSE there, so unassigned
+        # rows are never touched by anybody's criteria.
+        return or_(
+            *[
+                and_(
+                    model.search_profile_id.isnot(None),
+                    model.search_profile_id == pid,
+                    builder(model, crit),
+                )
+                for pid, crit in pairs
+            ]
+        )
+
+    # Membership in SOME criteria-carrying subscription, for the `unknown`
+    # mode: unknown is ~fail AND ~pass, and without this clause a row whose
+    # subscription has NO criteria answered both negations TRUE and leaked
+    # into a verdict it never had (its reading is `no_criteria`) — the gate
+    # review's finding.
+    member = or_(
+        *[
+            and_(
+                model.search_profile_id.isnot(None),
+                model.search_profile_id == pid,
+            )
+            for pid, _ in pairs
+        ]
+    )
+    return {
+        "pairs": pairs,
+        # The same pairs keyed for the Python reader, so `row_verdict` judges
+        # a loaded row against the bounds the SQL clause above applied to it
+        # rather than against a second lookup of its own.
+        "by_profile": dict(pairs),
+        "member": member,
+        "hidden_default": _across(hidden_by_default_expression),
+        "fail": _across(failing_expression),
+        "pass": _across(passing_expression),
+    }
+
+
+def apply_filter(query, ctx, raw_value, count_hidden=False):
+    """One reading of the `criteria` parameter for every listing surface —
+    the list, the map, the CSV and `GET /api/properties`.
+
+    Default ('' or 'default') hides measured fails the owner has not judged
+    (never a favorited or reviewed row); `all` shows everything; `pass`,
+    `fail`, `unknown` select one verdict. Returns (query, hidden_count) —
+    the count only when asked, because it costs a COUNT(*) and only a surface
+    that draws the disclosure needs it.
+
+    A `ctx` of None leaves the query alone, INCLUDING under `fail`/`pass`/
+    `unknown`: no subscription carries criteria, so no row has a verdict and
+    there is nothing to select. A surface that offers the parameter where the
+    control is not drawn owes its reader that sentence — `/properties` never
+    draws the control in that state, `GET /api/properties` cannot help being
+    asked, and says so in its scope block.
+    """
+    if ctx is None:
+        return query, None
+    mode, _ = read_filter_mode(raw_value)
+    if mode == "all":
+        return query, None
+    if mode == "fail":
+        return query.filter(ctx["fail"]), None
+    if mode == "pass":
+        return query.filter(ctx["pass"]), None
+    if mode == "unknown":
+        return query.filter(ctx["member"], ~ctx["fail"], ~ctx["pass"]), None
+    hidden = query.filter(ctx["hidden_default"]).count() if count_hidden else None
+    return query.filter(~ctx["hidden_default"]), hidden
+
+
+def row_verdict(prop, ctx):
+    """`read_verdict` for one row, against ITS OWN subscription's bounds.
+
+    The Python twin of what `apply_filter` selects in SQL, for a surface that
+    has the row in hand and has to SAY which verdict it carries — the CSV
+    export and the JSON payload. `no_criteria` where the row's subscription
+    sets none and where it has no subscription at all, which is exactly the
+    set the SQL clauses leave alone.
+    """
+    criteria = None
+    if ctx is not None:
+        profile_id = getattr(prop, "search_profile_id", None)
+        if profile_id is not None:
+            criteria = ctx["by_profile"].get(int(profile_id))
+    return read_verdict(prop, criteria)
