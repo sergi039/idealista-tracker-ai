@@ -281,6 +281,41 @@ def passing_expression(model, criteria: Dict[str, float]):
     return and_(*clauses)
 
 
+def owner_has_judged(prop: Any) -> bool:
+    """The three exemptions of `hidden_by_default_expression`, in Python.
+
+    Branch for branch with the SQL twin below, and deliberately not with
+    `owner_review.read_decision`: the SQL asks `owner_verdict IS NULL`, so an
+    empty string stored there exempts the row in SQL, and a Python reader
+    that folded it back into `undecided` would call a visible row hidden.
+    """
+    from services.owner_review import ACTION_NONE, read_action
+
+    if getattr(prop, "is_favorite", None) is True:
+        return True
+    if getattr(prop, "owner_verdict", None) is not None:
+        return True
+    # Date-free, exactly as `open_action_expression` is: `pending` and
+    # `overdue` are both "still to do", and only the date tells them apart.
+    return read_action(prop)["state"] != ACTION_NONE
+
+
+def hidden_by_default(prop: Any, criteria: Optional[Dict[str, float]]) -> bool:
+    """Python twin of `hidden_by_default_expression` for ONE row.
+
+    The listing page hides a row and says only how many it hid; the row's own
+    page is where the reader arrives asking why, so it needs this reading in
+    Python. It is the twin rather than a second rule for the same reason the
+    verdict is (the `advertiser.py` contract): a page saying "this listing is
+    hidden" while the list still draws it is a third wrong number.
+    """
+    if not criteria:
+        return False
+    return read_verdict(prop, criteria)["state"] == "fail" and not owner_has_judged(
+        prop
+    )
+
+
 def hidden_by_default_expression(model, criteria: Dict[str, float]):
     """What the default view hides: measured fails the owner has NOT judged.
 

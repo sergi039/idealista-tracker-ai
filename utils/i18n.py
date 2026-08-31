@@ -87,6 +87,16 @@ TRANSLATIONS = {
         "search_properties": "Search, or paste a listing URL...",
         "search_read_as_listing": "Read as Idealista listing %s — nothing here carries that id.",
         "search_read_as_link": "Read as a listing link (%s) — nothing here carries that link.",
+        # The other half of that sentence, for the case where the listing IS
+        # here and this page's filters are what hide it. Split from the two
+        # above rather than woven into them: four combinations of
+        # id-or-link × filters-or-subscription is a combinatorial table
+        # nobody keeps translated.
+        "search_reads_as_listing": "Read as Idealista listing %s.",
+        "search_reads_as_link": "Read as a listing link (%s).",
+        "search_hidden_by_filters": "It is here as #%s, and the filters on this page hide it.",
+        "search_hidden_by_subscription": "It is here as #%s, in a subscription this page is not showing.",
+        "search_reveal_link": "Show it",
         "land_type_all": "All Types",
         "developed": "Developed",
         "buildable": "Buildable",
@@ -463,6 +473,27 @@ TRANSLATIONS = {
         "criteria_fail": "Criteria: failing only",
         "criteria_hidden_line": "Criteria: %s failing hidden",
         "criteria_hidden_tooltip": "Listings measurably below the subscription's bounds (house or plot too small) are hidden by default. A favorited or reviewed listing is never hidden. Pick 'show everything' to see them.",
+        # The same verdict on the row's OWN page, where the reader arrives
+        # asking why the list does not show it. Read from
+        # services/subscription_criteria.py, never re-derived.
+        "criteria_card_hidden": "This listing does not meet its subscription's criteria, so the listing page hides it by default.",
+        "criteria_card_fail_shown": "This listing does not meet its subscription's criteria. It is shown anyway, because you have already judged it.",
+        "criteria_card_pass": "This listing meets its subscription's criteria.",
+        "criteria_card_unknown": "This listing has not been measured against its subscription's criteria.",
+        "criteria_bound_house": "House at least %s m²",
+        "criteria_bound_plot": "Plot at least %s m²",
+        "criteria_measured_below": "%s m² — below the minimum",
+        "criteria_measured_meets": "%s m² — meets the minimum",
+        "criteria_not_stated": "not stated, so this bound cannot be checked",
+        # The empty list. "Try adjusting your filters, or run a manual sync"
+        # offered ingestion as the only remedy for rows that are already in
+        # the table, so the filters get a measured count and a link that
+        # really clears them (including `criteria`, whose absence is its
+        # default hide).
+        "empty_state_filters_hide_all": "Nothing here matches the filters on this page. Your subscription selection holds %s.",
+        "empty_state_clear_link": "Clear every filter",
+        "empty_state_sync_note": "A manual sync fetches new listings. If this is a fresh database but the ingestion cursor already advanced, run",
+        "empty_state_not_ingester": "Listings arrive on the machine that ingests, and this is not it — a second machine reading the same mailbox would build a database of its own.",
         "owner_comment_title": "Your verdict",
         "owner_comment_why": "Why? (the AI learns from this)",
         "owner_comment_placeholder": "Why do you like or dislike this one - plot shape, legality, views, neighbours...",
@@ -866,6 +897,11 @@ TRANSLATIONS = {
         "search_properties": "Buscar, o pegar la URL del anuncio...",
         "search_read_as_listing": "Interpretado como el anuncio %s de Idealista: aquí no hay ningún anuncio con ese id.",
         "search_read_as_link": "Interpretado como un enlace de anuncio (%s): aquí no hay ningún anuncio con ese enlace.",
+        "search_reads_as_listing": "Interpretado como el anuncio %s de Idealista.",
+        "search_reads_as_link": "Interpretado como un enlace de anuncio (%s).",
+        "search_hidden_by_filters": "Está aquí, es el #%s, y los filtros de esta página lo ocultan.",
+        "search_hidden_by_subscription": "Está aquí, es el #%s, en una suscripción que esta página no muestra.",
+        "search_reveal_link": "Mostrarlo",
         "land_type_all": "Todos los Tipos",
         "developed": "Desarrollado",
         "buildable": "Construible",
@@ -1191,6 +1227,19 @@ TRANSLATIONS = {
         "criteria_fail": "Criterios: solo los que no cumplen",
         "criteria_hidden_line": "Criterios: %s ocultos por no cumplir",
         "criteria_hidden_tooltip": "Los anuncios medidos por debajo de los límites de la suscripción (casa o parcela demasiado pequeña) se ocultan por defecto. Un favorito o uno ya valorado nunca se oculta. Elija 'mostrar todo' para verlos.",
+        "criteria_card_hidden": "Este anuncio no cumple los criterios de su suscripción, por eso el listado lo oculta por defecto.",
+        "criteria_card_fail_shown": "Este anuncio no cumple los criterios de su suscripción. Aun así se muestra, porque usted ya lo ha valorado.",
+        "criteria_card_pass": "Este anuncio cumple los criterios de su suscripción.",
+        "criteria_card_unknown": "Este anuncio no se ha medido contra los criterios de su suscripción.",
+        "criteria_bound_house": "Casa de al menos %s m²",
+        "criteria_bound_plot": "Parcela de al menos %s m²",
+        "criteria_measured_below": "%s m² — por debajo del mínimo",
+        "criteria_measured_meets": "%s m² — cumple el mínimo",
+        "criteria_not_stated": "sin indicar, así que este límite no se puede comprobar",
+        "empty_state_filters_hide_all": "Nada de aquí coincide con los filtros de esta página. Su selección de suscripciones tiene %s.",
+        "empty_state_clear_link": "Quitar todos los filtros",
+        "empty_state_sync_note": "Una sincronización manual trae anuncios nuevos. Si esta base de datos es nueva pero el cursor de ingesta ya avanzó, use",
+        "empty_state_not_ingester": "Los anuncios llegan a la máquina que hace la ingesta, y esta no lo es — una segunda máquina leyendo el mismo buzón construiría una base de datos propia.",
         "owner_comment_title": "Su veredicto",
         "owner_comment_why": "¿Por qué? (la IA aprende de esto)",
         "owner_comment_placeholder": "Por qué le gusta o no: forma de la parcela, legalidad, vistas, vecinos...",
