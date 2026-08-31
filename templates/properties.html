@@ -1099,9 +1099,23 @@
                        state, and resets nothing else. Rendered only on a real
                        narrowing -- a filter that matched everything hid
                        nothing worth a line. #}
+                    {# `> pagination.total`, not `!=` (#502 review). The scope is counted
+                       under the DEFAULT criteria reading, because that is what clearing lands
+                       on; the page is counted under the CURRENT one. Under `criteria=all` the
+                       page therefore holds rows the scope hides, and the line rendered
+                       "Filters: 4 of 2 shown" — a set claiming to be bigger than the set it
+                       says it is part of. In that state the bar has not narrowed anything
+                       relative to what clearing shows, so there is nothing for a narrowing
+                       note to disclose, and no number is better than a wrong one.
+
+                       The richer alternative — make `criteria` a view mode the clear link
+                       keeps, so both halves are counted under one reading — was tried and
+                       backed out: it contradicts this page's deliberate design that clearing
+                       resets the criteria mode, which its own test pins. That is the author's
+                       call to make, not a review fix. #}
                     {% if pagination and filter_bar_scope_total is defined
                           and filter_bar_scope_total is not none
-                          and filter_bar_scope_total != pagination.total %}
+                          and filter_bar_scope_total > pagination.total %}
                         <span id="filter-bar-narrowing-note" class="text-body-secondary small">
                             <i class="fas fa-filter me-1"></i>{{ t('filter_bar_narrowing')|format(pagination.total, filter_bar_scope_total) }}
                             (<a id="clear-filters-link"
@@ -1121,8 +1135,17 @@
                             <span id="unassigned-count-note" class="text-body-secondary small">({{ tn('unassigned_included', unassigned_count) }})</span>
                         {% else %}
                             <span id="unassigned-count-note" class="text-body-secondary small">&mdash; {{ tn('unassigned_not_shown', unassigned_count) }}
+                                {# `criteria=None` drops the criteria mode from this one link
+                                   (#502 review). The count is taken before the criteria filter
+                                   is applied, and every criteria expression leads with
+                                   `search_profile_id IS NOT NULL` — so under
+                                   criteria=pass/fail/unknown the link advertised N listings and
+                                   landed on a page that is always empty. A row with no
+                                   subscription has no subscription criteria to be judged
+                                   against; carrying the mode over states a filter that cannot
+                                   match. #}
                                 (<a id="unassigned-count-link"
-                                    href="{{ url_for('main.properties', **dict(base_args, profile_id='unassigned', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">{{ t('show_them') }}</a>)</span>
+                                    href="{{ url_for('main.properties', **dict(base_args, profile_id='unassigned', criteria=None, page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">{{ t('show_them') }}</a>)</span>
                         {% endif %}
                     {% endif %}
                     {# How many of those rows carry a status anybody established.

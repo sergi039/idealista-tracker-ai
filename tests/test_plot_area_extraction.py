@@ -217,3 +217,114 @@ class TestTheBackfill:
         assert "1 filled" in out
         assert float(rows[0].plot_area) == 777.0
         assert rows[1].plot_area is None
+
+
+class TestAWithdrawnAdvertIsNotAHostRefusal:
+    """From the #502 review: three dead adverts stalled the run forever.
+
+    fotocasa redirects a withdrawn listing to a search page, and
+    `fetch_listing` returns `REFUSAL_NOT_A_LISTING` for it
+    (services/fotocasa_source.py). Counting that as a host refusal tripped the
+    three-in-a-row stop, nothing was written, and the scope is ordered by id —
+    so the next run met the same three and stopped again. No forward progress
+    at any number of re-runs, while the module's docstring called itself
+    resumable.
+
+    The sibling already drew this line and said why:
+    `utils/backfill_advertiser._NOT_A_HOST_REFUSAL`, "a run would stop on its
+    third row having asked nobody anything".
+    """
+
+    @staticmethod
+    def _row(profile_id, url):
+        prop = Property(
+            title="t",
+            source_email_id=f"x:{url}",
+            url=url,
+            search_profile_id=profile_id,
+        )
+        db.session.add(prop)
+        db.session.commit()
+        return prop
+
+    def test_three_dead_adverts_do_not_stop_a_run_with_work_left(
+        self, app, monkeypatch, capsys
+    ):
+        import contextlib
+
+        from utils import backfill_plot_area
+
+        profile = SearchProfile(name="G", is_active=True)
+        db.session.add(profile)
+        db.session.commit()
+        base = "https://www.fotocasa.es/es/comprar/vivienda/n"
+        dead = [self._row(profile.id, f"{base}/{n}/d") for n in (1, 2, 3)]
+        alive = self._row(profile.id, f"{base}/4/d")
+
+        def _fetch(url):
+            if url == alive.url:
+                return fotocasa_source.FotocasaListing(url=url, plot_area=1200)
+            return fotocasa_source.FotocasaListing(
+                url=url, refusal=fotocasa_source.REFUSAL_NOT_A_LISTING
+            )
+
+        monkeypatch.setattr(backfill_plot_area.fotocasa_source, "fetch_listing", _fetch)
+        monkeypatch.setattr(
+            backfill_plot_area, "inflight", lambda *a, **k: contextlib.nullcontext()
+        )
+        monkeypatch.setattr(backfill_plot_area.time, "sleep", lambda s: None)
+        monkeypatch.setattr(backfill_plot_area, "create_app", lambda: app)
+        monkeypatch.setattr("sys.argv", ["backfill_plot_area", "--apply"])
+        backfill_plot_area.main()
+
+        # Re-read: `main()` commits through its own session, so the objects
+        # this test holds are stale. Asserting on a stale None would pass for
+        # the wrong reason in exactly the direction being tested.
+        db.session.expire_all()
+        alive = db.session.get(Property, alive.id)
+        dead = [db.session.get(Property, row.id) for row in dead]
+
+        assert float(alive.plot_area) == 1200.0, (
+            "the run stopped on three withdrawn adverts and never reached the "
+            "row that had an answer"
+        )
+        assert "Stopping" not in capsys.readouterr().out
+        for row in dead:
+            assert row.plot_area is None, "a gone advert is not a measurement"
+
+    def test_a_real_host_refusal_still_stops_the_run(self, app, monkeypatch, capsys):
+        """The negative control. Without it the change above could be read as
+        "never stop", which would walk a blocked run through the whole scope —
+        the thing the three-in-a-row rule exists to prevent."""
+        import contextlib
+
+        from utils import backfill_plot_area
+
+        profile = SearchProfile(name="G", is_active=True)
+        db.session.add(profile)
+        db.session.commit()
+        base = "https://www.fotocasa.es/es/comprar/vivienda/b"
+        for n in (1, 2, 3):
+            self._row(profile.id, f"{base}/{n}/d")
+        alive = self._row(profile.id, f"{base}/4/d")
+
+        monkeypatch.setattr(
+            backfill_plot_area.fotocasa_source,
+            "fetch_listing",
+            lambda url: fotocasa_source.FotocasaListing(
+                url=url, refusal=fotocasa_source.REFUSAL_BLOCKED
+            ),
+        )
+        monkeypatch.setattr(
+            backfill_plot_area, "inflight", lambda *a, **k: contextlib.nullcontext()
+        )
+        monkeypatch.setattr(backfill_plot_area.time, "sleep", lambda s: None)
+        monkeypatch.setattr(backfill_plot_area, "create_app", lambda: app)
+        monkeypatch.setattr("sys.argv", ["backfill_plot_area", "--apply"])
+        backfill_plot_area.main()
+
+        db.session.expire_all()
+        alive = db.session.get(Property, alive.id)
+
+        assert "Stopping" in capsys.readouterr().out
+        assert alive.plot_area is None

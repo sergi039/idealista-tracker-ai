@@ -234,3 +234,73 @@ class TestCanonicalResolution:
             resolved = SearchProfileService.canonical_profile(stub)
         assert resolved.id == stub.id
         assert stub.routed_to == target_id
+
+
+class TestABlankPatternClaimsNothing:
+    """`auto_route_from_pattern = ''` adopted every new subscription.
+
+    From the #502 review, reproduced: `''` survives the query's
+    `isnot(None)`, and `re.search("", anything)` matches, so one profile
+    carrying an empty string silently took ownership of every profile the
+    ingester auto-created — born routed and hidden, no chip, no notice.
+
+    Guarded on the read side because that is the only side there is: the
+    column has no UI writer anywhere in the tree, so hand SQL is its one
+    interface, and CLAUDE.md names direct SQL a supported workflow. Nothing
+    here refuses an over-broad pattern in general — `.` would match
+    everything too — only the blank that means "unset".
+    """
+
+    # `" "` is the one that carries weight besides `""`: a single space is a
+    # legal regex that matches almost every real subscription name, so it is
+    # the whitespace case that would actually adopt. `"\t"` matches nothing
+    # here and is included only as the third shape the column can hold.
+    @pytest.mark.parametrize("blank", ["", " ", "\t"])
+    def test_a_blank_pattern_adopts_nobody(self, app, blank):
+        carrier = _profile("Carrier", auto_route_from_pattern=blank)
+        db.session.commit()
+
+        created = SearchProfileService.get_or_create_profile_by_name(
+            "Asturias oriente casas"
+        )
+        db.session.commit()
+
+        assert created.routed_to is None, (
+            f"a {blank!r} pattern adopted a new subscription: it was born "
+            "routed and hidden with no chip and no notice"
+        )
+        assert created.is_hidden is not True
+        assert carrier.id != created.id
+
+    def test_a_real_pattern_still_adopts(self, app):
+        """The positive control. Without it the test above passes on a
+        routing path that never fires at all."""
+        carrier = _profile("Galicia costa", auto_route_from_pattern="^Galicia ")
+        db.session.commit()
+
+        created = SearchProfileService.get_or_create_profile_by_name(
+            "Galicia norte casas"
+        )
+        db.session.commit()
+
+        assert created.routed_to == carrier.id
+        assert created.is_hidden is True
+
+    def test_routing_a_blank_carrier_away_does_not_die_on_the_check(self, app):
+        """Symptom B: `route_profile` answered `{"status": "ok", "moved": 0}`
+        and then the CHECK refused the write at flush, because the column was
+        `''` rather than NULL while `ck_search_profiles_stub_has_no_pattern`
+        compares against NULL."""
+        carrier = _profile("Carrier", auto_route_from_pattern="")
+        target = _profile("Target")
+        db.session.commit()
+
+        result = SearchProfileService.route_profile(carrier.id, target.id)
+        db.session.commit()
+
+        assert result["status"] == "ok"
+        assert carrier.routed_to == target.id
+        assert carrier.auto_route_from_pattern is None, (
+            "a blank pattern was left on a row that is now a routed stub, "
+            "which the CHECK refuses"
+        )
