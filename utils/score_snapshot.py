@@ -57,6 +57,13 @@ CLASSIFICATION_COLUMNS: Tuple[str, ...] = (
     "property_subtype",
     "area_type",
 )
+# Where a listing says it is. Separate from the classification set because it
+# is a different kind of fact and a different repair touches it: the stored
+# string is what the alert email carried, and `services/property_comparables.
+# same_municipality()` builds a row's peer pool from it, so a snapshot that
+# restored the name without the scores it produced would put back a value
+# score computed against a different set of neighbours.
+LOCATION_COLUMNS: Tuple[str, ...] = ("municipality",)
 
 
 class SnapshotError(Exception):
@@ -90,7 +97,9 @@ def snapshot_row(
     """The current state of one property's score columns, plus what is asked for."""
     unknown = [name for name in json_columns if name not in JSON_COLUMNS]
     unknown += [
-        name for name in classification_columns if name not in CLASSIFICATION_COLUMNS
+        name
+        for name in classification_columns
+        if name not in CLASSIFICATION_COLUMNS + LOCATION_COLUMNS
     ]
     if unknown:
         raise SnapshotError(f"Not a snapshot column: {', '.join(sorted(unknown))}")
@@ -133,7 +142,13 @@ def parse_row(row: Any) -> Dict[str, Any]:
     if isinstance(row_id, bool) or not isinstance(row_id, int):
         raise SnapshotError(f"Snapshot row has no integer id: {row!r}")
 
-    known = {"id", *SCORE_COLUMNS, *JSON_COLUMNS, *CLASSIFICATION_COLUMNS}
+    known = {
+        "id",
+        *SCORE_COLUMNS,
+        *JSON_COLUMNS,
+        *CLASSIFICATION_COLUMNS,
+        *LOCATION_COLUMNS,
+    }
     unknown = sorted(set(row) - known)
     if unknown:
         raise SnapshotError(f"Row {row_id}: unknown column(s) {', '.join(unknown)}")
@@ -142,7 +157,7 @@ def parse_row(row: Any) -> Dict[str, Any]:
     for column in SCORE_COLUMNS:
         if column in row:
             parsed[column] = _parse_score(row[column], column, row_id)
-    for column in CLASSIFICATION_COLUMNS:
+    for column in CLASSIFICATION_COLUMNS + LOCATION_COLUMNS:
         if column in row:
             value = row[column]
             if value is not None and not isinstance(value, str):
