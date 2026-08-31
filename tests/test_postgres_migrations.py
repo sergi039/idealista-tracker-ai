@@ -65,6 +65,7 @@ OWNER_REVIEW_MIGRATION = "021_add_property_review_and_activity"
 CADASTRAL_MIGRATION = "022_add_property_cadastral_reference"
 ATTACHMENT_MIGRATION = "023_create_property_attachment"
 TASTE_MIGRATION = "024_add_property_taste"
+ROUTING_MIGRATION = "025_add_profile_routing_and_criteria"
 PROPERTY_VARIANT_UNIQUE_CONSTRAINT = (
     "ux_property_ai_analysis_variants_property_provider"
 )
@@ -282,6 +283,7 @@ def test_013_frees_the_label_on_a_database_that_already_holds_rows(
             CADASTRAL_MIGRATION,
             ATTACHMENT_MIGRATION,
             TASTE_MIGRATION,
+            ROUTING_MIGRATION,
         ]
 
         # Two *identified* subscriptions may now share the label...
@@ -1507,6 +1509,7 @@ def test_017_deduplicates_existing_rows_and_adds_the_unique_constraint(
             CADASTRAL_MIGRATION,
             ATTACHMENT_MIGRATION,
             TASTE_MIGRATION,
+            ROUTING_MIGRATION,
         ]
 
         with engine.begin() as connection:
@@ -1696,6 +1699,7 @@ def test_017_deduplicates_existing_land_variants_and_adds_the_unique_constraint(
             CADASTRAL_MIGRATION,
             ATTACHMENT_MIGRATION,
             TASTE_MIGRATION,
+            ROUTING_MIGRATION,
         ]
 
         with engine.begin() as connection:
@@ -2139,5 +2143,230 @@ def test_024_creates_the_taste_ledger_and_the_bounded_score(postgres_url):
                 _insert_property(
                     connection, source_email_id="taste-over", taste_score=150.0
                 )
+    finally:
+        engine.dispose()
+
+
+def test_025_the_route_is_enforced_at_the_database(postgres_url):
+    """Migration 025's real shape, on a real server.
+
+    The trigger is the guarantee the Python boundary cannot give: EVERY
+    writer of `properties.search_profile_id` — ORM, curation SQL, COPY —
+    lands a routed stub's listing on its target, at the row's own write.
+    SQLite never runs it, which is why this file owns the proof.
+    """
+    from sqlalchemy.exc import IntegrityError as PgIntegrityError
+
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+
+        with engine.begin() as connection:
+            target = connection.execute(
+                text(
+                    "INSERT INTO search_profiles (name, is_active) "
+                    "VALUES ('Target', TRUE) RETURNING id"
+                )
+            ).scalar_one()
+            stub = connection.execute(
+                text(
+                    "INSERT INTO search_profiles (name, is_active, routed_to) "
+                    "VALUES ('Stub', TRUE, :t) RETURNING id"
+                ),
+                {"t": target},
+            ).scalar_one()
+
+            # INSERT: a raw SQL write naming the stub lands on the target.
+            landed = connection.execute(
+                text(
+                    "INSERT INTO properties (source_email_id, title, "
+                    "search_profile_id) VALUES ('route-ins', 'x', :s) "
+                    "RETURNING search_profile_id"
+                ),
+                {"s": stub},
+            ).scalar_one()
+            assert landed == target
+
+            # UPDATE of the column: same canonicalization.
+            other = connection.execute(
+                text(
+                    "INSERT INTO properties (source_email_id, title) "
+                    "VALUES ('route-upd', 'y') RETURNING id"
+                )
+            ).scalar_one()
+            moved = connection.execute(
+                text(
+                    "UPDATE properties SET search_profile_id = :s "
+                    "WHERE id = :i RETURNING search_profile_id"
+                ),
+                {"s": stub, "i": other},
+            ).scalar_one()
+            assert moved == target
+
+        # The CHECKs are enforced, not decorative.
+        with pytest.raises(PgIntegrityError):
+            with engine.begin() as connection:
+                selfie = connection.execute(
+                    text(
+                        "INSERT INTO search_profiles (name, is_active) "
+                        "VALUES ('Selfie', TRUE) RETURNING id"
+                    )
+                ).scalar_one()
+                connection.execute(
+                    text("UPDATE search_profiles SET routed_to = :i WHERE id = :i"),
+                    {"i": selfie},
+                )
+        with pytest.raises(PgIntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO search_profiles "
+                        "(name, is_active, is_default, routed_to) "
+                        "VALUES ('Catchall', TRUE, TRUE, :t)"
+                    ),
+                    {"t": 1},
+                )
+        with pytest.raises(PgIntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO search_profiles "
+                        "(name, is_active, routed_to, auto_route_from_pattern) "
+                        "VALUES ('PatternStub', TRUE, :t, '^Galicia ')"
+                    ),
+                    {"t": 1},
+                )
+        with pytest.raises(PgIntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO properties (source_email_id, title, "
+                        "plot_area) VALUES ('neg-plot', 'z', -5)"
+                    )
+                )
+    finally:
+        engine.dispose()
+
+
+def test_025_route_profile_actually_runs_on_postgres(postgres_url, monkeypatch):
+    """`route_profile` itself, on the engine production runs.
+
+    The inbound-chain guard shipped as `.with_for_update().count()` — a
+    query PostgreSQL refuses outright ("FOR UPDATE is not allowed with
+    aggregate functions") and SQLite silently tolerates, so every SQLite
+    test stayed green while the one writer of `routed_to` could not
+    complete a single call in production (the gate review's crasher). This
+    test calls the real method through the ORM against a real server.
+    """
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+    finally:
+        engine.dispose()
+
+    from tests import setup_test_environment
+
+    setup_test_environment()
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    from config import Config as _Config
+
+    monkeypatch.setattr(_Config, "DATABASE_URL", postgres_url)
+    monkeypatch.setattr(_Config, "SQLALCHEMY_DATABASE_URI", postgres_url, raising=False)
+
+    from app import create_app, db as _db
+    from models import Property as _Property, SearchProfile as _SearchProfile
+    from services.search_profile_service import SearchProfileService
+
+    application = create_app()
+    application.config["TESTING"] = True
+    with application.app_context():
+        target = _SearchProfile(name="PG target", is_active=True)
+        stub = _SearchProfile(name="PG stub", is_active=True)
+        _db.session.add_all([target, stub])
+        _db.session.commit()
+        prop = _Property(
+            source_email_id="pg-route:1", title="PG row", search_profile_id=stub.id
+        )
+        _db.session.add(prop)
+        _db.session.commit()
+
+        outcome = SearchProfileService.route_profile(stub.id, target.id)
+        assert outcome == {"status": "ok", "moved": 1}
+        _db.session.refresh(prop)
+        assert prop.search_profile_id == target.id
+
+        # And the trigger canonicalizes an ORM insert naming the stub.
+        second = _Property(
+            source_email_id="pg-route:2", title="PG row 2", search_profile_id=stub.id
+        )
+        _db.session.add(second)
+        _db.session.commit()
+        _db.session.refresh(second)
+        assert second.search_profile_id == target.id
+        _db.session.remove()
+
+
+def test_025_nan_is_refused_and_never_reads_as_a_measurement(postgres_url, monkeypatch):
+    """PostgreSQL's `NUMERIC 'NaN'` sorts ABOVE every number.
+
+    So `plot_area > 0 AND plot_area >= 700` is TRUE for a NaN, and the
+    criteria SQL called such a row a `pass` while Python — where
+    `nan > 0` is False — called it unmeasured (the gate review's
+    reproduction). Two halves: the column CHECK refuses the write, and
+    the read-side credibility ceiling covers `area`, an older column no
+    CHECK guards. Both are asserted here because SQLite cannot express
+    either hazard.
+    """
+    from sqlalchemy.exc import DataError, IntegrityError as PgIntegrityError
+
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+
+        # The write is refused outright.
+        with pytest.raises((PgIntegrityError, DataError)):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO properties (source_email_id, title, plot_area) "
+                        "VALUES ('nan-plot', 'x', 'NaN'::numeric)"
+                    )
+                )
+
+        # And a NaN in the OLDER `area` column — which this migration cannot
+        # retroactively constrain — reads as unmeasured on both sides.
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO properties (source_email_id, title, area, "
+                    "area_type) VALUES ('nan-area', 'x', 'NaN'::numeric, 'built')"
+                )
+            )
+            # House bound ONLY: with both bounds the plot clause is false
+            # for this row whatever the area says, and the assertion below
+            # would pass without ever exercising the NaN — a test green for
+            # the wrong reason (caught by mutating the ceiling away).
+            criteria = {"min_house_m2": 150.0}
+            from services import subscription_criteria
+            from models import Property as _P
+
+            passing_sql = str(
+                subscription_criteria.passing_expression(_P, criteria).compile(
+                    compile_kwargs={"literal_binds": True}
+                )
+            )
+            selected = connection.execute(
+                text(
+                    "SELECT count(*) FROM properties WHERE source_email_id = "
+                    "'nan-area' AND (" + passing_sql + ")"
+                )
+            ).scalar_one()
+        assert selected == 0, "a NaN area must never be selected as a pass"
     finally:
         engine.dispose()

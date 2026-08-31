@@ -146,6 +146,7 @@ def preview_row(listing) -> Dict[str, Any]:
         "price": listing.price,
         "area": listing.area,
         "area_type": listing.area_type,
+        "plot_area": listing.plot_area,
         "deal_type": listing.deal_type,
         "municipality": listing.municipality,
         "province": listing.province,
@@ -294,9 +295,20 @@ def build_property(
     prop.price = row.get("price")
     prop.area = row.get("area")
     prop.area_type = row.get("area_type") or "unknown"
+    prop.plot_area = row.get("plot_area")
     prop.deal_type = row.get("deal_type") or "sale"
     prop.municipality = row.get("municipality")
-    prop.search_profile_id = profile_id
+    # One hop through a route (migration 025): the paste door lets a
+    # caller name any profile id, and on SQLite — the test suite — no
+    # trigger canonicalizes it. PostgreSQL remains the guarantee; this is
+    # the readable boundary at the one builder every portal door shares.
+    from app import db
+    from models import SearchProfile
+    from services.search_profile_service import SearchProfileService
+
+    profile_obj = db.session.get(SearchProfile, profile_id) if profile_id else None
+    canonical = SearchProfileService.canonical_profile(profile_obj)
+    prop.search_profile_id = canonical.id if canonical else profile_id
     prop.property_category = category
     prop.property_subtype = subtype
     prop.attributes = row.get("attributes") or {}

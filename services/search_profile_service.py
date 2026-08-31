@@ -724,6 +724,9 @@ class SearchProfileService:
                 return None
 
         try:
+            # A name the owner has claimed with an auto-route pattern is born
+            # routed and hidden — no chip appears at the first email.
+            route_target = SearchProfileService._auto_route_target_for(cleaned)
             profile = SearchProfile(
                 name=cleaned,
                 description="Autocreated from Idealista saved search name",
@@ -733,6 +736,8 @@ class SearchProfileService:
                 # this subscription's URL may correct it (#102).
                 is_auto_created=True,
                 travel_targets=default_travel_targets_config(),
+                routed_to=route_target.id if route_target else None,
+                is_hidden=bool(route_target),
             )
             db.session.add(profile)
             db.session.commit()
@@ -1241,6 +1246,9 @@ class SearchProfileService:
     ) -> Optional[SearchProfile]:
         name = search_name or f"Idealista {identity.label_hint} ({identity.key[-8:]})"
         try:
+            # Same as the label path: a claimed name is born routed and
+            # hidden. The stub keeps its #102 identity key either way.
+            route_target = SearchProfileService._auto_route_target_for(name[:120])
             profile = SearchProfile(
                 name=name[:120],
                 description="Autocreated from an Idealista saved-search URL",
@@ -1250,6 +1258,8 @@ class SearchProfileService:
                 source_search_key=identity.key,
                 source_search_url=identity.url,
                 travel_targets=default_travel_targets_config(),
+                routed_to=route_target.id if route_target else None,
+                is_hidden=bool(route_target),
             )
             db.session.add(profile)
             db.session.commit()
@@ -1316,7 +1326,170 @@ class SearchProfileService:
         return None
 
     @staticmethod
+    def canonical_profile(
+        profile: Optional[SearchProfile],
+    ) -> Optional[SearchProfile]:
+        """The profile a listing actually lands on: one hop through `routed_to`.
+
+        The readable first line of defence; the guarantee is the PostgreSQL
+        trigger from migration 025, which canonicalizes at the row's own
+        write whatever wrote it. One hop, deliberately: `route_profile()`
+        refuses chains at write time, and a hand-made chain should misroute
+        one listing rather than send a resolver walking.
+        """
+        if profile is None or profile.routed_to is None:
+            return profile
+        target = db.session.get(SearchProfile, profile.routed_to)
+        if target is None:
+            logger.error(
+                "Profile %s routes to %s, which does not exist; keeping the stub",
+                profile.id,
+                profile.routed_to,
+            )
+            return profile
+        return target
+
+    @staticmethod
+    def route_profile(
+        source_id: int, target_id: int, commit: bool = True
+    ) -> Dict[str, Any]:
+        """Send `source`'s listings — present and future — to `target`.
+
+        The ONE writer of `routed_to`. Refusals, each a named reason rather
+        than a guess (the plan-gate findings, rounds 2-4): a self-route; a
+        missing row; the catch-all on either side; a target that is itself
+        routed (forward chain); a source some other profile already routes
+        to (backward chain — re-point those routes first, explicitly); a
+        source carrying an auto-route pattern (the CHECK would refuse the
+        write anyway; the service says why first).
+
+        Both rows are locked FOR UPDATE in ascending id order — two
+        concurrent `route(25,26)` / `route(26,25)` calls serialize instead
+        of deadlocking, and the loser is refused because its target is now
+        routed. Existing listings move in the SAME transaction, so a route
+        is never half-applied: from its commit, the stub holds nothing and
+        receives nothing (the trigger reads the route under KEY SHARE, so a
+        listing inserted concurrently waits for this commit and then lands
+        on the target).
+        """
+        if source_id == target_id:
+            return {"status": "refused", "reason": "self_route"}
+        try:
+            locked = {
+                row.id: row
+                for row in SearchProfile.query.filter(
+                    SearchProfile.id.in_(sorted({source_id, target_id}))
+                )
+                .order_by(SearchProfile.id.asc())
+                .with_for_update()
+                .all()
+            }
+            source = locked.get(source_id)
+            target = locked.get(target_id)
+            if source is None or target is None:
+                db.session.rollback()
+                return {"status": "refused", "reason": "no_such_profile"}
+            if source.is_default or target.is_default:
+                db.session.rollback()
+                return {"status": "refused", "reason": "catch_all_never_routes"}
+            if target.routed_to is not None:
+                db.session.rollback()
+                return {"status": "refused", "reason": "target_is_routed"}
+            if source.routed_to is not None:
+                # Re-pointing a routed stub would SPLIT its listings: the
+                # ones already moved stay on the old target while future
+                # ones go to the new — "ok, moved 0" over a silent fork
+                # (the implementation review's reproduction). Clearing the
+                # old route is a deliberate act this writer does not offer.
+                db.session.rollback()
+                return {"status": "refused", "reason": "source_already_routed"}
+            if source.auto_route_from_pattern:
+                db.session.rollback()
+                return {"status": "refused", "reason": "source_carries_a_pattern"}
+            # `.all()` then len, never `.count()` under the lock: PostgreSQL
+            # refuses `SELECT count(*) ... FOR UPDATE` outright ("FOR UPDATE
+            # is not allowed with aggregate functions") and SQLite swallowed
+            # it, which is how this shipped green (the gate review's
+            # crasher). Locking the inbound rows themselves is also what the
+            # serialization wants.
+            inbound = len(
+                SearchProfile.query.filter(SearchProfile.routed_to == source_id)
+                .with_for_update()
+                .all()
+            )
+            if inbound:
+                db.session.rollback()
+                return {
+                    "status": "refused",
+                    "reason": "source_is_a_route_target",
+                    "inbound_routes": inbound,
+                }
+
+            source.routed_to = target_id
+            # Off the screens the way is_hidden means it: no chip, no menu
+            # entry — and unlike a merely hidden profile, nothing stays here.
+            source.is_hidden = True
+            moved = Property.query.filter_by(search_profile_id=source_id).update(
+                {"search_profile_id": target_id}, synchronize_session=False
+            )
+            if commit:
+                db.session.commit()
+            logger.info(
+                "Routed profile %s -> %s, moved %d listings",
+                source_id,
+                target_id,
+                moved,
+            )
+            return {"status": "ok", "moved": moved}
+        except Exception:
+            db.session.rollback()
+            raise
+
+    @staticmethod
+    def _auto_route_target_for(name: str) -> Optional[SearchProfile]:
+        """The profile whose `auto_route_from_pattern` matches `name`, if any.
+
+        Consulted at auto-creation only: a profile born from an alert whose
+        name the owner has claimed (e.g. '^Galicia ') starts life routed and
+        hidden instead of putting a chip on the screen at its first email.
+        A broken pattern is skipped and logged, never fatal — mail routing
+        must not die on a typo in a regex.
+        """
+        candidates = (
+            SearchProfile.query.filter(
+                SearchProfile.auto_route_from_pattern.isnot(None),
+                SearchProfile.routed_to.is_(None),
+                SearchProfile.is_default.isnot(True),
+            )
+            .order_by(SearchProfile.id.asc())
+            .all()
+        )
+        for candidate in candidates:
+            try:
+                if re.search(candidate.auto_route_from_pattern, name or ""):
+                    return candidate
+            except re.error:
+                logger.warning(
+                    "Profile %s carries an unparseable auto_route_from_pattern %r",
+                    candidate.id,
+                    candidate.auto_route_from_pattern,
+                )
+        return None
+
+    @staticmethod
     def resolve_profile(subject: str, body: str) -> Optional[SearchProfile]:
+        """Pick the profile a listing LANDS on: resolution, then the route.
+
+        `_resolve_profile_raw` answers the #102 question — which saved
+        search does this email belong to. The route answers the owner's —
+        where do its listings live. Keeping them separate keeps every #102
+        invariant (identity keys, adoption, contested labels) untouched.
+        """
+        profile = SearchProfileService._resolve_profile_raw(subject, body)
+        return SearchProfileService.canonical_profile(profile)
+
+    @staticmethod
+    def _resolve_profile_raw(subject: str, body: str) -> Optional[SearchProfile]:
         """Pick a profile for an incoming email.
 
         The saved-search URL in the body is the identity (#102); the name in
