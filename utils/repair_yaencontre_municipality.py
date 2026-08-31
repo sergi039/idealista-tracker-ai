@@ -35,6 +35,22 @@ way is out of scope, and a row it can only answer `None` for is **left
 alone**: replacing a stored name with a blank is a loss, and "no comma and no
 ' en '" is the parser's honest refusal rather than a correction.
 
+**And two guards narrow it further, both because the dry run found rows they
+had to catch.** The stored value must be one of the two shapes the old reading
+produced -- nothing, or a district string still carrying the separator --
+because a row holding a plain name was not written by the defect being
+repaired (#265: a repair narrower than its defect is a repair whose narrowness
+is the safety). And the proposal must be a name the INE register knows, since
+a parser reading a title cannot tell a municipality from a street. Both were
+measured rather than imagined: of the 253 production rows, four are
+hand-imported with the street last -- `Porceyo, Gijón, Calle del Castañeu`,
+`Bañugues, Gozón, Calle Go` -- and each already carries the right
+municipality, which the naive scope would have replaced with the street. The
+register refuses all four proposals and accepts all 102 real ones. Every row a
+guard refuses is **reported with its reason**, because this walk is the only
+thing that will ever look at these rows and a scope that quietly shrinks
+claims a completeness it does not have.
+
 Reports and exits unless `--apply`. The snapshot goes first (`--no-backup` is
 a thing you say out loud) and `restore` is compare-and-swap: it touches only
 the rows its snapshot names and skips one that no longer differs, so a name
@@ -53,8 +69,13 @@ from typing import Any, Dict, List, Tuple
 from app import create_app, db
 from models import Property
 from services.property_scoring_service import PropertyScoringService
-from services.yaencontre_source import _municipality_from_title, is_yaencontre_url
+from services.yaencontre_source import (
+    _DISTRICT_SEPARATOR,
+    _municipality_from_title,
+    is_yaencontre_url,
+)
 from utils import score_snapshot
+from utils.municipality_codes import load_name_index, match
 
 logger = logging.getLogger(__name__)
 
@@ -66,26 +87,60 @@ def _proposed(prop: Property) -> Tuple[str, str]:
     return (prop.municipality or ""), (_municipality_from_title(prop.title) or "")
 
 
-def _rows_to_repair() -> List[Property]:
-    """Yaencontre rows whose stored municipality is not what the parser now reads.
+def _written_by_the_old_reading(stored: str) -> bool:
+    """Is this the shape the reading being repaired produced?
 
-    A row the parser cannot name at all is excluded here rather than skipped
-    later: `None` is its refusal, and writing a blank over a stored name would
-    take a listing out of every municipality surface to no one's benefit.
+    Two, and only two: nothing at all, or a district string still carrying the
+    separator. A row holding a plain municipality name was not written by the
+    defect, so it is not this repair's to rewrite -- #265's rule that a repair
+    narrower than its defect is a repair whose narrowness is the safety.
+    """
+    return not stored or _DISTRICT_SEPARATOR in stored
+
+
+def _names_a_municipality(proposed: str) -> bool:
+    """Does the INE register recognise this as a municipality?
+
+    A street is not one, and the difference is not visible to a parser reading
+    a title. Measured on the 253 production rows: four hand-imported ones read
+    `Porceyo, Gijón, Calle del Castañeu` and `Bañugues, Gozón, Calle Go`, whose
+    last comma is a street; the register refuses all four proposals and accepts
+    all 102 real ones. It is the join `/municipalities` already uses, folding
+    both sides through `normalize()`, so it costs no new reading of a name.
+    """
+    return match(proposed, load_name_index()) is not None
+
+
+def _rows_to_repair() -> Tuple[List[Property], List[Dict[str, Any]]]:
+    """The rows to repair, and the ones a guard refused with its reason.
+
+    A refusal is reported rather than dropped: this walk is the only thing that
+    will ever look at these rows, and a scope that quietly shrinks is a repair
+    reporting completeness it did not have.
     """
     candidates = (
         db.session.query(Property)
         .filter(Property.url.isnot(None))
         .order_by(Property.id)
     )
-    rows = []
+    rows: List[Property] = []
+    skipped: List[Dict[str, Any]] = []
     for prop in candidates:
         if not is_yaencontre_url(prop.url):
             continue
         stored, proposed = _proposed(prop)
-        if proposed and proposed != stored:
+        if not proposed or proposed == stored:
+            # The parser's own refusal, or it already agrees. Writing a blank
+            # over a stored name is a loss, not a correction.
+            continue
+        entry = {"id": prop.id, "stored": stored or None, "proposed": proposed}
+        if not _written_by_the_old_reading(stored):
+            skipped.append({**entry, "reason": "stored_name_is_not_a_district"})
+        elif not _names_a_municipality(proposed):
+            skipped.append({**entry, "reason": "proposal_is_not_a_municipality"})
+        else:
             rows.append(prop)
-    return rows
+    return rows, skipped
 
 
 def _repair_row(prop: Property) -> Dict[str, Any]:
@@ -108,13 +163,14 @@ def _repair_row(prop: Property) -> Dict[str, Any]:
 def repair(
     apply: bool = False, snapshot_path: str = "", backup: bool = True
 ) -> Dict[str, Any]:
-    rows = _rows_to_repair()
+    rows, skipped = _rows_to_repair()
     outcome: Dict[str, Any] = {
         "found": len(rows),
         "repaired": 0,
         "applied": bool(apply),
         "snapshot": None,
         "rows": [],
+        "skipped": skipped,
     }
     if not rows:
         return outcome

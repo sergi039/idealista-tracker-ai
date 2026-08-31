@@ -113,6 +113,45 @@ def test_a_title_the_parser_cannot_name_keeps_its_stored_name(app):
     assert db.session.get(Property, prop.id).municipality == "Castrillón"
 
 
+def test_a_street_read_off_a_hand_imported_title_is_refused(app):
+    """Property 761 on production: the last comma is a street, not a district.
+
+    Its stored `Gijón` is right and the parser proposes `Calle del Castañeu`.
+    Two guards catch it independently, so the test asserts the reason as well
+    as the refusal -- a row skipped for the wrong reason is a row the next
+    shape of this defect walks past.
+    """
+    prop = _row(app, title="Porceyo, Gijón, Calle del Castañeu", municipality="Gijón")
+
+    outcome = repair_tool.repair()
+
+    assert outcome["found"] == 0
+    assert outcome["skipped"] == [
+        {
+            "id": prop.id,
+            "stored": "Gijón",
+            "proposed": "Calle del Castañeu",
+            "reason": "stored_name_is_not_a_district",
+        }
+    ]
+
+
+def test_a_proposal_the_register_does_not_know_is_refused(app):
+    """The stored value IS a district string, so only the INE join can stop it."""
+    _row(
+        app,
+        title="Terreno en venta en Bañugues, Gozón, Calle Go en Nowhere",
+        municipality="Somewhere en Nowhere",
+    )
+
+    outcome = repair_tool.repair()
+
+    assert outcome["found"] == 0
+    assert [s["reason"] for s in outcome["skipped"]] == [
+        "proposal_is_not_a_municipality"
+    ]
+
+
 def test_another_portal_is_never_touched(app):
     _row(
         app,
