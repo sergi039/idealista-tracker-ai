@@ -73,7 +73,14 @@ _HOSTS = ("milanuncios.com",)
 # `/venta-de-chalets-en-.../<slug>-612329827.htm` it 301s to.
 _LISTING_PATH = re.compile(r"-(\d{5,})\.htm$")
 
-_TRACKER = re.compile(r"https?://sgt\.milanuncios\.com/ls/click\?[^\s\"'<>]+")
+# The SparkPost click tracker. The path segment before `ls/click` varies by
+# template -- a real alert of 2026-08-30 used `/uni/ls/click` and was refused
+# whole by a pattern anchored on `/ls/click`, so the four ads it carried were
+# never read. The host is milanuncios' own tracker and nothing else is served
+# from it, so the prefix is what is loosened, not the host.
+_TRACKER = re.compile(
+    r"https?://sgt\.milanuncios\.com/(?:[A-Za-z0-9_-]+/)*ls/click\?[^\s\"'<>]+"
+)
 
 _ANCHOR = re.compile(
     r'<a\b[^>]*href="(?P<href>[^"]+)"[^>]*>(?P<inner>.*?)</a>',
@@ -83,6 +90,19 @@ _ANCHOR = re.compile(
 # The ad-photo hosts seen in the real digests; braze template art lives on
 # cdn.braze.eu and marks a management button, never a card.
 _AD_IMAGE_HOSTS = ("images.milanuncios.com", "images-re.milanuncios.com")
+
+# The template's own word for "this anchor leads to the ad", carried on the
+# card's opening tag. It is read beside the photo host because an ad with no
+# photograph renders a braze placeholder instead of an `images*.milanuncios`
+# one, and the whole email was then refused as cardless -- losing every
+# photo-less ad, which is exactly the shape a cheap private-seller plot
+# arrives in. Measured against both committed digests, this attribute selects
+# the identical anchor set the photo host does (3 in `..._solares.html`, 2 in
+# `..._chalets.html`), so it widens recognition without moving any card that
+# is found today.
+_CARD_TITLE = re.compile(
+    r'title="ver el resultado de la b(?:ú|&uacute;|u)squeda"', re.IGNORECASE
+)
 
 _INITIAL_PROPS = re.compile(
     r'window\.__INITIAL_PROPS__\s*=\s*JSON\.parse\("(?P<literal>(?:[^"\\]|\\.)*)"\)',
@@ -149,19 +169,29 @@ def normalize_url(url: Optional[str]) -> Optional[str]:
 def card_tracker_urls(body: Optional[str]) -> List[str]:
     """The click-tracker URLs of the listing cards, in email order.
 
-    A card is an anchor wrapping an ad photo (`images*.milanuncios.com`);
-    every other tracker in the template -- the alert-management buttons, the
-    survey, the footer -- is left strictly alone. The "Ver más fotos" twin
-    under each photo resolves to the same ad, so only the photo anchor is
-    taken and each card costs one resolve.
+    A card is an anchor that either wraps an ad photo
+    (`images*.milanuncios.com`) or carries the template's own
+    "ver el resultado de la búsqueda" title; every other tracker in the
+    template -- the alert-management buttons, the survey, the footer -- is
+    left strictly alone. The "Ver más fotos" twin under each photo resolves
+    to the same ad and carries neither mark, so each card still costs one
+    resolve; identical hrefs are collapsed so a template that ever marked
+    both cannot double the traffic.
     """
     urls: List[str] = []
+    seen: set = set()
     for match in _ANCHOR.finditer(body or ""):
         href = html_entities.unescape(match.group("href"))
         if not _TRACKER.match(href):
             continue
+        whole = match.group(0)
+        opening_tag = whole[: whole.find(">") + 1]
         inner = match.group("inner")
-        if any(host in inner for host in _AD_IMAGE_HOSTS):
+        is_card = any(host in inner for host in _AD_IMAGE_HOSTS) or bool(
+            _CARD_TITLE.search(opening_tag)
+        )
+        if is_card and href not in seen:
+            seen.add(href)
             urls.append(href)
     return urls
 

@@ -53,6 +53,7 @@ from services.fotocasa_source import (
     fetch_listing,
     listing_id_from_url,
     normalize_url,
+    url_says_plot,
 )
 
 logger = logging.getLogger(__name__)
@@ -228,6 +229,15 @@ def classify_row(row: Dict[str, Any], profile_id: Optional[int]):
     profile's own rules are written in. It is passed to the shared classifier
     as one of the texts instead, so a per-subscription rule reaches these rows
     exactly as it reaches an ingested one.
+
+    The type word fotocasa puts in its own canonical path rides in the same
+    text, ahead of `buildingType`, and only when that word is a land one. It
+    has to be *some* text rather than a verdict returned here, or a
+    subscription's own rules would stop reaching these rows -- and it has to
+    be ahead of the description, because the rules are read in text order and
+    a plot advertised as somewhere to build "la casa de tus sueños" otherwise
+    matches `housing/house` on the strength of the marketing copy. That is
+    exactly how property 1333, a 16,782 m² field, became a house.
     """
     from app import db
     from models import SearchProfile
@@ -239,9 +249,14 @@ def classify_row(row: Dict[str, Any], profile_id: Optional[int]):
     # a subscription with no rules of its own is not a special case here.
     rules = SearchProfileService.get_classification_rules(profile)
 
+    portal_type = "terreno" if url_says_plot(row.get("url")) else None
+    stated_type = " ".join(
+        part for part in (portal_type, row.get("building_type")) if part
+    )
+
     return PropertyClassificationService.classify_sources(
         row.get("title"),
-        row.get("building_type"),
+        stated_type or None,
         row.get("description"),
         rules or [],
     )
@@ -304,6 +319,7 @@ def build_property(
     # the readable boundary at the one builder every portal door shares.
     from app import db
     from models import SearchProfile
+    from services.property_classification_service import PropertyClassificationService
     from services.search_profile_service import SearchProfileService
 
     profile_obj = db.session.get(SearchProfile, profile_id) if profile_id else None
@@ -311,6 +327,10 @@ def build_property(
     prop.search_profile_id = canonical.id if canonical else profile_id
     prop.property_category = category
     prop.property_subtype = subtype
+    # The one place the classifier's verdict and the portal's own area meet.
+    # Without this a row classified `land` keeps whatever `area_type` the
+    # payload implied, and a parcel is counted as floor space.
+    PropertyClassificationService.reconcile_area_type(prop)
     prop.attributes = row.get("attributes") or {}
     prop.email_date = email_date or _parse_published(row.get("published_at"))
     prop.email_subject = email_subject
