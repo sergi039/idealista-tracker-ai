@@ -11,10 +11,12 @@ throwaway_nan_test` on 127.0.0.1:5432 — Postgres.app, which is the inbox-zero
 project's database server and holds its live `inboxzero` database. Nothing was
 lost; only the `throwaway_*` databases were created and dropped. What made it
 happen is that the prohibition named no server that was actually reachable:
-CONTRIBUTING.md's disposable container is correct and Docker Desktop was not
-running, so the one real PostgreSQL within reach was the one that must not be
-used. `tools/ci/migration_test_db.sh` is the reachable answer, and this module
-is what makes the prohibition mechanical rather than remembered.
+CONTRIBUTING.md's `docker run` needs a Docker daemon and the MacBook has none.
+It has one on the mini, which is where every other container in this project
+already lives — `tools/ci/migration_test_db.sh` raises the throwaway there and
+tunnels it to 127.0.0.1:55432, so this machine still runs no database of its
+own. This module is what makes the prohibition mechanical rather than
+remembered.
 
 The refusal is a **failure, never a skip**: a skip reads as success, which is
 the whole reason `tests/skip_guard.py` exists.
@@ -68,8 +70,9 @@ def refusal(found, target):
         + ". These tests CREATE and DROP databases on that server, so it must "
         "be a throwaway nobody else is using — 127.0.0.1:5432 is inbox-zero's "
         "Postgres.app and 127.0.0.1:5434 is the mini's idealista-db, and "
-        "neither is one. Start a disposable cluster on 127.0.0.1:55432 "
-        "instead — it needs no Docker daemon and is destroyed by `stop`:\n"
+        "neither is one. This project keeps no local database at all: the "
+        "throwaway server is a container on the mini, tunnelled to "
+        "127.0.0.1:55432 and removed by `stop`:\n"
         '    eval "$(tools/ci/migration_test_db.sh start)"\n'
         "    uv run pytest tests/test_postgres_migrations.py -v\n"
         "    tools/ci/migration_test_db.sh stop\n"

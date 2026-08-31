@@ -22,12 +22,29 @@ imapclient · anthropic SDK · Google API clients · uv (`uv.lock`) · pytest.
 
 ## Run
 
+**The stack runs in Docker on the Mac mini, and nowhere else** (owner,
+2026-08-31). The mini is the server: `idealista-app`, `idealista-db` (5434),
+`idealista-redis` and `osrm-spain` are containers there, and code reaches it by
+push → the deploy watcher pulls, rebuilds and health-checks. A MacBook is a
+*client*: it writes code, and it opens `http://127.0.0.1:5001/` through the
+permanent ssh tunnel (`com.idealista.mini-tunnel`), which is the **mini's** app.
+`docker ps` on the laptop being empty is the correct state, not a broken one.
+
+So the commands below describe **the mini**. Do not bring a second stack up on
+a laptop: the two databases diverged by 324 rows once already, and the merge
+back cost an afternoon. There is no local PostgreSQL for this project — not the
+deployment's and not a test server (see "Writing a migration?" in the hard
+rules for the one throwaway, which is also a container on the mini).
+
 ```bash
-docker compose up -d --build                 # app on http://localhost:5001/
+docker compose up -d --build                 # the mini; app on 127.0.0.1:5001
 docker compose -f docker-compose.dev.yml up  # dev variant with --reload
-pytest tests/ -v                             # test suite
+pytest tests/ -v                             # test suite (runs anywhere)
 pytest tests/ --cov=app --cov-report=html    # coverage report
 ```
+
+Building by hand on the mini is the deploy watcher's job, not yours — see
+"Keeping the container current" below before you type the first line.
 
 ### Local CI gate
 
@@ -2748,13 +2765,20 @@ and TODO.md; respect it if you ever run both side by side.
   one that must not be touched. A rule that forbids the only available path is
   a rule that gets walked around, and this one was.
 
-  So the permitted path ships with the prohibition. `tools/ci/
-  migration_test_db.sh start` runs `initdb` from the PostgreSQL binaries
-  Postgres.app already installs and puts a **brand-new cluster** in a
-  temporary directory on 55432 — same binaries, different cluster, its own
-  data directory, nothing in it but the databases the tests create, and `stop`
-  removes it. No Docker daemon required; the container in CONTRIBUTING.md is
-  equally good when one is running.
+  So the permitted path ships with the prohibition, **and it keeps no database
+  on the laptop at all** — this project runs in Docker on the Mac mini and the
+  laptop is a client over Tailscale (owner, 2026-08-31; the first version of
+  this fix raised a local cluster and was itself out of that scheme).
+  `tools/ci/migration_test_db.sh start` runs one `docker run --rm` on the mini
+  of the same `postgres:15-alpine` the deployment's `idealista-db` runs — its
+  own name, the mini's loopback, no volume, no compose labels, so
+  `docker_cleanup.sh` ignores it and a deploy does not disturb it — and
+  tunnels it to 127.0.0.1:55432 for the run. `stop` closes the tunnel and
+  removes the container. Two things that follow: the migrations are exercised
+  on **production's own major version** rather than on whatever PostgreSQL the
+  laptop happens to have, and offline there is no server at all — `start`
+  fails and says so, because the honest fallback is CI and not a database
+  here.
 
   And the rule is mechanical rather than remembered:
   `tests/postgres_server_guard.py` enumerates `pg_database` on the connection

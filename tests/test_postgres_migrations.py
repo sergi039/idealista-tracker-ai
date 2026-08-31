@@ -12,24 +12,19 @@ PostgreSQL server, both on an empty database (the fresh-install path) and on a
 database that already holds rows under the pre-013 schema (the upgrade path
 the owner's database will actually take).
 
-Point them at a *throwaway* server, never at a database with real data. The
-one that is always reachable needs no Docker daemon — it runs `initdb` from
-the PostgreSQL binaries already on the machine and puts a brand-new cluster in
-a temporary directory:
+Point them at a *throwaway* server, never at a database with real data — and
+this project keeps no local database of any kind, so the throwaway is a
+container on the Mac mini, tunnelled here:
 
     eval "$(tools/ci/migration_test_db.sh start)"
     uv run pytest tests/test_postgres_migrations.py -v
     tools/ci/migration_test_db.sh stop
 
-A disposable container is equally good when Docker Desktop is running:
+It runs the same postgres:15-alpine the deployment's `idealista-db` runs, so
+the migrations are exercised on production's own major version. Offline it
+fails and says so; the fallback is CI, never a database on this machine.
 
-    docker run -d --rm --name pg-migtest -e POSTGRES_PASSWORD=migtest \\
-        -e POSTGRES_USER=migtest -e POSTGRES_DB=migtest \\
-        -p 127.0.0.1:55432:5432 postgres:15-alpine
-    TEST_DATABASE_URL_POSTGRES=postgresql://migtest:migtest@127.0.0.1:55432/migtest \\
-        uv run pytest tests/test_postgres_migrations.py -v
-
-What is NOT a throwaway server: 127.0.0.1:5432, which on this Mac is
+What is NOT a throwaway server: 127.0.0.1:5432, which on a Mac here is
 Postgres.app and holds inbox-zero's live database, and 127.0.0.1:5434, the
 mini's `idealista-db`. `postgres_url` refuses both before it issues a single
 CREATE DATABASE — see tests/postgres_server_guard.py.
