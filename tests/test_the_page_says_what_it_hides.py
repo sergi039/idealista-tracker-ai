@@ -103,6 +103,14 @@ def _page(client, url):
     return html
 
 
+def _href(html, element_id):
+    """The href of one link on the page, unescaped for the test client."""
+    marker = f'id="{element_id}" href="'
+    assert marker in html, f"no {element_id} on the page"
+    start = html.index(marker) + len(marker)
+    return html[start : html.index('"', start)].replace("&amp;", "&")
+
+
 class TestASearchThatNamesAListingTheFiltersHide:
     """Defect 1, the general case: any narrowing, not only the criteria."""
 
@@ -192,10 +200,7 @@ class TestTheRevealLinkActuallyReveals:
     re-issued the filter it promised to clear."""
 
     def _href(self, html):
-        marker = 'id="search-reveal-link" href="'
-        assert marker in html, "no reveal link on the page"
-        start = html.index(marker) + len(marker)
-        return html[start : html.index('"', start)].replace("&amp;", "&")
+        return _href(html, "search-reveal-link")
 
     def test_it_clears_the_criteria_hide_rather_than_re_issuing_it(
         self, client, galicia
@@ -274,12 +279,25 @@ class TestTheEmptyStateNamesARemedyThatWorks:
             "Nothing here matches the filters on this page. "
             "Your subscription selection holds 2 listings."
         ) in html
-        marker = 'id="empty-state-clear-link" href="'
-        start = html.index(marker) + len(marker)
-        href = html[start : html.index('"', start)].replace("&amp;", "&")
-        cleared = _page(client, href)
+        cleared = _page(client, _href(html, "empty-state-clear-link"))
         assert "Casa en Brantuas" in cleared
         assert "2 properties found" in cleared
+
+    def test_the_count_is_the_number_its_own_link_lands_on(self, client, galicia):
+        # The disclosed number has to be the number that page shows -- the
+        # rule `unassigned_count` already states. Both switches count as
+        # filters here, so a withdrawn row is in the count AND on the page:
+        # `hide_removed` defaults ON and has to be stated, exactly as
+        # `criteria` does.
+        _mk(galicia.id, title="Casa viva", area=137)
+        _mk(galicia.id, title="Casa retirada", area=137, listing_status="removed")
+
+        html = _page(client, f"/properties?profile_id={galicia.id}&search=Brantuas")
+
+        assert "Your subscription selection holds 2 listings." in html
+        cleared = _page(client, _href(html, "empty-state-clear-link"))
+        assert "2 properties found" in cleared
+        assert "Casa retirada" in cleared
 
     def test_a_genuinely_empty_scope_offers_no_such_line(self, client, galicia):
         html = _page(client, f"/properties?profile_id={galicia.id}")
