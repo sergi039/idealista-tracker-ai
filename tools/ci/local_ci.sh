@@ -78,7 +78,10 @@ run_pytest() {
     # run imply the migrations were covered.
     if [ -z "${TEST_DATABASE_URL_POSTGRES:-}" ]; then
         printf '  note: TEST_DATABASE_URL_POSTGRES unset -> the PostgreSQL '
-        printf 'migration tests will skip (CI runs them; see CONTRIBUTING.md)\n'
+        printf 'migration tests will skip (CI runs them). To run them here:\n'
+        printf '        eval "$(tools/ci/migration_test_db.sh start)"\n'
+        printf '  It raises a throwaway cluster on 55432 and needs no Docker. '
+        printf 'Never point it at 5432 (inbox-zero) or 5434 (the mini).\n'
     fi
     uv run pytest tests/ -q
 }
