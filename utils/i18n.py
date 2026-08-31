@@ -767,6 +767,23 @@ TRANSLATIONS = {
             "every type, subtype and size \u2014 it describes the inventory mix, not a "
             "size-adjusted price for the municipality"
         ),
+        # What the subscription criteria left out of this page (#513). Two
+        # counted phrases rather than one sentence with two numbers in it,
+        # because the second clause is only rendered when a municipality
+        # really disappeared -- and because Spanish inflects the verb with the
+        # count in both of them.
+        "municipalities_criteria_excluded_one": (
+            "%s listing is outside every count and median on this page"
+        ),
+        "municipalities_criteria_excluded_other": (
+            "%s listings are outside every count and median on this page"
+        ),
+        "municipalities_criteria_excluded_places_one": (
+            "%s municipality is therefore not shown at all"
+        ),
+        "municipalities_criteria_excluded_places_other": (
+            "%s municipalities are therefore not shown at all"
+        ),
         "pool_unroutable": "no road route",
         "pool_unroutable_tooltip": "Google answered: no driving route to this pool",
         "pool_owner_absence": "Owner confirmed: no usable pool",
@@ -1462,6 +1479,18 @@ TRANSLATIONS = {
             "\u20ac/m\u00b2 es la mediana sin ajustar del precio pedido \u00f7 superficie "
             "sobre todos los tipos, subtipos y tamaños \u2014 describe la composición del "
             "inventario, no un precio del municipio ajustado por tamaño"
+        ),
+        "municipalities_criteria_excluded_one": (
+            "%s anuncio queda fuera de todos los recuentos y medianas de esta página"
+        ),
+        "municipalities_criteria_excluded_other": (
+            "%s anuncios quedan fuera de todos los recuentos y medianas de esta página"
+        ),
+        "municipalities_criteria_excluded_places_one": (
+            "por eso %s municipio no aparece en la tabla"
+        ),
+        "municipalities_criteria_excluded_places_other": (
+            "por eso %s municipios no aparecen en la tabla"
         ),
         "pool_unroutable": "sin ruta por carretera",
         "pool_unroutable_tooltip": "Google respondió: sin ruta en coche a esta piscina",

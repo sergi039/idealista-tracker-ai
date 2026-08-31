@@ -26,11 +26,18 @@
    all", deliberately distinct from `()`, which is an explicit selection that
    matches nothing. #}
 {% set is_everything = profile_selection.filter_ids is none and not profile_selection.include_unassigned %}
+{# `criteria` rides `base_args` like every other filter, so a sort header or
+   the archived toggle cannot quietly restore the default reading. Its empty
+   string travels as `none` and is therefore absent from the URL, which is
+   what the default reading spells on every surface
+   (utils/listing_filters.CLEARED_NOT_ABSENT records that absence IS the
+   hide). #}
 {% set base_args = {
     'sort': sort_by,
     'order': order,
     'archived': 'on' if include_archived else none,
     'favorites': 'on' if favorites_only else none,
+    'criteria': criteria_filter or none,
     'profile_id': profile_selection.link_values | list
 } %}
 
@@ -82,6 +89,32 @@
                    title="{{ t('municipalities_archived_tooltip') }}">
                     <i class="fas fa-box-archive me-1"></i>{{ t('municipalities_archived') }}
                 </a>
+                {# The subscription criteria (#513). Same parameter, same five
+                   readings and the same default as /properties, /map and the
+                   CSV -- and the same option labels, from the same i18n keys,
+                   because it is one rule and a second wording of it is a
+                   second rule waiting to drift. Drawn only while some
+                   subscription carries criteria, exactly as the /properties
+                   control is: with none set the reading changes nothing and a
+                   control for it would be a switch with one position. #}
+                {% if criteria_enabled %}
+                    <div class="dropdown" id="municipalities-criteria-control">
+                        <button class="btn btn-sm {{ 'btn-outline-secondary' if not criteria_filter else 'btn-secondary' }} dropdown-toggle"
+                                type="button" data-bs-toggle="dropdown" aria-expanded="false"
+                                aria-label="{{ t('criteria_filter') }}">
+                            <i class="fas fa-filter me-1"></i>{{ t('criteria_' ~ (criteria_filter or 'default')) }}
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            {% for value in criteria_choices %}
+                                <li><a class="dropdown-item {{ 'active' if (criteria_filter or '') == value }}"
+                                       data-criteria="{{ value or 'default' }}"
+                                       href="{{ url_for('main.municipalities', **dict(base_args, criteria=value or none)) }}">
+                                    {{ t('criteria_' ~ (value or 'default')) }}
+                                </a></li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                {% endif %}
                 {# Which subscriptions the table is taken over (MUNIC-002).
                    A menu of links rather than a form of checkboxes: every
                    option is one URL, so it needs no JavaScript and no hidden
@@ -191,6 +224,31 @@
                     <i class="fas fa-calculator me-1 text-primary"></i>
                     <strong>{{ t('municipalities_basis_label') }}</strong>
                     — {{ t('municipalities_basis_note') }}.
+                </div>
+            {% endif %}
+            {# What the criteria reading is NOT counting (#513). Every count
+               and every median above is taken over the kept rows, so a page
+               that printed 28 where it printed 35 and said nothing would be
+               #98 in a new place -- and the municipalities clause is the same
+               defect one level up, where a municipality absent from the table
+               reads as a municipality with nothing in it. Rendered only when
+               something really was excluded: a permanent "0 excluded" is
+               noise, and the control above already shows which reading is on. #}
+            {% if criteria_excluded and criteria_excluded.listings %}
+                {# The tooltip explains the DEFAULT hide -- what it is and what
+                   it never hides -- so it is attached only where that is the
+                   reading in force. Under `pass`/`fail`/`unknown` the excluded
+                   rows are excluded by the reader's own explicit choice, which
+                   the control above names, and reusing the default's
+                   explanation there would describe a narrowing that is not the
+                   one that happened. #}
+                <div class="mt-1" id="municipalities-criteria-excluded"
+                     {% if not criteria_filter %}title="{{ t('criteria_hidden_tooltip') }}"{% endif %}>
+                    <i class="fas fa-filter me-1 text-primary"></i>
+                    <strong>{{ t('criteria_filter') }}</strong>
+                    — {{ tn('municipalities_criteria_excluded', criteria_excluded.listings) }}{%
+                        if criteria_excluded.municipalities %};
+                        {{ tn('municipalities_criteria_excluded_places', criteria_excluded.municipalities) }}{% endif %}.
                 </div>
             {% endif %}
         </div>
