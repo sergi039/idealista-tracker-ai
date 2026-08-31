@@ -2406,7 +2406,7 @@ def test_025_nan_is_refused_and_never_reads_as_a_measurement(postgres_url, monke
         engine.dispose()
 
 
-def test_026_the_insert_path_cannot_deadlock_against_an_ascending_locker(
+def test_026_the_insert_path_no_longer_inverts_against_an_ascending_locker(
     postgres_url,
 ):
     """Migration 025's trigger locked stub-then-target; everyone else locks by
@@ -2427,6 +2427,11 @@ def test_026_the_insert_path_cannot_deadlock_against_an_ascending_locker(
     `lock_timeout` is set on both sides so a regression that turns the
     deadlock into an indefinite wait fails this test instead of hanging the
     suite.
+
+    What this does NOT prove is that no cycle can form at all: a route change
+    landing inside the trigger's read-to-lock gap still leaves one, reproduced
+    and recorded in issue #513 and in migration 026's own comment. This test
+    pins the inversion that needed no conditions whatsoever.
     """
     import threading
 
