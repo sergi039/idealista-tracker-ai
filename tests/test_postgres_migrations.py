@@ -2489,7 +2489,28 @@ def test_026_the_insert_path_cannot_deadlock_against_an_ascending_locker(
                 )
                 a_holds_the_low_row.set()
                 assert b_has_started.wait(15), "the inserting thread never ran"
-                time.sleep(2.0)  # let the inserter reach its foreign-key wait
+                # NOT a sleep. The reviewer's finding: a descheduled inserter
+                # lets the locker take the stub and commit before the insert
+                # even starts, so the choreography completes without ever
+                # forming the cycle and the test stays green on the reverted
+                # lock order. Wait for the inserter's backend to actually be
+                # blocked on a lock instead of assuming two seconds is enough.
+                deadline = time.monotonic() + 20
+                while True:
+                    waiting = connection.execute(
+                        text(
+                            "SELECT count(*) FROM pg_stat_activity WHERE "
+                            "datname = current_database() AND wait_event_type "
+                            "= 'Lock' AND pid <> pg_backend_pid()"
+                        )
+                    ).scalar_one()
+                    if waiting:
+                        break
+                    assert time.monotonic() < deadline, (
+                        "the inserting transaction never blocked on a lock, so "
+                        "this test never exercised the cycle it exists for"
+                    )
+                    time.sleep(0.1)
                 connection.execute(
                     text("SELECT id FROM search_profiles WHERE id = :s FOR UPDATE"),
                     {"s": stub},
