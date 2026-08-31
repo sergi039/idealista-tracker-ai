@@ -36,6 +36,14 @@ Measured against production on 2026-08-19, that made 38 of 87 rows disagree
 with the page they linked to and opened 13 of them on zero -- 311 of 773
 listings sit in retired subscriptions. Two numbers about one municipality,
 taken by two different queries, is exactly how they came to disagree.
+
+`build_rows` counts and measures exactly the rows it is handed and asks the
+database nothing, so *which* listings a municipality is compared over is the
+caller's decision. Since #513 the route hands it the rows the subscription
+criteria keep (`services/subscription_criteria.py`), which is why
+`drilldown_args` carries that reading too -- and why the page discloses what
+the reading left out. A medians table that quietly drops the cheap half of a
+municipality is #98 with a number in place of a blank.
 """
 
 import logging
@@ -222,6 +230,7 @@ def drilldown_args(
     row: Dict[str, Any],
     favorites_only: bool = False,
     include_archived: bool = False,
+    criteria: str = "",
 ) -> Dict[str, Any]:
     """`/properties` query parameters that open exactly this row's listings.
 
@@ -232,7 +241,7 @@ def drilldown_args(
     stored listing. Measured against production on 2026-08-19 that was 38
     disagreeing rows out of 87 and 13 that opened on zero (#417).
 
-    Making it honest is four independent axes, not one parameter:
+    Making it honest is five independent axes, not one parameter:
 
     1. **the contributing subscriptions**, named by id -- an explicit id is
        the only thing that reaches a retired or hidden profile, and it is
@@ -253,7 +262,18 @@ def drilldown_args(
        way it is the target's guess rather than this page's scope, which is why
        the parameter is still stated outright: a number here and the page its
        link opens are one statement, and the only way to keep them one is to
-       say which listings the number counted.
+       say which listings the number counted;
+    5. **the subscription criteria** (#513) -- the fifth axis, and the one
+       that made this list five long. `/municipalities` reads `criteria` with
+       the same default as the list and the map, so the number beside a
+       municipality is taken under a reading the link has to carry or the two
+       disagree again. It travels verbatim, including the empty string, which
+       is *absent* on the link: unlike `hide_removed`, an absent `criteria` is
+       not a guess at the far end -- `utils/listing_filters.CLEARED_NOT_ABSENT`
+       records that its unset state IS the default hide, the same reading this
+       page then applied. Stating `default` outright would say the same thing
+       and put a value in the URL that `/properties`' own control has no
+       option for.
 
     The `profile_id` encoding is `services/profile_selection.py`'s, not a
     second spelling of it, so a selection this builds and a selection the URL
@@ -277,6 +297,7 @@ def drilldown_args(
         "profile_id": list(resolved.link_values),
         "favorites": "on" if favorites_only else None,
         "hide_removed": "off" if include_archived else "on",
+        "criteria": criteria or None,
     }
 
 

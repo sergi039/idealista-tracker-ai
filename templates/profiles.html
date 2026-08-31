@@ -49,8 +49,24 @@
                                applies its own default and hides the withdrawn rows,
                                and the count would overstate the page it opens.
                                `drilldown_args` states it explicitly for the same
-                               reason (#417). #}
-                                <a class="small text-decoration-none" href="{{ url_for('main.properties', profile_id=p.id, hide_removed='off') }}">
+                               reason (#417).
+
+                               `criteria=all` is the second half of that scope and it
+                               is stated for the same reason (#513): the subscription
+                               criteria hide measured fails by DEFAULT, so a link that
+                               says nothing about them re-issues the hide. Measured on
+                               production 2026-08-31, this column said 443 for the
+                               Galicia subscription and its own link opened on "384
+                               properties found". Here the number stays and the link
+                               moves -- what it counts is a FACT ABOUT THE
+                               SUBSCRIPTION, how many listings it holds, not a basis
+                               for comparing anything, so narrowing it would answer a
+                               question this page is not asking. That is the opposite
+                               call from /municipalities, deliberately: there the
+                               medians ARE the comparison and the counts moved
+                               instead. `utils/listing_filters.CLEARED_NOT_ABSENT`
+                               records why absence cannot do this job. #}
+                                <a class="small text-decoration-none" href="{{ url_for('main.properties', profile_id=p.id, hide_removed='off', criteria='all') }}">
                                     {{ property_counts.get(p.id, 0) }}
                                 </a>
                             </td>
@@ -123,9 +139,15 @@
                     </td>
                     <td>
                         {# Same as the per-profile count above: unfiltered, so the
-                           link says so. #}
+                           link says so -- both axes of it, the listing status and
+                           the subscription criteria. An unassigned row is outside
+                           every subscription's criteria clause and so is never
+                           hidden by that reading today; `criteria=all` is stated
+                           anyway, because what makes the link honest is that it
+                           names the scope the number was counted under, not that
+                           somebody checked the two happen to agree this month. #}
                         <a class="small text-decoration-none"
-                           href="{{ url_for('main.properties', profile_id='unassigned', hide_removed='off') }}">
+                           href="{{ url_for('main.properties', profile_id='unassigned', hide_removed='off', criteria='all') }}">
                             {{ unassigned_count }}
                         </a>
                     </td>
