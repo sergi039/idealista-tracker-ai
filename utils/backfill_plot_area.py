@@ -72,6 +72,21 @@ def _record_states_no_plot(prop) -> None:
         prop.enrichment = enrichment
 
 
+#: Refusals that are an answer about the row rather than the host saying no.
+#: They must not count towards the consecutive-refusal stop, or a handful of
+#: withdrawn adverts halts a run that had plenty left to ask. Same shape, and
+#: the same reasoning, as `utils/backfill_advertiser._NOT_A_HOST_REFUSAL`.
+#:
+#: `REFUSAL_NOT_FOTOCASA` is here for the same reason and is not reachable
+#: today: the scope selects fotocasa rows, so `source_of()` and
+#: `fetch_listing()` would have to disagree about one URL. It costs nothing to
+#: be right in advance about a refusal that asks nobody anything.
+_NOT_A_HOST_REFUSAL = (
+    fotocasa_source.REFUSAL_NOT_A_LISTING,
+    fotocasa_source.REFUSAL_NOT_FOTOCASA,
+)
+
+
 def _scope(args):
     """Fotocasa rows whose plot nobody has established, oldest first.
 
@@ -135,6 +150,28 @@ def main() -> None:
                 if index:
                     time.sleep(args.sleep)
                 listing = fotocasa_source.fetch_listing(prop.url)
+                if listing.refusal in _NOT_A_HOST_REFUSAL:
+                    # The advert is gone, not the host refusing us: fotocasa
+                    # redirects a withdrawn listing to a search page
+                    # (services/fotocasa_source.py:481-488). That is an answer
+                    # about this row, and counting it as a host refusal stalled
+                    # the whole run — three dead adverts in a row stopped it,
+                    # nothing was written, and the scope is ordered by id so
+                    # the next run met the same three and stopped again. No
+                    # forward progress at any number of re-runs (#502 review).
+                    #
+                    # The sibling already drew this line and said why:
+                    # `utils/backfill_advertiser.py` `_NOT_A_HOST_REFUSAL`,
+                    # "a run would stop on its third row having asked nobody
+                    # anything".
+                    consecutive_refusals = 0
+                    tally["gone"] += 1
+                    logger.info(
+                        "property %s: %s — the advert is gone, moving on",
+                        prop.id,
+                        listing.refusal,
+                    )
+                    continue
                 if listing.refusal:
                     consecutive_refusals += 1
                     tally["refused"] += 1

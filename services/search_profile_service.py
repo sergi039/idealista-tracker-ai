@@ -558,6 +558,17 @@ def normalize_travel_targets_config(value: Any) -> Dict[str, Any]:
     return {"presets": presets, "custom": custom}
 
 
+def _is_a_pattern(value: Optional[str]) -> bool:
+    """Whether `auto_route_from_pattern` actually carries one.
+
+    `None`, `""` and whitespace-only all mean "this profile claims nothing".
+    One reading, used by the candidate query and by `route_profile`, because
+    two spellings of "is there a pattern here" is how the adopter and the
+    refusal come to disagree about one row.
+    """
+    return bool((value or "").strip())
+
+
 class SearchProfileService:
     @staticmethod
     def find_unidentified_by_name(name: str) -> Optional[SearchProfile]:
@@ -1403,9 +1414,17 @@ class SearchProfileService:
                 # old route is a deliberate act this writer does not offer.
                 db.session.rollback()
                 return {"status": "refused", "reason": "source_already_routed"}
-            if source.auto_route_from_pattern:
+            if _is_a_pattern(source.auto_route_from_pattern):
                 db.session.rollback()
                 return {"status": "refused", "reason": "source_carries_a_pattern"}
+            if source.auto_route_from_pattern is not None:
+                # Blank, so not a pattern by the rule above — but the column
+                # is not NULL, and `ck_search_profiles_stub_has_no_pattern`
+                # compares against NULL. Left alone, this returned
+                # {"status": "ok", "moved": 0} and then died on the CHECK at
+                # flush. Normalized here, under the same FOR UPDATE, so the
+                # row that stops being a carrier says so in the column too.
+                source.auto_route_from_pattern = None
             # `.all()` then len, never `.count()` under the lock: PostgreSQL
             # refuses `SELECT count(*) ... FOR UPDATE` outright ("FOR UPDATE
             # is not allowed with aggregate functions") and SQLite swallowed
@@ -1455,6 +1474,19 @@ class SearchProfileService:
         A broken pattern is skipped and logged, never fatal — mail routing
         must not die on a typo in a regex.
         """
+        # A BLANK pattern is not a pattern (#502 review). `''` survives
+        # `isnot(None)` and `re.search("", anything)` matches, so one profile
+        # carrying an empty string silently adopted every subscription the
+        # ingester created — born routed and hidden, with no chip and no
+        # notice. Whitespace-only is the same accident wearing a space: `" "`
+        # is a legal regex that matches almost every real name.
+        #
+        # Guarded on the READ side because that is the only side there is:
+        # `auto_route_from_pattern` has no UI writer anywhere in the tree, so
+        # its one interface is hand SQL, which no application guard can stand
+        # in front of. Nothing here tries to refuse an over-broad pattern in
+        # general — `.` would match everything too — only the blank that means
+        # "unset" rather than "match anything".
         candidates = (
             SearchProfile.query.filter(
                 SearchProfile.auto_route_from_pattern.isnot(None),
@@ -1465,6 +1497,8 @@ class SearchProfileService:
             .all()
         )
         for candidate in candidates:
+            if not _is_a_pattern(candidate.auto_route_from_pattern):
+                continue
             try:
                 if re.search(candidate.auto_route_from_pattern, name or ""):
                     return candidate
