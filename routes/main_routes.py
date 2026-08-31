@@ -591,10 +591,15 @@ def _map_auto_profile_id(default_profile, profiles, focus_property=None):
     else. An inactive subscription is a valid answer here: its listings are
     real, and a link that names one asked for it explicitly.
 
-    Deliberately different from `/properties`, which takes the richest active
-    profile: a map is useless without coordinates, so the profile with the
-    most mappable rows wins. When nothing has coordinates yet it falls back to
-    the most recently active profile, then the default, then the first one.
+    Deliberately different from `/properties` and `/properties/export.csv`,
+    which both rewrite a bare request to `all`: a map is useless without
+    coordinates, so the profile with the most mappable rows wins. When nothing
+    has coordinates yet it falls back to the most recently active profile,
+    then the default, then the first one. (This paragraph said "which takes
+    the richest active profile" until 2026-08-31 -- true of the list until the
+    owner's 2026-08-09 decision, and never re-read afterwards. The helper it
+    named, `resolve_richest_active_profile_id`, outlived its last caller by
+    the same inattention and is gone.)
 
     Every candidate is a *visible* subscription. A hidden one is still a valid
     answer when the link names it -- the `focus` branch above reaches one, and
@@ -5087,26 +5092,33 @@ def export_properties_csv():
 
         from services.search_profile_service import SearchProfileService
 
-        default_profile = SearchProfileService.get_default_profile(create=True)
+        # Unassigned, for its side effect and like /properties does it: the
+        # catch-all is ensured to exist, and nothing here needs to hold it now
+        # that the fallback is `all` rather than a profile picked for the
+        # reader.
+        SearchProfileService.get_default_profile(create=True)
         # Visible, like /properties -- an export of "all subscriptions" that
         # carried the hidden ones would disagree with the page it was taken
         # from (2026-08-17).
         profiles = SearchProfileService.list_visible_profiles(active_only=True)
 
         # Same profile_id contract as /properties (auto | all | selected(ids))
-        # and the same auto-select fallback, so an export matches what that
-        # page is showing instead of landing on a possibly-empty default.
+        # and the same fallback, which is `all` -- the owner's decision of
+        # 2026-08-09 that a bare listing surface shows every live subscription
+        # at once, rather than one picked for the reader.
+        #
+        # This comment claimed exactly that while the code did the opposite: it
+        # resolved a bare export to a single auto-selected profile. Measured on
+        # production 2026-08-31, `/properties` showed 386 listings and
+        # `/properties/export.csv` handed over **2** -- the catch-all's whole
+        # contents -- with nothing on either surface saying they disagreed. The
+        # page's own Export button carries `profile_id=all`, so this only ever
+        # bit the bare URL, which is the one a person types or bookmarks.
         selection = parse_profile_selection(request.args)
+        if selection.is_auto:
+            selection = ProfileSelection(ProfileSelectionState.ALL)
         profile_selection = resolve_profile_selection(
-            selection,
-            [profile.id for profile in profiles],
-            auto_profile_id=(
-                SearchProfileService.resolve_richest_active_profile_id(
-                    default_profile, profiles
-                )
-                if selection.is_auto
-                else None
-            ),
+            selection, [profile.id for profile in profiles]
         )
         selected_profile_id = profile_selection.single_id
 
