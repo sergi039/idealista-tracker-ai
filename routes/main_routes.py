@@ -833,9 +833,23 @@ def _listing_reveal_link(prop, search_query):
         keep=NON_FILTERS - {"profile_id"},
     )
     args.update(CLEARED_NOT_ABSENT)
-    args["hide_removed"] = (
-        "off" if prop.listing_status in DELISTED_LISTING_STATUSES else "on"
+    # `on` is safe only for a row the ON filter provably KEEPS, and that is a
+    # narrower set than "not delisted": the page filters with
+    # `Property.listing_status.notin_(DELISTED_LISTING_STATUSES)`, and under
+    # SQL's three-valued logic `NULL NOT IN (...)` is NULL, so a NULL-status
+    # row is dropped by the very setting a Python `not in` test calls safe.
+    # A link that promises to reveal a listing must not rest on the two
+    # languages disagreeing about NULL -- the same trap
+    # `subscription_criteria` records for its own definite clauses. Production
+    # holds no NULL status today (measured: 1536 active, 1 removed), but direct
+    # SQL is a supported workflow here, and a reader that refuses a shape only
+    # because today's writer cannot produce it is a reader that trusts the
+    # writer.
+    survives_hide_removed = (
+        prop.listing_status is not None
+        and prop.listing_status not in DELISTED_LISTING_STATUSES
     )
+    args["hide_removed"] = "on" if survives_hide_removed else "off"
     args["search"] = search_query
     args["page"] = 1
     profile_id = (

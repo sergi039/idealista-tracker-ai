@@ -405,3 +405,71 @@ class TestTheTwoReadingsOfTheHideAgree:
         prop = _mk(asturias.id, area=10)
 
         assert subscription_criteria.hidden_by_default(prop, None) is False
+
+
+class TestTheRevealLinkSurvivesANullStatus:
+    """The reviewer's finding: `None not in ("removed", "sold")` is True in
+    Python, so the link called `hide_removed=on` safe — while the page filters
+    with `notin_(...)`, and under SQL's three-valued logic `NULL NOT IN (...)`
+    is NULL, which drops the row. The link promised to reveal a listing and
+    landed on a page that still hid it.
+
+    Production holds no NULL status today (1536 active, 1 removed, measured
+    2026-08-31), so this is latent — but direct SQL is a supported workflow in
+    this repository and the row shape is reachable.
+    """
+
+    def test_a_null_status_row_is_really_revealed(self, client, app):
+        import re
+
+        from sqlalchemy import text
+
+        prop = _mk(
+            None,
+            title="Null status row",
+            area=100,
+            area_type="built",
+            idealista_property_id=99887766,
+        )
+        # Only direct SQL can produce it: the column carries a Python-side
+        # default that SQLAlchemy applies to any attribute that is None.
+        db.session.execute(
+            text("UPDATE properties SET listing_status = NULL WHERE id = :i"),
+            {"i": prop.id},
+        )
+        db.session.commit()
+        # The identity map still holds the row as the ORM wrote it, so without
+        # this the route re-reads 'active' and the test fails for a reason that
+        # is not the defect.
+        db.session.expire_all()
+        assert (
+            db.session.execute(
+                text("SELECT listing_status FROM properties WHERE id = :i"),
+                {"i": prop.id},
+            ).scalar()
+            is None
+        ), "the fixture must really store NULL, or this test proves nothing"
+
+        # Search by the LISTING id, which is what the box reads — the row's
+        # internal id names nothing, and searching by it drew no reveal line
+        # at all in the first version of this test.
+        body = client.get("/properties?search=99887766").data.decode()
+        # Anchor on the reveal link itself. A bare href regex matches the
+        # clear-filters link first, which carries profile_id=all and is a
+        # different promise -- the first version of this test did exactly that
+        # and reported the wrong element's parameters.
+        match = re.search(r'id="search-reveal-link" href="([^"]+)"', body)
+        if match is None:
+            # No reveal line means the row was not hidden at all; then there is
+            # nothing to promise and nothing to break.
+            assert "Null status row" in body
+            return
+        link = match.group(1).replace("&amp;", "&")
+        assert "hide_removed=off" in link, (
+            f"a NULL-status row is dropped by hide_removed=on, so the link that "
+            f"promises to reveal it must not ask for it: {link!r}"
+        )
+        revealed = client.get(link).data.decode()
+        assert "Null status row" in revealed, (
+            f"following {link!r} did not reveal the listing it named"
+        )
