@@ -372,6 +372,21 @@ def _criteria_context():
     }
 
 
+def _shows_rows_the_default_hides(query, ctx):
+    """Whether the rows on screen include any that the DEFAULT criteria
+    reading hides — the reading the "clear filters" link restores.
+
+    This is the honest form of the question the "N of M shown" note asks,
+    because that sentence claims the N rows are part of the M the link lands
+    on. It reads the rows rather than the `criteria` parameter: the spelling
+    of the mode does not decide whether the two sets nest, the subscription's
+    own criteria do. A scope with no criteria at all nests under every mode.
+    """
+    if ctx is None:
+        return False
+    return query.filter(ctx["hidden_default"]).first() is not None
+
+
 def _apply_criteria_filter(query, ctx, raw_value, count_hidden=False):
     """One reading of the `criteria` parameter for the list, the map and the
     CSV — a surface that kept the parameter while another dropped it is the
@@ -1602,11 +1617,19 @@ def properties():
         # on the grounds that it is a design decision rather than a review
         # fix. It is: `criteria` stays a filter the clear link resets, and
         # the note stands down when it cannot back its own arithmetic.)
-        criteria_mode_admits_hidden = (criteria_filter or "").strip().lower() in {
-            "all",
-            "fail",
-        }
-        if filter_bar_active and not criteria_mode_admits_hidden:
+        #
+        # The question is asked of the ROWS and never of the parameter's
+        # spelling. The first version of this guard tested `criteria` against
+        # {"all", "fail"} and was wrong in both directions on production: a
+        # subscription that carries NO criteria selects the default's own rows
+        # under `criteria=all`, so a true sentence was silenced — and its
+        # clear-filters link went with it, because the link lives inside the
+        # note's own span. Conversely `criteria=fail` over a scope whose fails
+        # the owner has all judged shows rows the default keeps, where the
+        # sentence is true and the string test refuses it. Both are one
+        # measurement: does anything on screen fall outside what the clear
+        # link restores?
+        if filter_bar_active and not _shows_rows_the_default_hides(query, criteria_ctx):
             scope_query = apply_profile_filter(
                 filter_bar_scope, Property.search_profile_id, profile_selection
             )
