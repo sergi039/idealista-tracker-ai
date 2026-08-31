@@ -366,9 +366,10 @@ local run. One asymmetry between them is deliberate and should not be
 "fixed": CI pins that image **by digest** while the script and
 `docker-compose.yml` use the bare `postgres:15-alpine` tag, because the
 throwaway exists to reproduce `idealista-db` and therefore has to move when
-the deployment moves. Digest-pinning the script without pinning compose
-would make the test server *more* frozen than production — the same
-divergence this rule exists to prevent, pointed the other way.
+the deployment moves. **Pin both or neither**: digest-pinning the
+script alone makes the test server *more* frozen than production, which is
+this rule's own divergence pointed the other way, and it is the tidy-looking
+change a future reader will reach for first.
 A compact form that snapshots a field into hidden inputs erases whatever
 another tab set in the meantime, so the comment card sends `keep_action`
 and `set_review` re-reads the action under its own lock. And a test can
