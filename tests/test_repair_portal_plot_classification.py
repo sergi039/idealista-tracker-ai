@@ -266,8 +266,12 @@ def test_a_snapshot_naming_a_column_the_app_does_not_restore_is_refused(tmp_path
     """The snapshot module's own rule, exercised through the widened set."""
     from utils import score_snapshot
 
-    with pytest.raises(score_snapshot.SnapshotError):
-        score_snapshot.parse_row({"id": 1, "municipality": "Gozón"})
+    # The row carries a restorable column too, or the refusal that fires is
+    # "restores nothing" and the test passes without the rule under it.
+    with pytest.raises(score_snapshot.SnapshotError, match="unknown column"):
+        score_snapshot.parse_row(
+            {"id": 1, "score_total": "50", "title": "Finca en Gozón"}
+        )
 
     parsed = score_snapshot.parse_row({"id": 1, "property_category": "land"})
     assert parsed["property_category"] == "land"
