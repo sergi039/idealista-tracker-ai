@@ -84,6 +84,10 @@ MATRIX = [
     # measured fail into unknown (the gate review's reproduction).
     (650, "PLOT", None, "fail"),
     (650, " Plot ", None, "fail"),
+    # A TAB survives SQL's trim() (btrim strips spaces only — the SEPE
+    # lesson), so both languages read a tab-polluted type as not-plot and
+    # answer unknown together; Python matching SQL, not the other way.
+    (650, "PLOT\t", None, "unknown"),
     (0, "built", 800, "unknown"),  # zero is a blank, never a tiny house
     (200, "built", 0, "unknown"),  # zero plot is a blank too
 ]
@@ -269,6 +273,20 @@ class TestTheSurfaces:
         html = client.get("/properties?profile_id=unassigned").data.decode()
         assert "Orphan tiny" in html
         assert orphan.search_profile_id is None
+
+    def test_unknown_mode_never_claims_a_criteria_less_subscriptions_row(
+        self, client, app, rows
+    ):
+        """The gate review's leak: unknown is ~fail AND ~pass, and a row of
+        a subscription with NO criteria answered both negations TRUE — a
+        verdict it never had (its reading is no_criteria)."""
+        bare = SearchProfile(name="Bare", is_active=True)
+        db.session.add(bare)
+        db.session.commit()
+        _mk(bare.id, title="No criteria here", area=100, area_type="built")
+        html = client.get("/properties?criteria=unknown").data.decode()
+        assert "Unknown plot" in html
+        assert "No criteria here" not in html
 
     def test_without_criteria_the_control_is_absent_and_nothing_hides(
         self, client, app

@@ -344,8 +344,23 @@ def _criteria_context():
             ]
         )
 
+    # Membership in SOME criteria-carrying subscription, for the `unknown`
+    # mode: unknown is ~fail AND ~pass, and without this clause a row whose
+    # subscription has NO criteria answered both negations TRUE and leaked
+    # into a verdict it never had (its reading is `no_criteria`) — the gate
+    # review's finding.
+    member = or_(
+        *[
+            and_(
+                Property.search_profile_id.isnot(None),
+                Property.search_profile_id == pid,
+            )
+            for pid, _ in pairs
+        ]
+    )
     return {
         "pairs": pairs,
+        "member": member,
         "hidden_default": _across(subscription_criteria.hidden_by_default_expression),
         "fail": _across(subscription_criteria.failing_expression),
         "pass": _across(subscription_criteria.passing_expression),
@@ -373,7 +388,7 @@ def _apply_criteria_filter(query, ctx, raw_value, count_hidden=False):
     if mode == "pass":
         return query.filter(ctx["pass"]), None
     if mode == "unknown":
-        return query.filter(~ctx["fail"], ~ctx["pass"]), None
+        return query.filter(ctx["member"], ~ctx["fail"], ~ctx["pass"]), None
     hidden = query.filter(ctx["hidden_default"]).count() if count_hidden else None
     return query.filter(~ctx["hidden_default"]), hidden
 

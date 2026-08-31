@@ -1406,10 +1406,16 @@ class SearchProfileService:
             if source.auto_route_from_pattern:
                 db.session.rollback()
                 return {"status": "refused", "reason": "source_carries_a_pattern"}
-            inbound = (
+            # `.all()` then len, never `.count()` under the lock: PostgreSQL
+            # refuses `SELECT count(*) ... FOR UPDATE` outright ("FOR UPDATE
+            # is not allowed with aggregate functions") and SQLite swallowed
+            # it, which is how this shipped green (the gate review's
+            # crasher). Locking the inbound rows themselves is also what the
+            # serialization wants.
+            inbound = len(
                 SearchProfile.query.filter(SearchProfile.routed_to == source_id)
                 .with_for_update()
-                .count()
+                .all()
             )
             if inbound:
                 db.session.rollback()

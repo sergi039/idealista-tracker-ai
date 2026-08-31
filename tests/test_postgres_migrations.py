@@ -2248,3 +2248,63 @@ def test_025_the_route_is_enforced_at_the_database(postgres_url):
                 )
     finally:
         engine.dispose()
+
+
+def test_025_route_profile_actually_runs_on_postgres(postgres_url, monkeypatch):
+    """`route_profile` itself, on the engine production runs.
+
+    The inbound-chain guard shipped as `.with_for_update().count()` — a
+    query PostgreSQL refuses outright ("FOR UPDATE is not allowed with
+    aggregate functions") and SQLite silently tolerates, so every SQLite
+    test stayed green while the one writer of `routed_to` could not
+    complete a single call in production (the gate review's crasher). This
+    test calls the real method through the ORM against a real server.
+    """
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+    finally:
+        engine.dispose()
+
+    from tests import setup_test_environment
+
+    setup_test_environment()
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    from config import Config as _Config
+
+    monkeypatch.setattr(_Config, "DATABASE_URL", postgres_url)
+    monkeypatch.setattr(_Config, "SQLALCHEMY_DATABASE_URI", postgres_url, raising=False)
+
+    from app import create_app, db as _db
+    from models import Property as _Property, SearchProfile as _SearchProfile
+    from services.search_profile_service import SearchProfileService
+
+    application = create_app()
+    application.config["TESTING"] = True
+    with application.app_context():
+        target = _SearchProfile(name="PG target", is_active=True)
+        stub = _SearchProfile(name="PG stub", is_active=True)
+        _db.session.add_all([target, stub])
+        _db.session.commit()
+        prop = _Property(
+            source_email_id="pg-route:1", title="PG row", search_profile_id=stub.id
+        )
+        _db.session.add(prop)
+        _db.session.commit()
+
+        outcome = SearchProfileService.route_profile(stub.id, target.id)
+        assert outcome == {"status": "ok", "moved": 1}
+        _db.session.refresh(prop)
+        assert prop.search_profile_id == target.id
+
+        # And the trigger canonicalizes an ORM insert naming the stub.
+        second = _Property(
+            source_email_id="pg-route:2", title="PG row 2", search_profile_id=stub.id
+        )
+        _db.session.add(second)
+        _db.session.commit()
+        _db.session.refresh(second)
+        assert second.search_profile_id == target.id
+        _db.session.remove()

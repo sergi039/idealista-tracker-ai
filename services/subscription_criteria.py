@@ -105,7 +105,11 @@ def _effective_figures(prop: Any) -> Dict[str, Optional[float]]:
 
     area = _positive(prop.area)
     plot = _positive(getattr(prop, "plot_area", None))
-    area_type = (getattr(prop, "area_type", None) or "").strip().lower()
+    # `.strip(" ")`, not `.strip()`: the SQL twin normalizes with trim(),
+    # which strips SPACES only (btrim — the SEPE lesson, one module over),
+    # and a tab-polluted "PLOT\t" must read the same in both languages —
+    # here as not-plot, exactly as lower(trim(...)) reads it.
+    area_type = (getattr(prop, "area_type", None) or "").strip(" ").lower()
     if area_type == "plot":
         return {"house_m2": None, "plot_m2": plot if plot is not None else area}
     return {"house_m2": area, "plot_m2": plot}
