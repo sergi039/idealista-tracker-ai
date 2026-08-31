@@ -591,10 +591,15 @@ def _map_auto_profile_id(default_profile, profiles, focus_property=None):
     else. An inactive subscription is a valid answer here: its listings are
     real, and a link that names one asked for it explicitly.
 
-    Deliberately different from `/properties`, which takes the richest active
-    profile: a map is useless without coordinates, so the profile with the
-    most mappable rows wins. When nothing has coordinates yet it falls back to
-    the most recently active profile, then the default, then the first one.
+    Deliberately different from `/properties` and `/properties/export.csv`,
+    which both rewrite a bare request to `all`: a map is useless without
+    coordinates, so the profile with the most mappable rows wins. When nothing
+    has coordinates yet it falls back to the most recently active profile,
+    then the default, then the first one. (This paragraph said "which takes
+    the richest active profile" until 2026-08-31 -- true of the list until the
+    owner's 2026-08-09 decision, and never re-read afterwards. The helper it
+    named, `resolve_richest_active_profile_id`, outlived its last caller by
+    the same inattention and is gone.)
 
     Every candidate is a *visible* subscription. A hidden one is still a valid
     answer when the link names it -- the `focus` branch above reaches one, and
@@ -1772,6 +1777,28 @@ def properties():
             hazard_complete_expression(Property)
         ).count()
 
+        # And for the score itself (#493). The number this page sorts by is a
+        # weighted average over the criteria that answered, renormalised past
+        # the ones that did not (#379) -- so it stays honest per row and says
+        # nothing about the *set*. Measured on production 2026-08-26, 678 of
+        # 948 located rows carry `travel: approximate_origin` and 628 carry
+        # `sea: approximate_origin`: for roughly 70% of them the drive times
+        # and the sea distance are measured, stored, rendered, and scored by
+        # nothing, leaving `value` + `size` carrying `score_total` alone.
+        # Every abstention is right on its own terms; what was missing is that
+        # a 0-100 silently meaning one thing here and another thing there
+        # looks like a composite ranking while being a single-axis one.
+        #
+        # So the same disclosure the two lines above make, from the predicate
+        # `measured=full` already filters on -- header and filter cannot
+        # disagree. A row whose share was never recorded is NOT counted:
+        # `_score_coverage_share_expr` is NULL there, "unknown coverage must
+        # not pass as full" is that helper's own rule, and counting it would
+        # be #98 inside the line that exists to prevent #98.
+        score_full_basis_count = query.filter(
+            _score_coverage_share_expr(Property) >= 0.999
+        ).count()
+
         # And for the taste ranking (#498): the version once per request, so
         # every row is judged against the same profile, and the disclosure
         # count beside the result count -- "K of N scored against the current
@@ -1923,6 +1950,7 @@ def properties():
             travel_display_targets=travel_display_targets,
             listing_verified_count=listing_verified_count,
             hazard_scanned_count=hazard_scanned_count,
+            score_full_basis_count=score_full_basis_count,
             taste_version=taste_version,
             taste_scored_count=taste_scored_count,
             criteria_enabled=criteria_ctx is not None,
@@ -5248,26 +5276,33 @@ def export_properties_csv():
 
         from services.search_profile_service import SearchProfileService
 
-        default_profile = SearchProfileService.get_default_profile(create=True)
+        # Unassigned, for its side effect and like /properties does it: the
+        # catch-all is ensured to exist, and nothing here needs to hold it now
+        # that the fallback is `all` rather than a profile picked for the
+        # reader.
+        SearchProfileService.get_default_profile(create=True)
         # Visible, like /properties -- an export of "all subscriptions" that
         # carried the hidden ones would disagree with the page it was taken
         # from (2026-08-17).
         profiles = SearchProfileService.list_visible_profiles(active_only=True)
 
         # Same profile_id contract as /properties (auto | all | selected(ids))
-        # and the same auto-select fallback, so an export matches what that
-        # page is showing instead of landing on a possibly-empty default.
+        # and the same fallback, which is `all` -- the owner's decision of
+        # 2026-08-09 that a bare listing surface shows every live subscription
+        # at once, rather than one picked for the reader.
+        #
+        # This comment claimed exactly that while the code did the opposite: it
+        # resolved a bare export to a single auto-selected profile. Measured on
+        # production 2026-08-31, `/properties` showed 386 listings and
+        # `/properties/export.csv` handed over **2** -- the catch-all's whole
+        # contents -- with nothing on either surface saying they disagreed. The
+        # page's own Export button carries `profile_id=all`, so this only ever
+        # bit the bare URL, which is the one a person types or bookmarks.
         selection = parse_profile_selection(request.args)
+        if selection.is_auto:
+            selection = ProfileSelection(ProfileSelectionState.ALL)
         profile_selection = resolve_profile_selection(
-            selection,
-            [profile.id for profile in profiles],
-            auto_profile_id=(
-                SearchProfileService.resolve_richest_active_profile_id(
-                    default_profile, profiles
-                )
-                if selection.is_auto
-                else None
-            ),
+            selection, [profile.id for profile in profiles]
         )
         selected_profile_id = profile_selection.single_id
 

@@ -1194,6 +1194,21 @@
                             <i class="fas fa-circle-info me-1"></i>{{ t('hazards_coverage')|format(hazard_scanned_count, pagination.total) }}
                         </span>
                     {% endif %}
+                    {# And for the score itself (#493). The two lines above say
+                       how much of what is on screen was measured; this one says
+                       how much of the number the page SORTS BY was. A weighted
+                       average renormalised past the criteria that abstained is
+                       honest per listing and says nothing about the set -- and
+                       on this table most rows abstain on travel and sea, which
+                       leaves price-per-m2 and size carrying the figure. Same
+                       filtered set as the count beside it, same predicate the
+                       `measured=full` filter uses. #}
+                    {% if score_full_basis_count is defined and pagination %}
+                        <span id="score-basis-coverage" class="text-body-secondary small"
+                              title="{{ t('score_basis_coverage_tooltip') }}">
+                            <i class="fas fa-circle-info me-1"></i>{{ t('score_basis_coverage')|format(score_full_basis_count, pagination.total) }}
+                        </span>
+                    {% endif %}
                     {# And for the taste ranking (#498): how many of these rows
                        are scored against the CURRENT profile. Rendered only
                        while a profile exists -- with none the feature is
