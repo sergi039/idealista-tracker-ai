@@ -283,6 +283,19 @@ class TestWhatTheReadingLeavesOutIsSaidOutLoud:
         body = _page(client, "/municipalities?criteria=all")
         assert 'id="municipalities-criteria-excluded"' not in body
 
+    def test_the_note_explains_the_default_hide_only_where_it_is_the_reading(
+        self, client, world
+    ):
+        """The tooltip describes what the DEFAULT hide never hides. Under an
+        explicitly chosen verdict the rows are gone by the reader's own
+        choice, and reusing that explanation would describe a narrowing that
+        did not happen."""
+        note = re.compile(r'id="municipalities-criteria-excluded"(.*?)>', re.S)
+        default = note.search(_page(client, "/municipalities")).group(1)
+        chosen = note.search(_page(client, "/municipalities?criteria=fail")).group(1)
+        assert "A favorited or reviewed listing is never hidden" in default
+        assert "title=" not in chosen
+
     def test_an_unreadable_mode_marks_the_reading_it_actually_applied(
         self, client, world
     ):

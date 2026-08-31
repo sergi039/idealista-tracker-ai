@@ -235,8 +235,15 @@
                something really was excluded: a permanent "0 excluded" is
                noise, and the control above already shows which reading is on. #}
             {% if criteria_excluded and criteria_excluded.listings %}
+                {# The tooltip explains the DEFAULT hide -- what it is and what
+                   it never hides -- so it is attached only where that is the
+                   reading in force. Under `pass`/`fail`/`unknown` the excluded
+                   rows are excluded by the reader's own explicit choice, which
+                   the control above names, and reusing the default's
+                   explanation there would describe a narrowing that is not the
+                   one that happened. #}
                 <div class="mt-1" id="municipalities-criteria-excluded"
-                     title="{{ t('criteria_hidden_tooltip') }}">
+                     {% if not criteria_filter %}title="{{ t('criteria_hidden_tooltip') }}"{% endif %}>
                     <i class="fas fa-filter me-1 text-primary"></i>
                     <strong>{{ t('criteria_filter') }}</strong>
                     — {{ tn('municipalities_criteria_excluded', criteria_excluded.listings) }}{%
