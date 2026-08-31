@@ -74,6 +74,26 @@ NON_FILTERS: frozenset[str] = frozenset(
 )
 
 
+# The exception that sentence above did not survive, and the reason it needs
+# naming rather than fixing quietly: **`criteria` filters when it is absent.**
+# Every other filter here is off when it is not in the URL, so dropping it
+# clears it. `criteria` is a four-state view of a verdict
+# (`services/subscription_criteria.py`) whose unset state is *hide the
+# measured fails* -- so a link that drops it re-issues exactly the hide it
+# meant to lift, which is #445's defect in the one parameter the inverted
+# list cannot see.
+#
+# Measured on production 2026-08-31: `/map?focus=1457` said the listing was
+# hidden by the filters and offered "Clear the filters and show it"; the
+# cleared link rendered the identical notice with the identical link, a loop
+# with no exit, because 1457 is a measured criteria fail.
+#
+# So clearing is "keep the non-filters, AND state the cleared value for any
+# filter whose absence is not its off position". A future filter of the same
+# shape belongs here; one of the ordinary shape needs nothing.
+CLEARED_NOT_ABSENT: dict[str, str] = {"criteria": "all"}
+
+
 class FilterArgs:
     """`request.args`, remembering which filters were taken from it.
 

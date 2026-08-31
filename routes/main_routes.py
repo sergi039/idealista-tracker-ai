@@ -62,7 +62,12 @@ from utils.google_spend import (
     cap_for_rows,
 )
 from utils.i18n import t
-from utils.listing_filters import NON_FILTERS, FilterArgs, rebuilt_from
+from utils.listing_filters import (
+    CLEARED_NOT_ABSENT,
+    NON_FILTERS,
+    FilterArgs,
+    rebuilt_from,
+)
 from utils.listing_search import interpret_search, listing_search_clause
 from utils.listing_source import source_filter_clause
 from utils.listing_status_scope import resolve_hide_removed
@@ -689,6 +694,13 @@ def _map_focus_link(profile_id, keep_filters=True):
         drop={"profile_id"},
         keep=None if keep_filters else NON_FILTERS - {"profile_id"},
     )
+    if not keep_filters:
+        # ...except for the filters whose ABSENCE is not their off position:
+        # dropping `criteria` re-issues the default hide, so the link that
+        # promises to show the listing has to say `criteria=all` out loud
+        # (`utils/listing_filters.CLEARED_NOT_ABSENT`). Without this the
+        # notice for a criteria-hidden listing linked to itself.
+        args.update(CLEARED_NOT_ABSENT)
     return url_for("main.map_view", profile_id=profile_id, **args)
 
 
@@ -1572,17 +1584,32 @@ def properties():
         # Counted only when a filter really applied: the extra COUNT is not
         # spent on the common unfiltered page.
         filter_bar_scope_total = None
-        if filter_bar_active:
-            # Under the same standing criteria hide as the page itself:
-            # the "N of M" disclosure describes the set clearing the bar
-            # lands on, and that set is also criteria-filtered (finding 6b).
+        # "N of M shown" is a SUBSET claim: the N rows on screen are part of
+        # the M the clear link lands on. That link resets `criteria` to its
+        # default, so M is counted under the default reading — and the claim
+        # holds only while every row on screen would survive that default.
+        # `pass` and `unknown` rows do, so those modes keep the line and it
+        # is true. `fail` rows do not, and `all` puts them on screen beside
+        # the rest, so under those two the sets are not nested: measured on
+        # production, `?criteria=fail&search=casa` said "54 of 377" while
+        # none of the 54 was among the 377. A subset claim about sets that
+        # are not nested is not a disclosure, it is a wrong number, so the
+        # line stands down there — the criteria dropdown already shows its
+        # own state, and the Clear control sits beside it.
+        #
+        # (A sibling session removed the mirror case, N > M under
+        # `criteria=all`, in the template, and left this half to the author
+        # on the grounds that it is a design decision rather than a review
+        # fix. It is: `criteria` stays a filter the clear link resets, and
+        # the note stands down when it cannot back its own arithmetic.)
+        criteria_mode_admits_hidden = (criteria_filter or "").strip().lower() in {
+            "all",
+            "fail",
+        }
+        if filter_bar_active and not criteria_mode_admits_hidden:
             scope_query = apply_profile_filter(
                 filter_bar_scope, Property.search_profile_id, profile_selection
             )
-            # The DEFAULT reading, not the current mode: this number is what
-            # the clear link lands on, and clearing resets criteria too —
-            # under criteria=fail the current-mode total described a page
-            # the link never shows (the gate review's finding).
             scope_query, _ = _apply_criteria_filter(scope_query, criteria_ctx, "")
             filter_bar_scope_total = scope_query.count()
 
