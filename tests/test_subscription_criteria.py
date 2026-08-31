@@ -11,6 +11,8 @@ rule: a filter one surface keeps and another drops is the regression).
 import csv
 import io
 
+from datetime import date
+
 import pytest
 
 from app import create_app, db
@@ -88,6 +90,26 @@ MATRIX = [
     # lesson), so both languages read a tab-polluted type as not-plot and
     # answer unknown together; Python matching SQL, not the other way.
     (650, "PLOT\t", None, "unknown"),
+    # AT the bound, both criteria. The matrix carried 120/200/650/800/900 and
+    # never 150 or 700 — the two numbers CRITERIA is built from — so `>=`
+    # could be mutated to `>` in the SQL twin and the whole suite stayed
+    # green (#502 review). Reachable the day it merged: 13 production rows
+    # carry `area = 150` and 3 bare-land rows carry `area = 700`.
+    (150, "built", 800, "pass"),  # house exactly at the bound passes
+    (200, "built", 700, "pass"),  # plot exactly at the bound passes
+    (700, "plot", None, "pass_or_unknown_house"),  # bare land at the bound
+    # One under the bound on each, so the pair pins the boundary from both
+    # sides — an off-by-one that moved the comparison would break one of the
+    # two whichever direction it moved.
+    (149, "built", 800, "fail"),
+    (200, "built", 699, "fail"),
+    # A built row whose area clears the PLOT bound while its plot is
+    # unmeasured. `passing_expression`'s bare-land branch is guarded by
+    # `is_plot`; without that guard this reads the BUILT surface as the
+    # parcel and calls it a pass. Deleting the guard left the full suite at
+    # 4211 passed — 43 production rows are `area_type='built' AND area >=
+    # 700`, and migration 025 gave every existing row a NULL plot_area.
+    (800, "built", None, "unknown"),
     (0, "built", 800, "unknown"),  # zero is a blank, never a tiny house
     (200, "built", 0, "unknown"),  # zero plot is a blank too
 ]
@@ -263,6 +285,76 @@ class TestTheSurfaces:
             f"the scope total must be the default view's 2, got: {text!r}"
         )
 
+    def test_the_narrowing_note_never_claims_more_than_its_own_scope(
+        self, client, rows
+    ):
+        """ "Filters: 4 of 2 shown" — rendered literally (#502 review).
+
+        The scope is counted under the DEFAULT criteria reading, because that
+        is what clearing lands on; the page under the CURRENT one. Under
+        `criteria=all` the page holds rows the scope hides, so `N of M` stops
+        being a subset claim. `i18n` spells it "Filters: %s of %s shown", so
+        4-of-2 is not a phrasing being read uncharitably.
+        """
+        import re
+
+        def _pair(query):
+            html = client.get(query).data.decode()
+            note = re.search(r"filter-bar-narrowing-note.*?</span>", html, re.S)
+            if note is None:
+                return None
+            # The phrase itself, not every digit in the block: the icon class
+            # is `fas fa-filter me-1`, so a bare `\d+` scan reads the `1` out
+            # of `me-1` first and compares 1 <= 3 — an assertion that passes
+            # on the very inversion it is written for. Measured: the first
+            # version of this test stayed green under the mutation.
+            found = re.search(r"(\d+)\s+of\s+(\d+)", note.group(0))
+            assert found is not None, f"unreadable note: {note.group(0)!r}"
+            return int(found.group(1)), int(found.group(2))
+
+        # Positive control first: in a genuine narrowing the note must render,
+        # or the assertion below is satisfied by a line that never appears.
+        narrowed = _pair("/properties?search=Passing")
+        assert narrowed is not None, "the narrowing note must render at all"
+        assert narrowed[0] <= narrowed[1]
+
+        widened = _pair("/properties?criteria=all&search=n")
+        if widened is not None:
+            assert widened[0] <= widened[1], (
+                f"the note claims to show {widened[0]} of {widened[1]} — a set "
+                "bigger than the set it says it is part of"
+            )
+
+    def test_the_unassigned_link_lands_on_the_rows_it_advertises(
+        self, client, app, profile_row
+    ):
+        """The link said "N listings with no subscription (show them)" and
+        landed on a page that is always empty under criteria=pass/fail/unknown
+        (#502 review): the count is taken before the criteria filter, and every
+        criteria expression leads with `search_profile_id IS NOT NULL`.
+
+        A row with no subscription has no subscription criteria, so the mode
+        is dropped from that one link rather than carried over to state a
+        filter that cannot match.
+        """
+        import re
+
+        _mk(None, title="Orphan tiny", area=100, area_type="built")
+        for mode in ("fail", "pass", "unknown"):
+            html = client.get(f"/properties?criteria={mode}").data.decode()
+            link = re.search(r'id="unassigned-count-link"\s+href="([^"]+)"', html)
+            if link is None:
+                continue
+            href = link.group(1).replace("&amp;", "&")
+            assert "criteria=" not in href, (
+                f"the unassigned link carries the criteria mode ({mode}), and "
+                f"the page it lands on can never match: {href}"
+            )
+            landed = client.get(href).data.decode()
+            assert "Orphan tiny" in landed, (
+                f"the link advertised the row and landed on a page without it: {href}"
+            )
+
     def test_an_unassigned_listing_is_never_hidden_by_anybodys_criteria(
         self, client, app, profile_row
     ):
@@ -298,3 +390,72 @@ class TestTheSurfaces:
         html = client.get("/properties").data.decode()
         assert "Tiny but shown" in html
         assert 'name="criteria"' not in html
+
+
+class TestAnOwnerActionIsNeverHidden:
+    """The HIGH finding of the #502 review, pinned.
+
+    A listing carrying an outstanding action but no verdict was hidden by the
+    criteria default, while the overdue count — built off the profile
+    selection with no criteria clause — went on advertising it. The bare page
+    read "1 overdue", its own link landed on "0 properties found", and that
+    page re-rendered the same link. A loop with no way out.
+
+    The exemption is the third of a set: favorited, reviewed, and now
+    *acted on* — one idea, that the owner has touched this row, so the
+    subscription's blanket criteria stop deciding whether they see it.
+    """
+
+    def test_a_row_with_an_open_action_survives_the_default_hide(self, app):
+        prop = _mk(None, area=100, area_type="built")
+        prop.next_action = "call the architect"
+        prop.next_action_due_on = date(2020, 1, 1)
+        db.session.commit()
+
+        hidden = (
+            db.session.query(Property.id)
+            .filter(
+                subscription_criteria.hidden_by_default_expression(Property, CRITERIA)
+            )
+            .all()
+        )
+        assert prop.id not in [row[0] for row in hidden], (
+            "a listing the owner left an action on was hidden by the criteria "
+            "default, while the overdue count still advertised it"
+        )
+
+    def test_the_same_row_without_an_action_is_still_hidden(self, app):
+        """The negative control: without it the test above passes on a hide
+        that never fired, which is the shape of an assertion that cannot
+        fail."""
+        prop = _mk(None, area=100, area_type="built")
+        db.session.commit()
+
+        hidden = (
+            db.session.query(Property.id)
+            .filter(
+                subscription_criteria.hidden_by_default_expression(Property, CRITERIA)
+            )
+            .all()
+        )
+        assert prop.id in [row[0] for row in hidden]
+
+    def test_a_blank_action_is_not_an_action(self, app):
+        """Whitespace in `next_action` must not buy an exemption: the column
+        is free text and `""` is what an emptied form field stores."""
+        for blank in ("", "   ", "\t"):
+            prop = _mk(None, area=100, area_type="built")
+            prop.next_action = blank
+            db.session.commit()
+            hidden = (
+                db.session.query(Property.id)
+                .filter(
+                    subscription_criteria.hidden_by_default_expression(
+                        Property, CRITERIA
+                    )
+                )
+                .all()
+            )
+            assert prop.id in [row[0] for row in hidden], (
+                f"a blank next_action ({blank!r}) bought an exemption"
+            )

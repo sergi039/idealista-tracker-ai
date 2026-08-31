@@ -390,3 +390,71 @@ class TestTheDailyJob:
         assert "AUTO_TASTE_SCORING=${AUTO_TASTE_SCORING:-false}" in compose
         dev = (root / "docker-compose.dev.yml").read_text()
         assert "AUTO_TASTE_SCORING" not in dev
+
+
+class TestTheDailyJobIsReallyGated:
+    """The fail-closed flag is pinned at CONSUMPTION, not only at its defaults.
+
+    The #502 review measured this: replacing
+    `if getattr(Config, "AUTO_TASTE_SCORING", False):` with `if True:` in
+    `services/scheduler_service.py` left the whole suite at 4211 passed.
+    `test_the_flag_is_fail_closed_everywhere_it_is_decided` reads config.py
+    and both compose files **as text** and never constructs a scheduler, and
+    `TestTheDailyJob` calls `run_scheduled_taste_scoring` directly, bypassing
+    registration entirely — so nothing asked whether the flag actually keeps
+    the job off the scheduler.
+
+    The sibling flag is pinned at both ends
+    (`tests/test_scheduler_belongs_to_the_web_process.py` imports `main`
+    under both values and asserts in four directions). This one now is too:
+    the job is registered when the flag is on, absent when it is off, and the
+    assertion is on the scheduler's own job ids rather than on a mock.
+    """
+
+    @staticmethod
+    def _job_ids(app, monkeypatch, flag):
+        """The job ids `init_scheduler` really registers under `flag`.
+
+        Driven through the real `init_scheduler` — the whole point is that
+        the flag governs *registration*, and a harness that called the job
+        body directly would prove exactly what the suite already proved and
+        the mutation walked straight through. `TESTING` off and the module
+        globals reset for the same reason
+        `tests/test_scheduler_service_universal.py` does it: `init_scheduler`
+        returns early under either.
+        """
+        from config import Config
+        from services import scheduler_service
+
+        monkeypatch.setattr(Config, "AUTO_TASTE_SCORING", flag, raising=False)
+        monkeypatch.setattr(scheduler_service, "scheduler", None)
+        monkeypatch.setattr(scheduler_service, "flask_app", None)
+        app.config["TESTING"] = False
+        app.config["AUTO_START_SCHEDULER"] = True
+
+        started = scheduler_service.init_scheduler(app)
+        try:
+            assert started is not None, "the scheduler did not start at all"
+            return sorted(job.id for job in started.get_jobs())
+        finally:
+            started.shutdown(wait=False)
+            scheduler_service.scheduler = None
+            if scheduler_service.scheduler_lock_file:
+                scheduler_service.scheduler_lock_file.close()
+                scheduler_service.scheduler_lock_file = None
+            app.config["TESTING"] = True
+
+    def test_the_job_is_absent_when_the_flag_is_off(self, app, monkeypatch):
+        ids = self._job_ids(app, monkeypatch, False)
+        assert ids, "no jobs were registered at all — the harness proves nothing"
+        assert "taste_scoring" not in ids, (
+            "the unattended taste job was registered with AUTO_TASTE_SCORING "
+            "off: a dev checkout would spend the owner's bridge credit"
+        )
+
+    def test_the_job_is_present_when_the_flag_is_on(self, app, monkeypatch):
+        """The positive control. Without it the test above is satisfied by a
+        scheduler that registers nothing, which is the shape of an assertion
+        that cannot fail."""
+        ids = self._job_ids(app, monkeypatch, True)
+        assert "taste_scoring" in ids
