@@ -14,7 +14,18 @@ exactly what the criteria verdict renders for them (#98).
 Paced at 30 s (the `backfill_advertiser` measurement: fotocasa starts
 serving its block page after 5 requests spaced 3 s), stops after three host
 refusals in a row, per-row commit, and `resumable=True` is a true claim:
-a row that gained its plot (or measurably has none) leaves the scope.
+a row that gained its plot leaves the scope, and so does one whose page
+ANSWERED and stated none.
+
+That second half is a measurement, not a blank, so it is recorded rather
+than inferred from a still-NULL column: `enrichment["plot_lookup"]` says
+the page was read and stated no plot, and the scope skips it. Without it
+the run re-fetched every known no-plot page forever, which is the
+resumability claim being false in the direction that costs somebody
+else's server (the gate review's finding). It is NOT a zero — `plot_area`
+stays NULL, so the criteria verdict still reads `unknown` (#98). A row
+named explicitly with `--ids` is re-read whatever the marker says: an
+operator naming a row means "ask again".
 """
 
 import argparse
@@ -22,9 +33,12 @@ import logging
 import time
 from collections import Counter
 
+from datetime import datetime, timezone
+
 from app import create_app, db
 from models import Property
 from services import fotocasa_source
+from services.enrichment_write import check_writable, locked_write
 from utils.inflight import inflight
 from utils.listing_source import source_of
 
@@ -33,23 +47,50 @@ logger = logging.getLogger(__name__)
 DEFAULT_SLEEP_S = 30.0
 DEFAULT_MAX_REFUSALS = 3
 
+# Where "the page answered and stated no plot" is recorded. A measured
+# absence, in the family's own shape: a status somebody can read, never a
+# zero in the measurement column.
+LOOKUP_KEY = "plot_lookup"
+STATED_NONE = "page_states_no_plot"
+
+
+def _states_no_plot(prop) -> bool:
+    block = (prop.enrichment or {}).get(LOOKUP_KEY) if prop.enrichment else None
+    return isinstance(block, dict) and block.get("status") == STATED_NONE
+
+
+def _record_states_no_plot(prop) -> None:
+    """Write the measured absence under the row lock (#339's contract)."""
+    check_writable(prop, True)
+    with locked_write(prop, locked=True, commit=True):
+        enrichment = dict(prop.enrichment or {})
+        enrichment[LOOKUP_KEY] = {
+            "status": STATED_NONE,
+            "source": "fotocasa",
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+        }
+        prop.enrichment = enrichment
+
 
 def _scope(args):
-    """Fotocasa rows with no plot on record, oldest first.
+    """Fotocasa rows whose plot nobody has established, oldest first.
 
-    `plot_area IS NULL` is what makes an interrupted run resumable — a
-    scored row leaves the scope. A page that answers but states no plot
-    writes a zero-marker? No: it writes nothing, and the row stays in
-    scope; `--skip-ids` exists for the handful a re-run should not keep
-    re-fetching.
+    Two ways a row leaves this scope, and both are what makes an
+    interrupted run resumable: it gained a `plot_area`, or its page was
+    read and stated none (`enrichment["plot_lookup"]`). Naming a row with
+    `--ids` overrides the second — an operator asking for a row means ask
+    again, and a portal may have gained the figure since.
     """
     query = Property.query.filter(Property.plot_area.is_(None))
-    if args.ids:
+    named = bool(args.ids)
+    if named:
         query = query.filter(Property.id.in_(args.ids))
     rows = [
         prop
         for prop in query.order_by(Property.id.asc()).all()
-        if source_of(prop) == "fotocasa" and prop.id not in set(args.skip_ids or [])
+        if source_of(prop) == "fotocasa"
+        and prop.id not in set(args.skip_ids or [])
+        and (named or not _states_no_plot(prop))
     ]
     return rows[: args.limit] if args.limit else rows
 
@@ -112,9 +153,12 @@ def main() -> None:
                     continue
                 consecutive_refusals = 0
                 if listing.plot_area is None:
-                    # The page answered and stated no plot — nothing is
-                    # written (#98: the absence stays an absence, and a
-                    # marker value would read as a measurement).
+                    # The page answered and stated no plot. `plot_area`
+                    # stays NULL — a zero there would be a measurement
+                    # nobody took (#98) — and the READING is recorded, so
+                    # the next run does not re-fetch a page that already
+                    # answered.
+                    _record_states_no_plot(prop)
                     tally["page_states_no_plot"] += 1
                     logger.info("property %s: page states no plot", prop.id)
                     continue

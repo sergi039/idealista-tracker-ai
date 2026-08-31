@@ -124,6 +124,55 @@ class TestTheBackfill:
         rows = backfill_plot_area._scope(Args())
         assert [p.id for p in rows] == [wanted.id]
 
+    def test_a_page_stating_no_plot_leaves_the_scope_but_stays_unknown(
+        self, app, monkeypatch, capsys
+    ):
+        """The gate review's finding: the tool re-fetched every known
+        no-plot page forever, because the only thing marking a row done was
+        a `plot_area` the page had just said does not exist. The READING is
+        recorded now — and it is not a zero: `plot_area` stays NULL, so the
+        criteria verdict still reads unknown (#98)."""
+        import contextlib
+
+        from utils import backfill_plot_area
+
+        profile = SearchProfile(name="G", is_active=True)
+        db.session.add(profile)
+        db.session.commit()
+        row = self._row(profile.id, "https://www.fotocasa.es/es/comprar/vivienda/n/7/d")
+
+        monkeypatch.setattr(
+            backfill_plot_area.fotocasa_source,
+            "fetch_listing",
+            lambda url: fotocasa_source.FotocasaListing(url=url, plot_area=None),
+        )
+        monkeypatch.setattr(
+            backfill_plot_area, "inflight", lambda *a, **k: contextlib.nullcontext()
+        )
+        monkeypatch.setattr(backfill_plot_area.time, "sleep", lambda s: None)
+        monkeypatch.setattr(backfill_plot_area, "create_app", lambda: app)
+        monkeypatch.setattr("sys.argv", ["backfill_plot_area", "--apply"])
+        backfill_plot_area.main()
+
+        assert row.plot_area is None, "a stated absence is never a zero"
+        assert (row.enrichment or {})["plot_lookup"]["status"] == "page_states_no_plot"
+
+        class Args:
+            ids = []
+            skip_ids = []
+            limit = 0
+
+        assert backfill_plot_area._scope(Args()) == [], (
+            "a row whose page answered must leave the scope"
+        )
+
+        class NamedArgs(Args):
+            ids = [row.id]
+
+        assert [p.id for p in backfill_plot_area._scope(NamedArgs())] == [row.id], (
+            "--ids must override the marker — an operator naming a row means ask again"
+        )
+
     def test_a_page_stating_no_plot_writes_nothing_and_a_refusal_stops(
         self, app, monkeypatch, capsys
     ):
