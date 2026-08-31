@@ -1662,6 +1662,28 @@ def properties():
             hazard_complete_expression(Property)
         ).count()
 
+        # And for the score itself (#493). The number this page sorts by is a
+        # weighted average over the criteria that answered, renormalised past
+        # the ones that did not (#379) -- so it stays honest per row and says
+        # nothing about the *set*. Measured on production 2026-08-26, 678 of
+        # 948 located rows carry `travel: approximate_origin` and 628 carry
+        # `sea: approximate_origin`: for roughly 70% of them the drive times
+        # and the sea distance are measured, stored, rendered, and scored by
+        # nothing, leaving `value` + `size` carrying `score_total` alone.
+        # Every abstention is right on its own terms; what was missing is that
+        # a 0-100 silently meaning one thing here and another thing there
+        # looks like a composite ranking while being a single-axis one.
+        #
+        # So the same disclosure the two lines above make, from the predicate
+        # `measured=full` already filters on -- header and filter cannot
+        # disagree. A row whose share was never recorded is NOT counted:
+        # `_score_coverage_share_expr` is NULL there, "unknown coverage must
+        # not pass as full" is that helper's own rule, and counting it would
+        # be #98 inside the line that exists to prevent #98.
+        score_full_basis_count = query.filter(
+            _score_coverage_share_expr(Property) >= 0.999
+        ).count()
+
         # And for the taste ranking (#498): the version once per request, so
         # every row is judged against the same profile, and the disclosure
         # count beside the result count -- "K of N scored against the current
@@ -1799,6 +1821,7 @@ def properties():
             travel_display_targets=travel_display_targets,
             listing_verified_count=listing_verified_count,
             hazard_scanned_count=hazard_scanned_count,
+            score_full_basis_count=score_full_basis_count,
             taste_version=taste_version,
             taste_scored_count=taste_scored_count,
             criteria_enabled=criteria_ctx is not None,
