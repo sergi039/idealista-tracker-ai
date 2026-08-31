@@ -283,6 +283,20 @@ class TestWhatTheReadingLeavesOutIsSaidOutLoud:
         body = _page(client, "/municipalities?criteria=all")
         assert 'id="municipalities-criteria-excluded"' not in body
 
+    def test_an_unreadable_mode_marks_the_reading_it_actually_applied(
+        self, client, world
+    ):
+        """A stale bookmark asking for a mode that does not exist gets the
+        default reading — and the control has to say so. Every option
+        un-highlighted over a narrowed page reads as "nothing is on" (#104's
+        shape), and the page's own links would go on carrying the word."""
+        body = _page(client, "/municipalities?criteria=bogus")
+        assert int(_cells(body, "cedeira")[5]) == 3
+        assert re.search(
+            r'class="dropdown-item active"\s+data-criteria="default"', body
+        )
+        assert "criteria=bogus" not in body
+
     def test_the_reader_can_switch_the_reading_from_the_page(self, client, world):
         body = _page(client, "/municipalities")
         assert 'id="municipalities-criteria-control"' in body
