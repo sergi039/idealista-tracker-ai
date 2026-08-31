@@ -22,12 +22,29 @@ imapclient · anthropic SDK · Google API clients · uv (`uv.lock`) · pytest.
 
 ## Run
 
+**The stack runs in Docker on the Mac mini, and nowhere else** (owner,
+2026-08-31). The mini is the server: `idealista-app`, `idealista-db` (5434),
+`idealista-redis` and `osrm-spain` are containers there, and code reaches it by
+push → the deploy watcher pulls, rebuilds and health-checks. A MacBook is a
+*client*: it writes code, and it opens `http://127.0.0.1:5001/` through the
+permanent ssh tunnel (`com.idealista.mini-tunnel`), which is the **mini's** app.
+`docker ps` on the laptop being empty is the correct state, not a broken one.
+
+So the commands below describe **the mini**. Do not bring a second stack up on
+a laptop: the two databases diverged by 324 rows once already, and the merge
+back cost an afternoon. There is no local PostgreSQL for this project — not the
+deployment's and not a test server (see "Writing a migration?" in the hard
+rules for the one throwaway, which is also a container on the mini).
+
 ```bash
-docker compose up -d --build                 # app on http://localhost:5001/
+docker compose up -d --build                 # the mini; app on 127.0.0.1:5001
 docker compose -f docker-compose.dev.yml up  # dev variant with --reload
-pytest tests/ -v                             # test suite
+pytest tests/ -v                             # test suite (runs anywhere)
 pytest tests/ --cov=app --cov-report=html    # coverage report
 ```
+
+Building by hand on the mini is the deploy watcher's job, not yours — see
+"Keeping the container current" below before you type the first line.
 
 ### Local CI gate
 
@@ -2816,10 +2833,58 @@ and TODO.md; respect it if you ever run both side by side.
   multi-statement, so SQLite cannot execute it and `db.create_all()` proves
   nothing about it. `tests/test_postgres_migrations.py` runs the real files
   against a real server; it skips unless `TEST_DATABASE_URL_POSTGRES` points
-  at a **throwaway** database (never `idealista-db` on 5434), and the CI
-  `pytest` job sets it plus `REQUIRE_POSTGRES_TESTS=1` so a missing server
-  fails instead of skipping. A percent sign in migration SQL must be doubled —
-  psycopg2 eats a lone one and the statement dies at deploy time.
+  at a **throwaway** database, and the CI `pytest` job sets it plus
+  `REQUIRE_POSTGRES_TESTS=1` so a missing server fails instead of skipping. A
+  percent sign in migration SQL must be doubled — psycopg2 eats a lone one and
+  the statement dies at deploy time.
+
+  **The throwaway server is `tools/ci/migration_test_db.sh`, and 5432 is not
+  it** (owner request 2026-08-31). Those tests CREATE and DROP databases on
+  whatever that variable names, as whatever role it carries, so the server has
+  to be one nobody else is using. Two are not: `127.0.0.1:5434` is the mini's
+  `idealista-db`, and **`127.0.0.1:5432` on this Mac is Postgres.app, which is
+  the inbox-zero project's database server** — the owner's global rules
+  reserve it for that project and forbid this one from connecting to it at
+  all.
+
+  It was used anyway, which is the part worth keeping. A session needed a real
+  PostgreSQL for migration 025, ran `open -a Postgres` and then `createdb -U
+  ss throwaway_nan_test` on 5432, and the cluster holding `inboxzero` spent
+  two minutes serving this project's DDL. Nothing was lost — only the
+  `throwaway_*` databases were created and dropped, `inboxzero` was never
+  opened, and the postgres log shows the whole of it. **The cause was not
+  carelessness: the prohibition named no server that was reachable.**
+  CONTRIBUTING.md's disposable container was correct and Docker Desktop was
+  not running on the laptop, so the one real PostgreSQL within reach was the
+  one that must not be touched. A rule that forbids the only available path is
+  a rule that gets walked around, and this one was.
+
+  So the permitted path ships with the prohibition, **and it keeps no database
+  on the laptop at all** — this project runs in Docker on the Mac mini and the
+  laptop is a client over Tailscale (owner, 2026-08-31; the first version of
+  this fix raised a local cluster and was itself out of that scheme).
+  `tools/ci/migration_test_db.sh start` runs one `docker run --rm` on the mini
+  of the same `postgres:15-alpine` the deployment's `idealista-db` runs — its
+  own name, the mini's loopback, no volume, no compose labels, so
+  `docker_cleanup.sh` ignores it and a deploy does not disturb it — and
+  tunnels it to 127.0.0.1:55432 for the run. `stop` closes the tunnel and
+  removes the container. Two things that follow: the migrations are exercised
+  on **production's own major version** rather than on whatever PostgreSQL the
+  laptop happens to have, and offline there is no server at all — `start`
+  fails and says so, because the honest fallback is CI and not a database
+  here.
+
+  And the rule is mechanical rather than remembered:
+  `tests/postgres_server_guard.py` enumerates `pg_database` on the connection
+  the `postgres_url` fixture already opens, **before its first CREATE
+  DATABASE**, and fails — never skips, a skip reads as success — when the
+  cluster holds a database that is neither PostgreSQL's own nor this run's.
+  `inboxzero` and `ss` trip it; `migtest` alone in the throwaway cluster and
+  `idealista_ci` alone in CI do not, which is why the rule cannot be a port
+  number: CI is on 5432 too. What it cannot see is an *empty* foreign cluster
+  — there is nothing in it to recognise and equally nothing in it to lose —
+  and that limit is written into the module so its absence is not read as
+  coverage.
 - A local PostToolUse hook auto-runs `ruff check --fix` and `ruff format`
   on edited Python files — do not fight it. It calls whatever `ruff` is on
   PATH, which is not necessarily the version in `uv.lock`; the CI job and

@@ -78,7 +78,11 @@ run_pytest() {
     # run imply the migrations were covered.
     if [ -z "${TEST_DATABASE_URL_POSTGRES:-}" ]; then
         printf '  note: TEST_DATABASE_URL_POSTGRES unset -> the PostgreSQL '
-        printf 'migration tests will skip (CI runs them; see CONTRIBUTING.md)\n'
+        printf 'migration tests will skip (CI runs them). To run them here:\n'
+        printf '        eval "$(tools/ci/migration_test_db.sh start)"\n'
+        printf '  It raises a throwaway postgres container on the mini and '
+        printf 'tunnels it to 55432. Never point it at 5432 (inbox-zero) or '
+        printf '5434 (the mini idealista-db).\n'
     fi
     uv run pytest tests/ -q
 }
