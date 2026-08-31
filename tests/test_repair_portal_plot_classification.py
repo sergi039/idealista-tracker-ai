@@ -233,6 +233,35 @@ def test_restore_is_a_dry_run_by_default(app, tmp_path):
     assert db.session.get(Property, prop.id).property_category == "land"
 
 
+def test_a_row_the_classifier_will_not_call_land_is_reported_not_forced(
+    app, monkeypatch
+):
+    """The repair asks the shipped classifier; it does not overrule it.
+
+    A tool that writes "land" whatever the code says is a second copy of the
+    classification decision, and the subscription whose rules disagree would
+    then fight its own ingest.
+    """
+    prop = _property(
+        app,
+        PLOT_URL,
+        property_category="housing",
+        property_subtype="house",
+        area_type="built",
+    )
+    monkeypatch.setattr(
+        repair_tool, "_classification_now", lambda _p: ("commercial", "retail")
+    )
+
+    outcome = repair_tool.repair(apply=True, backup=False)
+
+    assert outcome["found"] == 1
+    assert outcome["repaired"] == 0
+    assert outcome["skipped"] == 1
+    db.session.expire_all()
+    assert db.session.get(Property, prop.id).property_category == "housing"
+
+
 def test_a_snapshot_naming_a_column_the_app_does_not_restore_is_refused(tmp_path):
     """The snapshot module's own rule, exercised through the widened set."""
     from utils import score_snapshot

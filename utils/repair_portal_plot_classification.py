@@ -51,6 +51,7 @@ from typing import Any, Dict, List
 
 from app import create_app, db
 from models import Property
+from services.fotocasa_import import classify_row
 from services.fotocasa_source import url_says_plot
 from services.property_classification_service import PropertyClassificationService
 from services.property_scoring_service import PropertyScoringService
@@ -85,6 +86,30 @@ def _rows_to_repair() -> List[Property]:
     ]
 
 
+def _classification_now(prop: Property):
+    """What the shipped classifier says about this row today.
+
+    Asked rather than assumed: `classify_row` is the path both portal doors
+    take, it applies the subscription's own rules, and it is where #503 put
+    the portal's type word. Writing "land" here instead would be a second
+    copy of that decision, and a subscription whose rules say otherwise would
+    disagree with its own ingest.
+    """
+    enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
+    imported = enrichment.get("import") if isinstance(enrichment, dict) else {}
+    building_type = (imported or {}).get("building_type")
+
+    return classify_row(
+        {
+            "title": prop.title,
+            "building_type": building_type,
+            "description": prop.description,
+            "url": prop.url,
+        },
+        prop.search_profile_id,
+    )
+
+
 def _repair_row(prop: Property) -> Dict[str, Any]:
     """Correct one row in place and report what moved."""
     before = {
@@ -94,10 +119,16 @@ def _repair_row(prop: Property) -> Dict[str, Any]:
         "score_total": score_snapshot.decimal_str(prop.score_total),
     }
 
-    prop.property_category = "land"
-    prop.property_subtype = prop.property_subtype or "plot"
-    if (prop.property_subtype or "").strip().lower() not in ("plot", "land"):
-        prop.property_subtype = "plot"
+    category, subtype = _classification_now(prop)
+    if (category or "").strip().lower() != "land":
+        # The classifier does not agree that this is land, so nothing is
+        # written: a repair that overrules the code it exists to catch up
+        # with is not a repair. Reported so the row is visible rather than
+        # silently skipped.
+        return {"id": prop.id, "before": before, "after": None, "skipped": category}
+
+    prop.property_category = category
+    prop.property_subtype = subtype or "plot"
     PropertyClassificationService.reconcile_area_type(prop)
     PropertyScoringService().calculate_for_property(prop)
 
@@ -120,6 +151,7 @@ def repair(
     outcome: Dict[str, Any] = {
         "found": len(rows),
         "repaired": 0,
+        "skipped": 0,
         "applied": bool(apply),
         "snapshot": None,
         "rows": [],
@@ -152,8 +184,12 @@ def repair(
         outcome["snapshot"] = path
 
     for prop in rows:
-        outcome["rows"].append(_repair_row(prop))
-        outcome["repaired"] += 1
+        result = _repair_row(prop)
+        outcome["rows"].append(result)
+        if result.get("after") is None:
+            outcome["skipped"] += 1
+        else:
+            outcome["repaired"] += 1
 
     if apply:
         db.session.commit()
