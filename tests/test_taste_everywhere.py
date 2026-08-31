@@ -272,6 +272,41 @@ class TestRescorePending:
             "a refused batch must still read as pending"
         )
 
+    def test_a_tick_during_a_retrain_build_answers_busy(self, app):
+        """The gate review's interleaving: with only the rescore locked, a
+        scheduler tick landing during a slow BUILD scored rows against the
+        old profile and the retrain re-bought them against the new one."""
+        import threading
+
+        _ledger()
+        profile = _profile()
+        _mk(profile.id)
+
+        release = threading.Event()
+        building = threading.Event()
+        outcomes = {}
+
+        def _slow_build(provider="claude"):
+            building.set()
+            release.wait(timeout=5)
+            return {"status": "failed", "error": "aborted for the test"}
+
+        with patch.object(taste_service, "build_profile", side_effect=_slow_build):
+
+            def _retrain():
+                with app.app_context():
+                    outcomes["retrain"] = taste_service.retrain_and_rescore()
+
+            worker = threading.Thread(target=_retrain)
+            worker.start()
+            assert building.wait(timeout=5)
+            outcomes["tick"] = taste_service.rescore_pending()
+            release.set()
+            worker.join(timeout=10)
+
+        assert outcomes["tick"]["status"] == "busy"
+        assert outcomes["retrain"]["status"] == "failed"
+
     def test_only_one_rescore_runs_at_a_time(self, app):
         """The review's finding 8: a daily tick landing during a retrain
         bought the same batch twice. The loser reports busy, spends nothing."""

@@ -79,6 +79,11 @@ MATRIX = [
     # Zero plot_area on bare land is a BLANK, so `area` answers — both
     # languages (the implementation review's 650/plot/0 reproduction).
     (650, "plot", 0, "fail"),
+    # Case and whitespace must not split the two languages: the Python
+    # reader lowercases, and " PLOT " read as built in SQL alone turned a
+    # measured fail into unknown (the gate review's reproduction).
+    (650, "PLOT", None, "fail"),
+    (650, " Plot ", None, "fail"),
     (0, "built", 800, "unknown"),  # zero is a blank, never a tiny house
     (200, "built", 0, "unknown"),  # zero plot is a blank too
 ]
@@ -236,6 +241,23 @@ class TestTheSurfaces:
         assert "Failing tiny" not in " ".join(titles)
         wide = client.get("/properties/export.csv?criteria=all").data.decode()
         assert "Failing tiny" in wide
+
+    def test_the_scope_total_describes_what_clearing_lands_on(self, client, rows):
+        """The gate review's finding: under criteria=fail the clear link
+        resets criteria, so its disclosed total must be the DEFAULT view's
+        count (what clearing lands on), never the fail-filtered one."""
+        import re
+
+        # Narrow by search so the filter bar is genuinely active, in fail
+        # mode: the page shows 1 (the failing row), clearing lands on the
+        # default view of 2 (pass + unknown).
+        html = client.get("/properties?criteria=fail&search=Failing").data.decode()
+        note = re.search(r"filter-bar-narrowing-note.*?</span>", html, re.S)
+        assert note is not None, "the narrowing note must render"
+        text = note.group(0)
+        assert "of 2" in text, (
+            f"the scope total must be the default view's 2, got: {text!r}"
+        )
 
     def test_an_unassigned_listing_is_never_hidden_by_anybodys_criteria(
         self, client, app, profile_row

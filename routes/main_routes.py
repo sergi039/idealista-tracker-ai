@@ -1564,9 +1564,11 @@ def properties():
             scope_query = apply_profile_filter(
                 filter_bar_scope, Property.search_profile_id, profile_selection
             )
-            scope_query, _ = _apply_criteria_filter(
-                scope_query, criteria_ctx, criteria_filter
-            )
+            # The DEFAULT reading, not the current mode: this number is what
+            # the clear link lands on, and clearing resets criteria too —
+            # under criteria=fail the current-mode total described a page
+            # the link never shows (the gate review's finding).
+            scope_query, _ = _apply_criteria_filter(scope_query, criteria_ctx, "")
             filter_bar_scope_total = scope_query.count()
 
         # How much of what the page is about to draw was ever verified against
@@ -3160,10 +3162,10 @@ def retrain_taste():
     app_obj = current_app._get_current_object()
 
     def _run():
-        outcome = taste_service.build_profile()
-        if outcome.get("status") != "ok":
-            return {"success": False, "error": outcome.get("error")}
-        rescored = taste_service.rescore_pending()
+        # Build AND rescore under one single-flight lock — a scheduler tick
+        # landing mid-build must answer busy, not score against the old
+        # profile (services/taste_service.retrain_and_rescore).
+        rescored = taste_service.retrain_and_rescore()
         return {"success": rescored.get("status") == "ok", **rescored}
 
     try:

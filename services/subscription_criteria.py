@@ -31,7 +31,7 @@ import logging
 import math
 from typing import Any, Dict, Optional
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, func, or_
 
 logger = logging.getLogger(__name__)
 
@@ -140,8 +140,13 @@ def _definite_shapes(model):
     a NULL outright under three-valued logic, so one NULL-able comparison
     would silently eat rows from the `unknown` filter.
     """
-    is_plot = and_(model.area_type.isnot(None), model.area_type == "plot")
-    not_plot = or_(model.area_type.is_(None), model.area_type != "plot")
+    # lower(trim(...)) — the Python reader normalizes with .strip().lower(),
+    # and a hand-written " PLOT " must not read as bare land in one language
+    # and built in the other (the gate review's case reproduction). The NULL
+    # guard comes first, so every clause stays definite.
+    normalized = func.lower(func.trim(model.area_type))
+    is_plot = and_(model.area_type.isnot(None), normalized == "plot")
+    not_plot = or_(model.area_type.is_(None), normalized != "plot")
     return is_plot, not_plot
 
 

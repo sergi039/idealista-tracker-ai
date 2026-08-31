@@ -897,6 +897,30 @@ def score_property(
 _RESCORE_LOCK = threading.Lock()
 
 
+def retrain_and_rescore(provider: str = "claude") -> Dict[str, Any]:
+    """Rebuild the profile, then re-score — ONE flight, under the same lock.
+
+    The retrain button's job body. The lock covers the BUILD as well as the
+    rescore: with only the rescore locked, a scheduler tick landing during a
+    slow build scored the pending rows against the old profile and the
+    retrain immediately re-bought them against the new one (the gate
+    review's interleaving). A tick during a retrain now answers `busy` and
+    spends nothing.
+    """
+    if not _RESCORE_LOCK.acquire(blocking=False):
+        return {
+            "status": "busy",
+            "error": "another rescore is already running in this process",
+        }
+    try:
+        outcome = build_profile(provider=provider)
+        if outcome.get("status") != "ok":
+            return {"status": "failed", "error": outcome.get("error")}
+        return _rescore_pending_locked(cap_calls=None, provider=provider)
+    finally:
+        _RESCORE_LOCK.release()
+
+
 def rescore_pending(
     cap_calls: Optional[int] = None, provider: str = "claude"
 ) -> Dict[str, Any]:
