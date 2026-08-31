@@ -1,11 +1,13 @@
 import logging
 import os
 import re
+from dataclasses import asdict
 from datetime import datetime, timezone
 from email import message_from_bytes
 from typing import Any, Dict, List, Optional
 
 from imapclient import IMAPClient
+from sqlalchemy.exc import IntegrityError
 
 from app import db
 from config import Config
@@ -16,6 +18,7 @@ from utils.google_spend import (
     CAP_INGEST_TRAVEL,
     authorized_spend,
 )
+from services import fotocasa_source, milanuncios_source, yaencontre_source
 from services.settings_service import SettingsService
 from services.search_profile_service import SearchProfileService
 from services.property_classification_service import PropertyClassificationService
@@ -36,6 +39,28 @@ from utils.idealista_extractors import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Fotocasa serves its "SENTIMOS LA INTERRUPCIÓN" page with a 200 after a
+# handful of closely spaced requests (measured 2026-08-17 during the
+# advertiser backfill: five requests at 3 s were enough), and the block then
+# stands for several minutes. After this many refusals in a row the run stops
+# fetching that portal's pages instead of walking the rest of the batch into
+# the same wall -- the pattern `utils/backfill_advertiser.py` already uses.
+# The emails whose pages were never read hold the UID cursor and are re-read
+# next run, so stopping early loses nothing. One counter per portal host
+# (`HostBreakers`' lesson): fotocasa refusing must not stop a milanuncios
+# fetch that would have answered.
+PORTAL_MAX_CONSECUTIVE_REFUSALS = 3
+
+# The portals whose alert email this loop can read, beside idealista itself:
+# which Config key names their senders, and which email_data type their
+# entries carry. `services/ingest_policy.py` still governs who may run this
+# at all; this table only says what an already-authorized run recognizes.
+PORTAL_SENDER_KEYS = {
+    "fotocasa": "FOTOCASA_ALERT_SENDERS",
+    "milanuncios": "MILANUNCIOS_ALERT_SENDERS",
+    "yaencontre": "YAENCONTRE_ALERT_SENDERS",
+}
 
 
 class PropertyIMAPService:
@@ -61,6 +86,115 @@ class PropertyIMAPService:
         # Set by get_idealista_emails(); run_ingestion() advances it per email
         # only after that email's DB work is committed (issue #24).
         self._uid_cursor: Optional[UidBatchCursor] = None
+        # Consecutive page refusals per portal in this run; a success resets
+        # its portal and PORTAL_MAX_CONSECUTIVE_REFUSALS stops that portal's
+        # fetching for the rest of the run.
+        self._portal_refusals: Dict[str, int] = {}
+
+    @staticmethod
+    def _portal_senders(portal: str) -> List[str]:
+        """The senders a portal's alert mail is expected from, or [] when off.
+
+        Read from Config at call time rather than frozen in __init__, the way
+        `_excluded_categories` already is, so a test or a settings change does
+        not need a fresh service instance to be seen.
+        """
+        raw = getattr(Config, PORTAL_SENDER_KEYS[portal], "") or ""
+        return [part.strip() for part in raw.split(",") if part.strip()]
+
+    def _all_portal_senders(self) -> List[str]:
+        return [
+            s for portal in PORTAL_SENDER_KEYS for s in self._portal_senders(portal)
+        ]
+
+    def _portal_email_entry(
+        self,
+        *,
+        uid: int,
+        subject: str,
+        body: str,
+        email_source_id: str,
+        internal_date: Any,
+        email_sender: str,
+    ) -> Optional[Dict[str, Any]]:
+        """One email_data entry for a portal alert email, or None.
+
+        Recognition is by what the email carries, not by its sender: the
+        sender lists gate each portal on/off and shape the Gmail query, and
+        the link shapes decide the rest -- the same order idealista's own
+        recognition runs in. Fotocasa and milanuncios entries carry only
+        what to fetch; yaencontre entries carry the parsed cards, because
+        its portal answers DataDome to every request from these machines
+        (measured 2026-08-30) and the email is the whole source.
+        """
+        base: Dict[str, Any] = {
+            "uid": uid,
+            "source_email_id": email_source_id,
+            "email_received_at": internal_date,
+            "email_subject": subject,
+            "email_sender": email_sender,
+        }
+
+        if self._portal_senders("fotocasa"):
+            fotocasa_urls = fotocasa_source.listing_urls_in_text(
+                body
+            ) or fotocasa_source.listing_urls_in_text(subject)
+            if fotocasa_urls:
+                profile = SearchProfileService.resolve_profile(subject, body)
+                return {
+                    **base,
+                    "type": "fotocasa_listings",
+                    "urls": fotocasa_urls,
+                    "search_profile_id": profile.id if profile else None,
+                }
+
+        if self._portal_senders("yaencontre"):
+            cards = yaencontre_source.cards_in_email(body)
+            if cards:
+                profile = SearchProfileService.resolve_profile(subject, body)
+                return {
+                    **base,
+                    "type": "yaencontre_listings",
+                    "cards": [asdict(card) for card in cards],
+                    "search_profile_id": profile.id if profile else None,
+                }
+
+        if self._portal_senders("milanuncios"):
+            tracker_urls = milanuncios_source.card_tracker_urls(body)
+            if tracker_urls:
+                profile = SearchProfileService.resolve_profile(subject, body)
+                return {
+                    **base,
+                    "type": "milanuncios_listings",
+                    "tracker_urls": tracker_urls,
+                    "search_profile_id": profile.id if profile else None,
+                }
+
+        return None
+
+    def _gmail_search_query(self) -> str:
+        """The whole Gmail X-GM-RAW query.
+
+        The label applies to the idealista term alone. It exists to keep two
+        builds off one mailbox (docs/DEV_RULES.md), and the owner's Gmail
+        filter puts it on idealista mail only -- measured 2026-08-30, all 65
+        fotocasa, 26 milanuncios and 29 yaencontre mails in the mailbox
+        carried no label, so a query that demanded it for the portal senders
+        fetched none of them, ever. The portal terms therefore stand on the
+        sender alone; the UID cursor is what keeps historical portal mail
+        from being reprocessed (only UIDs past it are fetched), and a
+        `run_full_sync` deliberately re-reads everything, portal mail
+        included. ORs are explicit and parenthesised: two adjacent `from:`
+        terms mean AND to Gmail and match nothing.
+        """
+        idealista = "from:noresponder@idealista.com"
+        label_part = self._gmail_label_query(self.folder)
+        portal_terms = [f"from:{s}" for s in self._all_portal_senders()]
+        if not portal_terms:
+            return f"{idealista} {label_part}" if label_part else idealista
+        if label_part:
+            idealista = f"({idealista} {label_part})"
+        return " OR ".join([idealista, *portal_terms])
 
     @staticmethod
     def _gmail_label_query(label: Optional[str]) -> Optional[str]:
@@ -358,10 +492,7 @@ class PropertyIMAPService:
                         client.select_folder("[Gmail]/All Mail", readonly=True)
                     except Exception:
                         client.select_folder("INBOX", readonly=True)
-                    gm_query = "from:noresponder@idealista.com"
-                    label_part = self._gmail_label_query(self.folder)
-                    if label_part:
-                        gm_query = f"{gm_query} {label_part}"
+                    gm_query = self._gmail_search_query()
                     try:
                         uids = client.search(["X-GM-RAW", gm_query])
                     except Exception:
@@ -432,6 +563,47 @@ class PropertyIMAPService:
 
                         url = extract_url(body) or extract_url(subject)
                         if not url:
+                            # Not an idealista email. A portal alert names its
+                            # listings and nothing else this loop needs: the
+                            # email contributes the links (and, for
+                            # yaencontre, the card fields, since that portal's
+                            # pages cannot be read at all), the arrival date
+                            # and the profile. Any network work happens in
+                            # run_ingestion() -- never here, inside an open
+                            # IMAP connection, where a batch of gated fetches
+                            # would hold the mailbox session for minutes.
+                            portal_entry = self._portal_email_entry(
+                                uid=uid,
+                                subject=subject,
+                                body=body,
+                                email_source_id=email_source_id,
+                                internal_date=internal_date,
+                                email_sender=email_sender,
+                            )
+                            if portal_entry is not None:
+                                emitted = True
+                                email_data.append(portal_entry)
+                                continue
+                            if any(
+                                s.lower() in (email_sender or "").lower()
+                                for s in self._all_portal_senders()
+                            ):
+                                # A portal sender whose links this parser
+                                # cannot read is either a welcome/confirmation
+                                # mail (fine to consume) or an alert template
+                                # whose link shape is not the one this
+                                # recognizes -- and that second case must be
+                                # visible in the log, because the email is
+                                # consumed either way and would otherwise
+                                # vanish.
+                                logger.warning(
+                                    "UID %s from portal sender %r carries no "
+                                    "recognizable listing; consuming it "
+                                    "(subject: %r)",
+                                    uid,
+                                    email_sender,
+                                    subject[:120],
+                                )
                             continue
                         if not self._is_listing_url(url):
                             # Nothing downstream can dedupe such a row, so this
@@ -576,6 +748,464 @@ class PropertyIMAPService:
 
         return email_data
 
+    def _enrich_new_property(self, prop: Property) -> None:
+        """Everything a freshly committed row gets, whichever portal it is from.
+
+        Extracted from the idealista branch of run_ingestion() verbatim when
+        the fotocasa branch arrived, so the two sources cannot drift: a
+        fotocasa row gets the same geocode-or-travel decision (its portal pin
+        makes `ensure_coordinates` return early, so the geocode is a no-op
+        there), the same sea distance, the same free pass and the same
+        scoring flag. Every step commits on its own and swallows its own
+        failure -- nothing in here may fail ingestion or hold the UID cursor.
+
+        The paid step, and the cheap one that has to survive it.
+
+        `AUTO_TRAVEL_ENRICHMENT` is off by default since 2026-08-17 (see
+        config.py for what the old default cost). It used to be the only
+        thing here, and it geocoded the row on its way to Google --
+        `calculate_for_property` opens with `ensure_coordinates`. So
+        switching it off would silently take the coordinate with it, and
+        with the coordinate go the sea distance, the sea-view verdict, the
+        OSM amenities and the quality-of-life block below: four free
+        measurements lost to a flag about a paid one, and a row that reads
+        "nothing nearby" when the truth is "nobody looked". That is #98's
+        defect arriving through the back door of a cost control.
+
+        Hence the `elif`, and not a second unconditional call: when travel
+        runs it has already geocoded the row, and `ensure_coordinates`
+        returns early on a row that has coordinates, so a second call would
+        be free and pointless -- but the two branches state the intent, which
+        is that exactly one geocode happens per new listing.
+        """
+        if getattr(Config, "AUTO_TRAVEL_ENRICHMENT", False):
+            try:
+                from services.property_travel_service import (
+                    PropertyTravelService,
+                )
+
+                travel_service = PropertyTravelService()
+                # `AUTO_TRAVEL_ENRICHMENT=true` is the one standing
+                # decision that lets an unattended loop spend, and
+                # it is off by default for what it cost. Naming it
+                # in the authorization puts it in the ledger under
+                # the flag that permitted it, so an invoice spike
+                # from ingestion is attributable to a setting
+                # rather than to a mystery.
+                with authorized_spend(
+                    f"ingest: AUTO_TRAVEL_ENRICHMENT for property {prop.id}",
+                    actor="ingest:property_imap",
+                    cap_units=CAP_INGEST_TRAVEL,
+                ):
+                    travel_service.calculate_for_property(prop, commit=True)
+            except Exception as enrich_error:
+                logger.warning(
+                    "Property travel enrichment failed for %s: %s",
+                    prop.id,
+                    enrich_error,
+                )
+                db.session.rollback()
+        elif getattr(Config, "AUTO_GEOCODING", True):
+            try:
+                from services.property_location_service import (
+                    PropertyLocationService,
+                )
+
+                # The one paid call the free pass cannot do
+                # without, at $0.005 a listing and about $1 a
+                # month here. A standing owner decision, recorded
+                # in `config.py` -- so it is authorized by name
+                # and lands in the ledger, rather than being the
+                # single billed call in the tree that answers to
+                # nobody.
+                with authorized_spend(
+                    f"ingest: AUTO_GEOCODING for property {prop.id}",
+                    actor="ingest:property_imap",
+                    cap_units=CAP_INGEST_GEOCODE,
+                ):
+                    PropertyLocationService().ensure_coordinates(prop)
+                # `ensure_coordinates` writes to the instance and
+                # leaves the commit to its caller, exactly as
+                # `utils/refresh_property_accuracy.py` does. It
+                # commits either way: a refusal is recorded on the
+                # row as a refusal (`enrichment["geocoding"]
+                # ["refused"]`), and that record is what stops the
+                # next run paying to re-ask the same question.
+                db.session.commit()
+            except Exception as geocode_error:
+                logger.warning(
+                    "Geocoding failed for %s: %s",
+                    prop.id,
+                    geocode_error,
+                )
+                db.session.rollback()
+
+        # Measured before scoring so the fresh score already accounts
+        # for it, and committed on its own: neither the travel flag
+        # above nor the scoring flag below may decide whether this
+        # result reaches the database.
+        if getattr(Config, "SEA_DISTANCE_ENABLED", True):
+            try:
+                from services.sea_distance_service import (
+                    SeaDistanceService,
+                )
+
+                SeaDistanceService().update_property(prop, commit=True)
+            except Exception as sea_error:
+                logger.warning(
+                    "Sea distance measurement failed for %s: %s",
+                    prop.id,
+                    sea_error,
+                )
+                db.session.rollback()
+
+        # The free pass: OSM amenities (#152), quality of life
+        # (#275) and the sea-view verdict. Ingestion ran the paid
+        # enrichers and skipped these, so every new row arrived
+        # with no Extended Infrastructure card, no QoL block and
+        # no sea-view verdict (#299). It runs after the travel
+        # step because that is what geocodes the row, and after
+        # the sea-distance step because that warms the per-cell
+        # coastline cache the sea-view geometry reads. Each step
+        # is paced by its transport's own gate, commits on its
+        # own, and records a refusal as a refusal; nothing in it
+        # may fail ingestion or hold the UID cursor back.
+        #
+        # `use_ai=False` is the load-bearing argument here. The
+        # sea-view text signal can ask the owner's Claude
+        # subscription what a mention of the sea means, and that
+        # is a cold CLI run with a 600 s timeout (#201). This
+        # loop runs unattended, twice a night, over however many
+        # alert emails arrived; "vistas al mar" is ordinary
+        # listing prose in Asturias and Galicia, so leaving the
+        # default on would mean minutes of subscription work per
+        # batch that nobody pressed a button for.
+        # `utils/backfill_sea_view.py` has had `--no-ai` since it
+        # was written, and an unattended ingest must not be
+        # bolder than a backfill. The keyword path records that
+        # it took it (`source: "keywords_only"`); the Enrich
+        # button, where there is a press, still uses the AI.
+        if getattr(Config, "FREE_ENRICHMENT_ENABLED", True):
+            try:
+                from services.property_enrichment_service import (
+                    PropertyEnrichmentService,
+                )
+
+                PropertyEnrichmentService().enrich_free_sources(
+                    prop, commit=True, use_ai=False
+                )
+            except Exception as free_error:
+                logger.warning(
+                    "Free enrichment failed for %s: %s",
+                    prop.id,
+                    free_error,
+                )
+                db.session.rollback()
+
+        if getattr(Config, "AUTO_PROPERTY_SCORING", False):
+            try:
+                from services.property_scoring_service import (
+                    PropertyScoringService,
+                )
+
+                scoring_service = PropertyScoringService()
+                scoring_service.calculate_for_property(prop, commit=True)
+            except Exception as scoring_error:
+                logger.warning(
+                    "Property scoring failed for %s: %s",
+                    prop.id,
+                    scoring_error,
+                )
+                db.session.rollback()
+
+    def _ingest_fotocasa_email(
+        self,
+        email_data: Dict[str, Any],
+        *,
+        sale_only: bool,
+        excluded_categories: set[str],
+    ) -> tuple[int, bool]:
+        """Create rows for the fotocasa listings one alert email names.
+
+        Returns ``(created, all_done)``. ``all_done=False`` means at least one
+        listing page could not be read for a reason that may pass -- fotocasa's
+        "SENTIMOS LA INTERRUPCIÓN" block (a 200, `services/fotocasa_source.py`),
+        a timeout, an HTTP error, or a payload this parser cannot read -- so
+        the caller must hold the UID cursor behind this email and let the next
+        run re-read it, exactly as #24 holds it for an idealista email that
+        raised. Every row committed before the failure is safe to re-meet: the
+        `fotocasa:<id>` dedup key makes the re-run skip it without a fetch.
+
+        The email supplies only the links, the arrival date and the profile;
+        every listing field comes off the listing page, through the same
+        `preview_row`/`build_property` pair the paste-links import uses --
+        one builder, so the two doors cannot disagree about the dedup key,
+        the NULL `listing_status_source` or the portal pin.
+
+        A page that answers "this URL no longer serves that listing"
+        (`not_the_listing_page`: the advert was taken down and the server
+        redirected) is a consumed skip, not a held one -- the server answered,
+        and re-asking tomorrow gets the same answer, so holding the cursor on
+        it would stall ingestion forever over a listing that is gone.
+        """
+        import requests
+
+        from services import fotocasa_import
+
+        http = requests.Session()
+        created = 0
+        all_done = True
+
+        for url in email_data.get("urls") or []:
+            listing_id = fotocasa_source.listing_id_from_url(url)
+            if listing_id is None:
+                continue
+
+            # Before the fetch, so a listing already here through either door
+            # (this ingester or the paste-links import) costs no request and
+            # no gate wait. The key both doors write is `fotocasa:<id>`.
+            if fotocasa_import.existing_by_listing_id(listing_id) is not None:
+                continue
+
+            if self._portal_fetching_stopped("fotocasa", email_data):
+                all_done = False
+                break
+
+            listing = fotocasa_source.fetch_listing(url, session=http)
+            if not listing.ok:
+                if listing.refusal == fotocasa_source.REFUSAL_NOT_A_LISTING:
+                    logger.info(
+                        "Fotocasa listing %s from %s is no longer served at its "
+                        "URL; skipping it for good",
+                        listing_id,
+                        email_data.get("source_email_id"),
+                    )
+                    continue
+                self._count_portal_refusal(
+                    "fotocasa", listing_id, listing.refusal, email_data
+                )
+                all_done = False
+                continue
+
+            self._portal_refusals["fotocasa"] = 0
+
+            if self._create_portal_row(
+                fotocasa_import.preview_row(listing),
+                source="fotocasa",
+                email_data=email_data,
+                sale_only=sale_only,
+                excluded_categories=excluded_categories,
+            ):
+                created += 1
+
+        return created, all_done
+
+    def _portal_fetching_stopped(self, portal: str, email_data: Dict[str, Any]) -> bool:
+        """True when this run has already given up on the portal's host."""
+        refusals = self._portal_refusals.get(portal, 0)
+        if refusals < PORTAL_MAX_CONSECUTIVE_REFUSALS:
+            return False
+        logger.warning(
+            "Skipping the remaining %s fetches this run after %s refusals in "
+            "a row; UID %s is held and re-read next run",
+            portal,
+            refusals,
+            email_data.get("uid"),
+        )
+        return True
+
+    def _count_portal_refusal(
+        self, portal: str, listing_id: Any, reason: Any, email_data: Dict[str, Any]
+    ) -> None:
+        self._portal_refusals[portal] = self._portal_refusals.get(portal, 0) + 1
+        logger.warning(
+            "%s refused listing %s (%s); holding UID %s for the next run",
+            portal,
+            listing_id,
+            reason,
+            email_data.get("uid"),
+        )
+
+    def _create_portal_row(
+        self,
+        row: Dict[str, Any],
+        *,
+        source: str,
+        email_data: Dict[str, Any],
+        sale_only: bool,
+        excluded_categories: set[str],
+        record_advertiser: bool = True,
+    ) -> bool:
+        """The shared tail of every portal ingest: filter, build, commit, enrich.
+
+        Returns True when a row landed. The rent and excluded-category skips
+        are deliberate filters (a consumed email, never a held one), and the
+        IntegrityError branch is the ordinary duplicate outcome arriving a
+        moment late from a concurrent writer -- the import page, another run.
+        """
+        from services import fotocasa_import
+
+        profile_id = email_data.get("search_profile_id")
+        email_date = self._parse_email_received_at(email_data.get("email_received_at"))
+
+        deal_type = (row.get("deal_type") or "sale").strip().lower()
+        if deal_type == "rent" and sale_only:
+            return False
+
+        classification = fotocasa_import.classify_row(row, profile_id)
+        category = (classification[0] or "").strip().lower()
+        if category and category in excluded_categories:
+            return False
+
+        prop = fotocasa_import.build_property(
+            row,
+            profile_id=profile_id,
+            classification=classification,
+            method="alert_email",
+            email_date=email_date,
+            email_subject=email_data.get("email_subject"),
+            email_sender=email_data.get("email_sender"),
+            source=source,
+            record_advertiser=record_advertiser,
+        )
+        try:
+            db.session.add(prop)
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            return False
+
+        self._enrich_new_property(prop)
+        return True
+
+    def _ingest_yaencontre_email(
+        self,
+        email_data: Dict[str, Any],
+        *,
+        sale_only: bool,
+        excluded_categories: set[str],
+    ) -> tuple[int, bool]:
+        """Create rows for the yaencontre cards one alert email carries.
+
+        No network at all: the portal answers DataDome to these machines
+        (measured 2026-08-30, module docstring of
+        `services/yaencontre_source.py`), so the card fields ARE the row --
+        no coordinates, no seller verdict (`record_advertiser=False`), and
+        the geocoder fills the location from the title at ingest. With no
+        fetches there are no refusals, so `all_done` is always True; an
+        exception is #24's territory and holds the cursor through the
+        caller's own except branch.
+        """
+        from services import fotocasa_import
+
+        created = 0
+        for card in email_data.get("cards") or []:
+            listing_id = card.get("listing_id")
+            if not listing_id:
+                continue
+            if (
+                fotocasa_import.existing_by_listing_id(
+                    int(listing_id), yaencontre_source.SOURCE_NAME
+                )
+                is not None
+            ):
+                continue
+            if self._create_portal_row(
+                dict(card),
+                source=yaencontre_source.SOURCE_NAME,
+                email_data=email_data,
+                sale_only=sale_only,
+                excluded_categories=excluded_categories,
+                record_advertiser=False,
+            ):
+                created += 1
+        return created, True
+
+    def _ingest_milanuncios_email(
+        self,
+        email_data: Dict[str, Any],
+        *,
+        sale_only: bool,
+        excluded_categories: set[str],
+    ) -> tuple[int, bool]:
+        """Create rows for the milanuncios cards one digest email names.
+
+        The email carries no direct listing URLs -- every card anchor is an
+        opaque SparkPost tracker -- so identity costs one redirect read per
+        card (`resolve_tracker`, redirects OFF) before the dedup check, and
+        the page fetch after it supplies every field, fotocasa-style. The
+        refusal semantics are fotocasa's too: a tracker or page that did not
+        answer holds the UID cursor; a page that answered "gone" (404, a
+        redirect to a different ad) or "this is a demand ad, not a property
+        for sale" is consumed, because tomorrow's answer is the same.
+        """
+        import requests
+
+        from services import fotocasa_import
+
+        http = requests.Session()
+        created = 0
+        all_done = True
+        seen_ids: set = set()
+
+        for tracker in email_data.get("tracker_urls") or []:
+            if self._portal_fetching_stopped("milanuncios", email_data):
+                all_done = False
+                break
+
+            target = milanuncios_source.resolve_tracker(tracker, session=http)
+            if target is None:
+                self._count_portal_refusal(
+                    "milanuncios", "unresolved-tracker", "no_redirect", email_data
+                )
+                all_done = False
+                continue
+
+            listing_id = milanuncios_source.listing_id_from_url(target)
+            if listing_id is None or listing_id in seen_ids:
+                continue
+            seen_ids.add(listing_id)
+            if (
+                fotocasa_import.existing_by_listing_id(
+                    listing_id, milanuncios_source.SOURCE_NAME
+                )
+                is not None
+            ):
+                continue
+
+            row = milanuncios_source.fetch_listing(target, session=http)
+            if row.get("status") == "refused":
+                reason = row.get("reason")
+                if reason in (
+                    milanuncios_source.REFUSAL_NOT_A_LISTING,
+                    milanuncios_source.REFUSAL_NOT_SUPPLY,
+                ):
+                    logger.info(
+                        "Milanuncios listing %s from %s is %s; skipping it for good",
+                        listing_id,
+                        email_data.get("source_email_id"),
+                        reason,
+                    )
+                    continue
+                self._count_portal_refusal(
+                    "milanuncios", listing_id, reason, email_data
+                )
+                all_done = False
+                continue
+
+            self._portal_refusals["milanuncios"] = 0
+
+            if self._create_portal_row(
+                row,
+                source=milanuncios_source.SOURCE_NAME,
+                email_data=email_data,
+                sale_only=sale_only,
+                excluded_categories=excluded_categories,
+            ):
+                created += 1
+
+        return created, all_done
+
     def run_ingestion(self, sync_type: str = "incremental") -> int:
         start_time = datetime.now(timezone.utc)
         sync_history = SyncHistory(
@@ -592,6 +1222,7 @@ class PropertyIMAPService:
 
         try:
             self._uid_cursor = None
+            self._portal_refusals = {}
             emails = self.get_idealista_emails()
             sync_history.total_emails_found = len(emails)
 
@@ -610,6 +1241,26 @@ class PropertyIMAPService:
                         )
                         if category and category in excluded_categories:
                             continue
+                    portal_handlers = {
+                        "fotocasa_listings": self._ingest_fotocasa_email,
+                        "yaencontre_listings": self._ingest_yaencontre_email,
+                        "milanuncios_listings": self._ingest_milanuncios_email,
+                    }
+                    handler = portal_handlers.get(
+                        (email_data.get("type") or "").strip().lower()
+                    )
+                    if handler is not None:
+                        created_here, all_done = handler(
+                            email_data,
+                            sale_only=sale_only,
+                            excluded_categories=excluded_categories,
+                        )
+                        processed_count += created_here
+                        if not all_done:
+                            # The finally below then holds the UID cursor, so
+                            # the unread listings come back next run.
+                            email_failed = True
+                        continue
                     if email_data.get("type") == "no_longer_listed":
                         url = email_data.get("url")
                         idealista_id = email_data.get(
@@ -815,166 +1466,7 @@ class PropertyIMAPService:
                     db.session.commit()
                     processed_count += 1
 
-                    # The paid step, and the cheap one that has to survive it.
-                    #
-                    # `AUTO_TRAVEL_ENRICHMENT` is off by default since
-                    # 2026-08-17 (see config.py for what the old default cost).
-                    # It used to be the only thing here, and it geocoded the row
-                    # on its way to Google — `calculate_for_property` opens with
-                    # `ensure_coordinates`. So switching it off would silently
-                    # take the coordinate with it, and with the coordinate go
-                    # the sea distance, the sea-view verdict, the OSM amenities
-                    # and the quality-of-life block below: four free
-                    # measurements lost to a flag about a paid one, and a row
-                    # that reads "nothing nearby" when the truth is "nobody
-                    # looked". That is #98's defect arriving through the back
-                    # door of a cost control.
-                    #
-                    # Hence the `elif`, and not a second unconditional call:
-                    # when travel runs it has already geocoded the row, and
-                    # `ensure_coordinates` returns early on a row that has
-                    # coordinates, so a second call would be free and
-                    # pointless — but the two branches state the intent, which
-                    # is that exactly one geocode happens per new listing.
-                    if getattr(Config, "AUTO_TRAVEL_ENRICHMENT", False):
-                        try:
-                            from services.property_travel_service import (
-                                PropertyTravelService,
-                            )
-
-                            travel_service = PropertyTravelService()
-                            # `AUTO_TRAVEL_ENRICHMENT=true` is the one standing
-                            # decision that lets an unattended loop spend, and
-                            # it is off by default for what it cost. Naming it
-                            # in the authorization puts it in the ledger under
-                            # the flag that permitted it, so an invoice spike
-                            # from ingestion is attributable to a setting
-                            # rather than to a mystery.
-                            with authorized_spend(
-                                f"ingest: AUTO_TRAVEL_ENRICHMENT for property {prop.id}",
-                                actor="ingest:property_imap",
-                                cap_units=CAP_INGEST_TRAVEL,
-                            ):
-                                travel_service.calculate_for_property(prop, commit=True)
-                        except Exception as enrich_error:
-                            logger.warning(
-                                "Property travel enrichment failed for %s: %s",
-                                prop.id,
-                                enrich_error,
-                            )
-                            db.session.rollback()
-                    elif getattr(Config, "AUTO_GEOCODING", True):
-                        try:
-                            from services.property_location_service import (
-                                PropertyLocationService,
-                            )
-
-                            # The one paid call the free pass cannot do
-                            # without, at $0.005 a listing and about $1 a
-                            # month here. A standing owner decision, recorded
-                            # in `config.py` -- so it is authorized by name
-                            # and lands in the ledger, rather than being the
-                            # single billed call in the tree that answers to
-                            # nobody.
-                            with authorized_spend(
-                                f"ingest: AUTO_GEOCODING for property {prop.id}",
-                                actor="ingest:property_imap",
-                                cap_units=CAP_INGEST_GEOCODE,
-                            ):
-                                PropertyLocationService().ensure_coordinates(prop)
-                            # `ensure_coordinates` writes to the instance and
-                            # leaves the commit to its caller, exactly as
-                            # `utils/refresh_property_accuracy.py` does. It
-                            # commits either way: a refusal is recorded on the
-                            # row as a refusal (`enrichment["geocoding"]
-                            # ["refused"]`), and that record is what stops the
-                            # next run paying to re-ask the same question.
-                            db.session.commit()
-                        except Exception as geocode_error:
-                            logger.warning(
-                                "Geocoding failed for %s: %s",
-                                prop.id,
-                                geocode_error,
-                            )
-                            db.session.rollback()
-
-                    # Measured before scoring so the fresh score already accounts
-                    # for it, and committed on its own: neither the travel flag
-                    # above nor the scoring flag below may decide whether this
-                    # result reaches the database.
-                    if getattr(Config, "SEA_DISTANCE_ENABLED", True):
-                        try:
-                            from services.sea_distance_service import (
-                                SeaDistanceService,
-                            )
-
-                            SeaDistanceService().update_property(prop, commit=True)
-                        except Exception as sea_error:
-                            logger.warning(
-                                "Sea distance measurement failed for %s: %s",
-                                prop.id,
-                                sea_error,
-                            )
-                            db.session.rollback()
-
-                    # The free pass: OSM amenities (#152), quality of life
-                    # (#275) and the sea-view verdict. Ingestion ran the paid
-                    # enrichers and skipped these, so every new row arrived
-                    # with no Extended Infrastructure card, no QoL block and
-                    # no sea-view verdict (#299). It runs after the travel
-                    # step because that is what geocodes the row, and after
-                    # the sea-distance step because that warms the per-cell
-                    # coastline cache the sea-view geometry reads. Each step
-                    # is paced by its transport's own gate, commits on its
-                    # own, and records a refusal as a refusal; nothing in it
-                    # may fail ingestion or hold the UID cursor back.
-                    #
-                    # `use_ai=False` is the load-bearing argument here. The
-                    # sea-view text signal can ask the owner's Claude
-                    # subscription what a mention of the sea means, and that
-                    # is a cold CLI run with a 600 s timeout (#201). This
-                    # loop runs unattended, twice a night, over however many
-                    # alert emails arrived; "vistas al mar" is ordinary
-                    # listing prose in Asturias and Galicia, so leaving the
-                    # default on would mean minutes of subscription work per
-                    # batch that nobody pressed a button for.
-                    # `utils/backfill_sea_view.py` has had `--no-ai` since it
-                    # was written, and an unattended ingest must not be
-                    # bolder than a backfill. The keyword path records that
-                    # it took it (`source: "keywords_only"`); the Enrich
-                    # button, where there is a press, still uses the AI.
-                    if getattr(Config, "FREE_ENRICHMENT_ENABLED", True):
-                        try:
-                            from services.property_enrichment_service import (
-                                PropertyEnrichmentService,
-                            )
-
-                            PropertyEnrichmentService().enrich_free_sources(
-                                prop, commit=True, use_ai=False
-                            )
-                        except Exception as free_error:
-                            logger.warning(
-                                "Free enrichment failed for %s: %s",
-                                prop.id,
-                                free_error,
-                            )
-                            db.session.rollback()
-
-                    if getattr(Config, "AUTO_PROPERTY_SCORING", False):
-                        try:
-                            from services.property_scoring_service import (
-                                PropertyScoringService,
-                            )
-
-                            scoring_service = PropertyScoringService()
-                            scoring_service.calculate_for_property(prop, commit=True)
-                        except Exception as scoring_error:
-                            logger.warning(
-                                "Property scoring failed for %s: %s",
-                                prop.id,
-                                scoring_error,
-                            )
-                            db.session.rollback()
+                    self._enrich_new_property(prop)
                 except Exception as e:
                     email_failed = True
                     logger.error(

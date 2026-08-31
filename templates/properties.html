@@ -1006,6 +1006,10 @@
                             {# Live again per issue #271: rows hold measured
                                beach times now, and unmeasured ones sort last. #}
                             <option value="travel_time_nearest_beach" {{ 'selected' if current_filters.sort_by == 'travel_time_nearest_beach' }}>{{ t('beach_distance') }}</option>
+                            {# Ranks only scores made against the current taste
+                               profile; stale and unscored rows sort last in
+                               both directions (#498). #}
+                            <option value="taste_score" {{ 'selected' if current_filters.sort_by == 'taste_score' }}>{{ t('taste_score_label') }}</option>
                         </select>
                         <select class="form-select properties-filter-order" name="order" aria-label="Sort direction">
                             <option value="desc" {{ 'selected' if current_filters.order == 'desc' }}>↓</option>
@@ -1117,6 +1121,17 @@
                             <i class="fas fa-circle-info me-1"></i>{{ t('hazards_coverage')|format(hazard_scanned_count, pagination.total) }}
                         </span>
                     {% endif %}
+                    {# And for the taste ranking (#498): how many of these rows
+                       are scored against the CURRENT profile. Rendered only
+                       while a profile exists -- with none the feature is
+                       dormant and a "0 of N" would announce a ranking nobody
+                       has built. #}
+                    {% if taste_version is defined and taste_version and taste_scored_count is not none and pagination %}
+                        <span id="taste-coverage" class="text-body-secondary small"
+                              title="{{ t('taste_coverage_tooltip') }}">
+                            <i class="fas fa-heart me-1"></i>{{ t('taste_coverage')|format(taste_scored_count, pagination.total, taste_version) }}
+                        </span>
+                    {% endif %}
                     {# How many listings are waiting on something that is now
                        late. It is a link and not only a dropdown option,
                        because a reminder nobody opens a menu to find is not a
@@ -1162,6 +1177,12 @@
                            href="{{ url_for('main.properties', **dict(base_args, mode='lifestyle', sort='score_lifestyle', order='desc')) }}"
                            title="Lifestyle Analysis - Focus on quality of life factors">
                             <i class="fas fa-home"></i>
+                        </a>
+                        <a id="mode-taste-btn"
+                           class="btn {{ 'btn-danger' if active_mode == 'taste' else 'btn-outline-secondary' }}"
+                           href="{{ url_for('main.properties', **dict(base_args, mode='taste', sort='taste_score', order='desc')) }}"
+                           title="{{ t('taste_mode_title') }}">
+                            <i class="fas fa-heart"></i>
                         </a>
                     </div>
                     <div class="btn-group btn-group-sm" role="group" aria-label="View type">
@@ -1226,6 +1247,10 @@
                                             <th class="col-score" style="background-color: #ffc107; color: #212529;">
                                                 {{ sort_header('score_lifestyle', 'Lifestyle', base_args, current_filters) }}
                                             </th>
+                                        {% elif active_mode == 'taste' %}
+                                            <th class="col-score" style="background-color: #d63384; color: #fff;">
+                                                {{ sort_header('taste_score', t('taste_score_label'), base_args, current_filters) }}
+                                            </th>
                                         {% else %}
                                             <th class="col-score">
                                                 {{ sort_header('score_total', t('score'), base_args, current_filters) }}
@@ -1257,11 +1282,17 @@
                                     {% for p in properties %}
                                         <tr class="property-row {% if p.listing_status in ('removed', 'sold') %}listing-inactive{% endif %}"
                                             data-listing-status="{{ listing_verdict_for(p).state }}">
-                                            <td class="col-score" {% if active_mode == 'investment' %}style="background-color: rgba(25, 135, 84, 0.2);"{% elif active_mode == 'lifestyle' %}style="background-color: rgba(255, 193, 7, 0.2);"{% endif %}>
+                                            <td class="col-score" {% if active_mode == 'investment' %}style="background-color: rgba(25, 135, 84, 0.2);"{% elif active_mode == 'lifestyle' %}style="background-color: rgba(255, 193, 7, 0.2);"{% elif active_mode == 'taste' %}style="background-color: rgba(214, 51, 132, 0.15);"{% endif %}>
                                                 {% if active_mode == 'investment' %}
                                                     {{ score_badge(p.score_investment|float if p.score_investment is not none else none, 'font-weight: bold; font-size: 0.9em;') }}
                                                 {% elif active_mode == 'lifestyle' %}
                                                     {{ score_badge(p.score_lifestyle|float if p.score_lifestyle is not none else none, 'font-weight: bold; font-size: 0.9em;') }}
+                                                {% elif active_mode == 'taste' %}
+                                                    {% set _taste = taste_for(p, taste_version) %}
+                                                    {{ score_badge(_taste.score if _taste.state != 'none' else none, 'font-weight: bold; font-size: 0.9em;') }}
+                                                    {% if _taste.state == 'stale' %}
+                                                        <i class="fas fa-clock-rotate-left text-body-secondary" title="{{ t('taste_stale_hint') }}"></i>
+                                                    {% endif %}
                                                 {% else %}
                                                     {{ score_badge(p.score_total|float if p.score_total is not none else none, '') }}
                                                     {{ coverage_hint(p) }}
@@ -1448,6 +1479,12 @@
                                             {{ score_badge(p.score_investment|float if p.score_investment is not none else none, 'border: 2px solid #198754; font-weight: bold;') }}
                                         {% elif active_mode == 'lifestyle' %}
                                             {{ score_badge(p.score_lifestyle|float if p.score_lifestyle is not none else none, 'border: 2px solid #ffc107; font-weight: bold;') }}
+                                        {% elif active_mode == 'taste' %}
+                                            {% set _taste = taste_for(p, taste_version) %}
+                                            {{ score_badge(_taste.score if _taste.state != 'none' else none, 'border: 2px solid #d63384; font-weight: bold;') }}
+                                            {% if _taste.state == 'stale' %}
+                                                <i class="fas fa-clock-rotate-left text-body-secondary" title="{{ t('taste_stale_hint') }}"></i>
+                                            {% endif %}
                                         {% else %}
                                             {{ score_badge(p.score_total|float if p.score_total is not none else none, '') }}
                                             {{ coverage_hint(p) }}

@@ -210,7 +210,7 @@ class TestInsert:
     ):
         """The race the sequential test could not see.
 
-        `_existing_by_listing_id` is a plain SELECT, so under READ COMMITTED it
+        `existing_by_listing_id` is a plain SELECT, so under READ COMMITTED it
         cannot see a row another transaction has inserted and not yet
         committed. Two confirms overlapping on one listing therefore both pass
         the check -- a double click is enough -- and the loser's flush hits the
@@ -231,7 +231,7 @@ class TestInsert:
         second["url"] = "https://www.fotocasa.es/en/buy/land/gozon/x/190210058/d"
         second["title"] = "A second, unrelated listing"
 
-        real_lookup = fotocasa_import._existing_by_listing_id
+        real_lookup = fotocasa_import.existing_by_listing_id
         blinded = {"count": 0}
 
         def blind_to_the_other_tabs_row(listing_id):
@@ -243,7 +243,7 @@ class TestInsert:
             return real_lookup(listing_id)
 
         monkeypatch.setattr(
-            fotocasa_import, "_existing_by_listing_id", blind_to_the_other_tabs_row
+            fotocasa_import, "existing_by_listing_id", blind_to_the_other_tabs_row
         )
 
         with app.app_context():

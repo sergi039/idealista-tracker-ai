@@ -1170,6 +1170,64 @@ search page would have been recorded as live — #136's false confirmation at a
 second host. All 56 stored fotocasa URLs end in `/<id>/d`, which is what the
 second anchor matches.
 
+**Portal alerts arrive by email too -- fotocasa, milanuncios and yaencontre --
+and the email contributes only what the portal cannot** (2026-08-30, two PRs
+the same day). The Gmail query is
+`(from:noresponder@idealista.com label:...) OR from:fotocasa.es OR
+from:milanuncios.com OR from:yaencontre.com`: **the label gates the idealista
+term alone**, because the owner's Gmail filter labels idealista mail only --
+measured that day, all 65 fotocasa, 26 milanuncios and 29 yaencontre mails in
+the mailbox carried no label, so the first version of this feature, which
+demanded the label for portal senders too, would never have fetched one. The
+UID cursor is what keeps historical portal mail out (only UIDs past it are
+fetched); a `run_full_sync` deliberately re-reads everything, portal promos
+included. Per-portal senders live in `FOTOCASA_ALERT_SENDERS` /
+`MILANUNCIOS_ALERT_SENDERS` / `YAENCONTRE_ALERT_SENDERS` (defaults are the
+bare domains; the real senders were read off the real mail:
+enviosfotocasa@fotocasa.es, no-responder@milanuncios.com,
+no-reply@envios.yaencontre.com); empty turns that portal off.
+
+The three portals differ in what the email can say, and each got the model
+its measurements dictate. **Fotocasa**: direct `/<id>/d` links, page answers
+the honest UA -- email names the listing, page supplies every field
+(validated against the first real alert, committed token-redacted as
+`tests/data/fotocasa_alert_arteixo.html`). **Milanuncios**: the digest
+carries *no direct links at all* -- every anchor is an opaque SparkPost
+tracker -- so `services/milanuncios_source.py` resolves only the *card*
+trackers (anchors wrapping an `images*.milanuncios.com` photo; the same
+template wraps Eliminar/Desactívala/Dar de baja in identical trackers, and
+resolving those would knock on alert-management doors), redirects OFF,
+`Location` only, then fetches the ad page, which answers 200 with
+`window.__INITIAL_PROPS__` -- price, surface, **coordinates**, and
+`sellerType` (`private` -> the advertiser verdict for free). Two payload
+traps are measured and pinned: `sellType: demand` is somebody *searching*
+and is refused, and `location.city.name` is the locality with the
+municipality in parentheses ("Los Quintanales (Mieres)" -> Mieres).
+**Yaencontre**: the portal answers DataDome to every request from both
+machines (403 even for robots.txt), so `services/yaencontre_source.py` reads
+the email card itself -- title, price, hab/baños/m², municipality from the
+title's last comma -- and the row gets no coordinate (the geocoder fills it
+at ingest) and **no advertiser block** (`record_advertiser=False`: an
+absent key reads "not established", which is true). The listing identity is
+the *second* number in `inmueble-<a>-<b>` -- the first repeats across one
+seller's adverts.
+
+One builder for every portal row: `fotocasa_import.build_property` (the
+module keeps its historical name; the writers are portal-generic) writes the
+`<source>:<id>` dedup key -- ids are only unique within a portal, so the
+LIKE patterns in `PORTAL_URL_PATTERNS` are anchored per source -- the NULL
+`listing_status_source`, and the portal pin. Dedup runs *before* any fetch.
+All fetches run in `run_ingestion`, never inside the open IMAP connection,
+each portal paced by its own gate and counted by its own refusal counter
+(`PORTAL_MAX_CONSECUTIVE_REFUSALS`, the `backfill_advertiser` pattern): a
+refusal **holds the UID cursor** so the email is re-read when the block
+lifts; only an *answered* "gone" (`not_the_listing_page`, a 404, a demand
+ad) is consumed, because tomorrow's answer is the same. Profile resolution
+is the existing chain (matchers, then the catch-all). The fixtures under
+`tests/data/` -- both alert bodies, the milanuncios payload -- are the real
+2026-08-30 artifacts, token-redacted; `tests/test_portal_alert_ingestion.py`
+and `tests/test_fotocasa_email_ingestion.py` pin all of it.
+
 **Who is selling is a four-state verdict too, and most of it was already in
 the table** (`services/advertiser.py`). The owner asked to see the listings
 sold by their owners rather than through an agency, from the list. Idealista
@@ -1444,6 +1502,76 @@ Three things this feature cost that are not about the feature:
 * **An i18n key ending in `_other` is read as a plural form.**
   `tests/test_subscription_copy_is_translated.py` then demands a `_one` beside
   it, which is why the channel labels carry a `_label` suffix.
+
+**The owner's taste ranks the search, and it learns only from the owner's own
+words** (#498, 2026-08-30). The review reason (`owner_verdict_reason`, now a
+textarea) is where the owner says WHY a listing is liked or rejected;
+`services/taste_service.py` distills those reasons into a structured profile
+and scores any listing 0–100 against it. Everything runs over the
+subscription bridge and nothing else — **no Google request exists anywhere on
+the path** (the owner's standing order of 2026-08-30: paid Google only with
+their consent, for objects they approve), and `tests/test_taste_service.py`
+runs every flow with `billed_get` patched to explode. A listing is scored on
+what the app already measured; a fact nobody measured is *named* missing in
+the prompt and lowers confidence, never the score (#98).
+
+Six things are load bearing, most of them findings of the two codex design
+reviews that preceded the code:
+
+* **The profile is an insert-only ledger** (`taste_profile`, migration 024) —
+  the version IS the primary key, so concurrent builds cannot mint the same
+  version, a failed build inserts nothing, and prior versions stay readable
+  forever. A malformed row reads as `no_profile`, never as an empty profile.
+  With two signals the profile marks itself `provisional`; dislikes may be
+  empty and dealbreakers come only from explicit owner language — two liked
+  references cannot establish aversions.
+* **A stale score never ranks interleaved with current ones.** The sort (page
+  AND CSV, one shared expression) is a CASE that answers the score only while
+  its stored `profile_version` matches the current ledger head — stale and
+  unscored rows are NULL and sort last in both directions. The version is
+  compared as TEXT via a cast-to-text (SQLite's json_extract answers INTEGER
+  for a JSON integer and refuses to equal '3'; PostgreSQL's ->> is already
+  text, and text→text cannot raise on a hand-edited value).
+* **No lock is held across a bridge call** (#339's shape). The row is locked
+  after the answer, re-read, and the write is discarded as `superseded` when
+  the row was meanwhile scored against a newer profile, when its facts
+  changed under the call, or when it already carries an `ok` score for the
+  SAME version — two callers racing one row must not end with whichever call
+  finished last (only the backfill's `--force` may overwrite a settled
+  current score, and even it never replaces a newer version's). The build has
+  the same discipline: a profile whose signals were edited mid-build is
+  refused, not published. A bridge refusal writes NOTHING — the row keeps its
+  old score or its NULL, which is what keeps it in the backfill's scope.
+* **Staleness is the reader's verdict, and facts count** — `read_taste`
+  answers `stale` for an older profile version, an older scorer rubric, AND a
+  row whose facts fingerprint no longer matches the row (a price drop makes
+  yesterday's judgement about a listing that no longer exists). The SQL sort
+  and coverage count see the two versions but not the fingerprint (only
+  Python can recompute it), so the coverage line is a disclosure, not a
+  guarantee — `history_out_of_sync`'s wording. The backfill's scope IS the
+  reader: a row the page calls stale is exactly a row the next run re-scores,
+  and its refusal-stop counts bridge CALLS the bridge actually saw
+  (`bridge_called`), never batches gated away before one.
+* **A batch answer is validated whole**: a missing, duplicated or uninvited
+  property id rejects the entire call, because an answer that already
+  demonstrated it was not following the question must not have its plausible
+  half salvaged. A row with nothing to judge (no price, no area, no text) is
+  gated deterministically BEFORE any credit is spent.
+* **Timeline notes are deliberately not fed to the profile** — the timeline
+  is a purchase conversation, not preference statements — and `waiting` is
+  excluded because it means "not decided", not "weak yes".
+* **The CLIs are dry-run first** (`utils/build_taste_profile.py`,
+  `utils/backfill_taste.py`): scope is explicit (`--profiles`/`--ids`/
+  `--all`, no implicit default), `--apply` is the spend, three failed bridge
+  CALLS in a row stop a run (calls, not rows), and `resumable` is true
+  exactly when finished rows leave the scope (`not --force`). The announce
+  rule for the mini applies to both.
+
+The taste score is its own fourth display mode and its own sort — it never
+enters `score_total`. The disclosure beside the result count ("K of N scored
+against profile vX") reads the same predicate the sort does. The seeds are
+969 and 1282 — the owner's two named tops, recorded through `set_review` with
+dossier-derived reasons that name their provenance.
 
 **Four reference files are committed on purpose, and `.gitignore` re-includes
 them one at a time.** `data/*` excludes the runtime artifacts — backfill

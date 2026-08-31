@@ -64,6 +64,7 @@ HIDDEN_SUBSCRIPTION_MIGRATION = "020_add_search_profile_is_hidden"
 OWNER_REVIEW_MIGRATION = "021_add_property_review_and_activity"
 CADASTRAL_MIGRATION = "022_add_property_cadastral_reference"
 ATTACHMENT_MIGRATION = "023_create_property_attachment"
+TASTE_MIGRATION = "024_add_property_taste"
 PROPERTY_VARIANT_UNIQUE_CONSTRAINT = (
     "ux_property_ai_analysis_variants_property_provider"
 )
@@ -280,6 +281,7 @@ def test_013_frees_the_label_on_a_database_that_already_holds_rows(
             OWNER_REVIEW_MIGRATION,
             CADASTRAL_MIGRATION,
             ATTACHMENT_MIGRATION,
+            TASTE_MIGRATION,
         ]
 
         # Two *identified* subscriptions may now share the label...
@@ -1504,6 +1506,7 @@ def test_017_deduplicates_existing_rows_and_adds_the_unique_constraint(
             OWNER_REVIEW_MIGRATION,
             CADASTRAL_MIGRATION,
             ATTACHMENT_MIGRATION,
+            TASTE_MIGRATION,
         ]
 
         with engine.begin() as connection:
@@ -1692,6 +1695,7 @@ def test_017_deduplicates_existing_land_variants_and_adds_the_unique_constraint(
             OWNER_REVIEW_MIGRATION,
             CADASTRAL_MIGRATION,
             ATTACHMENT_MIGRATION,
+            TASTE_MIGRATION,
         ]
 
         with engine.begin() as connection:
@@ -2062,5 +2066,78 @@ def test_023_cannot_attach_a_file_to_another_propertys_exchange(postgres_url):
         )
         with engine.begin() as connection:
             connection.exec_driver_sql(sql)
+    finally:
+        engine.dispose()
+
+
+def test_024_creates_the_taste_ledger_and_the_bounded_score(postgres_url):
+    """Migration 024's real shape, on a real server.
+
+    Appending "024" to the expected-list assertions above proves only that a
+    file ran; a syntactically valid no-op would pass them (the codex review's
+    finding). This one asserts what the file must MAKE: the insert-only
+    ledger whose SERIAL id is the version, the NUMERIC score with its range
+    CHECK actually refusing 150, and the deliberate ABSENCE of an index.
+    """
+    from sqlalchemy.exc import IntegrityError as PgIntegrityError
+
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+        inspector = inspect(engine)
+
+        ledger = {c["name"] for c in inspector.get_columns("taste_profile")}
+        assert {
+            "id",
+            "built_at",
+            "provider",
+            "model",
+            "signals_fingerprint",
+            "source",
+            "profile",
+        } <= ledger
+
+        props = {c["name"]: c for c in inspector.get_columns("properties")}
+        assert "taste" in props
+        # NUMERIC(5,2) like the three score columns beside it -- the type is
+        # asserted by name so a silent drift back to DOUBLE PRECISION fails.
+        assert type(props["taste_score"]["type"]).__name__ == "NUMERIC"
+
+        # Deliberately NO taste_score index — see the migration's comment:
+        # at this table's size the sort is a scan, and the plain CREATE INDEX
+        # was the one write-blocking statement in the file.
+        indexes = {i["name"] for i in inspector.get_indexes("properties")}
+        assert "ix_properties_taste_score" not in indexes
+
+        # Two ledger inserts get two distinct, increasing versions.
+        with engine.begin() as connection:
+            first = connection.execute(
+                text(
+                    "INSERT INTO taste_profile "
+                    "(built_at, provider, signals_fingerprint, source, profile) "
+                    "VALUES (NOW(), 'claude', 'f', '{}'::json, '{}'::json) "
+                    "RETURNING id"
+                )
+            ).scalar_one()
+            second = connection.execute(
+                text(
+                    "INSERT INTO taste_profile "
+                    "(built_at, provider, signals_fingerprint, source, profile) "
+                    "VALUES (NOW(), 'claude', 'f', '{}'::json, '{}'::json) "
+                    "RETURNING id"
+                )
+            ).scalar_one()
+        assert second > first
+
+        # The range CHECK is enforced, not decorative.
+        with engine.begin() as connection:
+            _insert_property(connection, source_email_id="taste-ok", taste_score=100.0)
+        with pytest.raises(PgIntegrityError):
+            with engine.begin() as connection:
+                _insert_property(
+                    connection, source_email_id="taste-over", taste_score=150.0
+                )
     finally:
         engine.dispose()

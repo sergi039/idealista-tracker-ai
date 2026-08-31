@@ -470,9 +470,13 @@
                     </div>
                     <div class="col-12 col-md-8">
                         <label class="form-label small mb-1" for="review-reason">{{ t('review_reason') }}</label>
-                        <input type="text" class="form-control form-control-sm" id="review-reason"
-                               name="reason" value="{{ property.owner_verdict_reason or '' }}"
-                               placeholder="{{ t('review_reason_placeholder') }}"/>
+                        {# A textarea, not an input: the reason is where the owner
+                           says WHY a listing is liked or rejected, and the taste
+                           profile (issue #498) learns from that text — a real
+                           paragraph has to fit without editing in a slit. #}
+                        <textarea class="form-control form-control-sm" id="review-reason"
+                                  name="reason" rows="3"
+                                  placeholder="{{ t('review_reason_placeholder') }}">{{ property.owner_verdict_reason or '' }}</textarea>
                     </div>
                     <div class="col-12 col-md-8">
                         <label class="form-label small mb-1" for="review-next-action">{{ t('next_action') }}</label>
@@ -491,6 +495,62 @@
                 </form>
             </div>
         </details>
+
+        {# The owner's taste (#498): how this listing scores against the
+           profile distilled from their own review comments. Values are
+           asserted by tests BY VALUE (the None×None lesson) -- a card full
+           of blanks must fail, not render politely. #}
+        {% set _taste = taste_for(property) %}
+        <div class="card mb-4" id="taste-card">
+            <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
+                <h2 class="h6 mb-0">
+                    <i class="fas fa-heart me-2 text-danger"></i>{{ t('taste_title') }}
+                </h2>
+                {% if _taste.state != 'none' %}
+                    <span class="badge {{ 'text-bg-danger' if _taste.score >= 70 else ('text-bg-warning' if _taste.score >= 40 else 'text-bg-secondary') }}">
+                        {{ '%.0f'|format(_taste.score) }}/100
+                    </span>
+                {% endif %}
+            </div>
+            <div class="card-body py-2">
+                {% if _taste.state == 'none' %}
+                    <p class="text-body-secondary small mb-0">{{ t('taste_not_scored') }}</p>
+                {% else %}
+                    {% if _taste.state == 'stale' %}
+                        <div class="alert alert-warning py-1 px-2 small mb-2">
+                            <i class="fas fa-clock-rotate-left me-1"></i>{{ t('taste_stale_hint') }}
+                        </div>
+                    {% endif %}
+                    <ul class="small mb-2">
+                        {% for reason in _taste.reasons_ru %}
+                            <li>{{ reason }}</li>
+                        {% endfor %}
+                    </ul>
+                    {% if _taste.matched_likes %}
+                        <div class="mb-1">
+                            {% for trait in _taste.matched_likes %}
+                                <span class="badge text-bg-success me-1 mb-1">{{ trait }}</span>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                    {% if _taste.matched_dislikes %}
+                        <div class="mb-1">
+                            {% for trait in _taste.matched_dislikes %}
+                                <span class="badge text-bg-secondary me-1 mb-1">{{ trait }}</span>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                    <p class="text-body-secondary small mb-0">
+                        {{ t('taste_confidence_label') }}: {{ _taste.confidence }}
+                        · {{ t('taste_profile_version_label') }} v{{ _taste.profile_version }}
+                        {% if _taste.closest_reference_id %}
+                            · {{ t('taste_closest_reference') }}:
+                            <a href="{{ url_for('main.property_detail', property_id=_taste.closest_reference_id) }}">#{{ _taste.closest_reference_id }}</a>
+                        {% endif %}
+                    </p>
+                {% endif %}
+            </div>
+        </div>
 
         <div class="card mb-4">
             <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">

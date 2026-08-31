@@ -108,6 +108,22 @@ class Config:
     IMAP_SEARCH_QUERY = os.environ.get("IMAP_SEARCH_QUERY") or "ALL"
     MAX_EMAILS_PER_RUN = int(os.environ.get("MAX_EMAILS_PER_RUN") or "200")
 
+    # Where each portal's alert mail comes from, comma-separated, for the
+    # Gmail X-GM-RAW sender filter. The defaults are the bare domains because
+    # Gmail's `from:` operator matches them for any mailbox and any subdomain
+    # -- and the real senders, read off the actual alert mail in the mailbox
+    # on 2026-08-30, all sit under them: enviosfotocasa@fotocasa.es,
+    # no-responder@milanuncios.com, no-reply@envios.yaencontre.com. An empty
+    # value disables that portal's email ingestion entirely: its sender
+    # leaves the query and the parser stops recognizing its listings.
+    FOTOCASA_ALERT_SENDERS = os.environ.get("FOTOCASA_ALERT_SENDERS", "fotocasa.es")
+    MILANUNCIOS_ALERT_SENDERS = os.environ.get(
+        "MILANUNCIOS_ALERT_SENDERS", "milanuncios.com"
+    )
+    YAENCONTRE_ALERT_SENDERS = os.environ.get(
+        "YAENCONTRE_ALERT_SENDERS", "yaencontre.com"
+    )
+
     # Gmail API (legacy, kept for compatibility)
     GMAIL_API_KEY = os.environ.get("GMAIL_API_KEY")
     GMAIL_CLIENT_ID = os.environ.get("GMAIL_CLIENT_ID")

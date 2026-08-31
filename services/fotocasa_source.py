@@ -60,6 +60,7 @@ evidence for changing this is already stored.
 
 from __future__ import annotations
 
+import html as html_entities
 import json
 import logging
 import re
@@ -148,6 +149,38 @@ def listing_id_from_url(url: Optional[str]) -> Optional[int]:
         return None
     found = _LISTING_PATH.search(path)
     return int(found.group(1)) if found else None
+
+
+# A URL inside an email body. Hrefs end at the closing quote and text-part
+# links end at whitespace; both terminators are excluded from the match.
+_URL_IN_TEXT = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+
+
+def listing_urls_in_text(text: Optional[str]) -> List[str]:
+    """Every fotocasa listing URL in a block of text, one per listing id.
+
+    Built for alert email bodies: the mail links each listing and also the
+    search page, the alert settings and the unsubscribe endpoint, and only a
+    URL naming exactly one listing (the ``/<id>/d`` shape) comes back --
+    the same gate `listing_id_from_url` already is for pasted links, so a
+    search page robots.txt puts out of bounds can never be fetched from here
+    either. A listing linked twice (photo and title) is one entry; order is
+    preserved so the email's own ordering survives into the ingest loop.
+
+    HTML entities are unescaped first because hrefs arrive ``&amp;``-encoded;
+    the listing id lives in the path, so this only matters for not carrying
+    a mangled query tail into the fetch.
+    """
+    found: List[str] = []
+    seen: set = set()
+    for match in _URL_IN_TEXT.finditer(text or ""):
+        candidate = html_entities.unescape(match.group(0))
+        listing_id = listing_id_from_url(candidate)
+        if listing_id is None or listing_id in seen:
+            continue
+        seen.add(listing_id)
+        found.append(candidate)
+    return found
 
 
 def normalize_url(url: Optional[str]) -> Optional[str]:
