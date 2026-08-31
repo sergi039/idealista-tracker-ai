@@ -143,16 +143,24 @@ def _rows_to_repair() -> Tuple[List[Property], List[Dict[str, Any]]]:
     return rows, skipped
 
 
-def _repair_row(prop: Property) -> Dict[str, Any]:
-    stored, proposed = _proposed(prop)
-    before_score = score_snapshot.decimal_str(prop.score_total)
+def _before(prop: Property) -> Dict[str, Any]:
+    """What this row held before anything was written.
 
-    prop.municipality = proposed
+    Captured for every row up front, because the rename pass runs before the
+    scoring pass and a row read afterwards would report its new name as its
+    old one -- the report of what changed, describing no change.
+    """
+    return {
+        "municipality": prop.municipality or None,
+        "score_total": score_snapshot.decimal_str(prop.score_total),
+    }
+
+
+def _rescore(prop: Property, before: Dict[str, Any]) -> Dict[str, Any]:
     PropertyScoringService().calculate_for_property(prop)
-
     return {
         "id": prop.id,
-        "before": {"municipality": stored or None, "score_total": before_score},
+        "before": before,
         "after": {
             "municipality": prop.municipality,
             "score_total": score_snapshot.decimal_str(prop.score_total),
@@ -196,8 +204,24 @@ def repair(
         )
         outcome["snapshot"] = path
 
+    # Two passes, and the boundary is a flush. Scoring reaches
+    # `property_comparables.same_municipality()`, which asks the *table* which
+    # spellings exist -- a live query, and the session autoflushes before it.
+    # Renaming and scoring one row at a time therefore scores each row against
+    # a half-repaired table: the early rows find a municipality peer pool that
+    # is still empty, fall through the comparables ladder to a wider scope, and
+    # are written a number the app does not produce from the committed table.
+    # Reproduced on six rows sharing one municipality: five of the six moved on
+    # a plain re-score afterwards, one by 25.6 points, on the column
+    # `/properties` sorts by -- the very fault the rescore exists to prevent,
+    # inflicted by the rescore. Nothing here rescores those rows again, so it
+    # would have stayed.
+    before = {prop.id: _before(prop) for prop in rows}
     for prop in rows:
-        outcome["rows"].append(_repair_row(prop))
+        prop.municipality = _proposed(prop)[1]
+    db.session.flush()
+    for prop in rows:
+        outcome["rows"].append(_rescore(prop, before[prop.id]))
         outcome["repaired"] += 1
 
     if apply:
