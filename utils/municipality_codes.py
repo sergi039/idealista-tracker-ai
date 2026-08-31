@@ -43,6 +43,15 @@ PROVINCE_CODES = frozenset({"15", "27", "32", "33", "36"})
 _ARTICLES = r"(?:el|la|los|las|a|o|as|os|l)"
 _TRAILING_ARTICLE_RE = re.compile(r",\s*" + _ARTICLES + r"\s*'?\s*$")
 _LEADING_ARTICLE_RE = re.compile(r"^" + _ARTICLES + r"[\s']+")
+# The third spelling of the same inversion. INE writes "Laracha, A" and
+# idealista "A Laracha", both of which the two patterns above already fold;
+# yaencontre writes "Laracha (A)", which folded to "laracha a" and therefore
+# grouped as a municipality of its own. Production carried "Laracha (A)" (4
+# rows) beside "Laracha" (1) before the parser change that made it common, so
+# the split is older than that change. The brackets alone are not enough --
+# "Gijón (address hidden)" is a real stored title and folding it would claim a
+# municipality the row does not state -- so the content must be an article.
+_PARENTHESISED_ARTICLE_RE = re.compile(r"\(\s*" + _ARTICLES + r"\s*'?\s*\)\s*$")
 _NON_ALNUM_RE = re.compile(r"[^0-9a-z]+")
 
 
@@ -50,13 +59,15 @@ def normalize(name: str) -> str:
     """Fold a municipality name onto its join key.
 
     Lowercase, accents stripped (NFKD, combining marks dropped), whitespace
-    and hyphens collapsed to single spaces, and the article removed from
-    either position — "Franco, El", "El Franco" and "franco" all become
-    "franco". Deterministic and side-agnostic: apply it to the INE name when
-    building an index and to the Idealista name when looking one up.
+    and hyphens collapsed to single spaces, and the article removed from any
+    of its three positions — "Franco, El", "El Franco", "Franco (El)" and
+    "franco" all become "franco". Deterministic and side-agnostic: apply it to
+    the INE name when building an index and to the portal name when looking
+    one up.
     """
     decomposed = unicodedata.normalize("NFKD", name.casefold())
     bare = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    bare = _PARENTHESISED_ARTICLE_RE.sub("", bare.strip())
     bare = _TRAILING_ARTICLE_RE.sub("", bare.strip())
     bare = _NON_ALNUM_RE.sub(" ", bare).strip()
     bare = _LEADING_ARTICLE_RE.sub("", bare)

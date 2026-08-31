@@ -45,6 +45,18 @@ SCORE_COLUMNS: Tuple[str, ...] = ("score_total", "score_investment", "score_life
 # is refused rather than ignored: a snapshot naming a column this app does not
 # restore is not a snapshot of this app's state.
 JSON_COLUMNS: Tuple[str, ...] = ("scoring", "enrichment", "travel")
+# What a listing is, as opposed to what it scored. A repair that corrects the
+# classification has to snapshot these beside the scores, because
+# `PropertyScoringService.scorer_for()` picks the scorer *by*
+# `property_category` -- so restoring a score without the category it was
+# computed under puts back a number the app would never produce again.
+# Opt-in per caller, like the JSON columns: a plain score snapshot must keep
+# writing exactly the rows it wrote before.
+CLASSIFICATION_COLUMNS: Tuple[str, ...] = (
+    "property_category",
+    "property_subtype",
+    "area_type",
+)
 
 
 class SnapshotError(Exception):
@@ -71,15 +83,22 @@ def decimal_str(value: Any) -> Optional[str]:
 
 
 def snapshot_row(
-    prop: Property, json_columns: Sequence[str] = ("scoring",)
+    prop: Property,
+    json_columns: Sequence[str] = ("scoring",),
+    classification_columns: Sequence[str] = (),
 ) -> Dict[str, Any]:
-    """The current state of one property's score columns, plus the JSON asked for."""
+    """The current state of one property's score columns, plus what is asked for."""
     unknown = [name for name in json_columns if name not in JSON_COLUMNS]
+    unknown += [
+        name for name in classification_columns if name not in CLASSIFICATION_COLUMNS
+    ]
     if unknown:
         raise SnapshotError(f"Not a snapshot column: {', '.join(sorted(unknown))}")
     row: Dict[str, Any] = {"id": prop.id}
     for column in SCORE_COLUMNS:
         row[column] = decimal_str(getattr(prop, column))
+    for column in classification_columns:
+        row[column] = getattr(prop, column)
     for column in json_columns:
         row[column] = getattr(prop, column)
     return row
@@ -114,7 +133,7 @@ def parse_row(row: Any) -> Dict[str, Any]:
     if isinstance(row_id, bool) or not isinstance(row_id, int):
         raise SnapshotError(f"Snapshot row has no integer id: {row!r}")
 
-    known = {"id", *SCORE_COLUMNS, *JSON_COLUMNS}
+    known = {"id", *SCORE_COLUMNS, *JSON_COLUMNS, *CLASSIFICATION_COLUMNS}
     unknown = sorted(set(row) - known)
     if unknown:
         raise SnapshotError(f"Row {row_id}: unknown column(s) {', '.join(unknown)}")
@@ -123,6 +142,14 @@ def parse_row(row: Any) -> Dict[str, Any]:
     for column in SCORE_COLUMNS:
         if column in row:
             parsed[column] = _parse_score(row[column], column, row_id)
+    for column in CLASSIFICATION_COLUMNS:
+        if column in row:
+            value = row[column]
+            if value is not None and not isinstance(value, str):
+                raise SnapshotError(
+                    f"Row {row_id}: {column} is not a name: {type(value).__name__}"
+                )
+            parsed[column] = value
     for column in JSON_COLUMNS:
         if column in row:
             value = row[column]
