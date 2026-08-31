@@ -155,8 +155,19 @@ pytest tests/ --cov=app --cov-report=html
 `migrations/*.sql` is PostgreSQL-only and multi-statement, so SQLite cannot
 execute it and `db.create_all()` says nothing about whether it works.
 `tests/test_postgres_migrations.py` applies the real files to a real server and
-skips unless `TEST_DATABASE_URL_POSTGRES` is set. Point it at a **throwaway**
-database — never at the running `idealista-db`:
+skips unless `TEST_DATABASE_URL_POSTGRES` is set. Those tests CREATE and DROP
+databases on whatever server it names, so it must be a **throwaway** nobody
+else is using. The one that is always reachable needs no Docker daemon — it
+runs `initdb` from the PostgreSQL binaries already on the machine and puts a
+brand-new cluster in a temporary directory on port 55432:
+
+```bash
+eval "$(tools/ci/migration_test_db.sh start)"
+uv run pytest tests/test_postgres_migrations.py -v
+tools/ci/migration_test_db.sh stop
+```
+
+A disposable container is equally good when Docker Desktop is running:
 
 ```bash
 docker run -d --rm --name pg-migtest -e POSTGRES_PASSWORD=migtest \
@@ -166,6 +177,13 @@ TEST_DATABASE_URL_POSTGRES=postgresql://migtest:migtest@127.0.0.1:55432/migtest 
   uv run pytest tests/test_postgres_migrations.py -v
 docker stop pg-migtest
 ```
+
+**Two servers are not throwaways and the suite refuses both**: `127.0.0.1:5434`
+is the mini's running `idealista-db`, and `127.0.0.1:5432` on this Mac is
+Postgres.app — the inbox-zero project's database server, which holds its live
+`inboxzero` database. `tests/postgres_server_guard.py` checks `pg_database`
+before the first CREATE DATABASE and fails, naming what it found; see the
+"Writing a migration?" rule in CLAUDE.md for the incident behind it.
 
 CI runs the same tests against a service container with
 `REQUIRE_POSTGRES_TESTS=1`, so a missing server fails the job rather than
