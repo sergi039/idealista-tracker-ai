@@ -338,6 +338,87 @@ def _shows_rows_the_default_hides(query, ctx):
     return query.filter(ctx["hidden_default"]).first() is not None
 
 
+# The `criteria` parameter's vocabulary AS A URL SPEAKS IT. The reading itself
+# lives in `services.subscription_criteria` — that is what #519 moved it there
+# for, because `routes/api_routes.py` had no way to reach it while it was
+# private here and grew a fifth answer instead. What stays here is the URL
+# side of the same rule, and the two vocabularies are deliberately not the
+# same word: the service spells the default `default`, a URL spells it by
+# saying nothing at all, and `criteria_mode()` is the one place that
+# translation happens so a link never carries a redundant spelling.
+CRITERIA_MODES = tuple(
+    mode for mode in subscription_criteria.FILTER_MODES if mode != "default"
+)
+
+# What a control offers, in the order a reader meets them: the default first
+# (the empty string IS the default reading, not a fifth mode), then everything,
+# then the verdicts from most to least welcome. The order is a display choice
+# and differs from CRITERIA_MODES, so the two are tied by an assertion rather
+# than by hope — a template that grew a fifth option nobody applies, or lost
+# one nobody could reach, is the disagreement this pair exists to prevent.
+CRITERIA_CHOICES = ("", "all", "pass", "unknown", "fail")
+assert set(CRITERIA_CHOICES) == {""} | set(CRITERIA_MODES), (
+    "the control must offer exactly the modes the code applies"
+)
+
+
+def criteria_mode(raw_value):
+    """The canonical spelling of the `criteria` parameter for a URL, `""` for
+    default. One reading — `subscription_criteria.read_filter_mode` — with the
+    service's `default` rendered as absence, which is how a link says it."""
+    mode, _ = subscription_criteria.read_filter_mode(raw_value)
+    return "" if mode == "default" else mode
+
+
+def _apply_criteria_filter(query, ctx, raw_value, count_hidden=False):
+    """The list, the map, the CSV and /municipalities, through the one reading.
+
+    A thin bind over `subscription_criteria.apply_filter` and nothing else:
+    `GET /api/properties` reaches the same function directly, which is the
+    whole point of it living in the service. Returning `query` **itself** when
+    nothing was applied is relied upon by `_split_by_criteria`, which reads it
+    as "this reading excluded nothing" and skips a COUNT. It is NOT what
+    `/properties`' `filter_bar_active` tests: that is computed before this runs,
+    deliberately, because the default hide is the page's standing policy and
+    not a filter-bar action.
+    """
+    return subscription_criteria.apply_filter(query, ctx, raw_value, count_hidden)
+
+
+def _split_by_criteria(query, ctx, raw_value):
+    """A scope's rows, split into the ones this criteria reading counts and
+    the ones it does not.
+
+    For a surface that has to *disclose* what it narrowed rather than only
+    apply it: /municipalities re-states every count and median over the kept
+    rows, and says how many listings — and how many municipalities — the
+    reading is not counting. The excluded rows are what that sentence is
+    counted from.
+
+    The split is made by the SAME expression `_apply_criteria_filter` applies,
+    read back as a set of ids, and never by a second reading of the rule in
+    Python: `hidden_by_default_expression` lives in SQL only (its favorited /
+    reviewed / open-action exemptions with it), and a Python twin written here
+    would be a second home for it — the defect this codebase keeps naming.
+
+    `_apply_criteria_filter` returns the query object *itself* when nothing is
+    applied (no subscription carries criteria, or the mode is `all`), and this
+    function is that identity test's only consumer — `/properties`'
+    `filter_bar_active` is a different test taken earlier, over the filter bar
+    alone. That branch costs no extra query and reports nothing excluded,
+    which is the truth: the reading excluded nothing.
+    """
+    kept_query, _ = _apply_criteria_filter(query, ctx, raw_value)
+    rows = query.all()
+    if kept_query is query:
+        return rows, []
+    kept_ids = {row[0] for row in kept_query.with_entities(Property.id)}
+    return (
+        [prop for prop in rows if prop.id in kept_ids],
+        [prop for prop in rows if prop.id not in kept_ids],
+    )
+
+
 def _filter_by_investment_rating(query, model, raw_value):
     """Keep only rows whose investment rating starts with `raw_value`."""
     wanted = (raw_value or "").strip().upper()
@@ -3581,6 +3662,26 @@ def municipalities():
     municipality's own listings — the owner's decision of 2026-08-14, taken
     over a capital-centroid basis because what he is choosing between is the
     listings, not the town halls. Every median carries its coverage.
+
+    Since #513 this is the fifth surface that reads the subscription criteria
+    (`services/subscription_criteria.py`), with the same parameter and the
+    same default as the list, the map and the CSV — a filter one surface keeps
+    and another drops is #445's regression, and this page was dropping it. It
+    is the *counts* that move here rather than the link, because the medians
+    are what the page is for and the excluded rows are concentrated at the
+    cheap end: measured on production 2026-08-31, Camariñas ran 18 rows at a
+    median €127,500 / €865 per m² against 11 rows at €200,000 / €584 under the
+    default reading, which is the difference between the cheapest municipality
+    on the page and an ordinary one. Seven houses the owner's own criteria rule
+    out were producing that cheapness.
+
+    Two things the criteria reading may not touch. **Municipality facts are
+    not listing statistics** — INE renta, población and SEPE unemployment
+    involve no listing at all, so they read identically under every mode, and
+    the page's own contract keeps the two kinds apart. And **a narrowing with
+    nothing saying what it excluded is #98's defect in a new place**, so the
+    page states how many listings, and how many municipalities, this reading
+    is not counting.
     """
     from services.municipality_comparison_service import (
         DEFAULT_SORT,
@@ -3600,6 +3701,13 @@ def municipalities():
 
         include_archived = request.args.get("archived") == "on"
         favorites_only = request.args.get("favorites") == "on"
+        # Canonicalised, unlike the list's raw read: this page's control is a
+        # menu of links rather than a select, so an unrecognised value would
+        # leave every option un-highlighted while the default reading was
+        # quietly applied — a control saying "nothing is on" over a page that
+        # is narrowed (#104's shape, in the criteria parameter).
+        criteria_filter = criteria_mode(request.args.get("criteria", ""))
+        criteria_ctx = _criteria_context()
         sort_by = request.args.get("sort") or DEFAULT_SORT
         if sort_by not in SORT_KEYS:
             sort_by = DEFAULT_SORT
@@ -3639,17 +3747,25 @@ def municipalities():
             query = query.filter(Property.is_favorite.is_(True))
 
         # How many listings each subscription holds *in this page's other
-        # scopes* -- counted off the query with the status and favorites
-        # filters applied and the subscription filter not yet, so the number
-        # beside a name in the menu is the number picking it would show. Same
-        # order, and the same reason, as `unassigned_count` on /properties:
-        # SQLAlchemy queries are immutable, so the two branches cannot drift.
-        # `live == held` on purpose: this page's count already answers "what
-        # picking it would show", so the number displayed and the number that
-        # decides whether the option is offered are the same fact here.
+        # scopes* -- counted off the query with the status, favorites and
+        # criteria filters applied and the subscription filter not yet, so the
+        # number beside a name in the menu is the number picking it would
+        # show. Same order, and the same reason, as `unassigned_count` on
+        # /properties: SQLAlchemy queries are immutable, so the two branches
+        # cannot drift. `live == held` on purpose: this page's count already
+        # answers "what picking it would show", so the number displayed and
+        # the number that decides whether the option is offered are the same
+        # fact here.
+        #
+        # The criteria reading is on this branch too, and that is the whole
+        # point of putting it before the menu: a count in the menu taken
+        # without it would promise a subscription's 443 listings and open on
+        # the 384 this page counts, which is the defect being fixed one
+        # control over.
+        counted, _ = _apply_criteria_filter(query, criteria_ctx, criteria_filter)
         listing_counts = {
             profile_id: ProfileListingCount(live=count, held=count)
-            for profile_id, count in query.with_entities(
+            for profile_id, count in counted.with_entities(
                 Property.search_profile_id, func.count(Property.id)
             ).group_by(Property.search_profile_id)
         }
@@ -3661,10 +3777,12 @@ def municipalities():
         # filtering afterwards would leave all of it describing the
         # unfiltered set while the page claimed otherwise. That is #417
         # exactly, on a new axis.
-        query = apply_profile_filter(
+        scope_query = apply_profile_filter(
             query, Property.search_profile_id, profile_selection
         )
-        properties = query.all()
+        properties, criteria_excluded_rows = _split_by_criteria(
+            scope_query, criteria_ctx, criteria_filter
+        )
 
         # The menu's rows, from the helper /properties builds its own from --
         # live first, the archive after it, a hidden one only when the URL
@@ -3701,8 +3819,28 @@ def municipalities():
                 row,
                 favorites_only=favorites_only,
                 include_archived=include_archived,
+                criteria=criteria_filter,
             )
             row["drilldown_truncated"] = drilldown_truncates(row)
+
+        # What this criteria reading is not counting, in the two units the
+        # page is written in. The listings are the rows `_split_by_criteria`
+        # held back; the municipalities are the ones that disappear from the
+        # table *entirely* -- every one of their listings excluded -- because
+        # a municipality silently absent reads as a municipality with nothing
+        # in it, which is #98 one level above the row. A municipality that
+        # merely lost some of its listings is still on screen with its own
+        # coverage counts beside every median.
+        shown_keys = {row["key"] for row in rows}
+        vanished = {
+            key
+            for key in (group_key(p.municipality) for p in criteria_excluded_rows)
+            if key is not None and key not in shown_keys
+        }
+        criteria_excluded = {
+            "listings": len(criteria_excluded_rows),
+            "municipalities": len(vanished),
+        }
 
         # Truncated email artifacts ("Ovi...", issue #298) count with the
         # unnamed listings: build_rows skips both, for the same reason -- a
@@ -3743,6 +3881,10 @@ def municipalities():
             unassigned_available=unassigned_available,
             listing_total=len(properties),
             unnamed_listings=unnamed,
+            criteria_choices=CRITERIA_CHOICES,
+            criteria_filter=criteria_filter,
+            criteria_enabled=criteria_ctx is not None,
+            criteria_excluded=criteria_excluded,
             sources=service.qol_service.reference_sources(),
         )
     except HTTPException:
