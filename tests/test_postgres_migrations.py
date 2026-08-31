@@ -12,13 +12,22 @@ PostgreSQL server, both on an empty database (the fresh-install path) and on a
 database that already holds rows under the pre-013 schema (the upgrade path
 the owner's database will actually take).
 
-Point them at a *throwaway* server, never at a database with real data:
+Point them at a *throwaway* server, never at a database with real data — and
+this project keeps no local database of any kind, so the throwaway is a
+container on the Mac mini, tunnelled here:
 
-    docker run -d --rm --name pg-migtest -e POSTGRES_PASSWORD=migtest \\
-        -e POSTGRES_USER=migtest -e POSTGRES_DB=migtest \\
-        -p 127.0.0.1:55432:5432 postgres:15-alpine
-    TEST_DATABASE_URL_POSTGRES=postgresql://migtest:migtest@127.0.0.1:55432/migtest \\
-        uv run pytest tests/test_postgres_migrations.py -v
+    eval "$(tools/ci/migration_test_db.sh start)"
+    uv run pytest tests/test_postgres_migrations.py -v
+    tools/ci/migration_test_db.sh stop
+
+It runs the same postgres:15-alpine the deployment's `idealista-db` runs, so
+the migrations are exercised on production's own major version. Offline it
+fails and says so; the fallback is CI, never a database on this machine.
+
+What is NOT a throwaway server: 127.0.0.1:5432, which on a Mac here is
+Postgres.app and holds inbox-zero's live database, and 127.0.0.1:5434, the
+mini's `idealista-db`. `postgres_url` refuses both before it issues a single
+CREATE DATABASE — see tests/postgres_server_guard.py.
 
 Each test creates and drops its own database on that server. CI sets both
 environment variables, so a missing server there is a failure rather than a
@@ -35,9 +44,11 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app import db
+from tests import postgres_server_guard
 from migrations.runner import BASELINE_IDENTIFIERS, MIGRATIONS_DIR
 
 # Importing the models is what registers them on db.metadata, which the
@@ -92,6 +103,23 @@ def _server_url() -> str:
     )
 
 
+def _refuse_a_server_someone_else_is_using(connection, server_url) -> None:
+    """Fail before the first CREATE DATABASE when this server is not ours.
+
+    The rule and the incident behind it live in tests/postgres_server_guard.py.
+    The check rides the connection this fixture already opens, so it costs one
+    query, and it runs ahead of every CREATE and DROP rather than after the
+    first one. It fails rather than skips: a skip reads as success.
+    """
+    target = make_url(server_url).database
+    names = connection.execute(text("SELECT datname FROM pg_database")).scalars().all()
+    message = postgres_server_guard.refusal(
+        postgres_server_guard.foreign_databases(names, target), target
+    )
+    if message:
+        pytest.fail(message)
+
+
 @pytest.fixture
 def postgres_url():
     """A freshly created, empty PostgreSQL database, dropped afterwards."""
@@ -102,6 +130,7 @@ def postgres_url():
     admin = create_engine(server_url, isolation_level="AUTOCOMMIT")
     try:
         with admin.connect() as connection:
+            _refuse_a_server_someone_else_is_using(connection, server_url)
             connection.execute(text(f'CREATE DATABASE "{name}"'))
     except SQLAlchemyError as exc:
         admin.dispose()

@@ -155,17 +155,34 @@ pytest tests/ --cov=app --cov-report=html
 `migrations/*.sql` is PostgreSQL-only and multi-statement, so SQLite cannot
 execute it and `db.create_all()` says nothing about whether it works.
 `tests/test_postgres_migrations.py` applies the real files to a real server and
-skips unless `TEST_DATABASE_URL_POSTGRES` is set. Point it at a **throwaway**
-database — never at the running `idealista-db`:
+skips unless `TEST_DATABASE_URL_POSTGRES` is set. Those tests CREATE and DROP
+databases on whatever server it names, so it must be a **throwaway** nobody
+else is using.
+
+**This project runs in Docker on the Mac mini and keeps no local database**
+(owner, 2026-08-31): your laptop is a client that reaches the mini over
+Tailscale, so the throwaway is a container over there, tunnelled to
+127.0.0.1:55432 for the duration of the run:
 
 ```bash
-docker run -d --rm --name pg-migtest -e POSTGRES_PASSWORD=migtest \
-  -e POSTGRES_USER=migtest -e POSTGRES_DB=migtest \
-  -p 127.0.0.1:55432:5432 postgres:15-alpine
-TEST_DATABASE_URL_POSTGRES=postgresql://migtest:migtest@127.0.0.1:55432/migtest \
-  uv run pytest tests/test_postgres_migrations.py -v
-docker stop pg-migtest
+eval "$(tools/ci/migration_test_db.sh start)"
+uv run pytest tests/test_postgres_migrations.py -v
+tools/ci/migration_test_db.sh stop
 ```
+
+`start` runs one `docker run --rm` of the same `postgres:15-alpine` the
+deployment's `idealista-db` runs — so migrations are exercised on production's
+own major version — under its own name, on the mini's loopback, with no compose
+labels and no volume. It never touches `idealista-db` and a deploy does not
+disturb it. Offline, `start` fails and says so; the fallback is CI, **never a
+database on your own machine**.
+
+**Two servers are not throwaways and the suite refuses both**: `127.0.0.1:5434`
+is the mini's running `idealista-db`, and `127.0.0.1:5432` on a Mac here is
+Postgres.app — the inbox-zero project's database server, which holds its live
+`inboxzero` database. `tests/postgres_server_guard.py` checks `pg_database`
+before the first CREATE DATABASE and fails, naming what it found; see the
+"Writing a migration?" rule in CLAUDE.md for the incident behind it.
 
 CI runs the same tests against a service container with
 `REQUIRE_POSTGRES_TESTS=1`, so a missing server fails the job rather than
