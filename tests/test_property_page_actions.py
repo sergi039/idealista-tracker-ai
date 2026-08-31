@@ -405,9 +405,13 @@ class TestTheManualStatusOverrideIsGone:
     ):
         body = client.get(f"/properties/{listing}").get_data(as_text=True)
         handler = body[body.index("async function setPropertyListingStatus") :]
-        handler = handler[: handler.index("// Ask Idealista")]
+        handler = handler[: handler.index("// Ask the listing's own site")]
         assert "/api/property/${propertyId}/set-status" in handler
-        assert "Idealista is not consulted" in handler
+        # The site is named at runtime from the row's own URL now, because the
+        # page renders for fotocasa and yaencontre rows too; this fixture is on
+        # idealista.com, so `window.LISTING_SITE` is "Idealista" for it.
+        assert "${window.LISTING_SITE} is not consulted" in handler
+        assert 'window.LISTING_SITE = "Idealista";' in body
 
     def test_check_status_stayed(self, client, listing):
         body = client.get(f"/properties/{listing}").get_data(as_text=True)
