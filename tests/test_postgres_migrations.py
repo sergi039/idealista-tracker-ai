@@ -39,6 +39,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -77,6 +78,7 @@ CADASTRAL_MIGRATION = "022_add_property_cadastral_reference"
 ATTACHMENT_MIGRATION = "023_create_property_attachment"
 TASTE_MIGRATION = "024_add_property_taste"
 ROUTING_MIGRATION = "025_add_profile_routing_and_criteria"
+LOCK_ORDER_MIGRATION = "026_canonicalize_locks_in_id_order"
 PROPERTY_VARIANT_UNIQUE_CONSTRAINT = (
     "ux_property_ai_analysis_variants_property_provider"
 )
@@ -313,6 +315,7 @@ def test_013_frees_the_label_on_a_database_that_already_holds_rows(
             ATTACHMENT_MIGRATION,
             TASTE_MIGRATION,
             ROUTING_MIGRATION,
+            LOCK_ORDER_MIGRATION,
         ]
 
         # Two *identified* subscriptions may now share the label...
@@ -1539,6 +1542,7 @@ def test_017_deduplicates_existing_rows_and_adds_the_unique_constraint(
             ATTACHMENT_MIGRATION,
             TASTE_MIGRATION,
             ROUTING_MIGRATION,
+            LOCK_ORDER_MIGRATION,
         ]
 
         with engine.begin() as connection:
@@ -1729,6 +1733,7 @@ def test_017_deduplicates_existing_land_variants_and_adds_the_unique_constraint(
             ATTACHMENT_MIGRATION,
             TASTE_MIGRATION,
             ROUTING_MIGRATION,
+            LOCK_ORDER_MIGRATION,
         ]
 
         with engine.begin() as connection:
@@ -2397,5 +2402,224 @@ def test_025_nan_is_refused_and_never_reads_as_a_measurement(postgres_url, monke
                 )
             ).scalar_one()
         assert selected == 0, "a NaN area must never be selected as a pass"
+    finally:
+        engine.dispose()
+
+
+def test_026_the_insert_path_no_longer_inverts_against_an_ascending_locker(
+    postgres_url,
+):
+    """Migration 025's trigger locked stub-then-target; everyone else locks by
+    ascending id, so a stub whose id is higher than its target's produced two
+    exactly opposite lock orders and the pair deadlocked.
+
+    This is deliberately NOT a load test. A load-based reproduction of a race
+    answers "did it happen today" (measured: 0-7 deadlocks in 20 s across
+    identical runs, and one sample of it came back 0 and nearly bought the
+    wrong conclusion). The choreography below answers "can the cycle form",
+    and it forms once, every run, on the shipped trigger:
+
+        A: SELECT id = target FOR UPDATE   -- holds the LOW id
+        B: INSERT a listing on the stub    -- trigger takes the HIGH id, then
+                                           -- the FK wants the LOW one: waits
+        A: SELECT id = stub   FOR UPDATE   -- wants the HIGH one: cycle
+
+    `lock_timeout` is set on both sides so a regression that turns the
+    deadlock into an indefinite wait fails this test instead of hanging the
+    suite.
+
+    What this does NOT prove is that no cycle can form at all: a route change
+    landing inside the trigger's read-to-lock gap still leaves one, reproduced
+    and recorded in issue #513 and in migration 026's own comment. This test
+    pins the inversion that needed no conditions whatsoever.
+    """
+    import threading
+
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+
+        with engine.begin() as connection:
+            target = connection.execute(
+                text(
+                    "INSERT INTO search_profiles (name, is_active) "
+                    "VALUES ('lock-order-target', TRUE) RETURNING id"
+                )
+            ).scalar_one()
+            stub = connection.execute(
+                text(
+                    "INSERT INTO search_profiles (name, is_active) "
+                    "VALUES ('lock-order-stub', TRUE) RETURNING id"
+                )
+            ).scalar_one()
+            connection.execute(
+                text("UPDATE search_profiles SET routed_to = :t WHERE id = :s"),
+                {"t": target, "s": stub},
+            )
+        # The shape the defect needs. If ids ever stop ascending, this test
+        # would silently exercise the safe direction instead.
+        assert stub > target
+
+        a_holds_the_low_row = threading.Event()
+        b_has_started = threading.Event()
+        failures: dict[str, str] = {}
+        inserter_pid: dict[str, int] = {}
+
+        def insert_on_the_stub() -> None:
+            try:
+                with engine.connect() as connection:
+                    connection.execute(text("SET lock_timeout = '20s'"))
+                    # Its own backend pid, so the waiter the other side polls
+                    # for is THIS transaction and not merely somebody.
+                    inserter_pid["v"] = connection.execute(
+                        text("SELECT pg_backend_pid()")
+                    ).scalar_one()
+                    a_holds_the_low_row.wait(15)
+                    b_has_started.set()
+                    connection.execute(
+                        text(
+                            "INSERT INTO properties (source_email_id, title, "
+                            "search_profile_id) VALUES ('lock-order', 'x', :p)"
+                        ),
+                        {"p": stub},
+                    )
+                    connection.commit()
+            except Exception as exc:  # noqa: BLE001
+                failures["inserter"] = f"{type(exc).__name__}: {exc}"
+
+        inserter = threading.Thread(target=insert_on_the_stub, daemon=True)
+        inserter.start()
+        try:
+            with engine.connect() as connection:
+                connection.execute(text("SET lock_timeout = '20s'"))
+                connection.execute(
+                    text("SELECT id FROM search_profiles WHERE id = :t FOR UPDATE"),
+                    {"t": target},
+                )
+                a_holds_the_low_row.set()
+                assert b_has_started.wait(15), "the inserting thread never ran"
+                # NOT a sleep, and NOT "somebody is waiting". Two findings
+                # from the independent review, in order: a descheduled
+                # inserter walks past a fixed sleep, so the locker takes the
+                # stub and commits and the choreography never forms the cycle
+                # — green on the reverted lock order, the one thing this test
+                # exists to catch. And counting any lock-waiting backend in
+                # the database accepts an unrelated waiter as proof that THIS
+                # inserter is blocked, which reopens exactly that hole. So it
+                # polls for the inserter's own backend pid.
+                assert inserter_pid.get("v"), "the inserter never reported a pid"
+                deadline = time.monotonic() + 20
+                while True:
+                    waiting = connection.execute(
+                        text(
+                            "SELECT count(*) FROM pg_stat_activity WHERE "
+                            "pid = :pid AND wait_event_type = 'Lock'"
+                        ),
+                        {"pid": inserter_pid["v"]},
+                    ).scalar_one()
+                    if waiting:
+                        break
+                    assert time.monotonic() < deadline, (
+                        "the inserting transaction never blocked on a lock, so "
+                        "this test never exercised the cycle it exists for"
+                    )
+                    time.sleep(0.1)
+                connection.execute(
+                    text("SELECT id FROM search_profiles WHERE id = :s FOR UPDATE"),
+                    {"s": stub},
+                )
+                connection.commit()
+        except Exception as exc:  # noqa: BLE001
+            failures["locker"] = f"{type(exc).__name__}: {exc}"
+        inserter.join(30)
+
+        assert not failures, (
+            "the insert path and an ascending-id locker deadlocked, so the "
+            "trigger is taking its locks out of order again: " + repr(failures)
+        )
+
+        # The fix must not have bought its ordering by dropping the routing.
+        with engine.connect() as connection:
+            landed = connection.execute(
+                text(
+                    "SELECT search_profile_id FROM properties "
+                    "WHERE source_email_id = 'lock-order'"
+                )
+            ).scalar_one()
+        assert landed == target, "the listing stopped being routed to its target"
+    finally:
+        engine.dispose()
+
+
+def test_026_a_route_writer_still_blocks_an_insert(postgres_url):
+    """The ordering fix must keep 025's actual guarantee.
+
+    `FOR KEY SHARE` is there so a listing inserted while a re-route is in
+    flight waits for the decision instead of racing past it onto the stub.
+    Reordering the locks is only correct if that still holds — a trigger that
+    stopped locking would also pass the deadlock test above.
+    """
+    import threading
+
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+        with engine.begin() as connection:
+            target = connection.execute(
+                text(
+                    "INSERT INTO search_profiles (name, is_active) "
+                    "VALUES ('block-target', TRUE) RETURNING id"
+                )
+            ).scalar_one()
+            stub = connection.execute(
+                text(
+                    "INSERT INTO search_profiles (name, is_active) "
+                    "VALUES ('block-stub', TRUE) RETURNING id"
+                )
+            ).scalar_one()
+            connection.execute(
+                text("UPDATE search_profiles SET routed_to = :t WHERE id = :s"),
+                {"t": target, "s": stub},
+            )
+
+        was_blocked: dict[str, object] = {}
+
+        def insert_while_the_route_is_held() -> None:
+            try:
+                with engine.connect() as connection:
+                    connection.execute(text("SET lock_timeout = '3s'"))
+                    connection.execute(
+                        text(
+                            "INSERT INTO properties (source_email_id, title, "
+                            "search_profile_id) VALUES ('blocked', 'x', :p)"
+                        ),
+                        {"p": stub},
+                    )
+                    connection.commit()
+                was_blocked["v"] = False
+            except Exception as exc:  # noqa: BLE001
+                text_of = str(exc).lower()
+                was_blocked["v"] = "lock" in text_of or "timeout" in text_of
+
+        with engine.connect() as connection:
+            connection.execute(
+                text("SELECT id FROM search_profiles WHERE id = :s FOR UPDATE"),
+                {"s": stub},
+            )
+            thread = threading.Thread(
+                target=insert_while_the_route_is_held, daemon=True
+            )
+            thread.start()
+            thread.join(20)
+            connection.rollback()
+
+        assert was_blocked.get("v") is True, (
+            "an insert ran straight past a route writer holding the stub "
+            "FOR UPDATE: the serialization migration 025 exists for is gone"
+        )
     finally:
         engine.dispose()
