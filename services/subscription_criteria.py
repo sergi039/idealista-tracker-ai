@@ -273,10 +273,25 @@ def hidden_by_default_expression(model, criteria: Dict[str, float]):
     """What the default view hides: measured fails the owner has NOT judged.
 
     A favorited or reviewed listing is never hidden — the filter must not
-    overrule the owner's own recorded judgement.
+    overrule the owner's own recorded judgement. **An outstanding action
+    counts as such a judgement** (#502 review, the HIGH finding): a row
+    carrying `next_action` was hidden here while the overdue count, built
+    without any criteria clause, went on advertising it — so the bare page
+    read "1 overdue" and its own link landed on "0 properties found" and
+    re-rendered the same link, a loop with no way out of it.
+
+    Three exemptions, one idea: the owner has touched this row, so the
+    subscription's blanket criteria no longer decide whether they see it.
+    The action predicate is deliberately date-free — `pending` and `overdue`
+    are both "still to do", and only the date tells them apart — so nothing
+    here needs `review_today` threaded in, and the hide cannot drift from the
+    counts by recomputing a date per row.
     """
+    from services.owner_review import open_action_expression
+
     return and_(
         failing_expression(model, criteria),
         model.is_favorite.isnot(True),
         model.owner_verdict.is_(None),
+        ~open_action_expression(model),
     )

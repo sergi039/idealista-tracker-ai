@@ -262,6 +262,44 @@ def _sqlite_has_action(model: Any):
     )
 
 
+def open_action_expression(model: Any):
+    """Whether the owner has recorded something still to do about this row.
+
+    `pending` and `overdue` collapsed into one predicate, deliberately
+    date-free: the date only tells those two apart, and every consumer that
+    merely asks "did the owner leave an action here" would otherwise have to
+    thread `review_today` through for a distinction it does not use — which is
+    how a date gets recomputed per row and the page disagrees with its own
+    counts.
+
+    It exists because the criteria hide needs it (#502 review, the HIGH
+    finding): a listing carrying an outstanding action was hidden by the
+    default view, and the overdue count — built without the criteria clause —
+    went on advertising it, so the bare page said "1 overdue" and its own link
+    landed on "0 properties found" and re-rendered the same link. A row the
+    owner has acted on is in the same class as a favorited or reviewed one and
+    must not be hidden out from under them.
+
+    The dialect split is `action_expression_portable`'s, reused rather than
+    copied: PostgreSQL gets the regex the CHECK constraint applies, SQLite the
+    operator form, and `tests/test_owner_review.py` runs its matrix through
+    the same two branches.
+    """
+    from app import db
+
+    dialect = ""
+    try:
+        dialect = db.session.get_bind().dialect.name
+    except Exception:  # pragma: no cover - no bind outside an app context
+        dialect = ""
+
+    if dialect == "postgresql":
+        return func.coalesce(cast(model.next_action, String), "").op("~")(
+            "[^[:space:]]"
+        )
+    return _sqlite_has_action(model)
+
+
 def action_expression_portable(model: Any, on_date: Optional[date] = None):
     """`action_expression` for whichever engine is under us.
 
@@ -271,20 +309,12 @@ def action_expression_portable(model: Any, on_date: Optional[date] = None):
     runs its matrix through this function, so what the suite proves is what the
     surfaces call.
     """
-    from app import db
-
     reference = on_date or today()
-    dialect = ""
-    try:
-        dialect = db.session.get_bind().dialect.name
-    except Exception:  # pragma: no cover - no bind outside an app context
-        dialect = ""
-
-    has_action = (
-        func.coalesce(cast(model.next_action, String), "").op("~")("[^[:space:]]")
-        if dialect == "postgresql"
-        else _sqlite_has_action(model)
-    )
+    # The same predicate `open_action_expression` exports, called rather than
+    # spelled a second time: two copies of "has the owner left an action" is
+    # how the hide and the badge come to disagree about one row. The dialect
+    # lookup lives there now, which is why this function no longer does one.
+    has_action = open_action_expression(model)
     due = model.next_action_due_on
     return case(
         (~has_action, literal(ACTION_NONE)),
