@@ -887,6 +887,79 @@ def score_property(
     }
 
 
+def rescore_pending(
+    cap_calls: Optional[int] = None, provider: str = "claude"
+) -> Dict[str, Any]:
+    """Score every visible listing the reader does not call `ok`.
+
+    One loop for the two attended-or-opted-in callers: the retrain button's
+    background job (uncapped — the owner pressed and confirmed) and the
+    daily auto-score (capped, `AUTO_TASTE_SCORING`, explicitly opted in by
+    the owner on 2026-08-31 — subscription credit, never Google). Scope is
+    the VISIBLE subscriptions: a hidden stub's rows either moved to their
+    route target or are off every surface, and scoring what nobody can see
+    spends credit on nothing. Three failed bridge CALLS in a row stop the
+    run — the backfill CLI's rule, one home over.
+    """
+    from services.search_profile_service import SearchProfileService
+
+    profile_data = load_current_profile()
+    if profile_data is None:
+        return {"status": "failed", "error": "no taste profile"}
+    visible_ids = [p.id for p in SearchProfileService.list_visible_profiles()]
+    if not visible_ids:
+        return {"status": "ok", "scored": 0, "calls": 0, "pending_left": 0}
+    rows = (
+        Property.query.filter(Property.search_profile_id.in_(visible_ids))
+        .order_by(Property.id.asc())
+        .all()
+    )
+    pending = [
+        prop
+        for prop in rows
+        if read_taste(prop, profile_data["version"])["state"] != "ok"
+    ]
+    tally = {"scored": 0, "superseded": 0, "insufficient_evidence": 0}
+    calls_made = 0
+    consecutive_refusals = 0
+    index = 0
+    while index < len(pending):
+        if cap_calls is not None and calls_made >= cap_calls:
+            break
+        batch = pending[index : index + DEFAULT_BATCH_SIZE]
+        index += DEFAULT_BATCH_SIZE
+        outcome = score_batch(batch, profile_data, provider=provider, commit=True)
+        bridge_called = bool(outcome.get("bridge_called"))
+        if bridge_called:
+            calls_made += 1
+        if outcome.get("status") != "ok":
+            if bridge_called:
+                consecutive_refusals += 1
+                if consecutive_refusals >= 3:
+                    logger.warning(
+                        "Taste rescore stopping after %d failed bridge calls "
+                        "in a row: %s",
+                        consecutive_refusals,
+                        outcome.get("error"),
+                    )
+                    break
+            continue
+        if bridge_called:
+            consecutive_refusals = 0
+        for state in outcome["rows"].values():
+            tally[state] = tally.get(state, 0) + 1
+    # Informational: what a next run would still find (it re-derives the
+    # scope itself, so an attempted-but-refused batch comes back anyway).
+    pending_left = max(0, len(pending) - index)
+    return {
+        "status": "ok",
+        "calls": calls_made,
+        "pending_total": len(pending),
+        "pending_left": pending_left,
+        **tally,
+    }
+
+
 # --------------------------------------------------------------------------
 # Reading a stored score for the surfaces.
 # --------------------------------------------------------------------------

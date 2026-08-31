@@ -180,6 +180,11 @@ def _create_historical_schema(engine):
             # migration, not the model, so SQLite has none to drop first.
             "taste_score",
             "taste",
+            # Migration 025 (#498 follow-up) added the parcel's surface. The
+            # search_profiles additions (routed_to, auto_route_from_pattern,
+            # criteria) need no drops here: the historical table above is
+            # rebuilt wholesale.
+            "plot_area",
         ):
             connection.execute(
                 text(f"ALTER TABLE properties DROP COLUMN {column}")  # noqa: S608

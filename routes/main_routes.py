@@ -26,12 +26,13 @@ from flask import (
 # below would answer 500 for it: every one of them re-raises it first so an
 # unknown id stays a 404 (issue #136).
 from werkzeug.exceptions import HTTPException
-from sqlalchemy import or_, case, func
+from sqlalchemy import and_, or_, case, func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import defer
 from models import Land, Property, SearchProfile
 from app import db, limiter
 from services import sea_view_service
+from services import subscription_criteria
 from services import taste_service
 from services.coordinate_quality import shared_coordinate_peers
 from services import advertiser
@@ -304,6 +305,68 @@ def _nearest_beach_minutes(model):
     time", and the Phase-2 backfill made that false.
     """
     return model.travel["beaches"]["items"][0]["duration_min"].as_float()
+
+
+def _criteria_context():
+    """The subscriptions carrying criteria, with their SQL clauses.
+
+    None when no profile has criteria — the filter control is then not drawn
+    and no query is touched, so the feature is dormant until the owner sets
+    criteria on a subscription (services/subscription_criteria.py). The
+    clauses are per-profile ORs: a row fails only against ITS OWN
+    subscription's bounds, and rows of criteria-less subscriptions are never
+    touched by any of them.
+    """
+    from services.search_profile_service import SearchProfileService
+
+    pairs = []
+    for profile in SearchProfileService.list_profiles(active_only=False):
+        criteria = subscription_criteria.read_criteria(profile)
+        if criteria:
+            pairs.append((profile.id, criteria))
+    if not pairs:
+        return None
+
+    def _across(builder):
+        return or_(
+            *[
+                and_(Property.search_profile_id == pid, builder(Property, crit))
+                for pid, crit in pairs
+            ]
+        )
+
+    return {
+        "pairs": pairs,
+        "hidden_default": _across(subscription_criteria.hidden_by_default_expression),
+        "fail": _across(subscription_criteria.failing_expression),
+        "pass": _across(subscription_criteria.passing_expression),
+    }
+
+
+def _apply_criteria_filter(query, ctx, raw_value, count_hidden=False):
+    """One reading of the `criteria` parameter for the list, the map and the
+    CSV — a surface that kept the parameter while another dropped it is the
+    #445 regression, one filter over.
+
+    Default ('' or 'default') hides measured fails the owner has not judged
+    (never a favorited or reviewed row); `all` shows everything; `pass`,
+    `fail`, `unknown` select one verdict. Returns (query, hidden_count) —
+    the count only when asked, because it costs a COUNT(*) and only the list
+    page draws the disclosure.
+    """
+    if ctx is None:
+        return query, None
+    mode = (raw_value or "").strip().lower()
+    if mode == "all":
+        return query, None
+    if mode == "fail":
+        return query.filter(ctx["fail"]), None
+    if mode == "pass":
+        return query.filter(ctx["pass"]), None
+    if mode == "unknown":
+        return query.filter(~ctx["fail"], ~ctx["pass"]), None
+    hidden = query.filter(ctx["hidden_default"]).count() if count_hidden else None
+    return query.filter(~ctx["hidden_default"]), hidden
 
 
 def _filter_by_investment_rating(query, model, raw_value):
@@ -1324,6 +1387,7 @@ def properties():
         sea_distance_filter = request.args.get("sea_dist", "")
         build_filter = request.args.get("build", "")
         measured_filter = request.args.get("measured", "")
+        criteria_filter = request.args.get("criteria", "")
 
         # Hide removed: ON by default (similar to /lands), unless this request
         # came from the filter form with the box unticked.
@@ -1444,6 +1508,20 @@ def properties():
         # filter, and the disclosure cannot describe a narrowing that was
         # never applied.
         filter_bar_active = query is not filter_bar_scope
+
+        # The subscription's own criteria (#498 follow-up): by default a
+        # measured fail the owner has not judged is hidden, and the count of
+        # what was hidden renders beside the result count — a filter that
+        # hides silently reads as "these listings do not exist". Applied
+        # AFTER the narrowing check on purpose: the default hide is the
+        # page's standing policy, not the user's filter-bar action, and it
+        # must not flip the "narrowed" disclosure on every load (an explicit
+        # criteria=... choice is a filter, but the scope-total line does not
+        # count it — stated here rather than discovered).
+        criteria_ctx = _criteria_context()
+        query, criteria_hidden_count = _apply_criteria_filter(
+            query, criteria_ctx, criteria_filter, count_hidden=True
+        )
 
         # Listings with no subscription at all (issue #111). They are invisible
         # to every profile selection including `all`, so the page has to say
@@ -1635,6 +1713,8 @@ def properties():
             hazard_scanned_count=hazard_scanned_count,
             taste_version=taste_version,
             taste_scored_count=taste_scored_count,
+            criteria_enabled=criteria_ctx is not None,
+            criteria_hidden_count=criteria_hidden_count,
             # How the search box entry was read, so an empty result can say
             # what it looked for instead of leaving "0 properties found" to
             # mean both "no such listing" and "not understood as you typed it".
@@ -1661,6 +1741,7 @@ def properties():
                 "sea_dist": sea_distance_filter,
                 "build": build_filter,
                 "measured": measured_filter,
+                "criteria": criteria_filter,
                 "favorites": favorites_filter,
                 "hide_removed": hide_removed_filter,
                 "sort_by": sort_by,
@@ -3045,6 +3126,49 @@ def set_advertiser(property_id):
     return redirect(url_for("main.property_detail", property_id=property_id))
 
 
+@main_bp.route("/properties/taste/retrain", methods=["POST"])
+def retrain_taste():
+    """Rebuild the taste profile from the owner's comments, then re-score.
+
+    Attended: the button carries a confirm naming the cost, and this is a
+    form POST on main_bp so it rides CSRF — a drive-by page cannot spend the
+    owner's bridge credit (the rule about new state-changing endpoints). The
+    job is a singleton (`dedupe_key="taste_retrain"`): a second press
+    attaches to the running job instead of doubling the spend, the same
+    contract the enrichment button has. Retrain AND re-score in one job —
+    a retrain that only marked scores stale would leave the ranking blank
+    until somebody remembered a CLI (the plan-gate round-1 finding).
+    """
+    from services.background_jobs import enqueue_job
+
+    app_obj = current_app._get_current_object()
+
+    def _run():
+        outcome = taste_service.build_profile()
+        if outcome.get("status") != "ok":
+            return {"success": False, "error": outcome.get("error")}
+        rescored = taste_service.rescore_pending()
+        return {"success": rescored.get("status") == "ok", **rescored}
+
+    try:
+        job_id = enqueue_job(
+            _run,
+            job_type="taste_retrain",
+            meta={},
+            app=app_obj,
+            dedupe_key="taste_retrain",
+        )
+        flash(
+            "Retraining the taste profile and re-scoring in the background "
+            f"(job {job_id[:8]}). Refresh in a few minutes.",
+            "info",
+        )
+    except Exception:
+        logger.error("Failed to queue the taste retrain", exc_info=True)
+        flash("Could not start the taste retrain. Check server logs.", "error")
+    return redirect(url_for("main.properties"))
+
+
 @main_bp.route("/properties/<int:property_id>/review", methods=["POST"])
 def set_review(property_id):
     """Record what the owner decided, and what is still outstanding.
@@ -3815,6 +3939,14 @@ def map_view():
         # describe two sets across the two surfaces (#445).
         if measured_filter:
             query = _filter_by_measured(query, Property, measured_filter)
+
+        # The same criteria reading as the list (#445's rule: a filter one
+        # surface keeps and another drops is the regression, one filter over)
+        # -- pressing Map on the default view must not widen it with the
+        # hidden fails.
+        query, _ = _apply_criteria_filter(
+            query, _criteria_context(), filters.get("criteria")
+        )
 
         if favorites_filter:
             query = query.filter(Property.is_favorite.is_(True))
@@ -4915,6 +5047,7 @@ def export_properties_csv():
         # against production 2026-08-20, the page found 72 listings and its own
         # export returned 471 rows.
         measured_filter = request.args.get("measured", "")
+        criteria_filter = request.args.get("criteria", "")
 
         # The same reading as /properties, from the same module, so an export
         # and the page it was taken from cannot disagree about which listings
@@ -4996,6 +5129,11 @@ def export_properties_csv():
 
         if measured_filter:
             query = _filter_by_measured(query, Property, measured_filter)
+
+        # The same criteria reading as the page and the map: an export of the
+        # visible list must not smuggle the hidden fails back in, and
+        # criteria=all must widen it the same way.
+        query, _ = _apply_criteria_filter(query, _criteria_context(), criteria_filter)
 
         if favorites_filter:
             query = query.filter(Property.is_favorite.is_(True))

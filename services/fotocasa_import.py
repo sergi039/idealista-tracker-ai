@@ -146,6 +146,7 @@ def preview_row(listing) -> Dict[str, Any]:
         "price": listing.price,
         "area": listing.area,
         "area_type": listing.area_type,
+        "plot_area": listing.plot_area,
         "deal_type": listing.deal_type,
         "municipality": listing.municipality,
         "province": listing.province,
@@ -294,6 +295,7 @@ def build_property(
     prop.price = row.get("price")
     prop.area = row.get("area")
     prop.area_type = row.get("area_type") or "unknown"
+    prop.plot_area = row.get("plot_area")
     prop.deal_type = row.get("deal_type") or "sale"
     prop.municipality = row.get("municipality")
     prop.search_profile_id = profile_id

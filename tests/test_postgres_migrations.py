@@ -65,6 +65,7 @@ OWNER_REVIEW_MIGRATION = "021_add_property_review_and_activity"
 CADASTRAL_MIGRATION = "022_add_property_cadastral_reference"
 ATTACHMENT_MIGRATION = "023_create_property_attachment"
 TASTE_MIGRATION = "024_add_property_taste"
+ROUTING_MIGRATION = "025_add_profile_routing_and_criteria"
 PROPERTY_VARIANT_UNIQUE_CONSTRAINT = (
     "ux_property_ai_analysis_variants_property_provider"
 )
@@ -282,6 +283,7 @@ def test_013_frees_the_label_on_a_database_that_already_holds_rows(
             CADASTRAL_MIGRATION,
             ATTACHMENT_MIGRATION,
             TASTE_MIGRATION,
+            ROUTING_MIGRATION,
         ]
 
         # Two *identified* subscriptions may now share the label...
@@ -1507,6 +1509,7 @@ def test_017_deduplicates_existing_rows_and_adds_the_unique_constraint(
             CADASTRAL_MIGRATION,
             ATTACHMENT_MIGRATION,
             TASTE_MIGRATION,
+            ROUTING_MIGRATION,
         ]
 
         with engine.begin() as connection:
@@ -1696,6 +1699,7 @@ def test_017_deduplicates_existing_land_variants_and_adds_the_unique_constraint(
             CADASTRAL_MIGRATION,
             ATTACHMENT_MIGRATION,
             TASTE_MIGRATION,
+            ROUTING_MIGRATION,
         ]
 
         with engine.begin() as connection:
@@ -2138,6 +2142,109 @@ def test_024_creates_the_taste_ledger_and_the_bounded_score(postgres_url):
             with engine.begin() as connection:
                 _insert_property(
                     connection, source_email_id="taste-over", taste_score=150.0
+                )
+    finally:
+        engine.dispose()
+
+
+def test_025_the_route_is_enforced_at_the_database(postgres_url):
+    """Migration 025's real shape, on a real server.
+
+    The trigger is the guarantee the Python boundary cannot give: EVERY
+    writer of `properties.search_profile_id` — ORM, curation SQL, COPY —
+    lands a routed stub's listing on its target, at the row's own write.
+    SQLite never runs it, which is why this file owns the proof.
+    """
+    from sqlalchemy.exc import IntegrityError as PgIntegrityError
+
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+
+        with engine.begin() as connection:
+            target = connection.execute(
+                text(
+                    "INSERT INTO search_profiles (name, is_active) "
+                    "VALUES ('Target', TRUE) RETURNING id"
+                )
+            ).scalar_one()
+            stub = connection.execute(
+                text(
+                    "INSERT INTO search_profiles (name, is_active, routed_to) "
+                    "VALUES ('Stub', TRUE, :t) RETURNING id"
+                ),
+                {"t": target},
+            ).scalar_one()
+
+            # INSERT: a raw SQL write naming the stub lands on the target.
+            landed = connection.execute(
+                text(
+                    "INSERT INTO properties (source_email_id, title, "
+                    "search_profile_id) VALUES ('route-ins', 'x', :s) "
+                    "RETURNING search_profile_id"
+                ),
+                {"s": stub},
+            ).scalar_one()
+            assert landed == target
+
+            # UPDATE of the column: same canonicalization.
+            other = connection.execute(
+                text(
+                    "INSERT INTO properties (source_email_id, title) "
+                    "VALUES ('route-upd', 'y') RETURNING id"
+                )
+            ).scalar_one()
+            moved = connection.execute(
+                text(
+                    "UPDATE properties SET search_profile_id = :s "
+                    "WHERE id = :i RETURNING search_profile_id"
+                ),
+                {"s": stub, "i": other},
+            ).scalar_one()
+            assert moved == target
+
+        # The CHECKs are enforced, not decorative.
+        with pytest.raises(PgIntegrityError):
+            with engine.begin() as connection:
+                selfie = connection.execute(
+                    text(
+                        "INSERT INTO search_profiles (name, is_active) "
+                        "VALUES ('Selfie', TRUE) RETURNING id"
+                    )
+                ).scalar_one()
+                connection.execute(
+                    text("UPDATE search_profiles SET routed_to = :i WHERE id = :i"),
+                    {"i": selfie},
+                )
+        with pytest.raises(PgIntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO search_profiles "
+                        "(name, is_active, is_default, routed_to) "
+                        "VALUES ('Catchall', TRUE, TRUE, :t)"
+                    ),
+                    {"t": 1},
+                )
+        with pytest.raises(PgIntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO search_profiles "
+                        "(name, is_active, routed_to, auto_route_from_pattern) "
+                        "VALUES ('PatternStub', TRUE, :t, '^Galicia ')"
+                    ),
+                    {"t": 1},
+                )
+        with pytest.raises(PgIntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO properties (source_email_id, title, "
+                        "plot_area) VALUES ('neg-plot', 'z', -5)"
+                    )
                 )
     finally:
         engine.dispose()

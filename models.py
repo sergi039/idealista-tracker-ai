@@ -122,6 +122,25 @@ class SearchProfile(db.Model):
     # Email routing for ingestion: list of regex patterns (configurable).
     email_matchers = db.Column(JSON)  # [{"pattern": "...", "priority": 10}, ...]
 
+    # This subscription's listings live on ANOTHER subscription (migration
+    # 025). The stub keeps its #102 saved-search identity; its rows land on
+    # the target — enforced by a BEFORE trigger on `properties` in
+    # PostgreSQL, so no writer (ORM, curation SQL, COPY) can land a row on a
+    # routed stub. Exactly one hop; `route_profile()` in
+    # services/search_profile_service.py is the one writer and refuses
+    # chains in both directions, self-routes and the catch-all. On SQLite
+    # (the test suite) only the Python boundary applies; the PostgreSQL
+    # trigger is pinned by tests/test_postgres_migrations.py.
+    routed_to = db.Column(db.Integer, db.ForeignKey("search_profiles.id"))
+    # On the TARGET: a profile auto-created by ingestion whose name matches
+    # this regex is born routed here and hidden — what keeps each of the six
+    # Galicia alerts from putting a chip back on screen at its first email.
+    auto_route_from_pattern = db.Column(db.String(120))
+    # The owner's app-side requirements the portals cannot encode, e.g.
+    # {"min_house_m2": 150, "min_plot_m2": 700}. Read by
+    # services/subscription_criteria.py; NULL means no criteria.
+    criteria = db.Column(JSON)
+
     # Per-profile configuration (all optional; fall back to global defaults).
     classification_rules = db.Column(
         JSON
@@ -320,6 +339,15 @@ class Property(db.Model):
     taste_score = db.Column(db.Numeric(5, 2))
     taste = db.Column(JSON)
 
+    # The parcel's surface in m², where the source portal states it
+    # (migration 025). A real column because the criteria verdict filters on
+    # it in SQL. NULL means nobody measured it (#98) — fotocasa's payload
+    # carries it (`surfaceLand`/`groundSurface`, 0-as-blank convention),
+    # yaencontre and idealista mostly cannot answer from this machine.
+    # Distinct from `area`, which is the BUILT surface for habitable
+    # listings and the plot only for bare land (`area_type` says which).
+    plot_area = db.Column(db.Numeric(10, 2))
+
     created_at = db.Column(db.DateTime, default=utcnow)
     email_date = db.Column(db.DateTime)
     updated_at = db.Column(db.DateTime, default=utcnow, onupdate=utcnow)
@@ -381,6 +409,7 @@ class Property(db.Model):
             "taste_score": float(self.taste_score)
             if self.taste_score is not None
             else None,
+            "plot_area": float(self.plot_area) if self.plot_area is not None else None,
             "taste": self.taste or {},
             "previous_price": float(self.previous_price)
             if self.previous_price

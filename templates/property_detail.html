@@ -419,6 +419,47 @@
         {% set _decision = owner_decision_for(property) %}
         {% set _action = owner_action_for(property) %}
         {% set _decision_class = {'interested': 'success', 'waiting': 'warning', 'rejected': 'danger'} %}
+
+        {# The owner's comment, IN THE OPEN (#498 follow-up, owner complaint
+           2026-08-31: the reason control shipped inside the collapsed block
+           below and the owner could not find it). Same write path — the
+           CSRF-protected set_review route — and the hidden inputs carry the
+           current next-action so this compact save cannot erase what the
+           full form below manages (the plan-gate round-1 finding). The AI
+           taste profile learns from exactly this text. #}
+        <div class="card mb-3 border-danger-subtle" id="owner-comment-card">
+            <div class="card-body py-2">
+                <form method="POST" action="{{ url_for('main.set_review', property_id=property.id) }}"
+                      class="row g-2 align-items-end">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    <input type="hidden" name="next_action" value="{{ property.next_action or '' }}"/>
+                    <input type="hidden" name="due_on" value="{{ property.next_action_due_on.isoformat() if property.next_action_due_on else '' }}"/>
+                    <div class="col-12 col-md-3">
+                        <label class="form-label small mb-1 fw-bold" for="owner-comment-verdict">
+                            <i class="fas fa-heart text-danger me-1"></i>{{ t('owner_comment_title') }}
+                        </label>
+                        <select class="form-select form-select-sm" id="owner-comment-verdict" name="verdict">
+                            <option value="" {{ 'selected' if not _decision.decided }}>{{ t('review_clear_verdict') }}</option>
+                            {% for _state in ['interested', 'waiting', 'rejected'] %}
+                                <option value="{{ _state }}" {{ 'selected' if _decision.state == _state }}>
+                                    {{ t(owner_decision_label_key(_state)) }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-12 col-md-7">
+                        <label class="form-label small mb-1" for="owner-comment-reason">{{ t('owner_comment_why') }}</label>
+                        <textarea class="form-control form-control-sm" id="owner-comment-reason"
+                                  name="reason" rows="2"
+                                  placeholder="{{ t('owner_comment_placeholder') }}">{{ property.owner_verdict_reason or '' }}</textarea>
+                    </div>
+                    <div class="col-12 col-md-2">
+                        <button type="submit" class="btn btn-sm btn-danger w-100">{{ t('review_save') }}</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
         <details class="mb-3" id="owner-review">
             <summary class="d-inline-flex flex-wrap align-items-center gap-2" style="cursor: pointer;">
                 <span class="badge bg-{{ _decision_class.get(_decision.state, 'body-tertiary text-body-secondary') }}">

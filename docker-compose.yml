@@ -47,6 +47,9 @@ services:
       # the deployment - two divergent databases and a second Google bill per
       # listing (#376). The machine that IS the deployment says so in its .env.
       - AUTO_START_SCHEDULER=${AUTO_START_SCHEDULER:-false}
+      # Fail-closed like the scheduler flag (#376): the machine's own .env
+      # says yes, or the tick spends nothing.
+      - AUTO_TASTE_SCORING=${AUTO_TASTE_SCORING:-false}
       # AI runs on the owner's subscriptions via the host bridge, never on API keys.
       - AI_BRIDGE_URL=${AI_BRIDGE_URL:-http://host.docker.internal:5061}
     extra_hosts:

@@ -173,6 +173,17 @@ class Config:
     AUTO_TRAVEL_ENRICHMENT = (
         os.environ.get("AUTO_TRAVEL_ENRICHMENT", "false").lower() == "true"
     )
+    # The daily taste auto-score (#498 follow-up). Explicitly opted in by the
+    # owner on 2026-08-31 for the DEPLOYMENT: it spends subscription-bridge
+    # credit (never Google) on new and stale rows, capped per run. Fail-closed
+    # like AUTO_START_SCHEDULER (#376): false unless the machine's own .env
+    # says otherwise, and both compose files default it false too — a dev
+    # checkout or worktree must not spend the owner's credit on a tick.
+    AUTO_TASTE_SCORING = os.environ.get("AUTO_TASTE_SCORING", "false").lower() == "true"
+    TASTE_SCORING_TIME = os.environ.get("TASTE_SCORING_TIME", "06:30")
+    # ~10 bridge calls = up to 80 listings a day. A cap, not a target: the
+    # run stops early when nothing is pending.
+    TASTE_SCORING_MAX_CALLS = int(os.environ.get("TASTE_SCORING_MAX_CALLS", "10"))
     # Geocoding at ingestion, on the other hand, stays on. It is the one paid
     # call the free pass cannot do without: `ensure_coordinates` is what puts
     # a coordinate on a new row, and with no coordinate the sea distance, the
