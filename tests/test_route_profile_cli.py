@@ -89,6 +89,89 @@ class TestApplyDoesTheWork:
                 )
 
 
+class TestItDelegatesToTheSafeWriter:
+    """The whole point of this CLI is WHICH writer it uses.
+
+    The independent review's finding: every other test here checks final
+    state, and a direct-SQL replacement that set `routed_to`, moved the
+    listings and handled the refusals would keep all of them green — while
+    losing exactly the property the CLI exists for, because a bare UPDATE
+    takes FOR NO KEY UPDATE and does not block an insert in flight. So the
+    delegation itself is asserted, and it is asserted at the only boundary
+    SQLite can observe: the call.
+
+    What this cannot prove is the locking, because SQLite ignores FOR UPDATE.
+    That belongs to `route_profile()`'s own PostgreSQL coverage; what belongs
+    here is that this file reaches it at all.
+    """
+
+    def test_apply_calls_route_profile_with_the_two_ids(self, app, monkeypatch):
+        with app.app_context():
+            target = _profile("target")
+            stub = _profile("stub")
+            seen = {}
+
+            def spy(source_id, target_id, *args, **kwargs):
+                seen["args"] = (source_id, target_id)
+                return {"status": "ok", "moved": 0}
+
+            monkeypatch.setattr(
+                "services.search_profile_service.SearchProfileService.route_profile",
+                staticmethod(spy),
+            )
+            assert (
+                main(["--source", str(stub.id), "--target", str(target.id), "--apply"])
+                == 0
+            )
+            assert seen.get("args") == (stub.id, target.id), (
+                "the CLI did not delegate to route_profile(); a direct-SQL "
+                "replacement would pass every other test in this file"
+            )
+
+    def test_a_dry_run_does_not_call_it_at_all(self, app, monkeypatch):
+        with app.app_context():
+            target = _profile("target")
+            stub = _profile("stub")
+            called = []
+            monkeypatch.setattr(
+                "services.search_profile_service.SearchProfileService.route_profile",
+                staticmethod(lambda *a, **k: called.append(a) or {"status": "ok"}),
+            )
+            main(["--source", str(stub.id), "--target", str(target.id)])
+            assert called == [], "a dry run reached the writer"
+
+    def test_the_cli_writes_no_sql_and_no_routed_to_of_its_own(self, app):
+        """Checked on the parse tree, not on the text.
+
+        A regex over the source flags this file's own docstring, which
+        explains the bare `UPDATE search_profiles SET routed_to = ...` that
+        the CLI exists to avoid — prose about the defect is not the defect.
+        So the assertion is structural: no raw SQL call, no assignment to a
+        `routed_to` attribute. Delegation or nothing.
+        """
+        import ast
+        from pathlib import Path
+
+        tree = ast.parse(Path("utils/route_profile.py").read_text())
+        raw_sql = [
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in {"text", "execute"}
+        ]
+        assert not raw_sql, f"the CLI issues raw SQL of its own: {raw_sql}"
+
+        writes = [
+            f"line {node.lineno}"
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            for goal in node.targets
+            if isinstance(goal, ast.Attribute) and goal.attr == "routed_to"
+        ]
+        assert not writes, f"the CLI sets routed_to itself at {writes}"
+
+
 class TestARefusalIsNotSuccess:
     def test_a_self_route_exits_non_zero(self, app):
         with app.app_context():
@@ -132,13 +215,46 @@ class TestEveryRefusalHasAnExplanation:
     it."""
 
     def test_no_reason_the_service_can_emit_is_unexplained(self):
-        import re
+        """Parsed, not grepped.
+
+        The review's finding: a regex over `"reason": "..."` sees only inline
+        string literals, so `NEW_REASON = "target_archived"` followed by
+        `return {"reason": NEW_REASON}` would leave this green while the CLI
+        printed "no explanation is recorded for this reason". The AST walk
+        below cannot know that reason's value either — but it can SEE that one
+        exists and fail, which turns a blind spot into a loud instruction.
+        """
+        import ast
         from pathlib import Path
 
-        source = Path("services/search_profile_service.py").read_text()
-        emitted = set(re.findall(r'"reason": "([a-z_]+)"', source))
-        assert emitted, "found no refusal reasons at all — did the parse break?"
-        assert not emitted - set(REFUSALS), (
-            "route_profile() can refuse with reasons the CLI cannot explain: "
-            + ", ".join(sorted(emitted - set(REFUSALS)))
+        module = ast.parse(Path("services/search_profile_service.py").read_text())
+        routers = [
+            node
+            for node in ast.walk(module)
+            if isinstance(node, ast.FunctionDef) and node.name == "route_profile"
+        ]
+        assert len(routers) == 1, "route_profile() was renamed or duplicated"
+
+        literal, dynamic = set(), []
+        for node in ast.walk(routers[0]):
+            if not isinstance(node, ast.Dict):
+                continue
+            for key, value in zip(node.keys, node.values):
+                if not (isinstance(key, ast.Constant) and key.value == "reason"):
+                    continue
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    literal.add(value.value)
+                else:
+                    dynamic.append(f"line {getattr(value, 'lineno', '?')}")
+
+        assert literal, "found no refusal reasons at all — did the parse break?"
+        assert not dynamic, (
+            "route_profile() builds a refusal reason dynamically at "
+            + ", ".join(dynamic)
+            + "; this test cannot read its value, so add the reason to "
+            "utils.route_profile.REFUSALS by hand and make the value a literal"
+        )
+        assert not literal - set(REFUSALS), (
+            "the service can refuse with reasons the CLI cannot explain: "
+            + ", ".join(sorted(literal - set(REFUSALS)))
         )
