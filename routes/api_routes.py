@@ -16,7 +16,7 @@ from services.listing_verification import read_verdict as listing_verdict
 from utils.api_errors import json_http_error
 from utils.google_spend import CAP_ONE_LAND, CAP_ONE_PROPERTY, authorized_spend
 from utils.listing_search import listing_search_clause
-from utils.listing_filters import FilterArgs
+from utils.listing_filters import FilterArgs, RecordedArgs
 from services import advertiser
 from services import owner_review
 from services import subscription_criteria
@@ -1720,8 +1720,16 @@ def get_properties():
         # left as it is (decision #410 -- redefining the spelling cannot be
         # done safely); what changes is that the payload now says so
         # (UNIVERSE-001).
-        raw_profile_id = request.args.get("profile_id")
-        profile_id = request.args.get("profile_id", type=int)
+        # Every parameter is read through ONE record of the reads
+        # (`utils/listing_filters.RecordedArgs`), and `scope.params_ignored`
+        # below is what the request carried minus what that record saw --
+        # the one enumeration there is. It is deliberately NOT a constant
+        # naming this endpoint's own parameters beside the filters: such a
+        # constant stood here for one commit, passed every test, and would
+        # have reported the next own parameter as ignored while honoring it.
+        args = RecordedArgs(request.args)
+        raw_profile_id = args.get("profile_id")
+        profile_id = args.get("profile_id", type=int)
 
         # Filters are read through the record of the read
         # (`utils/listing_filters.FilterArgs`), for the reason that module
@@ -1735,7 +1743,7 @@ def get_properties():
         # 2026-09-01). What was read is reported in `scope.filters_read`, and
         # what arrived without being read in `scope.params_ignored` — both
         # measured off the record, so neither can go stale silently.
-        filters = FilterArgs(request.args)
+        filters = FilterArgs(args)
         category_filter = (filters.get("category") or "").strip()
         subtype_filter = (filters.get("subtype") or "").strip()
         municipality_filter = (filters.get("municipality") or "").strip()
@@ -1763,11 +1771,11 @@ def get_properties():
             criteria_raw
         )
 
-        sort_by = (request.args.get("sort") or "created_at").strip()
-        sort_order = (request.args.get("order") or "desc").strip().lower()
-        limit = request.args.get("limit", 100, type=int)
-        offset = request.args.get("offset", 0, type=int)
-        full = (request.args.get("full") or "").strip().lower() in (
+        sort_by = (args.get("sort") or "created_at").strip()
+        sort_order = (args.get("order") or "desc").strip().lower()
+        limit = args.get("limit", 100, type=int)
+        offset = args.get("offset", 0, type=int)
+        full = (args.get("full") or "").strip().lower() in (
             "1",
             "true",
             "on",
@@ -1996,7 +2004,7 @@ def get_properties():
         # Three states, not two. "Nothing was sent" and "something was sent
         # that could not be read" are the distinction #410 is about, and a
         # single boolean collapses them back together.
-        if request.args.get("profile_id", type=int) is not None:
+        if args.get("profile_id", type=int) is not None:
             profile_id_source = "requested"
         elif raw_profile_id is None or not raw_profile_id.strip():
             profile_id_source = "omitted"
@@ -2085,18 +2093,16 @@ def get_properties():
                 f"not narrow the answer. It takes: {', '.join(accepted)}."
             )
 
-        # Parameters that arrived and were read by nothing here. `profile_id`
-        # and the paging/sorting parameters are this endpoint's own and are
-        # answered above; everything else unread is disclosed rather than
-        # silently dropped — a caller porting a /properties URL sends `page`
-        # and `per_page`, and an answer that ignores them without saying so
-        # reads as page 2.
-        own_params = {"profile_id", "sort", "order", "limit", "offset", "full"}
-        params_ignored = sorted(
-            key
-            for key in request.args.keys()
-            if key not in own_params and key not in filters.names_read()
-        )
+        # Parameters that arrived and were read by nothing here: the keys the
+        # request carried minus the keys the record above saw, filters and
+        # this endpoint's own parameters alike. Not a list of anything --
+        # a parameter the page grows tomorrow is named here without anyone
+        # editing this endpoint, and a parameter this endpoint grows tomorrow
+        # is read through the record and therefore not named. Disclosed
+        # rather than silently dropped because a caller porting a
+        # /properties URL sends `page` and `per_page`, and an answer that
+        # ignores them without saying so reads as page 2.
+        params_ignored = args.unread()
         if params_ignored:
             notes.append(
                 f"parameter(s) not read by this endpoint: "
@@ -2155,9 +2161,10 @@ def get_properties():
                     # `params_ignored` is one this endpoint answers itself
                     # (profile_id, sort/order, limit/offset, full).
                     "filters_read": sorted(filters.names_read()),
-                    # What arrived and was read by nothing. Empty means every
-                    # parameter sent was either a filter above or one of this
-                    # endpoint's own.
+                    # What arrived and was read by nothing: the request's
+                    # own key set minus every key read through the record,
+                    # `RecordedArgs.unread()`. Empty means every parameter
+                    # sent was read by something here.
                     "params_ignored": params_ignored,
                 },
                 "properties": properties_data,

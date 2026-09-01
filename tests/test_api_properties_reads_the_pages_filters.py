@@ -296,6 +296,38 @@ class TestTheScopeBlockStatesWhatWasReadAndWhatWasNot:
             == (_api(client, f"profile_id={world['pid']}")["scope"]["total"])
         )
 
+    def test_params_ignored_is_one_enumeration_of_the_request(self, client, world):
+        """A parameter the page grows tomorrow, which this endpoint has never
+        heard of, is named without anyone editing the endpoint — because
+        `params_ignored` is what the request carried minus what was read
+        (`utils/listing_filters.RecordedArgs.unread`), never a constant
+        listing today's parameters. Filters and the endpoint's own
+        parameters sit on the read side of that subtraction alike."""
+        pid = world["pid"]
+        payload = _api(
+            client,
+            f"profile_id={pid}&sea_view=yes&limit=5&order=asc"
+            "&tomorrows_page_filter=1&another_one=2",
+        )
+        assert payload["scope"]["params_ignored"] == [
+            "another_one",
+            "tomorrows_page_filter",
+        ]
+        assert "sea_view" in payload["scope"]["filters_read"]
+
+    def test_the_endpoint_reads_the_request_through_the_record_only(self):
+        """Structural: `get_properties` touches the request's argument
+        mapping exactly once — to wrap it. A read that bypassed the record
+        would be reported as ignored while being honored, the false
+        disclosure in the other direction, and no black-box request can
+        tell that from an honest one."""
+        import inspect
+
+        from routes import api_routes
+
+        source = inspect.getsource(api_routes.get_properties)
+        assert source.count("request.args") == 1, source.count("request.args")
+
     def test_the_endpoints_own_parameters_are_not_called_ignored(self, client, world):
         payload = _api(
             client,
