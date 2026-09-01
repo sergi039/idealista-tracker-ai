@@ -221,6 +221,190 @@ def test_a_fresh_database_gets_every_migration_and_matches_the_models(postgres_u
         engine.dispose()
 
 
+def test_decisive_enrichment_preserves_a_concurrent_top_level_block(
+    postgres_url, monkeypatch
+):
+    """#473: the decisive pass merges its blocks into the row it locks.
+
+    A has already read the original JSON and staged its sea result when B,
+    using another Flask-SQLAlchemy app/session, commits a hazards block.  A
+    then finishes the fake network work and commits the real decisive
+    orchestrator.  Replacing the whole JSON value from A's stale identity-map
+    copy loses B's block; reloading under ``FOR UPDATE`` and merging only A's
+    changed top-level blocks preserves both writers.
+    """
+    import threading
+
+    from sqlalchemy import select
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from app import create_app
+    from migrations.runner import run_migrations
+    from models import Property
+    from services.property_enrichment_service import PropertyEnrichmentService
+    from services.property_travel_service import PropertyTravelService
+    from tests import setup_test_environment
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+    finally:
+        engine.dispose()
+
+    setup_test_environment()
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    app_a = create_app()
+    app_b = create_app()
+
+    with app_a.app_context():
+        prop = Property(
+            source_email_id="issue-473-concurrent-enrichment",
+            title="Concurrent enrichment",
+            location_lat=43.5,
+            location_lon=-6.0,
+            location_accuracy="precise",
+            enrichment={"initial": {"kept": True}},
+        )
+        db.session.add(prop)
+        db.session.commit()
+        property_id = prop.id
+
+    sea_staged = threading.Event()
+    let_a_continue = threading.Event()
+    b_committed = threading.Event()
+    errors: dict[str, BaseException] = {}
+
+    class _PausedSea:
+        def update_property(self, prop, *, commit=False):
+            assert commit is False
+            enrichment = dict(prop.enrichment or {})
+            enrichment["sea"] = {"status": "ok", "distance_m": 700.0}
+            prop.enrichment = enrichment
+            flag_modified(prop, "enrichment")
+            sea_staged.set()
+            assert let_a_continue.wait(timeout=10), "A was never released"
+            return enrichment["sea"]
+
+    class _Travel(PropertyTravelService):
+        def calculate_for_property(self, prop, commit=False):
+            assert commit is False
+            # The production travel service resolves a profile after sea has
+            # dirtied enrichment. This query must not autoflush A's stale JSON
+            # before the final locked merge gets a chance to preserve B's block.
+            assert self._resolve_profile(prop, create_default=commit) is None
+            # Keep a second ORM read outside the resolver's own defensive
+            # no-autoflush scope. The orchestration boundary must protect every
+            # query a present or future decisive dependency performs.
+            assert (
+                db.session.execute(
+                    select(Property.id).where(Property.id == prop.id)
+                ).scalar_one()
+                == prop.id
+            )
+            prop.travel = {
+                "api_status": {"state": "ok"},
+                "targets": {
+                    "airport": {
+                        "status": "ok",
+                        "duration_min": 22,
+                        "distance_m": 31_000,
+                    }
+                },
+            }
+            return True
+
+    service = PropertyEnrichmentService(
+        sea_distance_service=_PausedSea(),
+        travel_service=_Travel(),
+    )
+    monkeypatch.setattr(service, "_advisory_pass", lambda *args, **kwargs: None)
+
+    def _a():
+        try:
+            with app_a.app_context():
+                prop = db.session.get(Property, property_id)
+                assert prop is not None
+                assert service._enrich_located(prop, recalc_scoring=False) is True
+        except BaseException as exc:  # noqa: BLE001 -- surfaced via `errors`
+            errors["a"] = exc
+
+    def _b():
+        try:
+            with app_b.app_context():
+                prop = db.session.get(Property, property_id)
+                assert prop is not None
+                enrichment = dict(prop.enrichment or {})
+                enrichment["hazards"] = {
+                    "status": "ok",
+                    "flood": {"distance_m": 123.0},
+                }
+                prop.enrichment = enrichment
+                flag_modified(prop, "enrichment")
+                db.session.commit()
+                b_committed.set()
+        except BaseException as exc:  # noqa: BLE001 -- surfaced via `errors`
+            errors["b"] = exc
+
+    thread_a = threading.Thread(target=_a)
+    thread_b = threading.Thread(target=_b)
+    thread_a.start()
+    a_reached_pause = sea_staged.wait(timeout=5)
+    if a_reached_pause:
+        thread_b.start()
+    b_finished_before_a_resumed = a_reached_pause and b_committed.wait(timeout=5)
+
+    # Always release and join the workers, including failure paths, so a
+    # broken lock placement or an exception cannot strand the test process.
+    let_a_continue.set()
+    thread_a.join(timeout=10)
+    if a_reached_pause:
+        thread_b.join(timeout=10)
+
+    assert a_reached_pause, f"A never staged its stale sea candidate: {errors}"
+    assert not thread_a.is_alive() and not thread_b.is_alive(), "a thread hung"
+    assert b_finished_before_a_resumed, (
+        "B could not commit while A's network work was paused; the decisive "
+        "pass may be holding the row lock across that work"
+    )
+    assert not errors, f"a concurrent enrichment writer raised: {errors}"
+
+    # A fresh engine is deliberate: neither writer's identity map may answer
+    # the assertion about what PostgreSQL finally committed.
+    check_engine = create_engine(postgres_url)
+    try:
+        with check_engine.begin() as connection:
+            stored = (
+                connection.execute(
+                    text("SELECT enrichment, travel FROM properties WHERE id = :id"),
+                    {"id": property_id},
+                )
+                .mappings()
+                .one()
+            )
+    finally:
+        check_engine.dispose()
+
+    enrichment = stored["enrichment"]
+    travel = stored["travel"]
+    assert enrichment["initial"] == {"kept": True}
+    assert enrichment["hazards"] == {
+        "status": "ok",
+        "flood": {"distance_m": 123.0},
+    }
+    assert enrichment["sea"] == {"status": "ok", "distance_m": 700.0}
+    assert enrichment["google"]["travel_state"] == "ok"
+    assert travel == {
+        "api_status": {"state": "ok"},
+        "targets": {
+            "airport": {
+                "status": "ok",
+                "duration_min": 22,
+                "distance_m": 31_000,
+            }
+        },
+    }
+
+
 def test_013_adds_the_identity_columns_and_a_unique_key_index(postgres_url):
     from migrations.runner import run_migrations
 
