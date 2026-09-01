@@ -770,10 +770,19 @@ def _wait_for_health(
             raise AssertionError(_unhealthy(port, proc, output))
         try:
             with urllib.request.urlopen(url, timeout=1) as response:
-                if response.status == 200:
-                    return
+                answered = response.status == 200
         except Exception:  # noqa: BLE001 - polling until the server accepts
             time.sleep(0.1)
+            continue
+        if answered:
+            # Answering once is not being up. A process that served this reply
+            # and then exited would otherwise be reported healthy, and the next
+            # assertion in the caller would blame the fake CLI for never
+            # starting -- a second wrong cause for the same failure (round 2 of
+            # the independent review, 2026-09-01).
+            if proc.poll() is not None:
+                raise AssertionError(_unhealthy(port, proc, output))
+            return
     # Polled again rather than reusing what the loop last saw. A process alive
     # at the final poll that dies in the ~1.1 s a failed health request plus its
     # backoff can take would otherwise be reported as "still running" with no
@@ -886,6 +895,42 @@ class TestTheHarnessKeepsTheEvidence:
         assert "exited with code 7" in message
         assert "still running" not in message
         assert "late crash" in message
+
+    def test_answering_once_and_dying_is_not_healthy(self, monkeypatch):
+        """Round 2 of the review: the success path returned on HTTP 200 without
+        asking whether the process was still there.
+
+        Pinned at the branch rather than with a real one-shot server, and the
+        reason is worth stating: a child that answers and exits does so
+        concurrently with the parent reading the reply, so whether `poll()` has
+        reaped it by the next statement is a race, and a test built on that
+        race would be the flaky thing this file exists to remove. The fake
+        below is deterministic and exercises the same branch.
+        """
+
+        class _Answered:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        class _Dead:
+            pid = 4242
+            stdout = None
+
+            def poll(self):
+                return 7
+
+        dead = _Dead()
+        output = _BridgeOutput(dead)
+        monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **kw: _Answered())
+        with pytest.raises(AssertionError) as raised:
+            _wait_for_health(_free_port(), time.monotonic() + 5, dead, output)
+        assert "exited with code 7" in str(raised.value)
+        assert "still running" not in str(raised.value)
 
     def test_a_live_but_silent_bridge_says_so(self):
         """The other half: still running, still not answering. The two used to
