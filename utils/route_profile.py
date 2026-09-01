@@ -95,9 +95,13 @@ def main(argv=None) -> int:
     # second application over a second database. A CLI that insists on its own
     # `create_app()` cannot be driven in-process, which is how a CLI ends up
     # with no tests except one that shells out and asserts an exit code.
-    from flask import has_app_context
+    from flask import current_app, has_app_context
 
-    if has_app_context():
+    # `has_app_context()` alone is the wrong predicate: it is true inside ANY
+    # Flask app's context, including one this project's `db` was never
+    # registered with, and `_route()` would then raise instead of standing up
+    # the application it needs. Ask whether THIS app is ours.
+    if has_app_context() and "sqlalchemy" in current_app.extensions:
         return _route(args)
 
     from app import create_app
@@ -111,29 +115,36 @@ def _route(args) -> int:
     from models import Property, SearchProfile
     from services.search_profile_service import SearchProfileService
 
-    source = db.session.get(SearchProfile, args.source)
-    target = db.session.get(SearchProfile, args.target)
-    if source is None or target is None:
-        missing = [
-            str(i)
-            for i, p in ((args.source, source), (args.target, target))
-            if p is None
-        ]
-        logger.error("No such subscription: %s", ", ".join(missing))
-        return 2
+    # The WHOLE read phase runs with autoflush off, not just the obvious
+    # queries. A dry run promises to write nothing, and an ORM read flushes
+    # whatever the caller left pending in the session first — including the
+    # implicit SELECT that `_describe()` triggers on an attribute expired by an
+    # earlier commit. Guarding `get()` and `count()` alone left exactly that
+    # hole.
+    with db.session.no_autoflush:
+        source = db.session.get(SearchProfile, args.source)
+        target = db.session.get(SearchProfile, args.target)
+        if source is None or target is None:
+            missing = [
+                str(i)
+                for i, p in ((args.source, source), (args.target, target))
+                if p is None
+            ]
+            logger.error("No such subscription: %s", ", ".join(missing))
+            return 2
 
-    listings = (
-        db.session.query(Property)
-        .filter(Property.search_profile_id == source.id)
-        .count()
-    )
-    logger.info("source: %s", _describe(source))
-    logger.info("target: %s", _describe(target))
-    logger.info(
-        "%d listing(s) sit on the source and would move; future ones follow the "
-        "route from the moment this commits.",
-        listings,
-    )
+        listings = (
+            db.session.query(Property)
+            .filter(Property.search_profile_id == source.id)
+            .count()
+        )
+        logger.info("source: %s", _describe(source))
+        logger.info("target: %s", _describe(target))
+        logger.info(
+            "%d listing(s) sit on the source and would move; future ones follow "
+            "the route from the moment this commits.",
+            listings,
+        )
 
     if not args.apply:
         logger.info("\nNothing written. Re-run with --apply.")

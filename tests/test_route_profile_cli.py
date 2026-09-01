@@ -172,6 +172,63 @@ class TestItDelegatesToTheSafeWriter:
         assert not writes, f"the CLI sets routed_to itself at {writes}"
 
 
+class TestADryRunReallyWritesNothing:
+    """Both findings of the second independent review, pinned.
+
+    A dry run that flushes somebody else's pending work is still a write,
+    and reusing an open app context is what invites an in-process caller to
+    have pending work at all — the convenience and the hazard are the same
+    decision.
+    """
+
+    def test_a_dry_run_does_not_flush_the_callers_pending_work(self, app):
+        with app.app_context():
+            target = _profile("target")
+            stub = _profile("stub")
+            # Read the ids BEFORE the session is made dirty. Touching an
+            # attribute of a commit-expired instance emits a SELECT, and that
+            # read autoflushes — so building the argv after `add()` would flush
+            # the pending row in the TEST and blame the CLI for it. The first
+            # version of this test did exactly that.
+            argv = ["--source", str(stub.id), "--target", str(target.id)]
+
+            pending = Property(source_email_id="pending", title="pending")
+            db.session.add(pending)  # deliberately NOT committed
+
+            main(argv)
+
+            assert pending.id is None, (
+                "the dry run autoflushed the caller's pending INSERT — an ORM "
+                "read is a write when the session is dirty"
+            )
+            db.session.rollback()
+
+    def test_it_builds_its_own_context_inside_a_foreign_app(self, app, monkeypatch):
+        """`has_app_context()` is true in ANY Flask app, including one this
+        project's `db` was never registered with. The predicate must ask
+        whether THIS app is ours, and stand up our own when it is not."""
+        from flask import Flask
+
+        with app.app_context():
+            target = _profile("target")
+            stub = _profile("stub")
+            ids = (stub.id, target.id)
+
+        built = []
+
+        def fake_create_app():
+            built.append(True)
+            return app
+
+        monkeypatch.setattr("app.create_app", fake_create_app)
+        with Flask("foreign").app_context():
+            assert main(["--source", str(ids[0]), "--target", str(ids[1])]) == 0
+        assert built, (
+            "inside a foreign app the CLI reused that context instead of "
+            "building its own; `db` is not registered there"
+        )
+
+
 class TestARefusalIsNotSuccess:
     def test_a_self_route_exits_non_zero(self, app):
         with app.app_context():
