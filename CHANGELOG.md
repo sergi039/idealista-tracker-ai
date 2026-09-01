@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🔒 Fixed: the trigger retries a stale route read instead of deadlocking (2026-09-01, #513)
+- **What**: migration 027 re-declares `canonicalize_search_profile()` as a
+  bounded retry — the route is read unlocked, the pair is locked ascending
+  inside a sentinel-exception subtransaction, and a re-read that disagrees
+  rolls that subtransaction back, RELEASING the stale pair (PG docs 13.3.2)
+  and resolving afresh; the sixth attempt proceeds with 026's exact
+  semantics. No application code changes.
+- **Why**: a route change committing inside the trigger's read-to-lock gap
+  left it holding a stale pair while the FK locked the fresh target out of
+  ascending order — a deadlock, reproduced on PostgreSQL 15.18 and now
+  reproduced deterministically by the shipped test's choreography (no
+  pg_sleep, no patched trigger copy). Closure is reader-side, so no writer —
+  `route_profile()`, a future UI, or raw docker-exec SQL — has to
+  participate. The issue's advisory-lock candidate was killed in design
+  review: a BEFORE ROW trigger acquires any new lock LATE (behind the
+  reassigning transaction's existing locks), which would deadlock the live
+  merge/repair paths deterministically.
+
 ### 📍 Added: a pin placed for one advert is not a village centroid (2026-09-01, #493)
 - **What**: `services/coordinate_quality.py` now answers which of three kinds of
   coordinate a row carries -- an address (0 m of slack), a listing-specific pin

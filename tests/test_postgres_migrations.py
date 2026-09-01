@@ -46,7 +46,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 
 from app import db
 from tests import postgres_server_guard
@@ -79,6 +79,7 @@ ATTACHMENT_MIGRATION = "023_create_property_attachment"
 TASTE_MIGRATION = "024_add_property_taste"
 ROUTING_MIGRATION = "025_add_profile_routing_and_criteria"
 LOCK_ORDER_MIGRATION = "026_canonicalize_locks_in_id_order"
+ROUTE_RETRY_MIGRATION = "027_retry_route_resolution_on_stale_read"
 PROPERTY_VARIANT_UNIQUE_CONSTRAINT = (
     "ux_property_ai_analysis_variants_property_provider"
 )
@@ -500,6 +501,7 @@ def test_013_frees_the_label_on_a_database_that_already_holds_rows(
             TASTE_MIGRATION,
             ROUTING_MIGRATION,
             LOCK_ORDER_MIGRATION,
+            ROUTE_RETRY_MIGRATION,
         ]
 
         # Two *identified* subscriptions may now share the label...
@@ -1727,6 +1729,7 @@ def test_017_deduplicates_existing_rows_and_adds_the_unique_constraint(
             TASTE_MIGRATION,
             ROUTING_MIGRATION,
             LOCK_ORDER_MIGRATION,
+            ROUTE_RETRY_MIGRATION,
         ]
 
         with engine.begin() as connection:
@@ -1918,6 +1921,7 @@ def test_017_deduplicates_existing_land_variants_and_adds_the_unique_constraint(
             TASTE_MIGRATION,
             ROUTING_MIGRATION,
             LOCK_ORDER_MIGRATION,
+            ROUTE_RETRY_MIGRATION,
         ]
 
         with engine.begin() as connection:
@@ -2804,6 +2808,249 @@ def test_026_a_route_writer_still_blocks_an_insert(postgres_url):
         assert was_blocked.get("v") is True, (
             "an insert ran straight past a route writer holding the stub "
             "FOR UPDATE: the serialization migration 025 exists for is gone"
+        )
+    finally:
+        engine.dispose()
+
+
+def test_027_a_route_change_landing_in_the_resolution_gap_no_longer_deadlocks(
+    postgres_url,
+):
+    """A route change committing inside the trigger's read-to-lock gap used to
+    leave it holding a STALE pair while the FK locked the fresh target out of
+    ascending order — the residual window 026 documented and #513 closes.
+    Migration 027's trigger detects the stale re-read, rolls back the
+    subtransaction holding the pair (releasing it: PG docs 13.3.2, row locks
+    are released on savepoint rollback), and resolves afresh.
+
+    Deterministic choreography on the SHIPPED trigger — no pg_sleep, no
+    patched copy: the trigger's own pair-lock PERFORM is the wait point that
+    stretches the gap. The route writer is deliberately ONE BARE UPDATE, the
+    docker-exec shape with no FOR UPDATE and no cooperation of any kind,
+    because the closure under test is reader-side. (A first draft had the
+    route writer hold the stub FOR UPDATE as the wait point; its own
+    uncommitted FK KEY SHARE on the new target then blocked the ascending
+    locker, and everything timed out instead of meeting — so the gap is held
+    open by H, a locker on the OLD target, which the trigger's first pair
+    lock queues on.) Ids: new-target < old-target < stub, the shape the
+    window needs.
+
+        H: FOR UPDATE old-target                      (holds B's gap open)
+        B: INSERT on the stub -> its trigger reads old-target as the route,
+           then parks on the pair-lock PERFORM against H
+        R: UPDATE routed_to = new-target; COMMIT      (lands inside B's gap)
+        A: FOR UPDATE new-target                      (the LOW id)
+        H: COMMIT -> on 026, B wakes holding stale {old, stub}, re-reads,
+           and its FK waits on A; on 027, B detects the stale read, RELEASES
+           the pair, and re-locks {new, stub} ascending, holding nothing
+        A: FOR UPDATE stub -> 026: cycle, DeadlockDetected every run;
+           027: granted, everyone completes
+
+    Sequencing is the inserter's own backend pid (never "somebody waiting")
+    and pg_blocking_pids, the two review findings the 026 test recorded.
+
+    Three more assertions keep the fix honest: before B commits, a NOWAIT
+    probe on the stub must FAIL — the subtransaction's locks must survive its
+    commit into the parent, or 025's wait-for-the-decision serialization was
+    dropped (the single assumption design R stands on); the listing must land
+    on the NEW target, or the retry read stale data; and both polls carry
+    deadlines so a regression to an indefinite wait fails instead of hanging.
+
+    Mutation: reverting migration 027 makes this test red with
+    DeadlockDetected at the locker's stub FOR UPDATE, which is also the
+    reproduction of the window the issue asks for.
+    """
+    import threading
+
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+
+        with engine.begin() as connection:
+            new_target = connection.execute(
+                text(
+                    "INSERT INTO search_profiles (name, is_active) "
+                    "VALUES ('gap-new-target', TRUE) RETURNING id"
+                )
+            ).scalar_one()
+            old_target = connection.execute(
+                text(
+                    "INSERT INTO search_profiles (name, is_active) "
+                    "VALUES ('gap-old-target', TRUE) RETURNING id"
+                )
+            ).scalar_one()
+            stub = connection.execute(
+                text(
+                    "INSERT INTO search_profiles (name, is_active) "
+                    "VALUES ('gap-stub', TRUE) RETURNING id"
+                )
+            ).scalar_one()
+            connection.execute(
+                text("UPDATE search_profiles SET routed_to = :t WHERE id = :s"),
+                {"t": old_target, "s": stub},
+            )
+        # The shape the window needs: the fresh target must sort BELOW the
+        # rows the stale pass locks, or the retried direction is safe anyway.
+        assert new_target < old_target < stub
+
+        failures: dict[str, str] = {}
+        inserter_pid: dict[str, int] = {}
+        insert_done = threading.Event()
+        allow_commit = threading.Event()
+
+        def insert_on_the_stub() -> None:
+            try:
+                with engine.connect() as connection:
+                    connection.execute(text("SET lock_timeout = '20s'"))
+                    inserter_pid["v"] = connection.execute(
+                        text("SELECT pg_backend_pid()")
+                    ).scalar_one()
+                    connection.execute(
+                        text(
+                            "INSERT INTO properties (source_email_id, title, "
+                            "search_profile_id) VALUES ('gap', 'x', :p)"
+                        ),
+                        {"p": stub},
+                    )
+                    insert_done.set()
+                    if not allow_commit.wait(20):
+                        raise TimeoutError("never allowed to commit")
+                    connection.commit()
+            except Exception as exc:  # noqa: BLE001
+                failures["inserter"] = f"{type(exc).__name__}: {exc}"
+                insert_done.set()
+
+        inserter = threading.Thread(target=insert_on_the_stub, daemon=True)
+        gap_holder = engine.connect()
+        try:
+            gap_holder.execute(text("SET lock_timeout = '20s'"))
+            gap_holder.execute(
+                text("SELECT id FROM search_profiles WHERE id = :t FOR UPDATE"),
+                {"t": old_target},
+            )
+
+            inserter.start()
+            with engine.connect() as locker:
+                try:
+                    locker.execute(text("SET lock_timeout = '20s'"))
+                    locker_pid = locker.execute(
+                        text("SELECT pg_backend_pid()")
+                    ).scalar_one()
+
+                    deadline = time.monotonic() + 20
+                    while not inserter_pid.get("v"):
+                        assert time.monotonic() < deadline, (
+                            "the inserter never reported a pid"
+                        )
+                        time.sleep(0.05)
+                    while True:
+                        waiting = locker.execute(
+                            text(
+                                "SELECT count(*) FROM pg_stat_activity WHERE "
+                                "pid = :pid AND wait_event_type = 'Lock'"
+                            ),
+                            {"pid": inserter_pid["v"]},
+                        ).scalar_one()
+                        if waiting:
+                            break
+                        assert time.monotonic() < deadline, (
+                            "the insert never parked inside the trigger, so this "
+                            "test never stretched the read-to-lock gap"
+                        )
+                        time.sleep(0.05)
+
+                    # The route change lands INSIDE B's read-to-lock gap: B has
+                    # already read old-target and is queued behind H. One bare
+                    # UPDATE, committed at once — no lock protocol whatsoever.
+                    with engine.begin() as route_writer:
+                        route_writer.execute(
+                            text(
+                                "UPDATE search_profiles SET routed_to = :t "
+                                "WHERE id = :s"
+                            ),
+                            {"t": new_target, "s": stub},
+                        )
+
+                    # Only after the route writer's commit: its FK check held
+                    # KEY SHARE on the new target, which FOR UPDATE conflicts
+                    # with (the first draft of this test learned that at 20s
+                    # of lock_timeout).
+                    locker.execute(
+                        text("SELECT id FROM search_profiles WHERE id = :t FOR UPDATE"),
+                        {"t": new_target},
+                    )
+
+                    gap_holder.commit()
+
+                    # B wakes into the stale state. Wait until it is
+                    # demonstrably blocked by THIS locker before closing in.
+                    deadline = time.monotonic() + 20
+                    while True:
+                        blocked_by_locker = locker.execute(
+                            text("SELECT :lp = ANY(pg_blocking_pids(:bp))"),
+                            {"lp": locker_pid, "bp": inserter_pid["v"]},
+                        ).scalar_one()
+                        if blocked_by_locker:
+                            break
+                        assert time.monotonic() < deadline, (
+                            "the inserter never blocked on the ascending locker, "
+                            "so the interleaving under test never formed"
+                        )
+                        time.sleep(0.05)
+
+                    locker.execute(
+                        text("SELECT id FROM search_profiles WHERE id = :s FOR UPDATE"),
+                        {"s": stub},
+                    )
+                    locker.commit()
+                except Exception as exc:  # noqa: BLE001
+                    failures["locker"] = f"{type(exc).__name__}: {exc}"
+
+            assert insert_done.wait(25), "the inserter never finished its INSERT"
+            assert not failures, (
+                "the residual route-resolution window deadlocked: the trigger "
+                "proceeded on a stale pair instead of releasing and retrying: "
+                + repr(failures)
+            )
+
+            # The subtransaction's locks must have survived its commit into
+            # the parent: with B's transaction still open, a FOR UPDATE on the
+            # stub must be refused, or the retry bought its safety by dropping
+            # 025's serialization. SQLSTATE 55P03 (lock_not_available)
+            # specifically: the class-level OperationalError would also match
+            # a statement_timeout or a dropped connection, reporting "the
+            # serialization survived" for a broken property.
+            with engine.connect() as probe:
+                with pytest.raises(OperationalError) as refused:
+                    probe.execute(
+                        text(
+                            "SELECT id FROM search_profiles "
+                            "WHERE id = :s FOR UPDATE NOWAIT"
+                        ),
+                        {"s": stub},
+                    )
+                assert getattr(refused.value.orig, "pgcode", None) == "55P03", (
+                    "the NOWAIT probe was refused for a different reason than "
+                    "the inserter's held lock: " + repr(refused.value)
+                )
+        finally:
+            allow_commit.set()
+            inserter.join(30)
+            gap_holder.close()
+
+        assert not failures, repr(failures)
+        with engine.connect() as connection:
+            landed = connection.execute(
+                text(
+                    "SELECT search_profile_id FROM properties "
+                    "WHERE source_email_id = 'gap'"
+                )
+            ).scalar_one()
+        assert landed == new_target, (
+            "the retry resolved a stale route: the listing missed the target "
+            "the route writer committed mid-gap"
         )
     finally:
         engine.dispose()
