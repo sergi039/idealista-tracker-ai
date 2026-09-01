@@ -101,6 +101,33 @@ exit 0
 STUB
 chmod +x "${STUB_BIN}/docker"
 
+# Deliberately permissive: if production regresses from the watcher's actual
+# interpreter to a bare `bash -n`, this PATH stub accepts malformed input and
+# scenario 24 catches the unchecked source under Apple's Bash 3.2.
+cat >"${STUB_BIN}/bash" <<'STUB'
+#!/bin/sh
+if [ "${1:-}" = "-n" ]; then
+    exit 0
+fi
+exec /bin/bash "$@"
+STUB
+chmod +x "${STUB_BIN}/bash"
+
+# Preserve argv[0] so Bash exposes this wrapper through $BASH inside the
+# watcher. On the first syntax preflight it atomically swaps a live contract;
+# the private snapshot must remain the version that gets sourced.
+BASH_WRAPPER="${WORK}/instrumented-bash"
+cat >"$BASH_WRAPPER" <<'STUB'
+#!/bin/bash
+if [ "${1:-}" = "-n" ] && [ -n "${BASH_SWAP_TARGET:-}" ] \
+    && [ ! -e "${BASH_SWAP_MARKER:-}" ]; then
+    : >"$BASH_SWAP_MARKER"
+    /bin/mv "$BASH_SWAP_REPLACEMENT" "$BASH_SWAP_TARGET"
+fi
+exec -a "$0" /bin/bash "$@"
+STUB
+chmod +x "$BASH_WRAPPER"
+
 # --- an app that answers healthz, and a page that may not -------------------
 HEALTH_PORT=""
 for candidate in $(seq 45901 45949); do
@@ -254,6 +281,10 @@ run_watcher() {
     DOCKER_INSPECT_RC="${DOCKER_INSPECT_RC:-0}" \
     DOCKER_MAIN_PID="${DOCKER_MAIN_PID-7}" \
     DOCKER_PS_OUTPUT="idealista-app" \
+    BASH_SWAP_TARGET="${BASH_SWAP_TARGET:-}" \
+    BASH_SWAP_REPLACEMENT="${BASH_SWAP_REPLACEMENT:-}" \
+    BASH_SWAP_MARKER="${BASH_SWAP_MARKER:-}" \
+    AUTOPILOT_LOCK_FD="${AUTOPILOT_LOCK_FD_OVERRIDE:-}" \
     AUTOPILOT_REPO_DIR="$REPO" \
     AUTOPILOT_DEPLOYED_MARKER="$MARKER" \
     AUTOPILOT_LOG_FILE="${WORK}/watcher.log" \
@@ -265,22 +296,52 @@ run_watcher() {
     AUTOPILOT_DEFER_STATE="$DEFER_STATE" \
     AUTOPILOT_DEFER_ON_INFLIGHT="${DEFER_ON_INFLIGHT:-0}" \
     AUTOPILOT_DEFER_BUDGET="${DEFER_BUDGET:-6}" \
-        bash "${WATCHER_UNDER_TEST:-$WATCHER}" >/dev/null 2>&1
+        "${WATCHER_BASH:-/bin/bash}" \
+        "${WATCHER_UNDER_TEST:-$WATCHER}" >/dev/null 2>&1
     )
     set -e
 }
 
-# A copy of the watcher next to a copy of lib/, so a scenario can damage the
-# contract it loads without touching the repository. The watcher finds its lib
-# through BASH_SOURCE, so the copy has to keep the same shape.
-watcher_with_contract() {
-    # watcher_with_contract <contents of lib/render_check.sh>
+# A copy of the watcher next to a copy of lib/, so a scenario can damage one
+# contract without touching the repository. The watcher finds its lib through
+# BASH_SOURCE, so the copy has to keep the same shape.
+fresh_watcher_contract_copy() {
     local where="${WORK}/broken-tools"
     rm -rf "$where"
     mkdir -p "${where}/lib"
     cp "$WATCHER" "${where}/deploy_watcher.sh"
     cp "${SCRIPT_DIR}/lib/lock.sh" "${where}/lib/lock.sh"
+    cp "${SCRIPT_DIR}/lib/render_check.sh" "${where}/lib/render_check.sh"
+    cp "${SCRIPT_DIR}/lib/docker_cleanup.sh" "${where}/lib/docker_cleanup.sh"
+}
+
+watcher_with_contract() {
+    # watcher_with_contract <contents of lib/render_check.sh>
+    local where="${WORK}/broken-tools"
+    fresh_watcher_contract_copy
     printf '%s' "$1" >"${where}/lib/render_check.sh"
+    printf '%s' "${where}/deploy_watcher.sh"
+}
+
+watcher_with_valid_contracts() {
+    local where="${WORK}/broken-tools"
+    fresh_watcher_contract_copy
+    printf '%s' "${where}/deploy_watcher.sh"
+}
+
+watcher_with_cleanup_contract() {
+    # watcher_with_cleanup_contract <contents of lib/docker_cleanup.sh>
+    local where="${WORK}/broken-tools"
+    fresh_watcher_contract_copy
+    printf '%s' "$1" >"${where}/lib/docker_cleanup.sh"
+    printf '%s' "${where}/deploy_watcher.sh"
+}
+
+watcher_with_lock_contract() {
+    # watcher_with_lock_contract <contents of lib/lock.sh>
+    local where="${WORK}/broken-tools"
+    fresh_watcher_contract_copy
+    printf '%s' "$1" >"${where}/lib/lock.sh"
     printf '%s' "${where}/deploy_watcher.sh"
 }
 
@@ -882,6 +943,80 @@ for shape in empty truncated unparseable; do
         || fail "scenario 24 (${shape}) blamed something other than the contract"
 done
 printf 'OK: a contract that did not load stops the deploy and names itself\n'
+
+# --- scenario 24b: broken optional housekeeping stays optional -------------
+# A syntax error in docker_cleanup.sh used to terminate Apple's Bash 3.2 before
+# the watcher reached its non-fatal guard. The build is already the important
+# work; a damaged housekeeping contract must be named and skipped, not promoted
+# into a failed deploy.
+for shape in empty unparseable; do
+    case "$shape" in
+        empty) contract="" ;;
+        unparseable) contract='deploy_cleanup() {'$'\n' ;;
+    esac
+    : >"${WORK}/watcher.log"
+    rm -f "$DEFER_STATE"
+    set_inflight ""
+    WATCHER_UNDER_TEST="$(watcher_with_cleanup_contract "$contract")" run_watcher
+
+    built || fail "scenario 24b (${shape}) let incomplete housekeeping stop the deploy"
+    grep -q "DEPLOYED .* successfully" "${WORK}/watcher.log" \
+        || fail "scenario 24b (${shape}) did not finish the deploy"
+    grep -q "housekeeping skipped: .*docker_cleanup.sh" "${WORK}/watcher.log" \
+        || fail "scenario 24b (${shape}) skipped housekeeping without naming it"
+done
+printf 'OK: malformed optional housekeeping is named and cannot stop a deploy\n'
+
+# --- scenario 24c: a broken lock contract fails loudly ---------------------
+# The lock is a sourced contract too, and running without it is unsafe. A
+# malformed copy must fail before docker is touched and leave the same durable
+# diagnostic as a malformed mandatory render contract.
+for shape in unparseable function_only fd_only; do
+    case "$shape" in
+        unparseable) contract='autopilot_acquire_lock() {'$'\n' ;;
+        # Valid Bash and the named function are not the whole lock contract:
+        # without fd 9, the watcher would either run unlocked or fail under -u.
+        function_only) contract='autopilot_acquire_lock() { return 0; }'$'\n' ;;
+        fd_only) contract='AUTOPILOT_LOCK_FD=9'$'\n' ;;
+    esac
+    : >"${WORK}/watcher.log"
+    rm -f "$DEFER_STATE"
+    set_inflight ""
+    AUTOPILOT_LOCK_FD_OVERRIDE=9 \
+    WATCHER_UNDER_TEST="$(watcher_with_lock_contract "$contract")" run_watcher
+
+    built && fail "scenario 24c (${shape}) deployed without a complete lock contract"
+    grep -q "FATAL" "${WORK}/watcher.log" \
+        || fail "scenario 24c (${shape}) stopped without a durable fatal diagnostic"
+    grep -q "lock.sh" "${WORK}/watcher.log" \
+        || fail "scenario 24c (${shape}) blamed something other than the lock contract"
+done
+printf 'OK: a malformed lock contract stops the deploy and names itself\n'
+
+# --- scenario 24d: validation and sourcing use the same bytes --------------
+# The instrumented interpreter replaces the live, valid render contract with a
+# valid-but-empty one during the first `-n`. A check-then-source implementation
+# would load the replacement and stop; the snapshot implementation must finish
+# with the coherent version it copied before the callback.
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE" "${WORK}/bash-swap.done"
+set_inflight ""
+snapshot_watcher="$(watcher_with_valid_contracts)"
+printf '%s\n' ': "${DEPLOY_RENDER_PATH=/properties}"' \
+    >"${WORK}/replacement-render.sh"
+BASH_SWAP_TARGET="${WORK}/broken-tools/lib/render_check.sh" \
+BASH_SWAP_REPLACEMENT="${WORK}/replacement-render.sh" \
+BASH_SWAP_MARKER="${WORK}/bash-swap.done" \
+WATCHER_BASH="$BASH_WRAPPER" \
+WATCHER_UNDER_TEST="$snapshot_watcher" run_watcher
+
+[ -e "${WORK}/bash-swap.done" ] \
+    || fail "scenario 24d never replaced the live contract during validation"
+built || fail "scenario 24d sourced different bytes from the version it checked"
+grep -q "rendered (200)" "${WORK}/watcher.log" \
+    || fail "scenario 24d did not retain the complete snapshotted render contract"
+printf 'OK: validation and sourcing use one immutable contract snapshot\n'
+
 # --- scenario 25: an unknown list deploying is not "0 jobs killed" ----------
 # Scenario 10 with deferring off. The tick correctly deploys - that is the
 # documented default - but the sentence it leaves behind decides what an
