@@ -764,21 +764,33 @@ def _wait_for_health(
     """
     url = f"http://127.0.0.1:{port}/health"
     while time.monotonic() < deadline:
-        exit_code = proc.poll()
-        if exit_code is not None:
+        if proc.poll() is not None:
             # It is already over; waiting out the deadline only delays the
-            # report by ten seconds and tells nobody anything.
-            raise AssertionError(
-                f"the bridge exited with code {exit_code} before it became "
-                f"healthy on port {port}. Its own output:\n{output.text()}"
-            )
+            # report and tells nobody anything.
+            raise AssertionError(_unhealthy(port, proc, output))
         try:
             with urllib.request.urlopen(url, timeout=1) as response:
                 if response.status == 200:
                     return
         except Exception:  # noqa: BLE001 - polling until the server accepts
             time.sleep(0.1)
-    raise AssertionError(
+    # Polled again rather than reusing what the loop last saw. A process alive
+    # at the final poll that dies in the ~1.1 s a failed health request plus its
+    # backoff can take would otherwise be reported as "still running" with no
+    # exit code -- losing exactly the distinction this function exists to draw
+    # (independent review, 2026-09-01).
+    raise AssertionError(_unhealthy(port, proc, output))
+
+
+def _unhealthy(port: int, proc: subprocess.Popen, output: _BridgeOutput) -> str:
+    """Say which of the two failures this is, from one fresh poll."""
+    exit_code = proc.poll()
+    if exit_code is not None:
+        return (
+            f"the bridge exited with code {exit_code} before it became "
+            f"healthy on port {port}. Its own output:\n{output.text()}"
+        )
+    return (
         f"bridge never became healthy on port {port} within the deadline; it "
         f"is still running (pid {proc.pid}). Its own output so far:\n"
         f"{output.text()}"
@@ -854,6 +866,26 @@ class TestTheHarnessKeepsTheEvidence:
             if proc.poll() is None:
                 proc.kill()
         assert time.monotonic() - started < 10
+
+    def test_a_bridge_that_dies_on_the_deadline_is_not_called_alive(self):
+        """The reviewed defect: the deadline path reported "still running"
+        without polling again, so a bridge that died between the loop's last
+        poll and the deadline lost its exit code -- the one distinction this
+        function exists to draw.
+
+        Reproduced deterministically with a deadline already in the past, so
+        the loop body never runs and the post-loop report is the only thing
+        under test.
+        """
+        proc = self._spawn("import sys; print('late crash'); sys.exit(7)")
+        output = _BridgeOutput(proc)
+        assert proc.wait(timeout=10) == 7
+        with pytest.raises(AssertionError) as raised:
+            _wait_for_health(_free_port(), time.monotonic() - 1, proc, output)
+        message = str(raised.value)
+        assert "exited with code 7" in message
+        assert "still running" not in message
+        assert "late crash" in message
 
     def test_a_live_but_silent_bridge_says_so(self):
         """The other half: still running, still not answering. The two used to
