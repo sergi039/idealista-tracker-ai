@@ -22,6 +22,9 @@ What these tests pin:
   survives it, a rescore does not block it, and a legacy snapshot that cannot
   tell the two apart is refused unless `--overwrite-hand-edits` is said out
   loud — and then every overwritten row is named.
+* the swap is the write (rx round 2 on #528): an edit committed between the
+  restore's read and its write fails the conditional UPDATE and is skipped
+  and named, never overwritten.
 """
 
 import json
@@ -29,6 +32,7 @@ import pathlib
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import text
 
 from app import create_app, db
 from models import Property, SearchProfile
@@ -290,6 +294,61 @@ def test_a_name_set_by_hand_after_the_repair_survives_restore(app, tmp_path):
     assert outcome["skipped_edited"] == [prop.id]
     db.session.expire_all()
     assert db.session.get(Property, prop.id).municipality == "Redondela"
+
+
+def test_an_edit_committed_between_the_check_and_the_write_survives_restore(
+    app, tmp_path, monkeypatch
+):
+    """rx round 2's BLOCKER on #528: the first CAS checked an ORM object and
+    then wrote unconditionally, so a hand edit another session committed
+    between the two was overwritten without the flag. The swap itself is
+    conditional now — `UPDATE ... WHERE municipality IS <what the repair
+    wrote>` — and a write that matches no row is a skip, named in the same
+    list as a pre-check miss.
+
+    SQLite observes no row lock, so the race is staged where it happens: the
+    check passes, and a raw UPDATE on the same connection stands in for the
+    concurrent commit before the write is issued.
+    """
+    prop = _row(
+        app,
+        title="Casa adosada en venta en calle Rosa, Teis en Vigo",
+        municipality="Teis en Vigo",
+    )
+    prop.score_total = Decimal("61.75")
+    db.session.commit()
+    path = str(tmp_path / "snap.json")
+    repair_tool.repair(apply=True, snapshot_path=path, backup=True)
+
+    db.session.expire_all()
+    repaired = db.session.get(Property, prop.id)
+    assert repaired.municipality == "Vigo"
+    score_after_repair = repaired.score_total
+    assert score_after_repair != Decimal("61.75"), "the repair must have rescored"
+
+    real_check = score_snapshot.edited_since_repair
+
+    def check_then_lose_the_race(current, row):
+        edited = real_check(current, row)
+        assert edited == {}, "the check must pass for the race to be what is tested"
+        db.session.execute(
+            text("UPDATE properties SET municipality = :name WHERE id = :id"),
+            {"name": "Redondela", "id": row["id"]},
+        )
+        return edited
+
+    monkeypatch.setattr(score_snapshot, "edited_since_repair", check_then_lose_the_race)
+
+    outcome = repair_tool.restore(path, apply=True)
+
+    assert outcome["restored"] == 0
+    assert outcome["skipped_edited"] == [prop.id]
+    db.session.expire_all()
+    row = db.session.get(Property, prop.id)
+    assert row.municipality == "Redondela"
+    assert row.score_total == score_after_repair, (
+        "nothing was put back, scores included"
+    )
 
 
 def test_a_later_rescore_does_not_block_the_restore(app, tmp_path):

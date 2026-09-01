@@ -27,6 +27,7 @@ import json
 import pathlib
 
 import pytest
+from sqlalchemy import text
 
 from app import create_app, db
 from models import Property, SearchProfile
@@ -365,6 +366,92 @@ def test_the_flag_overwrites_the_row_the_cas_skipped_and_names_it(app, tmp_path)
     assert db.session.get(Property, prop.id).property_category == "housing"
 
 
+def _lose_the_race_after_the_check(monkeypatch, column, value):
+    """Stage rx round 2's race on SQLite, which observes no row lock: let the
+    restore's check run, then commit a hand edit through the same connection
+    before the write is issued. Returns what the check saw, for asserting the
+    race was staged where it was meant to be."""
+    real_check = score_snapshot.edited_since_repair
+    seen = {}
+
+    def check_then_lose_the_race(current, row):
+        edited = real_check(current, row)
+        seen.update(edited)
+        db.session.execute(
+            text(f"UPDATE properties SET {column} = :value WHERE id = :id"),
+            {"value": value, "id": row["id"]},
+        )
+        return edited
+
+    monkeypatch.setattr(score_snapshot, "edited_since_repair", check_then_lose_the_race)
+    return seen
+
+
+def test_an_edit_committed_between_the_check_and_the_write_survives_restore(
+    app, tmp_path, monkeypatch
+):
+    """rx round 2's BLOCKER on #528, through this tool: the check passed on
+    the row the restore read, another session committed an edit, and the old
+    unconditional write overwrote it without the flag. The write is the CAS
+    now, and a swap that matches no row is a named skip."""
+    prop = _property(
+        app,
+        PLOT_URL,
+        property_category="housing",
+        property_subtype="house",
+        area_type="built",
+    )
+    path = str(tmp_path / "snap.json")
+    repair_tool.repair(apply=True, snapshot_path=path, backup=True)
+    db.session.expire_all()
+    assert db.session.get(Property, prop.id).property_category == "land"
+
+    seen = _lose_the_race_after_the_check(monkeypatch, "property_category", "garage")
+
+    outcome = repair_tool.restore(path, apply=True)
+
+    assert seen == {}, "the check must have passed for the race to be what is tested"
+    assert outcome["restored"] == 0
+    assert outcome["skipped_edited"] == [prop.id]
+    db.session.expire_all()
+    back = db.session.get(Property, prop.id)
+    assert back.property_category == "garage"
+    assert back.property_subtype == "plot", "nothing else was put back either"
+
+
+def test_the_flag_does_not_overwrite_a_value_it_never_saw(app, tmp_path, monkeypatch):
+    """The flag overwrites on purpose, and what it enumerates has to be true:
+    the value reported as overwritten must be the value the write replaced.
+    So the flag's swap is keyed on what the restore read, and a row that
+    moved between that read and the write is skipped and named — not
+    overwritten unseen and then reported under the older value."""
+    prop = _property(
+        app,
+        PLOT_URL,
+        property_category="housing",
+        property_subtype="house",
+        area_type="built",
+    )
+    path = str(tmp_path / "snap.json")
+    repair_tool.repair(apply=True, snapshot_path=path, backup=True)
+
+    db.session.expire_all()
+    edited = db.session.get(Property, prop.id)
+    edited.property_category = "commercial"
+    db.session.commit()
+
+    seen = _lose_the_race_after_the_check(monkeypatch, "property_category", "garage")
+
+    outcome = repair_tool.restore(path, apply=True, overwrite_hand_edits=True)
+
+    assert seen == {"property_category": ("commercial", "land")}
+    assert outcome["restored"] == 0
+    assert outcome["overwritten_edited"] == []
+    assert outcome["skipped_edited"] == [prop.id]
+    db.session.expire_all()
+    assert db.session.get(Property, prop.id).property_category == "garage"
+
+
 def test_the_record_is_data_about_the_repair_not_a_column(app):
     """`repaired` must be skipped by `differs` and `apply_row` the way `id` is,
     or it gets compared against — and written onto — the model."""
@@ -436,6 +523,49 @@ def test_a_repaired_record_must_cover_exactly_what_the_row_restores():
                 "property_category": "land",
                 "repaired": {"property_category": "land", "municipality": "Vigo"},
             }
+        )
+
+
+def test_the_swap_is_null_safe_on_both_engines():
+    """The CAS is the write, so it has to mean one thing on the suite's SQLite
+    and the deployment's PostgreSQL: a recorded None matches a stored NULL and
+    nothing else. `=` matches nothing against NULL on either engine, which
+    would turn every row the repair wrote a NULL into into a false skip. And
+    the record itself is never in the SET list."""
+    from sqlalchemy.dialects import postgresql, sqlite
+
+    statement = score_snapshot.swap_statement(
+        7,
+        {"municipality": "Vigo", "area_type": None},
+        {
+            "id": 7,
+            "municipality": "Teis en Vigo",
+            "score_total": None,
+            "repaired": {"municipality": "Vigo"},
+        },
+    )
+    on_sqlite = str(statement.compile(dialect=sqlite.dialect()))
+    on_postgres = str(statement.compile(dialect=postgresql.dialect()))
+
+    assert "properties.id = ?" in on_sqlite
+    assert "properties.municipality IS ?" in on_sqlite
+    assert "properties.area_type IS NULL" in on_sqlite
+    assert (
+        "properties.municipality IS NOT DISTINCT FROM %(municipality_1)s" in on_postgres
+    )
+    assert "properties.area_type IS NOT DISTINCT FROM NULL" in on_postgres
+    for sql in (on_sqlite, on_postgres):
+        assert sql.startswith("UPDATE properties SET ")
+        assert "municipality=" in sql and "score_total=" in sql
+        assert "repaired" not in sql and "id=" not in sql.split(" WHERE ")[0]
+
+
+def test_the_swap_guards_only_what_a_repair_sets():
+    """A guard on a score column is the guard-too-wide `_parse_repaired`
+    refuses on the way in, refused again where the statement is built."""
+    with pytest.raises(score_snapshot.SnapshotError, match="score_total"):
+        score_snapshot.swap_statement(
+            7, {"score_total": "61.75"}, {"id": 7, "municipality": "Vigo"}
         )
 
 

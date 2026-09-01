@@ -280,6 +280,12 @@ def restore(
     scores are outside the comparison on purpose: a rescore moves them without
     touching the name, and a guard over them would refuse correct restores.
 
+    The comparison is the write itself — one UPDATE conditional on
+    `municipality` still holding what the repair wrote — so an edit committed
+    between this script's read of the row and its write fails the swap and
+    is skipped too, never overwritten (rx round 2 on #528 reproduced the
+    read-then-unconditional-write losing exactly that edit).
+
     Snapshots this tool writes now are CAS-capable (every row carries
     `repaired`). A legacy one — written before that record existed, the
     2026-08-31 production file included — cannot tell "still the repair's

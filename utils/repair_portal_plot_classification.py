@@ -249,6 +249,12 @@ def restore(
     rescore moves them without touching the classification, and a guard over
     them would refuse correct restores.
 
+    The comparison is the write itself — one UPDATE conditional on
+    the classification columns still holding what the repair wrote — so an edit committed
+    between this script's read of the row and its write fails the swap and
+    is skipped too, never overwritten (rx round 2 on #528 reproduced the
+    read-then-unconditional-write losing exactly that edit).
+
     Snapshots this tool writes now are CAS-capable (every row carries
     `repaired`). A legacy one — written before that record existed — cannot
     tell "still the repair's write" from "hand-edited since" and is refused
