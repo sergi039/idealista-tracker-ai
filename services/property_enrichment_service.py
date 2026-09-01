@@ -1,14 +1,14 @@
 import logging
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Optional
-
-from sqlalchemy.orm.attributes import flag_modified
 
 from app import db
 from models import Property
 from services import advertiser, sea_view_service
 from services.enrich_budget import lookup_budget_seconds
 from services.enrichment_service import EnrichmentService
+from services.enrichment_write import merge_json_object_changes_under_lock
 from services.hazard_service import HazardService
 from services.property_location_service import PropertyLocationService
 from services.property_scoring_service import PropertyScoringService
@@ -291,43 +291,76 @@ class PropertyEnrichmentService:
         # its alert email came from. Ingestion owns that column now.
 
         # -- the decisive pass ------------------------------------------------
-        # Distance to the sea is a scored criterion, so it runs here rather
-        # than among the advisory steps, and it rides the commit below.
-        try:
-            self.sea_distance_service.update_property(prop, commit=False)
-        except Exception as e:
-            logger.warning(
-                "Sea distance measurement failed for %s: %s",
-                getattr(prop, "id", None),
-                e,
+        # A query after sea has dirtied this plain JSON column would normally
+        # autoflush the whole stale value. Travel resolves its profile through
+        # the ORM, so suppress autoflush from the first snapshot until the row
+        # has been locked and the current stored value merged. The final explicit
+        # commit still flushes, after the locked merge has made it safe.
+        with db.session.no_autoflush:
+            # Keep the exact object this pass started from. The network calls below
+            # can take seconds; a different transaction may commit another
+            # top-level block during that time, so their result cannot safely be
+            # committed as a replacement for the whole loaded JSON value.
+            base_enrichment = (
+                deepcopy(prop.enrichment) if isinstance(prop.enrichment, dict) else {}
             )
 
-        ok = self.travel_service.calculate_for_property(prop, commit=False)
-        travel_state = travel_api_state(prop)
+            # Distance to the sea is a scored criterion, so it runs here rather
+            # than among the advisory steps, and it rides the commit below.
+            try:
+                self.sea_distance_service.update_property(prop, commit=False)
+            except Exception as e:
+                logger.warning(
+                    "Sea distance measurement failed for %s: %s",
+                    getattr(prop, "id", None),
+                    e,
+                )
 
-        # `enrichment` is a plain JSON column, not a MutableDict: reading the
-        # loaded dict, mutating it and assigning the *same object* back leaves
-        # the attribute clean and the flush emits no UPDATE. It happened to
-        # reach the database only because a step above had already replaced the
-        # blob; on a run where every one of them failed, this marker was lost.
-        enrichment = dict(prop.enrichment) if isinstance(prop.enrichment, dict) else {}
-        google_meta = (
-            dict(enrichment["google"])
-            if isinstance(enrichment.get("google"), dict)
-            else {}
-        )
-        # An "updated_at" on its own claimed the property was enriched even when
-        # Google refused every request (#98). Record what actually happened.
-        google_meta["updated_at"] = datetime.now(timezone.utc).isoformat()
-        google_meta["travel_state"] = travel_state
-        enrichment["google"] = google_meta
-        prop.enrichment = enrichment
-        flag_modified(prop, "enrichment")
+            ok = self.travel_service.calculate_for_property(prop, commit=False)
+            travel_state = travel_api_state(prop)
 
-        # The paid measurement is durable from here. It used to wait for the
-        # single commit at the end of the whole method, behind the advisory
-        # steps below (#434).
-        db.session.commit()
+            # `enrichment` is a plain JSON column, not a MutableDict: reading the
+            # loaded dict, mutating it and assigning the *same object* back leaves
+            # the attribute clean and the flush emits no UPDATE. It happened to
+            # reach the database only because a step above had already replaced the
+            # blob; on a run where every one of them failed, this marker was lost.
+            enrichment = (
+                dict(prop.enrichment) if isinstance(prop.enrichment, dict) else {}
+            )
+            google_meta = (
+                dict(enrichment["google"])
+                if isinstance(enrichment.get("google"), dict)
+                else {}
+            )
+            # An "updated_at" on its own claimed the property was enriched even when
+            # Google refused every request (#98). Record what actually happened.
+            google_meta["updated_at"] = datetime.now(timezone.utc).isoformat()
+            google_meta["travel_state"] = travel_state
+            enrichment["google"] = google_meta
+
+            # Lock only for the short write, re-read the stored column without
+            # autoflushing this transaction's stale copy, and merge the top-level
+            # blocks changed by the decisive pass. The helper intentionally leaves
+            # the lock and transaction to the commit immediately below so travel
+            # and enrichment remain one decisive write.
+            try:
+                merge_json_object_changes_under_lock(
+                    prop,
+                    "enrichment",
+                    base=base_enrichment,
+                    updated=enrichment,
+                )
+
+                # The paid measurement is durable from here. It used to wait for the
+                # single commit at the end of the whole method, behind the advisory
+                # steps below (#434).
+                db.session.commit()
+            except Exception:
+                # The helper leaves the FOR UPDATE lock to this transaction owner.
+                # End it on every failure, including a failed flush/commit, rather
+                # than leaking the row lock into later work on this scoped session.
+                db.session.rollback()
+                raise
 
         # -- the advisory pass ------------------------------------------------
         self._advisory_pass(prop, use_ai=True, with_pool=True)

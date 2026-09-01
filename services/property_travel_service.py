@@ -477,7 +477,7 @@ class PropertyTravelService:
         # -- so the spender is always someone who asked. Do not add an
         # automatic caller without reading the billing rule in CLAUDE.md first.
 
-        profile = self._resolve_profile(prop)
+        profile = self._resolve_profile(prop, create_default=commit)
         config = SearchProfileService.get_travel_targets_config(profile)
         preset_defs = {
             d["key"]: d for d in SearchProfileService.get_travel_preset_defs()
@@ -771,16 +771,25 @@ class PropertyTravelService:
         if tally is not None:
             tally.record_resolved(estimated=res.estimated)
 
-    def _resolve_profile(self, prop: Property) -> Optional[SearchProfile]:
-        if prop.search_profile:
-            return prop.search_profile
-        if prop.search_profile_id:
-            try:
-                profile = db.session.get(SearchProfile, prop.search_profile_id)
-                if profile:
-                    return profile
-            except Exception:
-                pass
+    def _resolve_profile(
+        self, prop: Property, *, create_default: bool
+    ) -> Optional[SearchProfile]:
+        # A commit=False caller owns a possibly dirty outer transaction. Even a
+        # relationship read can autoflush it, and get_default_profile(create=True)
+        # may commit while creating the fallback. Keep that mode read-only; a
+        # missing profile still receives the built-in travel config below.
+        with db.session.no_autoflush:
+            if prop.search_profile:
+                return prop.search_profile
+            if prop.search_profile_id:
+                try:
+                    profile = db.session.get(SearchProfile, prop.search_profile_id)
+                    if profile:
+                        return profile
+                except Exception:
+                    pass
+            if not create_default:
+                return SearchProfile.query.filter_by(is_default=True).first()
         return SearchProfileService.get_default_profile(create=True)
 
     def _nearest_place_for_preset(

@@ -16,6 +16,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   their assertions, while Apple's Bash 3.2 terminated on a malformed sourced
   contract before the watcher could record the intended fatal diagnostic.
 
+### 🔒 Fixed: decisive enrichment preserves concurrent JSON blocks (2026-09-01, #473)
+- **What**: the decisive enrichment pass now records only the top-level
+  `Property.enrichment` keys it changed, re-reads the stored JSON under a
+  PostgreSQL row lock, and merges those changes immediately before its commit.
+- **Why**: a slower enrichment session could previously flush its stale copy of
+  the whole JSON column after another session had committed an unrelated block,
+  silently deleting the newer data.
+- **Concurrency contract**: unrelated top-level blocks are preserved; when two
+  writers change the same top-level key, the decisive pass remains the final
+  writer. The lock is acquired only after network work, so external calls do
+  not serialize concurrent sessions.
+
 ### 🚦 Fixed: the rate gate covers the retries, which is where the traffic was (2026-08-10)
 - **What**: `request_with_retries` takes a `gate=` and waits on it before
   **every** attempt. The three callers that paced themselves by hand —
