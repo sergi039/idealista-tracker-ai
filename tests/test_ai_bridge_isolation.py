@@ -712,16 +712,77 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
-def _wait_for_health(port: int, deadline: float) -> None:
+class _BridgeOutput:
+    """Reads a spawned bridge's output continuously, and keeps it.
+
+    Two defects in one object, both found while failing to reproduce
+    BRIDGE-TEST-001 (#265).
+
+    **The pipe has to be read.** `stdout=PIPE` with nobody reading it gives the
+    child a 64 KB buffer and then blocks it mid-write, forever. Startup logs
+    three lines today, so it does not fire -- but the mechanism produces
+    exactly the symptom that ticket is about, a bridge that never answers, and
+    it should not be sitting in the harness that is supposed to diagnose it.
+
+    **And the output is the evidence.** Before this, the bridge's own account
+    of why it did not start was captured into a pipe and discarded unread by
+    the `finally` that killed it, so the assertion could say `bridge never
+    became healthy` and nothing else -- it could not even distinguish "exited
+    instantly with a traceback" from "alive and not answering". That is why the
+    failure survived an afternoon of investigation with no cause named.
+    """
+
+    def __init__(self, proc: subprocess.Popen) -> None:
+        self._proc = proc
+        self._lines: list[str] = []
+        self._thread = threading.Thread(target=self._drain, daemon=True)
+        self._thread.start()
+
+    def _drain(self) -> None:
+        stream = self._proc.stdout
+        if stream is None:
+            return
+        for line in stream:
+            self._lines.append(line)
+
+    def text(self) -> str:
+        # A short join: the reader ends when the child's stdout closes, and a
+        # caller asking for the text has usually just killed it. Never block
+        # the test on it.
+        self._thread.join(timeout=2)
+        return "".join(self._lines)
+
+
+def _wait_for_health(
+    port: int, deadline: float, proc: subprocess.Popen, output: _BridgeOutput
+) -> None:
+    """Poll until the bridge answers, and say what happened if it never does.
+
+    `proc` and `output` are required rather than optional: a caller that has
+    them and forgets to pass them gets the old blind assertion back, which is
+    the whole defect. There is one caller.
+    """
     url = f"http://127.0.0.1:{port}/health"
     while time.monotonic() < deadline:
+        exit_code = proc.poll()
+        if exit_code is not None:
+            # It is already over; waiting out the deadline only delays the
+            # report by ten seconds and tells nobody anything.
+            raise AssertionError(
+                f"the bridge exited with code {exit_code} before it became "
+                f"healthy on port {port}. Its own output:\n{output.text()}"
+            )
         try:
             with urllib.request.urlopen(url, timeout=1) as response:
                 if response.status == 200:
                     return
         except Exception:  # noqa: BLE001 - polling until the server accepts
             time.sleep(0.1)
-    raise AssertionError("bridge never became healthy")
+    raise AssertionError(
+        f"bridge never became healthy on port {port} within the deadline; it "
+        f"is still running (pid {proc.pid}). Its own output so far:\n"
+        f"{output.text()}"
+    )
 
 
 def _fake_claude_script(pid_file: Path) -> str:
@@ -738,6 +799,105 @@ def _fake_claude_script(pid_file: Path) -> str:
         f"open({str(pid_file)!r}, 'w').write(f'{{os.getpid()}} {{grandchild.pid}}')\n"
         "time.sleep(300)\n"
     )
+
+
+class TestTheHarnessKeepsTheEvidence:
+    """BRIDGE-TEST-001 (#265): the failure that could not be diagnosed.
+
+    `test_the_bridges_own_shutdown_kills_an_in_flight_run` failed on this Mac
+    for about forty-five minutes on 2026-09-01 -- two full suites and three
+    standalone runs across three worktrees, one of them at an untouched
+    `main` -- and then stopped. Roughly 190 executions since, unloaded, under
+    six-way load, and with two copies racing each other, have not reproduced
+    it. **These tests do not fix that failure and are not evidence that it is
+    gone.** They fix the reason it cost an afternoon and named nothing: the
+    harness spawned the bridge with `stdout=PIPE`, never read it, and threw it
+    away in `finally`, so the only thing the assertion could say was that the
+    bridge never became healthy.
+    """
+
+    @staticmethod
+    def _spawn(script: str) -> subprocess.Popen:
+        return subprocess.Popen(
+            [sys.executable, "-c", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+
+    def test_a_bridge_that_dies_names_its_cause(self):
+        """Exit code and the process's own words, in the assertion."""
+        proc = self._spawn(
+            "import sys; print('AI_BRIDGE_TOKEN is not set'); sys.exit(3)"
+        )
+        output = _BridgeOutput(proc)
+        try:
+            with pytest.raises(AssertionError) as raised:
+                _wait_for_health(_free_port(), time.monotonic() + 5, proc, output)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+        message = str(raised.value)
+        assert "exited with code 3" in message
+        assert "AI_BRIDGE_TOKEN is not set" in message
+
+    def test_a_dead_bridge_is_reported_at_once(self):
+        """...and without waiting out the deadline, which only delays the
+        report by ten seconds and tells nobody anything."""
+        proc = self._spawn("import sys; sys.exit(1)")
+        output = _BridgeOutput(proc)
+        started = time.monotonic()
+        try:
+            with pytest.raises(AssertionError):
+                _wait_for_health(_free_port(), time.monotonic() + 30, proc, output)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+        assert time.monotonic() - started < 10
+
+    def test_a_live_but_silent_bridge_says_so(self):
+        """The other half: still running, still not answering. The two used to
+        be indistinguishable."""
+        # `flush=True` because a child's stdout is block-buffered when it is a
+        # pipe: without it the line sits in the *child's* buffer until it
+        # exits, and this test is about the harness rather than about C-level
+        # buffering. The real bridge logs through `logging` to stderr, which is
+        # merged here by `stderr=STDOUT` and is not block-buffered, so its
+        # startup lines really do arrive while it is still alive.
+        proc = self._spawn(
+            "import time; print('bound and idle', flush=True); time.sleep(30)"
+        )
+        output = _BridgeOutput(proc)
+        try:
+            with pytest.raises(AssertionError) as raised:
+                _wait_for_health(_free_port(), time.monotonic() + 2, proc, output)
+        finally:
+            proc.kill()
+            proc.wait(timeout=5)
+        message = str(raised.value)
+        assert "still running" in message
+        assert str(proc.pid) in message
+        assert "bound and idle" in message
+
+    def test_the_reader_does_not_wedge_a_noisy_bridge(self):
+        """An unread `PIPE` blocks the child mid-write once the 64 KB buffer
+        fills, forever -- which produces exactly the symptom BRIDGE-TEST-001
+        describes, a bridge that never answers. Today's bridge logs three lines
+        at startup so it does not fire; the mechanism has no business sitting
+        in the harness meant to diagnose it.
+        """
+        payload = 300_000
+        proc = self._spawn(
+            f"import sys; sys.stdout.write('x' * {payload}); sys.stdout.flush()"
+        )
+        output = _BridgeOutput(proc)
+        try:
+            # Without the reader thread this wait never returns.
+            assert proc.wait(timeout=15) == 0
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+        assert len(output.text()) == payload
 
 
 @pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX")
@@ -769,6 +929,14 @@ def test_the_bridges_own_shutdown_kills_an_in_flight_run(tmp_path):
     env["AI_BRIDGE_PORT"] = str(port)
     # Keeps the test fast without skipping the SIGTERM-then-SIGKILL path.
     env["AI_BRIDGE_KILL_GRACE"] = "1"
+    # Every other test in this file sets this; the one that spawns a real
+    # bridge subprocess did not, so it resolved `tempfile.gettempdir()/
+    # ai-bridge-workdir` -- the very directory the live `com.idealista.ai-bridge`
+    # LaunchAgent runs its CLIs in. The test then started its fake `claude`
+    # with production's cwd. It cannot break startup, so it is not the
+    # BRIDGE-TEST-001 failure; it is the harness reaching into production
+    # state, and this file's own convention already says not to.
+    env["AI_BRIDGE_WORKDIR"] = str(tmp_path / "bridge-workdir")
 
     bridge_proc = subprocess.Popen(
         [sys.executable, str(_BRIDGE_PATH)],
@@ -777,11 +945,19 @@ def test_the_bridges_own_shutdown_kills_an_in_flight_run(tmp_path):
         stderr=subprocess.STDOUT,
         text=True,
     )
+    bridge_output = _BridgeOutput(bridge_proc)
     request_thread = None
     child_pid = None
     grandchild_pid = None
     try:
-        _wait_for_health(port, time.monotonic() + 10)
+        _wait_for_health(port, time.monotonic() + 10, bridge_proc, bridge_output)
+
+        # The bridge announces its workdir on the line above the first request.
+        # Asserted here rather than left to the environment variable, because
+        # the variable is what a future edit would drop: without it this test
+        # ran its fake `claude` in `tempfile.gettempdir()/ai-bridge-workdir`,
+        # which is the live `com.idealista.ai-bridge` LaunchAgent's own cwd.
+        assert f"workdir={tmp_path / 'bridge-workdir'}" in bridge_output.text()
 
         def _fire_request():
             request = urllib.request.Request(
