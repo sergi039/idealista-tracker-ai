@@ -223,31 +223,44 @@ def repair(
     # `/properties` sorts by -- the very fault the rescore exists to prevent,
     # inflicted by the rescore. Nothing here rescores those rows again, so it
     # would have stayed.
-    before = {prop.id: _before(prop) for prop in rows}
-    for prop in rows:
-        prop.municipality = _proposed(prop)[1]
-    db.session.flush()
-    for prop in rows:
-        outcome["rows"].append(_rescore(prop, before[prop.id]))
-        outcome["repaired"] += 1
+    # The mutations and the snapshot write share one guard: if anything in
+    # here raises — the snapshot path already existing is the reproducible
+    # case, `score_snapshot.write` refuses it with a catchable SystemExit —
+    # the session is rolled back before the exception leaves, so a caller
+    # that survives it cannot commit a repair whose rollback point was never
+    # written. The old ordering (file first) had this property by accident;
+    # the new one has to say it.
+    try:
+        before = {prop.id: _before(prop) for prop in rows}
+        for prop in rows:
+            prop.municipality = _proposed(prop)[1]
+        db.session.flush()
+        for prop in rows:
+            outcome["rows"].append(_rescore(prop, before[prop.id]))
+            outcome["repaired"] += 1
 
-    if apply and backup:
-        for entry, prop in zip(snapshot_rows, rows, strict=True):
-            entry["repaired"] = score_snapshot.repaired_state(prop, SNAPSHOT_COLUMNS)
-        path = snapshot_path or os.path.join(
-            "data",
-            "yaencontre_municipality_snapshot_"
-            + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-            + ".json",
-        )
-        score_snapshot.write(
-            {
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "scores": snapshot_rows,
-            },
-            path,
-        )
-        outcome["snapshot"] = path
+        if apply and backup:
+            for entry, prop in zip(snapshot_rows, rows, strict=True):
+                entry["repaired"] = score_snapshot.repaired_state(
+                    prop, SNAPSHOT_COLUMNS
+                )
+            path = snapshot_path or os.path.join(
+                "data",
+                "yaencontre_municipality_snapshot_"
+                + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                + ".json",
+            )
+            score_snapshot.write(
+                {
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "scores": snapshot_rows,
+                },
+                path,
+            )
+            outcome["snapshot"] = path
+    except BaseException:
+        db.session.rollback()
+        raise
 
     if apply:
         db.session.commit()

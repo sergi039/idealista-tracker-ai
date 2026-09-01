@@ -181,6 +181,32 @@ def parse_row(row: Any) -> Dict[str, Any]:
             parsed[column] = value
     if "repaired" in row:
         parsed["repaired"] = _parse_repaired(row["repaired"], row_id)
+        # The record must cover exactly the repair-settable columns this row
+        # restores. A record covering less leaves the rest to be overwritten
+        # CAS-unchecked — an rx review reproduced that: guard only
+        # `property_category`, hand-edit `property_subtype`, and the restore
+        # overwrites the edit without the flag. A record covering more would
+        # skip a row over drift in a column the restore does not even touch,
+        # which is the guard-too-wide refusing correct restores.
+        restorable = {
+            column
+            for column in CLASSIFICATION_COLUMNS + LOCATION_COLUMNS
+            if column in parsed
+        }
+        unguarded = sorted(restorable - set(parsed["repaired"]))
+        if unguarded:
+            raise SnapshotError(
+                f"Row {row_id}: 'repaired' does not cover "
+                f"{', '.join(unguarded)} — what the record leaves unguarded, "
+                "the restore would overwrite unchecked"
+            )
+        beyond = sorted(set(parsed["repaired"]) - restorable)
+        if beyond:
+            raise SnapshotError(
+                f"Row {row_id}: 'repaired' guards {', '.join(beyond)}, which "
+                "this row does not restore — drift there would wrongly block "
+                "a correct restore"
+            )
     if not any(key not in NON_COLUMN_KEYS for key in parsed):
         raise SnapshotError(f"Row {row_id} restores nothing: no columns in it")
     return parsed

@@ -371,6 +371,27 @@ def test_the_flag_restores_a_legacy_snapshot_and_names_what_it_overwrote(app, tm
     assert db.session.get(Property, prop.id).municipality == "Teis en Vigo"
 
 
+def test_a_refused_snapshot_write_leaves_no_repair_pending(app, tmp_path):
+    """rx round 1, HIGH: the snapshot is now written after the session
+    mutations, and `score_snapshot.write` refuses an existing path with a
+    catchable SystemExit. A caller surviving that exception must not be able
+    to commit a repair whose rollback point was never written."""
+    prop = _row(
+        app,
+        title="Casa adosada en venta en calle Rosa, Teis en Vigo",
+        municipality="Teis en Vigo",
+    )
+    path = tmp_path / "snap.json"
+    path.write_text("{}", encoding="utf-8")  # the path is already taken
+
+    with pytest.raises(SystemExit, match="refusing to overwrite"):
+        repair_tool.repair(apply=True, snapshot_path=str(path), backup=True)
+    db.session.commit()  # the caller that survives and commits anyway
+
+    db.session.expire_all()
+    assert db.session.get(Property, prop.id).municipality == "Teis en Vigo"
+
+
 def test_restore_is_a_dry_run_by_default(app, tmp_path):
     prop = _row(
         app,

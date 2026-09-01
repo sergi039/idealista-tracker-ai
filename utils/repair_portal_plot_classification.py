@@ -187,34 +187,48 @@ def repair(
             for prop in rows
         ]
 
-    for prop in rows:
-        result = _repair_row(prop)
-        outcome["rows"].append(result)
-        if result.get("after") is None:
-            outcome["skipped"] += 1
-        else:
-            outcome["repaired"] += 1
+    # The mutations and the snapshot write share one guard: if anything in
+    # here raises — the snapshot path already existing is the reproducible
+    # case, `score_snapshot.write` refuses it with a catchable SystemExit —
+    # the session is rolled back before the exception leaves, so a caller
+    # that survives it cannot commit a repair whose rollback point was never
+    # written. The old ordering (file first) had this property by accident;
+    # the new one has to say it.
+    try:
+        for prop in rows:
+            result = _repair_row(prop)
+            outcome["rows"].append(result)
+            if result.get("after") is None:
+                outcome["skipped"] += 1
+            else:
+                outcome["repaired"] += 1
 
-    if apply and backup:
-        for entry, prop in zip(snapshot_rows, rows, strict=True):
-            entry["repaired"] = score_snapshot.repaired_state(prop, SNAPSHOT_COLUMNS)
-        path = snapshot_path or os.path.join(
-            "data",
-            "portal_plot_classification_snapshot_"
-            + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-            + ".json",
-        )
-        score_snapshot.write(
-            {
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                # `score_snapshot.load` names this list `scores`; writing it
-                # under any other key produces a file this repository's own
-                # loader refuses, which is a snapshot that is not a way back.
-                "scores": snapshot_rows,
-            },
-            path,
-        )
-        outcome["snapshot"] = path
+        if apply and backup:
+            for entry, prop in zip(snapshot_rows, rows, strict=True):
+                entry["repaired"] = score_snapshot.repaired_state(
+                    prop, SNAPSHOT_COLUMNS
+                )
+            path = snapshot_path or os.path.join(
+                "data",
+                "portal_plot_classification_snapshot_"
+                + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                + ".json",
+            )
+            score_snapshot.write(
+                {
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    # `score_snapshot.load` names this list `scores`; writing
+                    # it under any other key produces a file this repository's
+                    # own loader refuses, which is a snapshot that is not a
+                    # way back.
+                    "scores": snapshot_rows,
+                },
+                path,
+            )
+            outcome["snapshot"] = path
+    except BaseException:
+        db.session.rollback()
+        raise
 
     if apply:
         db.session.commit()

@@ -406,9 +406,63 @@ def test_a_repaired_record_may_not_carry_scores_or_be_empty():
         score_snapshot.SnapshotError, match="not a record of what the repair wrote"
     ):
         score_snapshot.parse_row({"id": 1, "property_category": "land", "repaired": {}})
-    # A row whose only payload is the record restores nothing and says so.
-    with pytest.raises(score_snapshot.SnapshotError, match="restores nothing"):
+    # A row whose only payload is the record guards a column it does not
+    # restore, which is the over-coverage refusal below.
+    with pytest.raises(score_snapshot.SnapshotError, match="does not restore"):
         score_snapshot.parse_row({"id": 1, "repaired": {"property_category": "land"}})
+
+
+def test_a_repaired_record_must_cover_exactly_what_the_row_restores():
+    """rx round 1, HIGH: a record guarding only `property_category` on a row
+    that also restores `property_subtype` leaves the subtype to be overwritten
+    CAS-unchecked — a hand-edited subtype would be lost without the flag. The
+    other direction is the guard-too-wide: a record guarding `municipality` on
+    a row that does not restore it would skip the row over drift the restore
+    would never touch. Both shapes are refused at parse time, so the whole
+    file restores nothing rather than half-guarding."""
+    with pytest.raises(score_snapshot.SnapshotError, match="does not cover"):
+        score_snapshot.parse_row(
+            {
+                "id": 1,
+                "property_category": "land",
+                "property_subtype": "plot",
+                "repaired": {"property_category": "land"},
+            }
+        )
+    with pytest.raises(score_snapshot.SnapshotError, match="does not restore"):
+        score_snapshot.parse_row(
+            {
+                "id": 1,
+                "property_category": "land",
+                "repaired": {"property_category": "land", "municipality": "Vigo"},
+            }
+        )
+
+
+def test_a_refused_snapshot_write_leaves_no_repair_pending(app, tmp_path):
+    """rx round 1, HIGH: the snapshot is now written after the session
+    mutations, and `score_snapshot.write` refuses an existing path with a
+    catchable SystemExit. A caller surviving that exception must not be able
+    to commit a repair whose rollback point was never written — the repair
+    rolls the session back before the exception leaves."""
+    prop = _property(
+        app,
+        PLOT_URL,
+        property_category="housing",
+        property_subtype="house",
+        area_type="built",
+    )
+    path = tmp_path / "snap.json"
+    path.write_text("{}", encoding="utf-8")  # the path is already taken
+
+    with pytest.raises(SystemExit, match="refusing to overwrite"):
+        repair_tool.repair(apply=True, snapshot_path=str(path), backup=True)
+    db.session.commit()  # the caller that survives and commits anyway
+
+    db.session.expire_all()
+    reread = db.session.get(Property, prop.id)
+    assert reread.property_category == "housing"
+    assert reread.area_type == "built"
 
 
 def test_restore_is_a_dry_run_by_default(app, tmp_path):
