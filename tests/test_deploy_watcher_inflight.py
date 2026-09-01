@@ -20,6 +20,7 @@ output on failure, the same way `test_deploy_watcher_marker.py` does.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -29,7 +30,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INFLIGHT_TEST = REPO_ROOT / "tools" / "autopilot" / "deploy_inflight_test.sh"
 
-# Thirty-five scenarios, 39 watcher runs against stubs, two of which wait out a
+# Thirty-eight scenarios, 45 watcher runs against stubs, two of which wait out a
 # short health timeout. Measured 27.9 s wall clock on the development Mac on
 # 2026-08-15, so the bound below is roughly eleven times the observed cost and
 # exists to fail a hang, not to pace a slow machine. Re-measure before lowering
@@ -37,10 +38,24 @@ INFLIGHT_TEST = REPO_ROOT / "tools" / "autopilot" / "deploy_inflight_test.sh"
 TIMEOUT_SECONDS = 300
 
 
+def _watcher_bashes() -> list[str]:
+    """Exercise production Bash and any distinct Bash selected by PATH."""
+    candidates = ["/bin/bash", shutil.which("bash")]
+    unique: list[str] = []
+    for candidate in candidates:
+        if not candidate or not Path(candidate).is_file():
+            continue
+        resolved = str(Path(candidate).resolve())
+        if resolved not in unique:
+            unique.append(resolved)
+    return unique
+
+
 @pytest.mark.skipif(
     not INFLIGHT_TEST.exists(), reason="deploy in-flight test not present"
 )
-def test_deploy_reports_inflight_work_and_verifies_a_page():
+@pytest.mark.parametrize("watcher_bash", _watcher_bashes())
+def test_deploy_reports_inflight_work_and_verifies_a_page(watcher_bash: str):
     if shutil.which("git") is None:
         pytest.skip("the test builds a throwaway git repository")
     if shutil.which("curl") is None:
@@ -48,9 +63,11 @@ def test_deploy_reports_inflight_work_and_verifies_a_page():
     if shutil.which("nc") is None:
         pytest.skip("the test picks a free port with nc")
 
+    env = dict(os.environ, WATCHER_BASH=watcher_bash)
     result = subprocess.run(
-        ["bash", str(INFLIGHT_TEST)],
+        ["/bin/bash", str(INFLIGHT_TEST)],
         capture_output=True,
+        env=env,
         text=True,
         timeout=TIMEOUT_SECONDS,
         cwd=REPO_ROOT,

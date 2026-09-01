@@ -96,6 +96,17 @@ printf 'curl stub: unexpected url %s\\n' "$url" >&2
 exit 7
 """
 
+# The hook deliberately checks the live launchd registry as well as the plist.
+# Tests must not inherit the development machine's loaded watcher: that made 25
+# otherwise operative scenarios stand down before their docker/curl stubs ran.
+LAUNCHCTL_STUB = """#!/bin/sh
+if [ "$#" -ne 1 ] || [ "$1" != "list" ]; then
+    printf 'launchctl stub: unexpected arguments: %s\\n' "$*" >&2
+    exit 90
+fi
+printf '%s\\n' "${LAUNCHCTL_LIST_OUTPUT:-}"
+"""
+
 GOOD_TEMPLATE = "{% block body %}{% if x %}ok{% endif %}{% endblock %}\n"
 # The 2026-08-14 defect itself: one endif more than there are ifs.
 BROKEN_TEMPLATE = "{% block body %}{% if x %}ok{% endif %}{% endif %}{% endblock %}\n"
@@ -158,6 +169,8 @@ def stub_bin(tmp_path: Path) -> Path:
     (binaries / "docker").chmod(0o755)
     (binaries / "curl").write_text(CURL_STUB)
     (binaries / "curl").chmod(0o755)
+    (binaries / "launchctl").write_text(LAUNCHCTL_STUB)
+    (binaries / "launchctl").chmod(0o755)
     return binaries
 
 
@@ -186,6 +199,7 @@ def hook_env(stub_bin: Path, home: Path, tmp_path: Path, log_name: str) -> dict:
             "EXPECT_RENDER_URL": "http://127.0.0.1:5001/properties",
             "CURL_BODY": '{"ok":true}',
             "CURL_RENDER_CODE": "200",
+            "LAUNCHCTL_LIST_OUTPUT": "",
             "AUTO_REBUILD_PYTHON": sys.executable,
             "AUTOPILOT_LOCK_DIR": str(tmp_path / log_name) + ".lock",
             "AUTO_REBUILD_HEALTH_TIMEOUT": "4",
@@ -412,6 +426,22 @@ def test_stands_down_where_the_deploy_watcher_is_installed(
     (home / WATCHER_PLIST).write_text("<plist/>\n")
 
     proc, log = run_hook(repo, stub_bin, home, tmp_path)
+
+    assert not built(log)
+    assert "deploy_watcher.sh owns this machine" in proc.stdout
+
+
+def test_stands_down_where_the_deploy_watcher_is_loaded_without_a_plist(
+    repo, stub_bin, home, tmp_path
+):
+    """The live launchd check remains part of the production contract."""
+    proc, log = run_hook(
+        repo,
+        stub_bin,
+        home,
+        tmp_path,
+        LAUNCHCTL_LIST_OUTPUT="-\t0\tcom.idealista.deploy-watcher",
+    )
 
     assert not built(log)
     assert "deploy_watcher.sh owns this machine" in proc.stdout

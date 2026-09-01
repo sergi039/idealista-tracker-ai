@@ -61,7 +61,9 @@ RENDER_LIB="${AUTOPILOT_LIB_DIR}/render_check.sh"
 # What the finished build leaves behind, swept once it is serving. Shared with
 # .githooks/post-merge for the #292 reason, and loaded on weaker terms than the
 # page check above: this one may be missing without stopping a deploy.
+# Canonical repository-relative contract: lib/docker_cleanup.sh
 CLEANUP_LIB="${AUTOPILOT_LIB_DIR}/docker_cleanup.sh"
+LOCK_LIB="${AUTOPILOT_LIB_DIR}/lock.sh"
 
 # --- long-running work inside the container (#283) --------------------------
 # `docker compose up -d --build` recreates the app container, which kills
@@ -142,19 +144,56 @@ die() {
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
+# Bash 3.2 exits the current shell before an `if ! source ...` handler can run
+# when the sourced file has a syntax error.  Checking the live path and then
+# opening it again is not enough either: a concurrent git update can replace
+# the contract between those two operations.  Copy once into a private
+# snapshot, then syntax-check and source that exact snapshot.  Git replaces
+# tracked files by rename, so the copy's open inode is one complete version;
+# the private directory prevents the checked snapshot itself from changing.
+source_contract_snapshot() {
+    local contract_source="$1"
+    local diagnostics="$2"
+    local snapshot_dir snapshot_file contract_status=0
+
+    [ -r "$contract_source" ] || return 1
+    snapshot_dir="$(
+        /usr/bin/mktemp -d "${TMPDIR:-/tmp}/idealista-deploy-contract.XXXXXX" \
+            2>>"$diagnostics"
+    )" || return 1
+    snapshot_file="${snapshot_dir}/contract.sh"
+
+    # shellcheck disable=SC1090
+    if ! /bin/cp "$contract_source" "$snapshot_file" 2>>"$diagnostics"; then
+        contract_status=1
+    elif ! "$SELF_INTERPRETER" -n "$snapshot_file" 2>>"$diagnostics"; then
+        contract_status=1
+    elif ! source "$snapshot_file" 2>>"$diagnostics"; then
+        contract_status=1
+    fi
+
+    /bin/rm -f "$snapshot_file" 2>>"$diagnostics" || contract_status=1
+    /bin/rmdir "$snapshot_dir" 2>>"$diagnostics" || contract_status=1
+    return "$contract_status"
+}
+
 # --- the page-check contract -----------------------------------------------
 # Present is not loaded, and loaded is not complete: a half-written file parses
 # into nothing, and a page check that cannot run must never read as one that
 # passed. `set -e` would already abort on a source that fails, but silently,
 # into launchd's stderr file - so say it in the deploy log instead, and require
 # the functions themselves rather than the file.
-# shellcheck source=lib/render_check.sh
-if [ ! -r "$RENDER_LIB" ] || ! source "$RENDER_LIB"; then
+# A syntax error in a sourced file terminates Apple's Bash 3.2 before the `if`
+# branch can call die(). Load one immutable snapshot with the exact interpreter
+# that owns this watcher, so a half-written contract stops with a durable log.
+unset -f deploy_render_origin deploy_render_url deploy_render_ok \
+    deploy_render_legacy_vars 2>/dev/null || true
+if ! source_contract_snapshot "$RENDER_LIB" "$LOG_FILE"; then
     die "${RENDER_LIB} is missing or did not load - the page check cannot run"
 fi
 for contract_fn in deploy_render_origin deploy_render_url deploy_render_ok \
     deploy_render_legacy_vars; do
-    command -v "$contract_fn" >/dev/null 2>&1 \
+    declare -F "$contract_fn" >/dev/null 2>&1 \
         || die "${RENDER_LIB} defined no ${contract_fn}() - the page check cannot run"
 done
 
@@ -164,18 +203,23 @@ done
 # not run leaves garbage and misreports nothing, and refusing to deploy over
 # uncollected images would be the tail wagging the dog. Half-loaded is checked
 # the same way regardless - the file parsing is not the file defining anything.
-# shellcheck source=lib/docker_cleanup.sh
 CLEANUP_READY=0
-if [ -r "$CLEANUP_LIB" ] && source "$CLEANUP_LIB" 2>/dev/null \
-    && command -v deploy_cleanup >/dev/null 2>&1; then
+unset -f deploy_cleanup 2>/dev/null || true
+if source_contract_snapshot "$CLEANUP_LIB" /dev/null \
+    && declare -F deploy_cleanup >/dev/null 2>&1; then
     CLEANUP_READY=1
 fi
 PAGE_URL="$(deploy_render_url "$(deploy_render_origin "$HEALTH_URL")")"
 
 # --- single instance -------------------------------------------------------
 # A build takes minutes; the timer fires more often than that.
-# shellcheck source=lib/lock.sh
-source "${AUTOPILOT_LIB_DIR}/lock.sh"
+unset AUTOPILOT_LOCK_FD
+unset -f autopilot_acquire_lock 2>/dev/null || true
+if ! source_contract_snapshot "$LOCK_LIB" "$LOG_FILE" \
+    || ! declare -F autopilot_acquire_lock >/dev/null 2>&1 \
+    || [ "${AUTOPILOT_LOCK_FD:-}" != "9" ]; then
+    die "${LOCK_LIB} is missing or did not load - the deploy lock cannot run"
+fi
 # A handover (#293) replaces the program, not the process, and bash sets no
 # close-on-exec on fd 9 - so the descriptor, and the flock(2) on it, are still
 # ours. Measured on this Mac: after `exec`, /dev/fd/9 is still open and an
