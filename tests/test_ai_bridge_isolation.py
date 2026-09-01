@@ -917,20 +917,34 @@ class TestTheHarnessKeepsTheEvidence:
             def __exit__(self, *exc):
                 return False
 
-        class _Dead:
+        class _DiesAfterAnswering:
+            """Alive when the loop checks, gone when the reply is in.
+
+            A stub that is dead from the start would be caught by the
+            top-of-loop poll and never reach the branch under test -- which is
+            what the first version of this test did, and a mutation removing
+            the re-poll left all 51 tests green.
+            """
+
             pid = 4242
             stdout = None
 
-            def poll(self):
-                return 7
+            def __init__(self):
+                self.polls = 0
 
-        dead = _Dead()
-        output = _BridgeOutput(dead)
+            def poll(self):
+                self.polls += 1
+                return None if self.polls == 1 else 7
+
+        proc = _DiesAfterAnswering()
+        output = _BridgeOutput(proc)
         monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **kw: _Answered())
         with pytest.raises(AssertionError) as raised:
-            _wait_for_health(_free_port(), time.monotonic() + 5, dead, output)
+            _wait_for_health(_free_port(), time.monotonic() + 5, proc, output)
         assert "exited with code 7" in str(raised.value)
         assert "still running" not in str(raised.value)
+        # It really did answer first: the loop's own poll said alive.
+        assert proc.polls >= 2
 
     def test_a_live_but_silent_bridge_says_so(self):
         """The other half: still running, still not answering. The two used to
