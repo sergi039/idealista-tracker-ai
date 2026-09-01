@@ -1165,10 +1165,16 @@ And **the portal declares its own coordinate inexact** (`coordinates.accuracy:
 0`, `address.isExact: false`), so a fotocasa row is stored `approximate` and
 never `precise` — `precise` grants zero slack in `services/coordinate_quality.py`
 and unlocks a travel run (billed via Distance Matrix only while `OSRM_URL` is
-unset; free from the local routing engine otherwise, #416), and no page
-claiming exactness has ever been seen. Both portal flags ride verbatim into
-`enrichment["import"]` so that measurement, when somebody takes it, needs no
-re-fetch.
+unset; free from the local routing engine otherwise, #416). This paragraph
+said "no page claiming exactness has ever been seen" until 2026-09-01, and
+that is stale: 8 production rows (825–1549) carry `portal_accuracy` with
+`is_exact: true`. The rule survives its own counter-example for a better
+reason — the one declared-exact pin a person actually checked (property 421)
+records *"EXACT per portal, but the pin is a meadow 170 m S of the house"* —
+so the portal's exactness claim is itself unreliable, and a fotocasa row
+stays `approximate` whatever the flag says. Both portal flags ride verbatim
+into `enrichment["import"]` so that measurement, when somebody takes it,
+needs no re-fetch.
 
 **And so does the pin itself**, because a re-geocode used to throw it away
 (#393). `refresh=True` clears the coordinate *before* geocoding, and
