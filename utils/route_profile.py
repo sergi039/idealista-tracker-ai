@@ -98,16 +98,24 @@ def main(argv=None) -> int:
     from flask import current_app, has_app_context
 
     # `has_app_context()` alone is the wrong predicate: it is true inside ANY
-    # Flask app's context, including one this project's `db` was never
-    # registered with, and `_route()` would then raise instead of standing up
-    # the application it needs. Ask whether THIS app is ours.
-    if has_app_context() and "sqlalchemy" in current_app.extensions:
+    # Flask app's context. Nor is `"sqlalchemy" in current_app.extensions`
+    # enough — every Flask-SQLAlchemy app satisfies that key while holding a
+    # DIFFERENT database, and the CLI would then read the wrong one and report
+    # "no such subscription" instead of failing. The question is identity: is
+    # the extension registered here OUR `db`.
+    if has_app_context() and current_app.extensions.get("sqlalchemy") is _db():
         return _route(args)
 
     from app import create_app
 
     with create_app().app_context():
         return _route(args)
+
+
+def _db():
+    from app import db
+
+    return db
 
 
 def _route(args) -> int:

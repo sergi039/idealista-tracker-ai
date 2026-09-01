@@ -28,6 +28,46 @@ def app():
         db.drop_all()
 
 
+def _refusal_reasons(source: str):
+    """Every refusal reason `route_profile()` can emit, and what defeats the read.
+
+    Returns (literals, problems). A `problem` is a refusal this walk cannot
+    resolve to a string — a dynamic value, or a return that is not an inline
+    dict at all, which is how `return _refusal("new_reason")` would slip past
+    a walk that only inspects dict literals (the third review round's finding).
+    """
+    import ast
+
+    module = ast.parse(source)
+    routers = [
+        node
+        for node in ast.walk(module)
+        if isinstance(node, ast.FunctionDef) and node.name == "route_profile"
+    ]
+    if len(routers) != 1:
+        return set(), ["route_profile() was renamed or duplicated"]
+
+    literals, problems = set(), []
+    for node in ast.walk(routers[0]):
+        if isinstance(node, ast.Return):
+            if node.value is not None and not isinstance(node.value, ast.Dict):
+                problems.append(
+                    f"line {node.lineno}: returns {type(node.value).__name__}, "
+                    "not an inline dict — its reason cannot be read here"
+                )
+            continue
+        if not isinstance(node, ast.Dict):
+            continue
+        for key, value in zip(node.keys, node.values):
+            if not (isinstance(key, ast.Constant) and key.value == "reason"):
+                continue
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                literals.add(value.value)
+            else:
+                problems.append(f"line {getattr(value, 'lineno', '?')}: dynamic reason")
+    return literals, problems
+
+
 def _profile(name, **kwargs):
     profile = SearchProfile(name=name, is_active=True, **kwargs)
     db.session.add(profile)
@@ -203,6 +243,39 @@ class TestADryRunReallyWritesNothing:
             )
             db.session.rollback()
 
+    def test_a_foreign_app_with_its_own_sqlalchemy_is_still_not_ours(
+        self, app, monkeypatch
+    ):
+        """The third review round's exact input.
+
+        `"sqlalchemy" in current_app.extensions` is true of ANY Flask-SQLAlchemy
+        application, so the previous predicate would have reused a foreign
+        context holding a DIFFERENT database — and the CLI would have read the
+        wrong one and reported "no such subscription" rather than failing. The
+        question is identity, not membership.
+        """
+        from flask import Flask
+        from flask_sqlalchemy import SQLAlchemy
+
+        with app.app_context():
+            target = _profile("target")
+            stub = _profile("stub")
+            argv = ["--source", str(stub.id), "--target", str(target.id)]
+
+        foreign = Flask("foreign")
+        foreign.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+        SQLAlchemy(foreign)  # a real, different db registered under the same key
+        assert "sqlalchemy" in foreign.extensions, "the premise needs this key set"
+
+        built = []
+        monkeypatch.setattr("app.create_app", lambda: built.append(True) or app)
+        with foreign.app_context():
+            assert main(argv) == 0
+        assert built, (
+            "the CLI reused a foreign app that merely HAS a sqlalchemy "
+            "extension; it would have read that database, not ours"
+        )
+
     def test_it_builds_its_own_context_inside_a_foreign_app(self, app, monkeypatch):
         """`has_app_context()` is true in ANY Flask app, including one this
         project's `db` was never registered with. The predicate must ask
@@ -272,46 +345,42 @@ class TestEveryRefusalHasAnExplanation:
     it."""
 
     def test_no_reason_the_service_can_emit_is_unexplained(self):
-        """Parsed, not grepped.
-
-        The review's finding: a regex over `"reason": "..."` sees only inline
-        string literals, so `NEW_REASON = "target_archived"` followed by
-        `return {"reason": NEW_REASON}` would leave this green while the CLI
-        printed "no explanation is recorded for this reason". The AST walk
-        below cannot know that reason's value either — but it can SEE that one
-        exists and fail, which turns a blind spot into a loud instruction.
-        """
-        import ast
         from pathlib import Path
 
-        module = ast.parse(Path("services/search_profile_service.py").read_text())
-        routers = [
-            node
-            for node in ast.walk(module)
-            if isinstance(node, ast.FunctionDef) and node.name == "route_profile"
-        ]
-        assert len(routers) == 1, "route_profile() was renamed or duplicated"
-
-        literal, dynamic = set(), []
-        for node in ast.walk(routers[0]):
-            if not isinstance(node, ast.Dict):
-                continue
-            for key, value in zip(node.keys, node.values):
-                if not (isinstance(key, ast.Constant) and key.value == "reason"):
-                    continue
-                if isinstance(value, ast.Constant) and isinstance(value.value, str):
-                    literal.add(value.value)
-                else:
-                    dynamic.append(f"line {getattr(value, 'lineno', '?')}")
-
-        assert literal, "found no refusal reasons at all — did the parse break?"
-        assert not dynamic, (
-            "route_profile() builds a refusal reason dynamically at "
-            + ", ".join(dynamic)
-            + "; this test cannot read its value, so add the reason to "
-            "utils.route_profile.REFUSALS by hand and make the value a literal"
+        literal, problems = _refusal_reasons(
+            Path("services/search_profile_service.py").read_text()
         )
+        assert not problems, (
+            "a refusal this CLI must explain cannot be read from the source: "
+            + "; ".join(problems)
+            + ". Keep route_profile()'s refusals as inline dict literals, or "
+            "add the reason to utils.route_profile.REFUSALS by hand."
+        )
+        assert literal, "found no refusal reasons at all — did the parse break?"
         assert not literal - set(REFUSALS), (
             "the service can refuse with reasons the CLI cannot explain: "
             + ", ".join(sorted(literal - set(REFUSALS)))
         )
+
+    def test_the_walk_catches_a_reason_moved_into_a_helper(self):
+        """The third review round's exact input, run against the checker.
+
+        Without this, the walk above is a claim: it passes today because every
+        refusal happens to be an inline dict, and it would keep passing after
+        the one refactor that defeats it.
+        """
+        literal, problems = _refusal_reasons(
+            "def _refusal(reason):\n"
+            "    return {'status': 'refused', 'reason': reason}\n"
+            "\n"
+            "def route_profile(a, b):\n"
+            "    if a == b:\n"
+            "        return _refusal('new_reason')\n"
+            "    return {'status': 'ok'}\n"
+        )
+        assert problems, (
+            "a refusal returned through a helper was not flagged, so the "
+            "completeness check would stay green while the CLI had no "
+            "explanation for it"
+        )
+        assert "new_reason" not in literal
