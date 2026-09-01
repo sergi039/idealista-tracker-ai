@@ -129,6 +129,42 @@ class FilterArgs:
         return frozenset(self._read)
 
 
+class RecordedArgs:
+    """`request.args`, remembering EVERY key read through it -- filter or not.
+
+    `FilterArgs` records the filters a route read, for its links. This wraps
+    the mapping underneath it so a surface can also answer "what arrived and
+    was read by nothing" from ONE enumeration: the keys the request carried
+    minus the keys anything read (`unread()`). The alternative -- a constant
+    naming the endpoint's own non-filter parameters beside the recorded
+    filters -- passes every test on the day it is written and goes stale
+    silently at the next parameter, which is #519's failure in a new shape:
+    a new parameter read directly would be reported as ignored while being
+    honored. `GET /api/properties` carried exactly such a constant for one
+    commit.
+
+    Only `get` counts as a read. `keys()` enumerates and records nothing, or
+    the enumeration itself would mark everything as read.
+    """
+
+    def __init__(self, args: Mapping[str, Any]):
+        self._args = args
+        self.keys_read: set[str] = set()
+
+    def get(self, key: str, default: Any = None, type: Any = None) -> Any:
+        self.keys_read.add(key)
+        if type is None:
+            return self._args.get(key, default)
+        return self._args.get(key, default, type=type)
+
+    def keys(self):
+        return self._args.keys()
+
+    def unread(self) -> list[str]:
+        """Every key the request carried that nothing read, sorted."""
+        return sorted(set(self._args.keys()) - self.keys_read)
+
+
 def rebuilt_from(
     args: Mapping[str, Any],
     *,
