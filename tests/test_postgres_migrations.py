@@ -3018,9 +3018,12 @@ def test_027_a_route_change_landing_in_the_resolution_gap_no_longer_deadlocks(
             # The subtransaction's locks must have survived its commit into
             # the parent: with B's transaction still open, a FOR UPDATE on the
             # stub must be refused, or the retry bought its safety by dropping
-            # 025's serialization.
+            # 025's serialization. SQLSTATE 55P03 (lock_not_available)
+            # specifically: the class-level OperationalError would also match
+            # a statement_timeout or a dropped connection, reporting "the
+            # serialization survived" for a broken property.
             with engine.connect() as probe:
-                with pytest.raises(OperationalError):
+                with pytest.raises(OperationalError) as refused:
                     probe.execute(
                         text(
                             "SELECT id FROM search_profiles "
@@ -3028,6 +3031,10 @@ def test_027_a_route_change_landing_in_the_resolution_gap_no_longer_deadlocks(
                         ),
                         {"s": stub},
                     )
+                assert getattr(refused.value.orig, "pgcode", None) == "55P03", (
+                    "the NOWAIT probe was refused for a different reason than "
+                    "the inserter's held lock: " + repr(refused.value)
+                )
         finally:
             allow_commit.set()
             inserter.join(30)

@@ -50,15 +50,19 @@
 -- survives to the transaction's end. Stale means RAISE the sentinel: the
 -- subtransaction rolls back, the stale pair is RELEASED — which is what
 -- breaks any half-formed cycle, since at that instant this transaction holds
--- no search_profiles lock at all — and the loop resolves afresh.
+-- no search_profiles lock THAT THIS TRIGGER TOOK — a transaction that locked
+-- profiles earlier (the merge and repair paths do, FOR UPDATE) still holds
+-- those, and the rollback cannot reach them — and the loop resolves afresh.
 --
 -- Closure is entirely READER-side. It does not matter what wrote the route:
 -- `route_profile()`, a future UI writer, or raw SQL through docker exec. No
 -- writer participates in anything, so there is no participation to forget.
 -- And no new lock object exists, so no new cycle can either: every attempt
--- begins holding nothing on search_profiles, the locks taken are the same
--- KEY SHAREs 026 took at the same points, and the state held at trigger exit
--- is a strict subset of the states 026 could reach.
+-- begins holding nothing on search_profiles that this trigger took (locks
+-- the surrounding transaction acquired before the trigger fired are its own
+-- and stay held — the release cannot reach them), the locks taken here are
+-- the same KEY SHAREs 026 took at the same points, and the state held at
+-- trigger exit is a strict subset of the states 026 could reach.
 --
 -- THE CLAIM, SCOPED HONESTLY. What is closed is the stale-pair DEADLOCK
 -- window, for every writer. What is unchanged is who gets the

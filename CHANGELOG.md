@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### 🔒 Fixed: the route-resolution window 026 narrowed is closed (2026-09-01, #513)
+### 🔒 Fixed: the trigger retries a stale route read instead of deadlocking (2026-09-01, #513)
 - **What**: migration 027 re-declares `canonicalize_search_profile()` as a
   bounded retry — the route is read unlocked, the pair is locked ascending
   inside a sentinel-exception subtransaction, and a re-read that disagrees
