@@ -193,7 +193,7 @@ if ! source_contract_snapshot "$RENDER_LIB" "$LOG_FILE"; then
 fi
 for contract_fn in deploy_render_origin deploy_render_url deploy_render_ok \
     deploy_render_legacy_vars; do
-    command -v "$contract_fn" >/dev/null 2>&1 \
+    declare -F "$contract_fn" >/dev/null 2>&1 \
         || die "${RENDER_LIB} defined no ${contract_fn}() - the page check cannot run"
 done
 
@@ -206,7 +206,7 @@ done
 CLEANUP_READY=0
 unset -f deploy_cleanup 2>/dev/null || true
 if source_contract_snapshot "$CLEANUP_LIB" /dev/null \
-    && command -v deploy_cleanup >/dev/null 2>&1; then
+    && declare -F deploy_cleanup >/dev/null 2>&1; then
     CLEANUP_READY=1
 fi
 PAGE_URL="$(deploy_render_url "$(deploy_render_origin "$HEALTH_URL")")"
@@ -216,7 +216,7 @@ PAGE_URL="$(deploy_render_url "$(deploy_render_origin "$HEALTH_URL")")"
 unset AUTOPILOT_LOCK_FD
 unset -f autopilot_acquire_lock 2>/dev/null || true
 if ! source_contract_snapshot "$LOCK_LIB" "$LOG_FILE" \
-    || ! command -v autopilot_acquire_lock >/dev/null 2>&1 \
+    || ! declare -F autopilot_acquire_lock >/dev/null 2>&1 \
     || [ "${AUTOPILOT_LOCK_FD:-}" != "9" ]; then
     die "${LOCK_LIB} is missing or did not load - the deploy lock cannot run"
 fi

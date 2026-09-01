@@ -113,6 +113,18 @@ exec /bin/bash "$@"
 STUB
 chmod +x "${STUB_BIN}/bash"
 
+# An executable of the right name is not a sourced shell-function contract.
+# These adversarial PATH entries make any regression from `declare -F` back to
+# `command -v` accept the wrong primitive and fail scenarios 24/24b/24c.
+for contract_name in deploy_render_origin deploy_render_url deploy_render_ok \
+    deploy_render_legacy_vars deploy_cleanup autopilot_acquire_lock; do
+    cat >"${STUB_BIN}/${contract_name}" <<'STUB'
+#!/bin/sh
+exit 0
+STUB
+    chmod +x "${STUB_BIN}/${contract_name}"
+done
+
 # Preserve argv[0] so Bash exposes this wrapper through $BASH inside the
 # watcher. On the first syntax preflight it atomically swaps a live contract;
 # the private snapshot must remain the version that gets sourced.
