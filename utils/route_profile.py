@@ -154,9 +154,15 @@ def _route(args) -> int:
             listings,
         )
 
-    if not args.apply:
-        logger.info("\nNothing written. Re-run with --apply.")
-        return 0
+        # Still inside the guard. The dry run's last act is a logging call,
+        # and a logging call runs whatever handler somebody attached -- one
+        # that queries the session would autoflush the caller's pending work
+        # on the way out (the fourth review round's finding). The dry-run
+        # path makes no session-touching call after the guard, which is the
+        # same as saying the guard spans the whole of it.
+        if not args.apply:
+            logger.info("\nNothing written. Re-run with --apply.")
+            return 0
 
     outcome = SearchProfileService.route_profile(source.id, target.id)
     if outcome.get("status") == "ok":

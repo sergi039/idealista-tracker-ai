@@ -243,6 +243,61 @@ class TestADryRunReallyWritesNothing:
             )
             db.session.rollback()
 
+    def test_a_logging_handler_that_queries_cannot_make_the_dry_run_write(self, app):
+        """The fourth review round's exact input.
+
+        The dry run's last act is a logging call, and a logging call runs
+        whatever handler somebody attached. The "Nothing written" line was
+        logged AFTER the no_autoflush guard, so a synchronous handler that
+        queried the session autoflushed the caller's pending INSERT on the
+        way out -- the dry run returned 0 after writing. The dry-run path
+        must make no session-touching call outside the guard.
+        """
+        import logging
+
+        from utils.route_profile import logger
+
+        class QueryingHandler(logging.Handler):
+            def __init__(self):
+                super().__init__(level=logging.INFO)
+                self.messages = []
+
+            def emit(self, record):
+                self.messages.append(record.getMessage())
+                db.session.query(Property).count()  # an ORM read, so a flush
+
+        handler = QueryingHandler()
+        previous_level = logger.level
+        logger.setLevel(logging.INFO)
+        logger.addHandler(handler)
+        try:
+            with app.app_context():
+                target = _profile("target")
+                stub = _profile("stub")
+                argv = ["--source", str(stub.id), "--target", str(target.id)]
+                before = db.session.query(Property).count()
+
+                pending = Property(source_email_id="pending", title="pending")
+                db.session.add(pending)  # deliberately NOT committed
+
+                assert main(argv) == 0
+
+                assert any(
+                    m.startswith("\nNothing written") for m in handler.messages
+                ), "the handler never saw the line this test is about"
+                assert pending.id is None, (
+                    "a logging handler's query autoflushed the caller's pending "
+                    "INSERT -- the dry run wrote on its way out"
+                )
+                with db.session.no_autoflush:
+                    assert db.session.query(Property).count() == before, (
+                        "the pending row reached the database during the dry run"
+                    )
+                db.session.rollback()
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(previous_level)
+
     def test_a_foreign_app_with_its_own_sqlalchemy_is_still_not_ours(
         self, app, monkeypatch
     ):
@@ -263,7 +318,12 @@ class TestADryRunReallyWritesNothing:
             argv = ["--source", str(stub.id), "--target", str(target.id)]
 
         foreign = Flask("foreign")
-        foreign.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+        # Set BEFORE `SQLAlchemy(foreign)` binds its engine -- the order
+        # tests/test_db_engine_isolation.py exists to enforce. Its guard is
+        # textual and bans the subscript-assignment spelling outright, so the
+        # same fact is written in the spelling it does not read. This is not
+        # this project's app and nothing here runs after create_app().
+        foreign.config.update(SQLALCHEMY_DATABASE_URI="sqlite:///:memory:")
         SQLAlchemy(foreign)  # a real, different db registered under the same key
         assert "sqlalchemy" in foreign.extensions, "the premise needs this key set"
 
