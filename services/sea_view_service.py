@@ -43,6 +43,8 @@ import requests
 from config import Config
 from services.coordinate_quality import (
     APPROXIMATE_COORD_SLACK_M,
+    TIER_LOCALITY,
+    slack_for_tier,
     is_precise,
 )
 from services.enrichment_origin import (
@@ -1184,8 +1186,18 @@ def evaluate_geometry(
     # coordinate is a municipality centroid, so the real plot may sit kilometres
     # from the point that was measured; only sea beyond this distance makes the
     # imprecision irrelevant.
+    # Deliberately the **locality** slack, named rather than copied, and
+    # deliberately not the row's own tier (#493). This function takes a
+    # coordinate and a label, not a row, so it cannot ask; and giving it the
+    # narrower pin slack would move `decisive_distance` from 15 km to 12 km,
+    # which changes verdicts *and* changes the cache key below, re-opening the
+    # cached geometry of every pin row. That is a free but paced run against
+    # Overpass and OpenTopoData, so it is a separate, announced change rather
+    # than a side effect of a scoring refactor. What this line must never
+    # become again is a second copy of the slack table: it reads the one in
+    # `coordinate_quality`.
     decisive_distance = MAX_SEA_DISTANCE_M + (
-        APPROXIMATE_COORD_SLACK_M if approximate else 0
+        slack_for_tier(TIER_LOCALITY) if approximate else 0
     )
     detail: Dict[str, Any] = {
         "coordinate_accuracy": coordinate_accuracy or "unknown",

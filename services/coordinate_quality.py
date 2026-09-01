@@ -25,6 +25,8 @@ repairing the rows is `utils/refresh_property_accuracy.py`, which needs the
 owner to ask because Google Geocoding is billed.
 """
 
+import math
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, List, Optional, Tuple
@@ -59,6 +61,74 @@ SOURCE_MANUAL = "manual"
 # view verdict cannot drift into three different numbers.
 APPROXIMATE_COORD_SLACK_M = 5_000
 
+# ---------------------------------------------------------------- tiers -----
+#
+# `approximate` means two different things and the scorer has to assume the
+# worse of them (#493). A locality centroid is shared by every listing in the
+# village -- 21 of them on the worst point on production -- while a pin a
+# portal or a person placed for *this advert* is not shared by anything.
+# Measured 2026-09-01 over the 1226 located rows: 51.9% of the 879 geocoded
+# rows sit on a point another listing also occupies, against **0.0% of the 183
+# rows carrying a pin**. Those are two populations, and one slack for both
+# takes the worse.
+#
+# What the middle tier is worth was measured against the strongest ground
+# truth available here: eight rows carry BOTH a location a person established
+# from the cadastre and a portal or map pin, and the distance between the two
+# is the pin's own error --
+#
+#     68, 102, 107, 122, 124, 174, 195, 1150 metres
+#
+# -- median 123, seven of eight at or under 195, **observed maximum 1150**.
+# The method is validated on one of those rows by a person rather than by
+# arithmetic: property 421 carries, in its own import block, the note
+# "EXACT per portal, but the pin is a meadow 170 m S of the house", and that
+# row's cadastre-versus-pin distance computes to 174 m. Agreement to 4 m. It
+# is deliberately not counted as a ninth sample -- it is the same property,
+# and one measurement taken twice is not two observations.
+#
+# That row also settles which way a portal's own exactness claim points: the
+# one declared-exact pin anybody has checked was wrong by 170 m. A portal
+# saying `is_exact` is evidence for this tier and against `precise`.
+#
+# **n is 8.** Eight observations do not bound an error, and an independent
+# review said so; 2000 m is the observed maximum with a margin, not a proven
+# ceiling, and it is written here with its sample so the next person can widen
+# it rather than inherit a number with no provenance. Re-derive it as the
+# sample grows -- the query is every row carrying both an
+# `enrichment["location"]` and an `enrichment["import"]["coordinate"]`.
+#
+# What the tier does NOT do is publish a point estimate from a band. Every
+# consumer still refuses unless the answer is the same at both ends of the
+# slack, so an underestimate here narrows a *disclosed band* rather than
+# printing a score nobody measured. That is the whole reason the constant is
+# allowed to rest on eight rows.
+LISTING_PIN_SLACK_M = 2_000
+
+# Metres, not decimal places: a pin is stored as a decimal string with between
+# 4 and 12 places (measured across the nine writers) while the columns are
+# `Numeric(10, 7)`, so `"40.123456789012"` and a stored `40.1234568` are the
+# same pin and have to compare equal. One metre is far below the smallest
+# error this tier is about and far above the rounding.
+PIN_MATCH_EPSILON_M = 1.0
+
+TIER_ADDRESS = "address"
+TIER_LISTING_PIN = "listing_pin"
+TIER_LOCALITY = "locality"
+
+
+#: Built per call rather than held as a module-level dict. The constants above
+#: are the single home of this policy, and a table frozen at import time stops
+#: honouring them the moment one is patched or reassigned -- which is exactly
+#: what `tests/test_hazard_proximity.py::test_the_coordinate_policy_is_the_shared_one`
+#: exists to catch, and did.
+def _tier_slack_table() -> dict:
+    return {
+        TIER_ADDRESS: 0.0,
+        TIER_LISTING_PIN: float(LISTING_PIN_SLACK_M),
+        TIER_LOCALITY: float(APPROXIMATE_COORD_SLACK_M),
+    }
+
 
 def normalize_accuracy(value: Any) -> str:
     """The accuracy label, lower-cased, with a missing one named `unknown`."""
@@ -71,9 +141,125 @@ def is_precise(value: Any) -> bool:
     return normalize_accuracy(value) == PRECISE
 
 
-def coordinate_slack_m(value: Any) -> float:
-    """Metres the real parcel may sit from a coordinate with this accuracy."""
-    return 0.0 if is_precise(value) else float(APPROXIMATE_COORD_SLACK_M)
+def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Metres between two coordinates, on a sphere.
+
+    Local to this module and deliberately not imported from a service: the
+    tier is consulted by four of them, and importing a distance helper from one
+    would make `coordinate_quality` -- which every consumer imports -- depend on
+    a consumer.
+    """
+    radius = 6_371_000.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    d_phi = phi2 - phi1
+    d_lambda = math.radians(lon2 - lon1)
+    a = (
+        math.sin(d_phi / 2) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
+    )
+    return 2 * radius * math.asin(min(1.0, math.sqrt(a)))
+
+
+def _pin_is_the_stored_coordinate(record: Any, pin: Tuple[float, float]) -> bool:
+    """Does the row's own coordinate still stand where the pin was placed?
+
+    A pin block says where a portal or a person put this advert. It does not
+    say where the row *is*: direct SQL through `docker exec` is a supported
+    workflow here, `utils/set_property_location.py` writes one column pair and
+    a different block, and `_apply_geocode_outcome` defends a portal pin only
+    on the path that runs through it. A block that no longer agrees with the
+    columns describes a coordinate the row has stopped carrying, so it earns
+    the row nothing.
+    """
+    lat = getattr(record, "location_lat", None)
+    lon = getattr(record, "location_lon", None)
+    if lat is None or lon is None:
+        return False
+    try:
+        return (
+            _haversine_m(float(lat), float(lon), pin[0], pin[1]) <= PIN_MATCH_EPSILON_M
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def coordinate_tier(record: Any) -> str:
+    """Which of the three kinds of coordinate this row carries.
+
+    Provenance, not accuracy: the tier says who placed the point and for what,
+    and `_TIER_SLACK_M` says what that is worth. The order is decisive --
+    `precise` first, because a hand-set location that a person labelled
+    `precise` has already been written to the column and must not be demoted to
+    the pin tier by carrying its own provenance block.
+
+    **The `source` string is deliberately not read.** It has already drifted
+    across nine spellings on production -- `fotocasa`, `fotocasa_pin`,
+    `fotocasa payload`, `idealista`, `idealista_map`, `idealista map pin`,
+    `idealista_pin`, `milanuncios`, `pisos_pin` -- so a table keyed on it would
+    give the wide slack to `fotocasa_pin` and the narrow one to `fotocasa`: a
+    partial rule that reads as complete, which is the shape of defect this
+    repository keeps removing. What the tier asserts is only "this point was
+    placed for this advert", and that is true of all nine.
+
+    What it therefore cannot tell is a pin from a portal that publishes a
+    locality centroid as its pin. The measurement above says that is not what
+    the table holds today (0 of 183 pin rows share a point), and the honest
+    limit is that this is evidence rather than proof -- which is why nothing
+    downstream may publish a point estimate out of the resulting band.
+    """
+    if isinstance(record, str):
+        # This function used to take the accuracy label, and a label still
+        # answers every `getattr` below with `None` -- so a caller that was not
+        # migrated would quietly receive the locality slack for every row,
+        # including precise ones. Silent and safe-looking is exactly the
+        # failure `SeaDistanceService.measure` refused a default for; raise.
+        raise TypeError(
+            "coordinate_tier takes the row, not its accuracy label; "
+            "pass the Property (see issue #493)"
+        )
+
+    if is_precise(getattr(record, "location_accuracy", None)):
+        return TIER_ADDRESS
+
+    hand_set = manual_coordinate(record)
+    if hand_set is not None and _pin_is_the_stored_coordinate(
+        record, (hand_set.lat, hand_set.lon)
+    ):
+        return TIER_LISTING_PIN
+
+    portal = portal_coordinate(record)
+    if portal is not None and _pin_is_the_stored_coordinate(
+        record, (portal[0], portal[1])
+    ):
+        return TIER_LISTING_PIN
+
+    return TIER_LOCALITY
+
+
+def slack_for_tier(tier: str) -> float:
+    """Metres the real parcel may sit from a coordinate of this tier.
+
+    Split from `coordinate_slack_m` for the callers that do not have the row in
+    their hands -- `SeaDistanceService.measure` takes a bare `lat, lon` and the
+    sea-view geometry takes a coordinate and an accuracy label. Those receive
+    the tier from the caller that *does* have the row, rather than each
+    re-deriving a rule from the accuracy string, which is how
+    `sea_view_service` came to carry its own copy of the old one.
+    """
+    return _tier_slack_table().get(tier, float(APPROXIMATE_COORD_SLACK_M))
+
+
+def coordinate_slack_m(record: Any) -> float:
+    """Metres the real parcel may sit from this row's coordinate.
+
+    Takes the **row**, not its accuracy label, and takes it as a required
+    argument. An optional record falling back to the label would return the
+    locality slack for any caller that forgot to pass one -- safe for the data
+    and wrong for the report, which `SeaDistanceService.measure`'s own
+    docstring already refuses in the same words: a required argument cannot be
+    forgotten quietly.
+    """
+    return slack_for_tier(coordinate_tier(record))
 
 
 def improves_on(new_accuracy: Any, old_accuracy: Any) -> bool:

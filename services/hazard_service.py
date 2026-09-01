@@ -712,7 +712,7 @@ class HazardService:
                     "distance_basis": DISTANCE_BASIS,
                     "origin": {"lat": lat, "lon": lon},
                     "origin_accuracy": accuracy,
-                    "slack_m": coordinate_slack_m(accuracy),
+                    "slack_m": coordinate_slack_m(prop),
                     "updated_at": now_iso,
                     "last_attempt_status": measurement["status"],
                     "last_attempt_at": now_iso,
@@ -779,7 +779,8 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
     enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
     stored = enrichment.get(ENRICHMENT_KEY)
     accuracy = normalize_accuracy(getattr(prop, "location_accuracy", None))
-    slack = coordinate_slack_m(accuracy)
+    # The row, not its label -- see `coordinate_quality.coordinate_tier` (#493).
+    slack = coordinate_slack_m(prop)
     base: Dict[str, Any] = {
         "origin_accuracy": accuracy,
         "slack_m": slack,

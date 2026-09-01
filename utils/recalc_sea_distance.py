@@ -19,6 +19,7 @@ from typing import Any, Dict, List
 from app import create_app, db
 from models import Property
 from services.property_scoring_service import PropertyScoringService
+from services.coordinate_quality import coordinate_tier
 from services.sea_distance_service import SeaDistanceService
 from utils import score_snapshot
 from utils.enrich_scope import log_scope
@@ -132,15 +133,20 @@ def main() -> None:
             for idx, prop in enumerate(properties, start=1):
                 try:
                     if args.dry_run:
-                        # The row's own accuracy, exactly as the real arm reads
-                        # it below. Omitted here since #358, this preview called
+                        # The row's own accuracy AND its own coordinate tier,
+                        # exactly as the real arm reads them below. The accuracy
+                        # was omitted here until #358 and this preview called
                         # every row a locality centroid, precise ones included —
                         # the number an operator reads before authorising the
-                        # rewrite this flag exists to hold back.
+                        # rewrite this flag exists to hold back. `tier` defaults
+                        # to that same locality reading (#493), so leaving it out
+                        # would reintroduce the identical defect one argument
+                        # over, for every row carrying a listing-specific pin.
                         result = sea_service.measure(
                             float(prop.location_lat),
                             float(prop.location_lon),
                             prop.location_accuracy,
+                            tier=coordinate_tier(prop),
                         )
                     else:
                         # `commit=True` so the write happens under FOR UPDATE:

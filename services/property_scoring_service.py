@@ -1316,7 +1316,7 @@ class HousingPropertyScorer(BasePropertyScorer):
         # whose real mix is nothing of the sort. Dropping the ambiguous ones
         # and averaging what is left is not a smaller claim than the original,
         # it is a differently wrong one.
-        slack_m = coordinate_slack_m(getattr(prop, "location_accuracy", None))
+        slack_m = coordinate_slack_m(prop)
         origin_accuracy = normalize_accuracy(getattr(prop, "location_accuracy", None))
 
         key_scores: Dict[str, Dict[str, Any]] = {}
