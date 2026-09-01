@@ -51,10 +51,25 @@ guard refuses is **reported with its reason**, because this walk is the only
 thing that will ever look at these rows and a scope that quietly shrinks
 claims a completeness it does not have.
 
-Reports and exits unless `--apply`. The snapshot goes first (`--no-backup` is
-a thing you say out loud) and `restore` is compare-and-swap: it touches only
-the rows its snapshot names and skips one that no longer differs, so a name
-somebody set by hand afterwards is not quietly overwritten.
+Reports and exits unless `--apply`. The snapshot is written before the commit
+(`--no-backup` is a thing you say out loud) and records, beside what each row
+held, what the repair wrote into `municipality` — read off the live session
+between the mutation and the commit, so the record equals the write by
+construction. That record is what makes `restore` a real compare-and-swap: a
+row still carrying the repair's write is put back whole, scores included, and
+one whose municipality moved since is *named and left alone*
+(`utils/import_review_notes.restore` is the shape). Only the repaired column
+is compared — the scores the snapshot also carries move legitimately under a
+rescore or a weight change, and a guard over them would refuse correct
+restores.
+
+Snapshots written before this record existed — the production
+`data/yaencontre_municipality_snapshot_20260831T171042Z.json` (102 rows, on
+the mini) among them — hold only the before-state, in which "still the
+repair's write" and "hand-edited since" are indistinguishable: both simply
+differ. `restore` refuses such a snapshot and says why; `--overwrite-hand-edits`
+is the way past, named after what it may do, and every row it overwrites is
+enumerated in the output.
 """
 
 from __future__ import annotations
@@ -183,26 +198,18 @@ def repair(
     if not rows:
         return outcome
 
+    # Captured before the rename pass, because these rows ARE the before-state.
+    # The file itself is written after the repair has run in the session and
+    # before the commit: each row then also records what the repair wrote
+    # (`repaired`), read off the live session, so the record equals the write
+    # by construction — a value predicted here instead would be a second copy
+    # of the repair's rule, kept in sync by hope.
+    snapshot_rows: List[Dict[str, Any]] = []
     if apply and backup:
-        path = snapshot_path or os.path.join(
-            "data",
-            "yaencontre_municipality_snapshot_"
-            + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-            + ".json",
-        )
-        score_snapshot.write(
-            {
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "scores": [
-                    score_snapshot.snapshot_row(
-                        prop, classification_columns=SNAPSHOT_COLUMNS
-                    )
-                    for prop in rows
-                ],
-            },
-            path,
-        )
-        outcome["snapshot"] = path
+        snapshot_rows = [
+            score_snapshot.snapshot_row(prop, classification_columns=SNAPSHOT_COLUMNS)
+            for prop in rows
+        ]
 
     # Two passes, and the boundary is a flush. Scoring reaches
     # `property_comparables.same_municipality()`, which asks the *table* which
@@ -216,13 +223,44 @@ def repair(
     # `/properties` sorts by -- the very fault the rescore exists to prevent,
     # inflicted by the rescore. Nothing here rescores those rows again, so it
     # would have stayed.
-    before = {prop.id: _before(prop) for prop in rows}
-    for prop in rows:
-        prop.municipality = _proposed(prop)[1]
-    db.session.flush()
-    for prop in rows:
-        outcome["rows"].append(_rescore(prop, before[prop.id]))
-        outcome["repaired"] += 1
+    # The mutations and the snapshot write share one guard: if anything in
+    # here raises — the snapshot path already existing is the reproducible
+    # case, `score_snapshot.write` refuses it with a catchable SystemExit —
+    # the session is rolled back before the exception leaves, so a caller
+    # that survives it cannot commit a repair whose rollback point was never
+    # written. The old ordering (file first) had this property by accident;
+    # the new one has to say it.
+    try:
+        before = {prop.id: _before(prop) for prop in rows}
+        for prop in rows:
+            prop.municipality = _proposed(prop)[1]
+        db.session.flush()
+        for prop in rows:
+            outcome["rows"].append(_rescore(prop, before[prop.id]))
+            outcome["repaired"] += 1
+
+        if apply and backup:
+            for entry, prop in zip(snapshot_rows, rows, strict=True):
+                entry["repaired"] = score_snapshot.repaired_state(
+                    prop, SNAPSHOT_COLUMNS
+                )
+            path = snapshot_path or os.path.join(
+                "data",
+                "yaencontre_municipality_snapshot_"
+                + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                + ".json",
+            )
+            score_snapshot.write(
+                {
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "scores": snapshot_rows,
+                },
+                path,
+            )
+            outcome["snapshot"] = path
+    except BaseException:
+        db.session.rollback()
+        raise
 
     if apply:
         db.session.commit()
@@ -231,27 +269,40 @@ def repair(
     return outcome
 
 
-def restore(path: str, apply: bool = False) -> Dict[str, Any]:
-    """Put a snapshot back. The way out, and it is tested."""
-    parsed = score_snapshot.load(path).rows
+def restore(
+    path: str, apply: bool = False, overwrite_hand_edits: bool = False
+) -> Dict[str, Any]:
+    """Put a snapshot back — compare-and-swap against what the repair wrote.
 
-    restored = 0
-    missing: List[int] = []
-    for row in parsed:
-        prop = db.session.get(Property, row["id"])
-        if prop is None:
-            missing.append(row["id"])
-            continue
-        if not score_snapshot.differs(prop, row):
-            continue
-        score_snapshot.apply_row(prop, row)
-        restored += 1
+    A row whose `municipality` still holds what the repair left is restored
+    whole, scores included; one edited since is named and skipped, because a
+    name somebody set by hand afterwards is not this script's to remove. The
+    scores are outside the comparison on purpose: a rescore moves them without
+    touching the name, and a guard over them would refuse correct restores.
+
+    The comparison is the write itself — one UPDATE conditional on
+    `municipality` still holding what the repair wrote — so an edit committed
+    between this script's read of the row and its write fails the swap and
+    is skipped too, never overwritten (rx round 2 on #528 reproduced the
+    read-then-unconditional-write losing exactly that edit).
+
+    Snapshots this tool writes now are CAS-capable (every row carries
+    `repaired`). A legacy one — written before that record existed, the
+    2026-08-31 production file included — cannot tell "still the repair's
+    write" from "hand-edited since" and is refused unless
+    `overwrite_hand_edits` says to overwrite both; every row the flag lets
+    through is enumerated in the result.
+    """
+    outcome = score_snapshot.cas_restore(
+        score_snapshot.load(path).rows, overwrite_hand_edits=overwrite_hand_edits
+    )
 
     if apply:
         db.session.commit()
     else:
         db.session.rollback()
-    return {"restored": restored, "missing": missing, "applied": bool(apply)}
+    outcome["applied"] = bool(apply)
+    return outcome
 
 
 def main() -> None:
@@ -262,13 +313,28 @@ def main() -> None:
         "--no-backup", action="store_true", help="do not write a snapshot"
     )
     parser.add_argument("--restore", default="", help="put a snapshot back")
+    parser.add_argument(
+        "--overwrite-hand-edits",
+        action="store_true",
+        help="with --restore: also put back rows edited after the repair, and "
+        "accept a legacy snapshot that cannot tell such rows apart — every "
+        "differing row is overwritten, hand edits included",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     app = create_app()
     with app.app_context():
         if args.restore:
-            print(json.dumps(restore(args.restore, apply=args.apply), indent=2))
+            try:
+                outcome = restore(
+                    args.restore,
+                    apply=args.apply,
+                    overwrite_hand_edits=args.overwrite_hand_edits,
+                )
+            except score_snapshot.SnapshotError as exc:
+                raise SystemExit(str(exc)) from exc
+            print(json.dumps(outcome, indent=2))
             return
         outcome = repair(
             apply=args.apply, snapshot_path=args.snapshot, backup=not args.no_backup

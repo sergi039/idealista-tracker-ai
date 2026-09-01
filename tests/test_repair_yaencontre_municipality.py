@@ -16,7 +16,15 @@ What these tests pin:
   from this string and moving a row changes the neighbours it was measured
   against;
 * the snapshot carries the name beside the scores, and `restore` puts both
-  back and leaves a row that no longer differs alone.
+  back and leaves a row that no longer differs alone;
+* the snapshot also records what the repair *wrote* (SNAPSHOT-001), so
+  `restore` is a real compare-and-swap: a name set by hand after the repair
+  survives it, a rescore does not block it, and a legacy snapshot that cannot
+  tell the two apart is refused unless `--overwrite-hand-edits` is said out
+  loud — and then every overwritten row is named.
+* the swap is the write (rx round 2 on #528): an edit committed between the
+  restore's read and its write fails the conditional UPDATE and is skipped
+  and named, never overwritten.
 """
 
 import json
@@ -24,12 +32,14 @@ import pathlib
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import text
 
 from app import create_app, db
 from models import Property, SearchProfile
 from services.property_scoring_service import PropertyScoringService
 from tests import setup_test_environment
 from utils import repair_yaencontre_municipality as repair_tool
+from utils import score_snapshot
 
 YAE = "https://www.yaencontre.com/venta/casa/inmueble-45358-112353204"
 OTHER_PORTAL = "https://www.fotocasa.es/es/comprar/vivienda/vigo/teis/190540646/d"
@@ -223,6 +233,222 @@ def test_the_snapshot_carries_the_name_and_restore_puts_both_back(app, tmp_path)
     back = db.session.get(Property, prop.id)
     assert back.municipality == "Teis en Vigo"
     assert back.score_total == Decimal("61.75")
+
+
+def _legacy_copy(path, target):
+    """The exact shape of the 2026-08-31 production snapshot: before-state only.
+
+    Built by stripping the `repaired` record off a real snapshot rather than by
+    hand, so the fixture cannot drift from what the tool writes.
+    """
+    payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    for row in payload["scores"]:
+        del row["repaired"]
+    target.write_text(json.dumps(payload), encoding="utf-8")
+    return str(target)
+
+
+def test_the_snapshot_records_what_the_repair_wrote(app, tmp_path):
+    """The `repaired` record is read off the live session after the mutation,
+    so recorded == written by construction — this pins that it really is the
+    written value and nothing else."""
+    _row(
+        app,
+        title="Casa adosada en venta en calle Rosa, Teis en Vigo",
+        municipality="Teis en Vigo",
+    )
+
+    path = str(tmp_path / "snap.json")
+    repair_tool.repair(apply=True, snapshot_path=path, backup=True)
+
+    payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    assert payload["scores"][0]["repaired"] == {"municipality": "Vigo"}
+
+
+def test_a_name_set_by_hand_after_the_repair_survives_restore(app, tmp_path):
+    """The SNAPSHOT-001 defect: the old restore overwrote exactly this row.
+
+    Against a before-state snapshot, a row still carrying the repair's write
+    and one hand-edited to a third value both `differ`, so the no-op check the
+    docstring called compare-and-swap protected neither. The CAS compares the
+    row against what the repair *wrote* and leaves the edited row alone,
+    naming it.
+    """
+    prop = _row(
+        app,
+        title="Casa adosada en venta en calle Rosa, Teis en Vigo",
+        municipality="Teis en Vigo",
+    )
+    path = str(tmp_path / "snap.json")
+    repair_tool.repair(apply=True, snapshot_path=path, backup=True)
+
+    db.session.expire_all()
+    edited = db.session.get(Property, prop.id)
+    assert edited.municipality == "Vigo"
+    edited.municipality = "Redondela"  # the owner corrected it by hand
+    db.session.commit()
+
+    outcome = repair_tool.restore(path, apply=True)
+
+    assert outcome["restored"] == 0
+    assert outcome["skipped_edited"] == [prop.id]
+    db.session.expire_all()
+    assert db.session.get(Property, prop.id).municipality == "Redondela"
+
+
+def test_an_edit_committed_between_the_check_and_the_write_survives_restore(
+    app, tmp_path, monkeypatch
+):
+    """rx round 2's BLOCKER on #528: the first CAS checked an ORM object and
+    then wrote unconditionally, so a hand edit another session committed
+    between the two was overwritten without the flag. The swap itself is
+    conditional now — `UPDATE ... WHERE municipality IS <what the repair
+    wrote>` — and a write that matches no row is a skip, named in the same
+    list as a pre-check miss.
+
+    SQLite observes no row lock, so the race is staged where it happens: the
+    check passes, and a raw UPDATE on the same connection stands in for the
+    concurrent commit before the write is issued.
+    """
+    prop = _row(
+        app,
+        title="Casa adosada en venta en calle Rosa, Teis en Vigo",
+        municipality="Teis en Vigo",
+    )
+    prop.score_total = Decimal("61.75")
+    db.session.commit()
+    path = str(tmp_path / "snap.json")
+    repair_tool.repair(apply=True, snapshot_path=path, backup=True)
+
+    db.session.expire_all()
+    repaired = db.session.get(Property, prop.id)
+    assert repaired.municipality == "Vigo"
+    score_after_repair = repaired.score_total
+    assert score_after_repair != Decimal("61.75"), "the repair must have rescored"
+
+    real_check = score_snapshot.edited_since_repair
+
+    def check_then_lose_the_race(current, row):
+        edited = real_check(current, row)
+        assert edited == {}, "the check must pass for the race to be what is tested"
+        db.session.execute(
+            text("UPDATE properties SET municipality = :name WHERE id = :id"),
+            {"name": "Redondela", "id": row["id"]},
+        )
+        return edited
+
+    monkeypatch.setattr(score_snapshot, "edited_since_repair", check_then_lose_the_race)
+
+    outcome = repair_tool.restore(path, apply=True)
+
+    assert outcome["restored"] == 0
+    assert outcome["skipped_edited"] == [prop.id]
+    db.session.expire_all()
+    row = db.session.get(Property, prop.id)
+    assert row.municipality == "Redondela"
+    assert row.score_total == score_after_repair, (
+        "nothing was put back, scores included"
+    )
+
+
+def test_a_later_rescore_does_not_block_the_restore(app, tmp_path):
+    """The trap: only the repaired column is compared, never the scores.
+
+    A rescore or a weight change legitimately moves `score_total` without
+    anybody touching the name; a CAS that compared the score columns would
+    refuse this correct restore.
+    """
+    prop = _row(
+        app,
+        title="Casa adosada en venta en calle Rosa, Teis en Vigo",
+        municipality="Teis en Vigo",
+    )
+    prop.score_total = Decimal("61.75")
+    db.session.commit()
+
+    path = str(tmp_path / "snap.json")
+    repair_tool.repair(apply=True, snapshot_path=path, backup=True)
+
+    db.session.expire_all()
+    rescored = db.session.get(Property, prop.id)
+    rescored.score_total = Decimal("48.25")  # a weight change moved it since
+    db.session.commit()
+
+    outcome = repair_tool.restore(path, apply=True)
+
+    assert outcome["restored"] == 1
+    assert outcome["skipped_edited"] == []
+    db.session.expire_all()
+    back = db.session.get(Property, prop.id)
+    assert back.municipality == "Teis en Vigo"
+    assert back.score_total == Decimal("61.75")
+
+
+def test_a_legacy_snapshot_is_refused_and_says_why(app, tmp_path):
+    """The production file of 2026-08-31 holds only the before-state, in which
+    'still the repair's write' and 'hand-edited since' are indistinguishable —
+    restoring it can only overwrite both, so it is refused by default."""
+    prop = _row(
+        app,
+        title="Casa adosada en venta en calle Rosa, Teis en Vigo",
+        municipality="Teis en Vigo",
+    )
+    path = str(tmp_path / "snap.json")
+    repair_tool.repair(apply=True, snapshot_path=path, backup=True)
+    legacy = _legacy_copy(path, tmp_path / "legacy.json")
+
+    with pytest.raises(score_snapshot.SnapshotError, match="cannot be told apart"):
+        repair_tool.restore(legacy, apply=True)
+
+    db.session.expire_all()
+    assert db.session.get(Property, prop.id).municipality == "Vigo"
+
+
+def test_the_flag_restores_a_legacy_snapshot_and_names_what_it_overwrote(app, tmp_path):
+    """`--overwrite-hand-edits` is the out-loud way past the refusal, and every
+    row it overwrites blind is enumerated — an overwrite nobody can list
+    afterwards is half the defect back."""
+    prop = _row(
+        app,
+        title="Casa adosada en venta en calle Rosa, Teis en Vigo",
+        municipality="Teis en Vigo",
+    )
+    path = str(tmp_path / "snap.json")
+    repair_tool.repair(apply=True, snapshot_path=path, backup=True)
+    legacy = _legacy_copy(path, tmp_path / "legacy.json")
+
+    db.session.expire_all()
+    edited = db.session.get(Property, prop.id)
+    edited.municipality = "Redondela"  # the hand edit the flag agrees to lose
+    db.session.commit()
+
+    outcome = repair_tool.restore(legacy, apply=True, overwrite_hand_edits=True)
+
+    assert outcome["restored"] == 1
+    assert outcome["overwritten_without_record"] == [prop.id]
+    db.session.expire_all()
+    assert db.session.get(Property, prop.id).municipality == "Teis en Vigo"
+
+
+def test_a_refused_snapshot_write_leaves_no_repair_pending(app, tmp_path):
+    """rx round 1, HIGH: the snapshot is now written after the session
+    mutations, and `score_snapshot.write` refuses an existing path with a
+    catchable SystemExit. A caller surviving that exception must not be able
+    to commit a repair whose rollback point was never written."""
+    prop = _row(
+        app,
+        title="Casa adosada en venta en calle Rosa, Teis en Vigo",
+        municipality="Teis en Vigo",
+    )
+    path = tmp_path / "snap.json"
+    path.write_text("{}", encoding="utf-8")  # the path is already taken
+
+    with pytest.raises(SystemExit, match="refusing to overwrite"):
+        repair_tool.repair(apply=True, snapshot_path=str(path), backup=True)
+    db.session.commit()  # the caller that survives and commits anyway
+
+    db.session.expire_all()
+    assert db.session.get(Property, prop.id).municipality == "Teis en Vigo"
 
 
 def test_restore_is_a_dry_run_by_default(app, tmp_path):
