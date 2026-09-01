@@ -35,6 +35,8 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from sqlalchemy import Update, update
+
 from app import db
 from models import Property, SearchProfile
 
@@ -64,6 +66,12 @@ CLASSIFICATION_COLUMNS: Tuple[str, ...] = (
 # restored the name without the scores it produced would put back a value
 # score computed against a different set of neighbours.
 LOCATION_COLUMNS: Tuple[str, ...] = ("municipality",)
+# Keys a snapshot row may carry that are not columns of the model, and must
+# therefore never be compared against one or written onto one. "id" names the
+# row; "repaired" records what a repair wrote into the columns it set
+# (`repaired_state` below), which is what lets `cas_restore` tell "still the
+# repair's write" from "hand-edited since".
+NON_COLUMN_KEYS: Tuple[str, ...] = ("id", "repaired")
 
 
 class SnapshotError(Exception):
@@ -143,7 +151,7 @@ def parse_row(row: Any) -> Dict[str, Any]:
         raise SnapshotError(f"Snapshot row has no integer id: {row!r}")
 
     known = {
-        "id",
+        *NON_COLUMN_KEYS,
         *SCORE_COLUMNS,
         *JSON_COLUMNS,
         *CLASSIFICATION_COLUMNS,
@@ -173,15 +181,73 @@ def parse_row(row: Any) -> Dict[str, Any]:
                     f"Row {row_id}: {column} is not JSON data: {type(value).__name__}"
                 )
             parsed[column] = value
-    if len(parsed) == 1:
+    if "repaired" in row:
+        parsed["repaired"] = _parse_repaired(row["repaired"], row_id)
+        # The record must cover exactly the repair-settable columns this row
+        # restores. A record covering less leaves the rest to be overwritten
+        # CAS-unchecked — an rx review reproduced that: guard only
+        # `property_category`, hand-edit `property_subtype`, and the restore
+        # overwrites the edit without the flag. A record covering more would
+        # skip a row over drift in a column the restore does not even touch,
+        # which is the guard-too-wide refusing correct restores.
+        restorable = {
+            column
+            for column in CLASSIFICATION_COLUMNS + LOCATION_COLUMNS
+            if column in parsed
+        }
+        unguarded = sorted(restorable - set(parsed["repaired"]))
+        if unguarded:
+            raise SnapshotError(
+                f"Row {row_id}: 'repaired' does not cover "
+                f"{', '.join(unguarded)} — what the record leaves unguarded, "
+                "the restore would overwrite unchecked"
+            )
+        beyond = sorted(set(parsed["repaired"]) - restorable)
+        if beyond:
+            raise SnapshotError(
+                f"Row {row_id}: 'repaired' guards {', '.join(beyond)}, which "
+                "this row does not restore — drift there would wrongly block "
+                "a correct restore"
+            )
+    if not any(key not in NON_COLUMN_KEYS for key in parsed):
         raise SnapshotError(f"Row {row_id} restores nothing: no columns in it")
     return parsed
+
+
+def _parse_repaired(value: Any, row_id: Any) -> Dict[str, Optional[str]]:
+    """Validate one row's record of what the repair wrote.
+
+    Only the columns a repair sets are legal in it — the score columns are
+    refused even though the row itself carries them, because a rescore or a
+    weight change legitimately moves a score without anybody touching the
+    repaired column, and a compare-and-swap over the scores would refuse
+    correct restores. An empty record is refused too: it would pass every
+    comparison vacuously, which is the guard removed rather than narrowed.
+    """
+    if not isinstance(value, dict) or not value:
+        raise SnapshotError(
+            f"Row {row_id}: 'repaired' is not a record of what the repair wrote"
+        )
+    allowed = set(CLASSIFICATION_COLUMNS + LOCATION_COLUMNS)
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise SnapshotError(
+            f"Row {row_id}: 'repaired' may only carry the columns a repair "
+            f"sets, not {', '.join(unknown)}"
+        )
+    for column, written in value.items():
+        if written is not None and not isinstance(written, str):
+            raise SnapshotError(
+                f"Row {row_id}: repaired {column} is not a name: "
+                f"{type(written).__name__}"
+            )
+    return dict(value)
 
 
 def differs(prop: Property, parsed: Dict[str, Any]) -> bool:
     """Would applying this row change the row that is there now?"""
     for column, value in parsed.items():
-        if column == "id":
+        if column in NON_COLUMN_KEYS:
             continue
         current = getattr(prop, column)
         if column in SCORE_COLUMNS:
@@ -197,8 +263,270 @@ def differs(prop: Property, parsed: Dict[str, Any]) -> bool:
 def apply_row(prop: Property, parsed: Dict[str, Any]) -> None:
     """Write one parsed row onto a property. Nothing here can fail."""
     for column, value in parsed.items():
-        if column != "id":
+        if column not in NON_COLUMN_KEYS:
             setattr(prop, column, value)
+
+
+def repaired_state(prop: Property, columns: Sequence[str]) -> Dict[str, Optional[str]]:
+    """What the repair left in the columns it set, read off the live session.
+
+    Recorded beside what it overwrote — between the mutation and the commit, so
+    the record equals the write by construction rather than by a second copy of
+    the repair's rule staying in sync with the first. This is the half a
+    compare-and-swap restore needs: with only the before-state, "still the
+    repair's write" and "hand-edited since" are indistinguishable.
+
+    Score columns are refused here for the same reason `_parse_repaired`
+    refuses them on the way back in.
+    """
+    unknown = [
+        name
+        for name in columns
+        if name not in CLASSIFICATION_COLUMNS + LOCATION_COLUMNS
+    ]
+    if unknown:
+        raise SnapshotError(f"Not a column a repair sets: {', '.join(sorted(unknown))}")
+    return {column: getattr(prop, column) for column in columns}
+
+
+def edited_since_repair(prop: Property, parsed: Dict[str, Any]) -> Dict[str, Any]:
+    """The repaired columns whose current value is not what the repair left.
+
+    Empty means the row still carries the repair's write (or the row has no
+    'repaired' record at all — a legacy snapshot, which `cas_restore` handles
+    before this answer is trusted). Each entry maps the column to
+    (current value, what the repair wrote).
+    """
+    expected = parsed.get("repaired") or {}
+    return {
+        column: (getattr(prop, column), written)
+        for column, written in expected.items()
+        if getattr(prop, column) != written
+    }
+
+
+def guarded_columns(parsed: Dict[str, Any]) -> Tuple[str, ...]:
+    """The columns a restore of this row compares before it writes.
+
+    A CAS-capable row guards exactly what its 'repaired' record covers, which
+    `parse_row` has already required to be exactly the repair-settable columns
+    the row restores; a legacy row has no record and guards whatever of those
+    columns it carries. Never a score column, for `_parse_repaired`'s reason.
+    """
+    if "repaired" in parsed:
+        return tuple(parsed["repaired"])
+    return tuple(
+        column
+        for column in CLASSIFICATION_COLUMNS + LOCATION_COLUMNS
+        if column in parsed
+    )
+
+
+def swap_statement(
+    row_id: int, expected: Dict[str, Any], parsed: Dict[str, Any]
+) -> Update:
+    """The compare-and-swap itself: one UPDATE that writes the row only while
+    every guarded column still holds the value it is expected to.
+
+    The check and the write used to be two steps — a read of the ORM object,
+    then an unconditional flush — and an rx review reproduced what that
+    allows: another session commits a hand edit between them, and the restore
+    overwrites it without the flag. So the comparison is in the statement's
+    own WHERE, where no commit can land between it and the write, and a
+    rowcount of 0 is the swap failing rather than an error. It is NULL-safe on
+    both engines: SQLAlchemy renders `is_not_distinct_from` as
+    `IS NOT DISTINCT FROM` on PostgreSQL and as `IS` on SQLite, that engine's
+    null-safe equality, so a recorded None matches a stored NULL and nothing
+    else — `=` would match nothing at all against a NULL and turn every such
+    row into a false skip.
+    """
+    unknown = sorted(set(expected) - set(CLASSIFICATION_COLUMNS + LOCATION_COLUMNS))
+    if unknown:
+        raise SnapshotError(f"Not a column a repair sets: {', '.join(unknown)}")
+    statement = update(Property).where(Property.id == row_id)
+    for column in sorted(expected):
+        statement = statement.where(
+            getattr(Property, column).is_not_distinct_from(expected[column])
+        )
+    return statement.values(
+        {
+            column: value
+            for column, value in parsed.items()
+            if column not in NON_COLUMN_KEYS
+        }
+    )
+
+
+def _swap(parsed: Dict[str, Any], expected: Dict[str, Any]) -> int:
+    """Issue the swap; the rowcount says whether the row was still as expected.
+
+    `synchronize_session=False` because the caller expires the object itself:
+    the identity-map copy is stale the moment this runs, whichever way it went.
+    """
+    result = db.session.execute(
+        swap_statement(parsed["id"], expected, parsed),
+        execution_options={"synchronize_session": False},
+    )
+    return result.rowcount
+
+
+def _skip_moved(
+    parsed: Dict[str, Any],
+    expected: Dict[str, Any],
+    missing: List[int],
+    skipped_edited: List[int],
+) -> None:
+    """The swap matched no row: it moved after it was read, or it is gone.
+
+    Named in the same list as a pre-check miss, because it is the same fact
+    observed later — the only difference is which of the two reads saw it.
+    """
+    row_id = parsed["id"]
+    current = db.session.get(Property, row_id)
+    if current is None:
+        missing.append(row_id)
+        logger.warning("Property %s vanished between the check and the write", row_id)
+        return
+    moved = {
+        column: (getattr(current, column), value)
+        for column, value in expected.items()
+        if getattr(current, column) != value
+    }
+    skipped_edited.append(row_id)
+    logger.warning(
+        "Property %s moved between the check and the write (%s); skipping "
+        "rather than overwriting somebody's work",
+        row_id,
+        "; ".join(
+            f"{column} is now {now!r} where {then!r} was expected"
+            for column, (now, then) in sorted(moved.items())
+        )
+        or "and has since returned to what was expected — re-run to restore it",
+    )
+
+
+def cas_restore(
+    parsed_rows: Iterable[Dict[str, Any]], overwrite_hand_edits: bool = False
+) -> Dict[str, Any]:
+    """Put repair-snapshot rows back, refusing to overwrite somebody's work.
+
+    Compare-and-swap in `utils/import_review_notes.restore`'s shape, with the
+    comparison made by the write itself: each row goes back through one
+    UPDATE conditional on its repaired columns still holding what the repair
+    wrote (`swap_statement`), so an edit another session commits after this
+    one read the row fails the swap instead of being overwritten — the
+    read-then-unconditional-flush an rx review reproduced losing exactly that
+    edit. A row whose swap matched nothing is *named and left alone*, in the
+    same list as one the read already found edited. Only the repaired columns
+    are compared — the scores the snapshot also carries move legitimately
+    under a rescore or a weight change, and a guard over them would refuse
+    correct restores.
+
+    A row with no 'repaired' record is a legacy snapshot's, in which "still
+    the repair's write" and "hand-edited since" cannot be told apart — both
+    simply differ from the before-state. Restoring one overwrites hand edits
+    it cannot see, so a legacy row is refused outright unless
+    `overwrite_hand_edits` says to do exactly that. The flag also overwrites
+    the rows a CAS-capable snapshot would have skipped.
+
+    Every row the flag let through is enumerated in the result, in two lists
+    because they are two different claims: `overwritten_edited` rows were
+    *measured* as edited; `overwritten_without_record` rows carried no record
+    to measure against. The flag's own swap is keyed on the values this
+    restore read, so what it enumerates as overwritten is what the write
+    replaced; a row that moved between that read and the write is skipped and
+    named, never overwritten unseen. The caller owns the transaction and
+    commits.
+    """
+    rows = list(parsed_rows)
+    legacy = [row["id"] for row in rows if "repaired" not in row]
+    if legacy and not overwrite_hand_edits:
+        raise SnapshotError(
+            f"{len(legacy)} row(s) carry no record of what the repair wrote "
+            f"(ids {', '.join(str(row_id) for row_id in legacy[:10])}"
+            f"{', ...' if len(legacy) > 10 else ''}): this snapshot predates "
+            "the compare-and-swap record, so a row still holding the repair's "
+            "write and one hand-edited since cannot be told apart, and "
+            "restoring it overwrites both. Pass --overwrite-hand-edits to "
+            "restore it anyway, hand edits included."
+        )
+
+    restored = 0
+    missing: List[int] = []
+    skipped_edited: List[int] = []
+    overwritten_edited: List[int] = []
+    overwritten_without_record: List[int] = []
+    for row in rows:
+        prop = db.session.get(Property, row["id"])
+        if prop is None:
+            missing.append(row["id"])
+            logger.warning("Property %s from snapshot no longer exists", row["id"])
+            continue
+        # Read the row as it is now, not as this session last saw it. The lock
+        # is PostgreSQL's and holds until the caller commits; SQLite observes
+        # no row lock at all — which is why the conditional write below, and
+        # not this read, is what makes the swap atomic on both engines.
+        db.session.refresh(prop, with_for_update=True)
+        if not differs(prop, row):
+            continue
+        edited = edited_since_repair(prop, row)
+        if edited and not overwrite_hand_edits:
+            skipped_edited.append(row["id"])
+            logger.warning(
+                "Property %s: %s; skipping rather than overwriting somebody's work",
+                row["id"],
+                "; ".join(
+                    f"{column} is {current!r} where the repair wrote {written!r}"
+                    for column, (current, written) in sorted(edited.items())
+                ),
+            )
+            continue
+        if overwrite_hand_edits:
+            # The flag overwrites on purpose, but what it enumerates afterwards
+            # has to be what the write really replaced: so its swap is keyed on
+            # the values just read, and a row that moved in between is skipped
+            # and named rather than overwritten unseen and reported as the
+            # older value.
+            expected = {
+                column: getattr(prop, column) for column in guarded_columns(row)
+            }
+        else:
+            expected = row["repaired"]
+        swapped = _swap(row, expected)
+        # The identity-map copy is stale either way now.
+        db.session.expire(prop)
+        if swapped != 1:
+            _skip_moved(row, expected, missing, skipped_edited)
+            continue
+        if edited:
+            overwritten_edited.append(row["id"])
+            logger.warning(
+                "Property %s: overwriting %s, because --overwrite-hand-edits says to",
+                row["id"],
+                "; ".join(
+                    f"{column} {current!r} (the repair wrote {written!r})"
+                    for column, (current, written) in sorted(edited.items())
+                ),
+            )
+        elif "repaired" not in row:
+            overwritten_without_record.append(row["id"])
+            logger.warning(
+                "Property %s: no record of what the repair wrote; overwriting %s "
+                "blind because --overwrite-hand-edits says to",
+                row["id"],
+                "; ".join(
+                    f"{column} {value!r}" for column, value in sorted(expected.items())
+                )
+                or "the scores",
+            )
+        restored += 1
+    return {
+        "restored": restored,
+        "missing": missing,
+        "skipped_edited": skipped_edited,
+        "overwritten_edited": overwritten_edited,
+        "overwritten_without_record": overwritten_without_record,
+    }
 
 
 def load(path: str) -> Snapshot:
