@@ -16,9 +16,11 @@ from services.listing_verification import read_verdict as listing_verdict
 from utils.api_errors import json_http_error
 from utils.google_spend import CAP_ONE_LAND, CAP_ONE_PROPERTY, authorized_spend
 from utils.listing_search import listing_search_clause
+from utils.listing_filters import FilterArgs
 from services import advertiser
 from services import owner_review
 from services import subscription_criteria
+from services import listing_attribute_filters
 from services import taste_service
 from utils.listing_source import source_filter_clause
 from utils.municipality_grouping import municipality_filter_clause
@@ -1720,18 +1722,32 @@ def get_properties():
         # (UNIVERSE-001).
         raw_profile_id = request.args.get("profile_id")
         profile_id = request.args.get("profile_id", type=int)
-        category_filter = (request.args.get("category") or "").strip()
-        subtype_filter = (request.args.get("subtype") or "").strip()
-        municipality_filter = (request.args.get("municipality") or "").strip()
-        search_query = (request.args.get("search") or "").strip()
-        favorites_only = (request.args.get("favorites") or "").strip().lower() in (
+
+        # Filters are read through the record of the read
+        # (`utils/listing_filters.FilterArgs`), for the reason that module
+        # gives about links: a hand-maintained list of "the parameters this
+        # endpoint honors" goes stale one filter at a time, and this endpoint
+        # is where that already happened twice — `criteria` accepted and
+        # ignored until #519, and then `sea_view`, `sea_dist`, `build`,
+        # `measured` and `inv_metr` accepted and ignored until the closing
+        # audit of that same work measured `?profile_id=24&sea_view=likely`
+        # answering `scope.total: 393` against a page showing 18 (production,
+        # 2026-09-01). What was read is reported in `scope.filters_read`, and
+        # what arrived without being read in `scope.params_ignored` — both
+        # measured off the record, so neither can go stale silently.
+        filters = FilterArgs(request.args)
+        category_filter = (filters.get("category") or "").strip()
+        subtype_filter = (filters.get("subtype") or "").strip()
+        municipality_filter = (filters.get("municipality") or "").strip()
+        search_query = (filters.get("search") or "").strip()
+        favorites_only = (filters.get("favorites") or "").strip().lower() in (
             "1",
             "true",
             "on",
             "yes",
         )
 
-        hide_removed_raw = (request.args.get("hide_removed") or "").strip().lower()
+        hide_removed_raw = (filters.get("hide_removed") or "").strip().lower()
         hide_removed = hide_removed_raw not in ("0", "false", "off", "no")
 
         # The subscription's own criteria. This endpoint ACCEPTED this
@@ -1742,7 +1758,7 @@ def get_properties():
         # which is #445. The raw spelling is kept beside the mode for the same
         # reason `profile_id` keeps its own: `criteria=failing` is not a mode,
         # and the reading it falls back to is the one that HIDES rows.
-        criteria_raw = request.args.get("criteria")
+        criteria_raw = filters.get("criteria", None)
         criteria_mode, criteria_recognized = subscription_criteria.read_filter_mode(
             criteria_raw
         )
@@ -1788,12 +1804,12 @@ def get_properties():
                 query = query.filter(Property.property_subtype == subtype_filter)
         if municipality_filter:
             query = query.filter(municipality_filter_clause(municipality_filter))
-        source_clause = source_filter_clause(Property, request.args.get("source", ""))
+        source_clause = source_filter_clause(Property, filters.get("source"))
         if source_clause is not None:
             query = query.filter(source_clause)
         # Who is selling -- the same clause the page and the CSV use.
         advertiser_clause = advertiser.filter_clause(
-            Property, request.args.get("advertiser", "")
+            Property, filters.get("advertiser")
         )
         if advertiser_clause is not None:
             query = query.filter(advertiser_clause)
@@ -1806,12 +1822,12 @@ def get_properties():
         # And one taste-profile version, for the same reason (#498).
         taste_version = taste_service.current_profile_version()
         verdict_clause = owner_review.decision_filter_clause(
-            Property, request.args.get("verdict", "")
+            Property, filters.get("verdict")
         )
         if verdict_clause is not None:
             query = query.filter(verdict_clause)
         action_clause = owner_review.action_filter_clause(
-            Property, request.args.get("action", ""), review_today
+            Property, filters.get("action"), review_today
         )
         if action_clause is not None:
             query = query.filter(action_clause)
@@ -1826,6 +1842,26 @@ def get_properties():
 
         if hide_removed:
             query = query.filter(Property.listing_status.notin_(["removed", "sold"]))
+
+        # The five attribute filters the page applies — `inv_metr`,
+        # `sea_view`, `sea_dist`, `build`, `measured` — through the same
+        # readings, from the module they now live in
+        # (services/listing_attribute_filters.py). This endpoint accepted all
+        # five and applied none, which is #445 in the endpoint #519 already
+        # fixed one parameter of. A non-empty value the reading does not
+        # recognise is *measured* rather than spell-checked: every helper
+        # hands back the same query object for one, and that identity is what
+        # the note below is built from — the #512 lesson, a measurement in
+        # place of a test of the spelling.
+        unrecognized_filter_values = []
+        for name, apply_attribute_filter in listing_attribute_filters.ATTRIBUTE_FILTERS:
+            raw_value = (filters.get(name) or "").strip()
+            if not raw_value:
+                continue
+            narrowed = apply_attribute_filter(query, Property, raw_value)
+            if narrowed is query:
+                unrecognized_filter_values.append((name, raw_value))
+            query = narrowed
 
         # The same clauses `/properties` narrows with, from the same module.
         # Applied BEFORE `total` and the subscription mix below, or the scope
@@ -2037,6 +2073,38 @@ def get_properties():
                 "no verdict and is in none of these three modes."
             )
 
+        # A value none of this endpoint's readings recognise narrowed nothing,
+        # and the caller cannot see that from the rows: `sea_view=banana`
+        # answers the unfiltered set, which reads as "banana matched all of
+        # them". Named with the vocabulary the filter does read, the shape the
+        # `criteria` note above already has.
+        for name, raw_value in unrecognized_filter_values:
+            accepted = listing_attribute_filters.ATTRIBUTE_FILTER_VOCABULARY[name]
+            notes.append(
+                f"{name}={raw_value!r} is not a value this filter reads; it did "
+                f"not narrow the answer. It takes: {', '.join(accepted)}."
+            )
+
+        # Parameters that arrived and were read by nothing here. `profile_id`
+        # and the paging/sorting parameters are this endpoint's own and are
+        # answered above; everything else unread is disclosed rather than
+        # silently dropped — a caller porting a /properties URL sends `page`
+        # and `per_page`, and an answer that ignores them without saying so
+        # reads as page 2.
+        own_params = {"profile_id", "sort", "order", "limit", "offset", "full"}
+        params_ignored = sorted(
+            key
+            for key in request.args.keys()
+            if key not in own_params and key not in filters.names_read()
+        )
+        if params_ignored:
+            notes.append(
+                f"parameter(s) not read by this endpoint: "
+                f"{', '.join(params_ignored)}. They did not narrow the answer; "
+                "the filters this endpoint reads are listed in "
+                "`scope.filters_read`."
+            )
+
         population = Population(
             label="one_subscription"
             if profile_id is not None
@@ -2078,6 +2146,19 @@ def get_properties():
                     # and one fact under two names in one object is what this
                     # block exists to stop happening between objects.
                     "offset": offset,
+                    # Every filter parameter this endpoint consulted for THIS
+                    # answer, from the record of the reads themselves — not a
+                    # hand-maintained list, which is how the five above went
+                    # missing while the scope block read as complete. A name
+                    # here with an unrecognised value is called out in
+                    # `notes`; a parameter absent from here AND from
+                    # `params_ignored` is one this endpoint answers itself
+                    # (profile_id, sort/order, limit/offset, full).
+                    "filters_read": sorted(filters.names_read()),
+                    # What arrived and was read by nothing. Empty means every
+                    # parameter sent was either a filter above or one of this
+                    # endpoint's own.
+                    "params_ignored": params_ignored,
                 },
                 "properties": properties_data,
             }

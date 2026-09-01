@@ -33,6 +33,15 @@ from models import Land, Property, SearchProfile
 from app import db, limiter
 from services import sea_view_service
 from services import subscription_criteria
+from services.listing_attribute_filters import (
+    filter_by_investment_rating,
+    filter_by_land_classification,
+    filter_by_measured,
+    filter_by_sea_distance,
+    filter_by_sea_view,
+    investment_rating_rank,
+    score_coverage_share_expr,
+)
 from services import taste_service
 from services.coordinate_quality import shared_coordinate_peers
 from services import advertiser
@@ -106,10 +115,6 @@ MAX_IMPORT_URLS = 100
 # A bare /properties must open on the freshest listings, so the mode default
 # only applies once the user actually picks a mode.
 DEFAULT_PROPERTY_SORT = "created_at"
-
-# Investment ratings the AI analysis emits, ordered worst to best. The rank is
-# what "sort by Inv. Metr." orders on; the keys are what the filter accepts.
-INVESTMENT_RATING_ORDER = ("BELOW", "MODERATE", "GOOD", "EXCELLENT")
 
 # What the Type / Subtype filters send for "classified as nothing at all".
 # A query-string sentinel, never a stored value.
@@ -284,22 +289,6 @@ def _partial_save_message(kind: str, kept: int, dropped: list) -> tuple:
     )
 
 
-def _investment_rating_expr(model):
-    """Upper-cased `ai_analysis.rental_market_analysis.investment_rating`.
-
-    Shared by /lands and /properties, and by both CSV exports, so the filter
-    and the sort cannot drift apart between the two models.
-    """
-    return func.upper(
-        func.coalesce(
-            model.ai_analysis["rental_market_analysis"][
-                "investment_rating"
-            ].as_string(),
-            "",
-        )
-    )
-
-
 def _nearest_beach_minutes(model):
     """Drive minutes to the nearest measured beach; NULL without one.
 
@@ -417,171 +406,6 @@ def _split_by_criteria(query, ctx, raw_value):
         [prop for prop in rows if prop.id in kept_ids],
         [prop for prop in rows if prop.id not in kept_ids],
     )
-
-
-def _filter_by_investment_rating(query, model, raw_value):
-    """Keep only rows whose investment rating starts with `raw_value`."""
-    wanted = (raw_value or "").strip().upper()
-    if wanted not in INVESTMENT_RATING_ORDER:
-        return query
-    return query.filter(_investment_rating_expr(model).like(f"{wanted}%"))
-
-
-def _investment_rating_rank(model):
-    """Sortable rank for the investment rating; NULL when there is none."""
-    rating = _investment_rating_expr(model)
-    return case(
-        *[
-            (rating.like(f"{label}%"), position)
-            for position, label in enumerate(INVESTMENT_RATING_ORDER, start=1)
-        ],
-        else_=None,
-    )
-
-
-# Sea view is a four-state verdict, not a flag -- see services/sea_view_service
-# for why. The filter offers two useful cuts of it: the corroborated rows, and
-# everything geometry or the listing text says is plausible.
-SEA_VIEW_FILTER_VALUES = {
-    "yes": ("yes",),
-    "likely": ("yes", "likely"),
-    # A bookmark from the retired /lands page says sea_view=on and means the
-    # old boolean. Reading it as "yes or likely" is the closest honest
-    # translation of what it used to select.
-    "on": ("yes", "likely"),
-}
-
-
-def _sea_view_state_expr(model):
-    """Effective sea-view state, with the mirrored `Land` boolean folded in.
-
-    Legacy rows keep their flag at enrichment.legacy_land.environment.sea_view.
-    It came from the same weak keyword pass the new verdict replaces, so a
-    legacy `true` reads as `likely` and never as `yes`; a legacy `false` is not
-    evidence of anything and stays absent.
-
-    Only the four known states are recognised at the computed path. Anything
-    else there -- a boolean the pre-verdict environment endpoint might have
-    left behind -- falls through to NULL, which reads as `unknown`: the
-    conservative answer, and the only one both dialects agree on, since a JSON
-    boolean casts to `true` on PostgreSQL and `1` on SQLite.
-    """
-    computed = model.enrichment["environment"]["sea_view"].as_string()
-    legacy = model.enrichment["legacy_land"]["environment"]["sea_view"].as_boolean()
-    return case(
-        (computed.in_(sea_view_service.VALID_STATES), computed),
-        (legacy.is_(True), "likely"),
-        else_=None,
-    )
-
-
-def _score_coverage_share_expr(model):
-    """`scoring.coverage.share` as a float; NULL where it was never recorded.
-
-    #379. Recorded by `PropertyScoringService` from this change on; a row
-    scored before it has no value here and therefore does not pass a
-    "fully measured" filter until it is rescored -- the honest reading, since
-    the SQL cannot re-derive the share the way `score_coverage()` does in
-    Python, and "unknown coverage" must not pass as "full".
-    """
-    return model.scoring["coverage"]["share"].as_float()
-
-
-def _filter_by_measured(query, model, raw_value):
-    """`measured=full` keeps rows whose every enabled criterion answered."""
-    if (raw_value or "").strip().lower() != "full":
-        return query
-    return query.filter(_score_coverage_share_expr(model) >= 0.999)
-
-
-def _filter_by_sea_view(query, model, raw_value):
-    """Keep only rows whose sea-view verdict is in the requested bucket."""
-    wanted = SEA_VIEW_FILTER_VALUES.get((raw_value or "").strip().lower())
-    if not wanted:
-        return query
-    return query.filter(_sea_view_state_expr(model).in_(wanted))
-
-
-# Walking-reach cuts of the sea distance, in metres over the ground at ~5 km/h:
-# 400 m is five minutes, 800 m ten, 1600 m twenty. Straight-line metres, so the
-# real walk is never shorter than the label -- the option text says both.
-SEA_DISTANCE_FILTER_VALUES = {
-    "400": 400.0,
-    "800": 800.0,
-    "1600": 1600.0,
-}
-
-
-def _sea_distance_m_expr(model):
-    """Metres to the coastline as measured; NULL without a measurement.
-
-    Reads the parcel-grade figure first (`distance_m`, written only for a
-    precise coordinate) and falls back to the centroid figure
-    (`origin_distance_m`, what an approximate row's measurement is really
-    about, #358) -- the same two numbers the property page and the plot badge
-    already show, captioned. The two never coexist in one payload
-    (services/sea_distance_service.py writes `distance_m: None` beside
-    `origin_distance_m`), so the coalesce is a fallback, not a preference.
-    JSON null reads as SQL NULL, so a refusal, a measured "no coastline within
-    the radius" and a row nobody measured all stay NULL -- a threshold filter
-    can never read absence as nearness (#98).
-    """
-    return func.coalesce(
-        model.enrichment["sea"]["distance_m"].as_float(),
-        model.enrichment["sea"]["origin_distance_m"].as_float(),
-    )
-
-
-def _filter_by_sea_distance(query, model, raw_value):
-    """Keep only rows measured within the requested distance of the sea.
-
-    Unknown values hand back the *same* query object -- `filter_bar_active`
-    reads object identity, and `sea_dist=banana` must not count as a
-    narrowing that never happened.
-    """
-    threshold = SEA_DISTANCE_FILTER_VALUES.get((raw_value or "").strip())
-    if threshold is None:
-        return query
-    return query.filter(_sea_distance_m_expr(model) <= threshold)
-
-
-# `attributes.land_classification` is a *curated* field: hand-run curation
-# scripts write it from planning documents, portal claims and research sheets,
-# and ingestion deliberately preserves it
-# (tests/test_ingest_preserves_curated_fields.py). Its vocabulary, measured in
-# production rather than invented here:
-#   urbano_solar        - urban/solar, a dwelling may be built now
-#   urbanizable         - buildable only after urbanisation/gestion completes
-#   residential_claimed - the seller claims buildability; no document seen
-# A row with no value was never curated -- it is offered as its own bucket and
-# never folded into any of the three (#98: absence is not a classification).
-LAND_CLASSIFICATION_FILTER_VALUES = {
-    "solar": ("urbano_solar",),
-    "urbanizable": ("urbanizable",),
-    "claimed": ("residential_claimed",),
-}
-
-
-def _land_classification_expr(model):
-    """The curated classification as text; NULL where nobody curated one."""
-    return model.attributes["land_classification"].as_string()
-
-
-def _filter_by_land_classification(query, model, raw_value):
-    """Keep only rows whose curated buildability matches the request.
-
-    `classified` keeps any curated row (IS NOT NULL rather than an IN-list,
-    so a new vocabulary value is not silently dropped from its own bucket);
-    the named buckets match exactly. Unknown values hand back the same query
-    object, the `filter_bar_active` identity contract.
-    """
-    wanted = (raw_value or "").strip().lower()
-    if wanted == "classified":
-        return query.filter(_land_classification_expr(model).isnot(None))
-    values = LAND_CLASSIFICATION_FILTER_VALUES.get(wanted)
-    if not values:
-        return query
-    return query.filter(_land_classification_expr(model).in_(values))
 
 
 def _map_auto_profile_id(default_profile, profiles, focus_property=None):
@@ -1679,18 +1503,18 @@ def properties():
             query = query.filter(search_clause)
 
         if investment_metrics_filter:
-            query = _filter_by_investment_rating(
+            query = filter_by_investment_rating(
                 query, Property, investment_metrics_filter
             )
 
         if sea_view_filter:
-            query = _filter_by_sea_view(query, Property, sea_view_filter)
+            query = filter_by_sea_view(query, Property, sea_view_filter)
         if sea_distance_filter:
-            query = _filter_by_sea_distance(query, Property, sea_distance_filter)
+            query = filter_by_sea_distance(query, Property, sea_distance_filter)
         if build_filter:
-            query = _filter_by_land_classification(query, Property, build_filter)
+            query = filter_by_land_classification(query, Property, build_filter)
         if measured_filter:
-            query = _filter_by_measured(query, Property, measured_filter)
+            query = filter_by_measured(query, Property, measured_filter)
 
         # Whether the filter bar narrowed anything. Object identity is the
         # honest reading: every applied clause produced a new query object,
@@ -1814,11 +1638,11 @@ def properties():
         # So the same disclosure the two lines above make, from the predicate
         # `measured=full` already filters on -- header and filter cannot
         # disagree. A row whose share was never recorded is NOT counted:
-        # `_score_coverage_share_expr` is NULL there, "unknown coverage must
+        # `score_coverage_share_expr` is NULL there, "unknown coverage must
         # not pass as full" is that helper's own rule, and counting it would
         # be #98 inside the line that exists to prevent #98.
         score_full_basis_count = query.filter(
-            _score_coverage_share_expr(Property) >= 0.999
+            score_coverage_share_expr(Property) >= 0.999
         ).count()
 
         # And for the taste ranking (#498): the version once per request, so
@@ -1860,7 +1684,7 @@ def properties():
             sort_by = default_sort
 
         if sort_by == "investment_metrics":
-            rank = _investment_rating_rank(Property)
+            rank = investment_rating_rank(Property)
             rank_order = rank.asc() if sort_order == "asc" else rank.desc()
             query = query.order_by(
                 rank_order.nullslast(),
@@ -4285,19 +4109,19 @@ def map_view():
         if search_clause is not None:
             query = query.filter(search_clause)
         if investment_metrics_filter:
-            query = _filter_by_investment_rating(
+            query = filter_by_investment_rating(
                 query, Property, investment_metrics_filter
             )
         if sea_view_filter:
-            query = _filter_by_sea_view(query, Property, sea_view_filter)
+            query = filter_by_sea_view(query, Property, sea_view_filter)
         if sea_distance_filter:
-            query = _filter_by_sea_distance(query, Property, sea_distance_filter)
+            query = filter_by_sea_distance(query, Property, sea_distance_filter)
         if build_filter:
-            query = _filter_by_land_classification(query, Property, build_filter)
+            query = filter_by_land_classification(query, Property, build_filter)
         # Same helper and same position as /properties, so one URL cannot
         # describe two sets across the two surfaces (#445).
         if measured_filter:
-            query = _filter_by_measured(query, Property, measured_filter)
+            query = filter_by_measured(query, Property, measured_filter)
 
         # The same criteria reading as the list (#445's rule: a filter one
         # surface keeps and another drops is the regression, one filter over)
@@ -5242,7 +5066,7 @@ def export_csv():
                     )
 
         if investment_metrics_filter:
-            query = _filter_by_investment_rating(query, Land, investment_metrics_filter)
+            query = filter_by_investment_rating(query, Land, investment_metrics_filter)
 
         if sea_view_filter:
             # SQLAlchemy 2.x: .astext removed; use JSON accessors
@@ -5253,7 +5077,7 @@ def export_csv():
 
         # Apply sorting with same logic as main lands route
         if sort_by == "investment_metrics":
-            rank = _investment_rating_rank(Land)
+            rank = investment_rating_rank(Land)
             rank_order = rank.asc() if sort_order == "asc" else rank.desc()
             lands = query.order_by(
                 rank_order.nullslast(),
@@ -5480,21 +5304,21 @@ def export_properties_csv():
             query = query.filter(search_clause)
 
         if investment_metrics_filter:
-            query = _filter_by_investment_rating(
+            query = filter_by_investment_rating(
                 query, Property, investment_metrics_filter
             )
 
         if sea_view_filter:
-            query = _filter_by_sea_view(query, Property, sea_view_filter)
+            query = filter_by_sea_view(query, Property, sea_view_filter)
 
         if sea_distance_filter:
-            query = _filter_by_sea_distance(query, Property, sea_distance_filter)
+            query = filter_by_sea_distance(query, Property, sea_distance_filter)
 
         if build_filter:
-            query = _filter_by_land_classification(query, Property, build_filter)
+            query = filter_by_land_classification(query, Property, build_filter)
 
         if measured_filter:
-            query = _filter_by_measured(query, Property, measured_filter)
+            query = filter_by_measured(query, Property, measured_filter)
 
         # The same criteria reading as the page and the map: an export of the
         # visible list must not smuggle the hidden fails back in, and
@@ -5537,7 +5361,7 @@ def export_properties_csv():
             ),
         }
         if sort_by == "investment_metrics":
-            rank = _investment_rating_rank(Property)
+            rank = investment_rating_rank(Property)
             rank_order = rank.asc() if sort_order == "asc" else rank.desc()
             props = query.order_by(
                 rank_order.nullslast(),

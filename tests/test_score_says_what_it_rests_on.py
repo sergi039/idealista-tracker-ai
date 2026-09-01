@@ -22,7 +22,7 @@ it a disclosure rather than a second wrong number:
 * it reads the **same predicate** `measured=full` filters on, so the header and
   the filter cannot disagree;
 * a row whose share was **never recorded** is not counted as full — that is
-  `_score_coverage_share_expr`'s own rule ("unknown coverage must not pass as
+  `listing_attribute_filters.score_coverage_share_expr`'s own rule ("unknown coverage must not pass as
   full"), and counting it would be #98 inside the line written to prevent #98.
 """
 
