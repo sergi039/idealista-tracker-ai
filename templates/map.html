@@ -47,6 +47,22 @@
             </div>
         {% endif %}
 
+        {# What the default criteria reading kept off this map (closing-audit
+           finding 4): 8 of 157 markers were absent on production 2026-09-01
+           with nothing on the page saying so, and on a map an empty stretch
+           of coast IS the answer being read — "nothing here" (#98's shape).
+           The same one-home line the list draws beside its result count,
+           with the lift in the only control this page has, a link. Rendered
+           only when something WAS hidden: the count is None under every
+           explicit mode and a zero would be noise. #}
+        {% if criteria_hidden_count %}
+            <div class="alert alert-light border py-2 px-3 small text-body-secondary" id="map-criteria-hidden-note"
+                 title="{{ t('criteria_hidden_tooltip') }}">
+                <i class="fas fa-filter me-1"></i>{{ t('criteria_hidden_line')|format(criteria_hidden_count) }}
+                &middot; <a href="{{ criteria_reveal_url }}">{{ t('show_them') }}</a>
+            </div>
+        {% endif %}
+
         {# The caller asked for one listing and the map does not hold it. The
            script below falls back to fitting every marker, which is
            indistinguishable from a map that just did not zoom -- so the page
