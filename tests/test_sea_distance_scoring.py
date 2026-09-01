@@ -24,6 +24,7 @@ from services.property_scoring_service import (
     _resolve_sea_distance_config,
     _sea_distance_score,
 )
+from services.coordinate_quality import TIER_ADDRESS
 from services.sea_distance_service import (
     STATUS_NO_COASTLINE,
     STATUS_NO_COORDINATES,
@@ -135,7 +136,7 @@ def test_measures_distance_to_a_known_segment(app, monkeypatch):
     """A point due east of the segment is measured across the longitude gap."""
     _patch_coastline(monkeypatch, _coast_nodes())
 
-    result = _service().measure(43.61, COAST_LON + 0.01, "precise")
+    result = _service().measure(43.61, COAST_LON + 0.01, "precise", tier=TIER_ADDRESS)
 
     # 0.01 degrees of longitude at 43.61 N: 0.01 * pi/180 * R * cos(lat).
     expected_m = math.radians(0.01) * 6_371_000.0 * math.cos(math.radians(43.61))
@@ -147,8 +148,8 @@ def test_distance_grows_with_separation(app, monkeypatch):
     _patch_coastline(monkeypatch, _coast_nodes())
     service = _service()
 
-    near = service.measure(43.61, COAST_LON + 0.01, "precise")
-    far = service.measure(43.61, COAST_LON + 0.05, "precise")
+    near = service.measure(43.61, COAST_LON + 0.01, "precise", tier=TIER_ADDRESS)
+    far = service.measure(43.61, COAST_LON + 0.05, "precise", tier=TIER_ADDRESS)
 
     assert near["distance_m"] < far["distance_m"]
 
@@ -159,7 +160,7 @@ def test_distance_grows_with_separation(app, monkeypatch):
 def test_source_refusal_is_unavailable_not_missing_coastline(app, monkeypatch):
     _patch_coastline(monkeypatch, SeaViewSourceError("Overpass returned HTTP 504"))
 
-    result = _service().measure(43.61, -5.85, "precise")
+    result = _service().measure(43.61, -5.85, "precise", tier=TIER_ADDRESS)
 
     assert result["status"] == STATUS_UNAVAILABLE
     assert result["distance_m"] is None
@@ -169,7 +170,7 @@ def test_no_coastline_points_is_a_measured_absence(app, monkeypatch):
     """An empty list means the source answered and there is no sea in range."""
     _patch_coastline(monkeypatch, [])
 
-    result = _service().measure(40.4, -3.7, "precise")
+    result = _service().measure(40.4, -3.7, "precise", tier=TIER_ADDRESS)
 
     assert result["status"] == STATUS_NO_COASTLINE
     assert result["distance_m"] is None
@@ -180,7 +181,10 @@ def test_coastline_beyond_the_guaranteed_radius_is_an_absence(app, monkeypatch):
     far_north = 43.61 + (sds.SEARCH_RADIUS_M * 2) / 111_320
     _patch_coastline(monkeypatch, [(far_north, -5.85)])
 
-    assert _service().measure(43.61, -5.85, "precise")["status"] == STATUS_NO_COASTLINE
+    assert (
+        _service().measure(43.61, -5.85, "precise", tier=TIER_ADDRESS)["status"]
+        == STATUS_NO_COASTLINE
+    )
 
 
 # -- persistence --------------------------------------------------------
@@ -262,7 +266,10 @@ def test_unusable_geometry_from_the_source_is_unavailable(app, monkeypatch):
     monkeypatch.setattr(svs, "_cache_set", lambda *a, **k: None)
     monkeypatch.setattr(_requests, "post", lambda *a, **k: _Resp())
 
-    assert _service().measure(43.61, -5.86, "precise")["status"] == STATUS_UNAVAILABLE
+    assert (
+        _service().measure(43.61, -5.86, "precise", tier=TIER_ADDRESS)["status"]
+        == STATUS_UNAVAILABLE
+    )
 
 
 def test_outage_keeps_the_last_good_measurement(app, monkeypatch):

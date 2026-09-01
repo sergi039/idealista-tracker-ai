@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 📍 Added: a pin placed for one advert is not a village centroid (2026-09-01, #493)
+- **What**: `services/coordinate_quality.py` now answers which of three kinds of
+  coordinate a row carries -- an address (0 m of slack), a listing-specific pin
+  a portal or a person placed (2000 m), or a locality centroid (5000 m,
+  unchanged) -- and `coordinate_slack_m` takes the row instead of its accuracy
+  label. The travel, sea-distance and hazard consumers read it;
+  `SeaDistanceService.measure` takes the tier as a required keyword.
+- **Why**: `approximate` meant both "we know this to within a street" and "we
+  know this to within a municipality", and the scorer had to assume the second.
+  Measured on production: 0.0% of the 183 rows carrying a pin share their exact
+  coordinate with another listing, against 51.9% of the 879 geocoded rows, and
+  eight rows carrying both a cadastral location and a portal pin put the pin's
+  own error at 68-1150 m.
+- **Effect**: disclosure only. No component that abstains today begins scoring
+  -- simulated over all 1226 located rows, every tier, both components, +0.
+  What narrows is what a row states: the sea band, `searched_m`, and the hazard
+  band on 183 rows. The coverage half of #493 stays open, because tiering the
+  slack cannot fix it.
+
 ### 🧪 Fixed: local deploy gates are independent of the host (2026-09-01)
 - **What**: post-merge tests now stub the launchd registry instead of observing
   the machine's installed deploy watcher. The watcher loads each sourced

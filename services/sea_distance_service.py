@@ -32,8 +32,10 @@ from models import Property
 from services.coordinate_quality import (
     APPROXIMATE_COORD_SLACK_M,
     coordinate_slack_m,
+    coordinate_tier,
     distance_bounds_m,
     normalize_accuracy,
+    slack_for_tier,
 )
 from services.sea_view_service import (
     MAX_SEA_DISTANCE_M,
@@ -134,7 +136,12 @@ class SeaDistanceService:
     """Straight-line distance to the OSM coastline, per property."""
 
     def measure(
-        self, lat: float, lon: float, accuracy: Optional[str]
+        self,
+        lat: float,
+        lon: float,
+        accuracy: Optional[str],
+        *,
+        tier: str,
     ) -> Dict[str, Any]:
         """Measure distance to the coastline for one point.
 
@@ -161,7 +168,15 @@ class SeaDistanceService:
         decide whether a profile's horizon reaches past the measurement.
         """
         accuracy = normalize_accuracy(accuracy)
-        slack = coordinate_slack_m(accuracy)
+        # This function is handed a coordinate and a label, so it cannot ask
+        # the row which kind of coordinate it is (#493) -- the caller that has
+        # the row passes the tier, and passes it **required, with no default**,
+        # for the reason the paragraph above gives about `accuracy`. That is
+        # not a symmetry argument: a default was written first, and the two
+        # tests that measure a precise row's distance immediately came back
+        # `approximate_origin` with a 5 km band, because the safest-looking
+        # default is a locality centroid and a precise row is not one.
+        slack = slack_for_tier(tier)
         guaranteed_m = SEARCH_RADIUS_M - slack
         base = {
             "searched_m": guaranteed_m,
@@ -249,7 +264,7 @@ class SeaDistanceService:
                 self._store(prop, payload)
             return payload
 
-        measurement = self.measure(lat, lon, accuracy)
+        measurement = self.measure(lat, lon, accuracy, tier=coordinate_tier(prop))
 
         # `previous` is read here, under the lock, and not before the
         # measurement: a refusal must yield to whatever is *stored* when the
@@ -360,7 +375,12 @@ def parcel_measurement(prop: Property) -> Dict[str, Any]:
     """
     stored = prop.enrichment.get("sea") if isinstance(prop.enrichment, dict) else None
     accuracy = normalize_accuracy(getattr(prop, "location_accuracy", None))
-    slack = coordinate_slack_m(accuracy)
+    # The row, not its label: `approximate` covers both a pin placed for this
+    # advert and a centroid twenty listings share, and only the row says which
+    # (#493). The stored payload's own `slack_m` is added back below, so a
+    # block written under a different tier restates correctly and nothing has
+    # to be recomputed.
+    slack = coordinate_slack_m(prop)
     base = {"origin_accuracy": accuracy, "slack_m": slack}
 
     if not isinstance(stored, dict):

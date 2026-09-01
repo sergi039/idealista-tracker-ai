@@ -27,6 +27,11 @@ setup_test_environment()
 from app import create_app, db  # noqa: E402
 from models import Property  # noqa: E402
 from services import sea_distance_service as sea_module  # noqa: E402
+from services.coordinate_quality import (  # noqa: E402
+    TIER_LISTING_PIN,
+    TIER_LOCALITY,
+    record_portal_coordinate,
+)
 from services.sea_distance_service import (  # noqa: E402
     STATUS_APPROXIMATE_ORIGIN,
     STATUS_OK,
@@ -138,6 +143,52 @@ class TestThePreviewReadsTheRow:
         assert float(reloaded.score_total) == 50.0
 
 
+class TestThePreviewReadsTheRowsTier:
+    """#493 put a second argument in front of the same trap.
+
+    `measure` now also takes the coordinate *tier*, and the dry run is again
+    the arm that would silently omit it: the summary it logs counts statuses,
+    and a pin row and a centroid row both log `approximate_origin`, so no
+    assertion over that text can tell the two apart. What distinguishes them
+    is the band -- 2 km against 5 km -- so this records the argument the call
+    actually received, rather than that a call happened (#297).
+    """
+
+    def _spy(self, monkeypatch):
+        seen = []
+        real = sea_module.SeaDistanceService.measure
+
+        def measure(inner_self, lat, lon, accuracy, **kw):
+            seen.append(kw.get("tier"))
+            return real(inner_self, lat, lon, accuracy, **kw)
+
+        monkeypatch.setattr(sea_module.SeaDistanceService, "measure", measure)
+        return seen
+
+    def test_a_pin_row_previews_under_its_own_tier(self, app, monkeypatch):
+        prop = _listing("pin", "approximate")
+        prop.enrichment = record_portal_coordinate(
+            None, source="fotocasa", lat=ROW_LAT, lon=ROW_LON
+        )
+        db.session.commit()
+
+        seen = self._spy(monkeypatch)
+        _run_dry(monkeypatch)
+
+        assert seen == [TIER_LISTING_PIN]
+
+    def test_a_centroid_row_is_the_control(self, app, monkeypatch):
+        """Same coordinate, same coastline, no pin block -- and the preview
+        must still call it a centroid, or the test above would pass for a call
+        site that hard-coded the narrow tier."""
+        _listing("centroid", "approximate")
+
+        seen = self._spy(monkeypatch)
+        _run_dry(monkeypatch)
+
+        assert seen == [TIER_LOCALITY]
+
+
 class TestTheArgumentCannotBeForgottenAgain:
     def test_measure_requires_an_accuracy(self, app):
         """The fix is the signature, not the one call site that got it wrong.
@@ -149,3 +200,15 @@ class TestTheArgumentCannotBeForgottenAgain:
         """
         with pytest.raises(TypeError):
             sea_module.SeaDistanceService().measure(ROW_LAT, ROW_LON)
+
+    def test_measure_requires_a_tier(self, app):
+        """The identical argument, one ticket later (#493).
+
+        A default here is not merely untidy: it was written first, and the two
+        tests that measure a precise row's distance came straight back as
+        `approximate_origin` with a 5 km band, because the safest-looking
+        default is a locality centroid and a precise row is not one. Both
+        callers hold the row and can answer.
+        """
+        with pytest.raises(TypeError):
+            sea_module.SeaDistanceService().measure(ROW_LAT, ROW_LON, "precise")
