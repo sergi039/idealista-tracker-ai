@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🧪 Fixed: local deploy gates are independent of the host (2026-09-01)
+- **What**: post-merge tests now stub the launchd registry instead of observing
+  the machine's installed deploy watcher. The watcher loads each sourced
+  contract from one private snapshot that its own interpreter syntax-checks;
+  mandatory render/lock failures stop loudly and cleanup remains optional.
+- **Why**: a loaded LaunchAgent made 25 hook scenarios exit before exercising
+  their assertions, while Apple's Bash 3.2 terminated on a malformed sourced
+  contract before the watcher could record the intended fatal diagnostic.
+
 ### 🔒 Fixed: decisive enrichment preserves concurrent JSON blocks (2026-09-01, #473)
 - **What**: the decisive enrichment pass now records only the top-level
   `Property.enrichment` keys it changed, re-reads the stored JSON under a
