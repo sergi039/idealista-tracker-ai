@@ -423,9 +423,9 @@ class TestTheCountsAreTakenOnce:
         calls = []
         original = main_routes._listing_counts_by_profile
 
-        def counted():
+        def counted(*args, **kwargs):
             calls.append(1)
-            return original()
+            return original(*args, **kwargs)
 
         main_routes._listing_counts_by_profile = counted
         try:

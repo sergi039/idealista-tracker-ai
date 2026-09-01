@@ -16,8 +16,11 @@ satisfied by any number -- the cadastre-card lesson):
 * the chip badge and the menu count, which render the same `option.count`
   twice and must agree;
 * the hidden-subscription note, which reads the same helper;
-* the #470 reproduction itself: the narrowing note's baseline and the chip
-  badge now say the same number on one page.
+* the #470 reproduction itself, under the rule that followed it (closing
+  audit 2026-09-01): the chip's link keeps the page's filters, so the badge
+  is the narrowing note's NUMERATOR -- the page its own link opens -- and
+  the baseline is the denominator. Chip 4 over "2 of 3 shown" became 3, and
+  is now the 2.
 """
 
 import re
@@ -197,8 +200,12 @@ class TestAnAllDelistedSubscriptionKeepsItsControls:
 
 
 class TestTheSeventyReproductionIsGone:
-    def test_the_badge_and_the_narrowing_baseline_say_one_number(self, client, app):
-        """#470's own scenario: chip 4 over 'Filters: 2 of 3 shown'."""
+    def test_the_badge_is_the_numerator_and_the_baseline_the_denominator(
+        self, client, app
+    ):
+        """#470's own scenario: chip 4 over 'Filters: 2 of 3 shown'. The
+        delisted row is still left out (3, not 4); and since the chip's link
+        keeps `sea_view=likely`, the badge is what that link opens: 2."""
         with app.app_context():
             norte_id = SearchProfile.query.filter_by(name="Land at Norte").one().id
         body = _rendered(
@@ -210,5 +217,7 @@ class TestTheSeventyReproductionIsGone:
         badge = _chip_badge(body, "Land at Norte")
         note = re.search(r"Filters: (\d+) of (\d+) shown", body)
         assert note, "the narrowing note is missing"
-        assert int(note.group(2)) == badge == 3
-        assert int(note.group(1)) == 2
+        assert int(note.group(1)) == badge == 2, (
+            "the badge is the page its own link opens, filters kept"
+        )
+        assert int(note.group(2)) == 3, "the baseline: live rows before the bar"
