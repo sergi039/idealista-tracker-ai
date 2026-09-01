@@ -26,7 +26,7 @@ from flask import (
 # below would answer 500 for it: every one of them re-raises it first so an
 # unknown id stays a 404 (issue #136).
 from werkzeug.exceptions import HTTPException
-from sqlalchemy import or_, case, func
+from sqlalchemy import or_, func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import defer
 from models import Land, Property, SearchProfile
@@ -310,6 +310,102 @@ def _criteria_context():
     `GET /api/properties` was doing with this parameter.
     """
     return subscription_criteria.profile_context(Property)
+
+
+# The filter bar's dimensions, in the order the page applies them. One home
+# for the page's own rows AND for every count drawn beside its controls: a
+# counted option is a promise about the page that picking it opens, and the
+# only way that promise cannot drift is for the count to be taken by the same
+# function that will narrow that page -- with the option's own dimension
+# skipped, because picking it replaces that dimension's value (closing-audit
+# findings 2 and 3, and the reviewer's second-order case below).
+FILTER_BAR_DIMENSIONS = (
+    "category",
+    "subtype",
+    "municipality",
+    "source",
+    "advertiser",
+    "verdict",
+    "action",
+    "search",
+    "inv_metr",
+    "sea_view",
+    "sea_dist",
+    "build",
+    "measured",
+)
+
+
+def _apply_filter_bar(query, bar, review_today, skip=None):
+    """Narrow `query` by every filter-bar value in `bar`, except `skip`.
+
+    `bar` maps each of FILTER_BAR_DIMENSIONS to its raw request value. Every
+    clause hands back the *same* query object when its value is empty or
+    unknown (the `filter_bar_active` identity contract on /properties), and
+    this function keeps that property: it returns `query` itself when
+    nothing narrowed.
+
+    Which site (utils/listing_source.py), who is selling
+    (services/advertiser.py), what the owner decided and what is still
+    outstanding (services/owner_review.py, applied together -- a surface that
+    keeps one of the pair and drops the other is the regression the two are
+    tested against together), a pasted listing URL or bare id as a search
+    (utils/listing_search.py), and the five attribute filters
+    (services/listing_attribute_filters.py) all keep their one home; this
+    function only applies them in one order.
+    """
+
+    def wanted(name):
+        return "" if name == skip else (bar.get(name) or "")
+
+    category_filter = wanted("category")
+    if category_filter:
+        if category_filter == UNCLASSIFIED_FILTER:
+            query = query.filter(_unclassified_clause(Property.property_category))
+        else:
+            query = query.filter(Property.property_category == category_filter)
+    subtype_filter = wanted("subtype")
+    if subtype_filter:
+        if subtype_filter == UNCLASSIFIED_FILTER:
+            query = query.filter(_unclassified_clause(Property.property_subtype))
+        else:
+            query = query.filter(Property.property_subtype == subtype_filter)
+    municipality_filter = wanted("municipality")
+    if municipality_filter:
+        query = query.filter(municipality_filter_clause(municipality_filter))
+    source_clause = source_filter_clause(Property, wanted("source"))
+    if source_clause is not None:
+        query = query.filter(source_clause)
+    advertiser_clause = advertiser.filter_clause(Property, wanted("advertiser"))
+    if advertiser_clause is not None:
+        query = query.filter(advertiser_clause)
+    verdict_clause = owner_review.decision_filter_clause(Property, wanted("verdict"))
+    if verdict_clause is not None:
+        query = query.filter(verdict_clause)
+    action_clause = owner_review.action_filter_clause(
+        Property, wanted("action"), review_today
+    )
+    if action_clause is not None:
+        query = query.filter(action_clause)
+    search_clause = listing_search_clause(Property, wanted("search"))
+    if search_clause is not None:
+        query = query.filter(search_clause)
+    investment_metrics_filter = wanted("inv_metr")
+    if investment_metrics_filter:
+        query = filter_by_investment_rating(query, Property, investment_metrics_filter)
+    sea_view_filter = wanted("sea_view")
+    if sea_view_filter:
+        query = filter_by_sea_view(query, Property, sea_view_filter)
+    sea_distance_filter = wanted("sea_dist")
+    if sea_distance_filter:
+        query = filter_by_sea_distance(query, Property, sea_distance_filter)
+    build_filter = wanted("build")
+    if build_filter:
+        query = filter_by_land_classification(query, Property, build_filter)
+    measured_filter = wanted("measured")
+    if measured_filter:
+        query = filter_by_measured(query, Property, measured_filter)
+    return query
 
 
 def _shows_rows_the_default_hides(query, ctx):
@@ -785,7 +881,7 @@ class ProfileListingCount(NamedTuple):
 EMPTY_PROFILE_COUNT = ProfileListingCount(live=0, held=0)
 
 
-def _listing_counts_by_profile():
+def _listing_counts_by_profile(live_query=None):
     """Per-profile `ProfileListingCount`, `None` keyed for the unassigned.
 
     One group-by shared by the menu and by the hidden-subscription note, which
@@ -807,15 +903,47 @@ def _listing_counts_by_profile():
     the matching one there. /profiles keeps its own raw inventory count on
     purpose, and /municipalities keeps its "what picking it would show" count
     -- three different questions, each answered where it is asked.
+
+    `live` is counted over `live_query` -- the page's own narrowed query with
+    only its subscription filter left open -- so the badge on a chip is the
+    size of the page its own href opens: the href carries every filter and
+    the criteria mode (`base_args`, and the form markers that keep the Hide
+    removed state), so the count is taken under all of them too. Measured on
+    production 2026-09-01: the chip said "Galicia · costa 543" while its link
+    opened 478 (the 65 criteria-hidden rows) -- #518's overstatement, on the
+    page everything was fixed for -- and the mirror was one filter away: a
+    chip counting the bare subscription over a page with `search=` typed
+    promises more than clicking it shows. So the count follows the current
+    criteria mode rather than the default reading (under `criteria=all` the
+    chip is exact at 543, under the default at 478), and it follows the
+    other filters, because that is what its link keeps.
+
+    One exception, #470's owner decision, and it is unconditional: the
+    delisted rows a `hide_removed=off` page shows are never counted. The
+    switch's own visible state explains that gap, and the badge answers
+    "how many live listings", the way the portal's saved search would.
+    `held` stays raw: it decides whether the option is offered at all, and a
+    subscription whose every row the current view excludes is still one
+    click away. A caller with no page of its own (`live_query` None) gets
+    the standing policy: live rows under the DEFAULT criteria reading.
     """
-    live_case = case((Property.listing_status.notin_(DELISTED_LISTING_STATUSES), 1))
+    held = dict(
+        db.session.query(Property.search_profile_id, func.count(Property.id)).group_by(
+            Property.search_profile_id
+        )
+    )
+    if live_query is None:
+        live_query, _ = subscription_criteria.apply_filter(
+            Property.query, _criteria_context(), ""
+        )
+    live = dict(
+        live_query.filter(Property.listing_status.notin_(DELISTED_LISTING_STATUSES))
+        .with_entities(Property.search_profile_id, func.count(Property.id))
+        .group_by(Property.search_profile_id)
+    )
     return {
-        profile_id: ProfileListingCount(live=live, held=held)
-        for profile_id, held, live in db.session.query(
-            Property.search_profile_id,
-            func.count(Property.id),
-            func.count(live_case),
-        ).group_by(Property.search_profile_id)
+        profile_id: ProfileListingCount(live=live.get(profile_id, 0), held=held_count)
+        for profile_id, held_count in held.items()
     }
 
 
@@ -1082,7 +1210,7 @@ def _keep_applied_choice(values, applied):
     return values
 
 
-def _municipality_choices(profile_selection, applied=""):
+def _municipality_choices(base_query, applied=""):
     """One dropdown option per real municipality, however the rows spell it.
 
     `properties.municipality` is free text and the same place arrives under
@@ -1097,18 +1225,20 @@ def _municipality_choices(profile_selection, applied=""):
     as a municipality of its own, and one that is already applied is put back
     below, so a hand-typed URL keeps agreeing with its dropdown.
 
-    Counts follow the same selection as the options themselves -- the
-    subscriptions on screen, not the other filters -- so the number beside a
-    name answers "how many listings does this municipality have here", the
-    same question the subscription chips answer.
+    The count beside a name is the size of the page that picking the name
+    opens: `base_query` is the page's own narrowing with the municipality
+    dimension left open (`_apply_filter_bar(..., skip="municipality")`),
+    under the subscriptions on screen and the current criteria mode. #518's
+    Cedeira, alive on the page everything was fixed for -- "(24)" over a page
+    finding 17 -- is what this closes, and a municipality whose every row the
+    current view excludes is not offered, because under that view the option
+    can only ever return an empty page.
     """
-    rows = apply_profile_filter(
-        db.session.query(Property.municipality, func.count(Property.id)).group_by(
-            Property.municipality
-        ),
-        Property.search_profile_id,
-        profile_selection,
-    ).all()
+    rows = (
+        base_query.with_entities(Property.municipality, func.count(Property.id))
+        .group_by(Property.municipality)
+        .all()
+    )
 
     applied_key = group_key(applied)
     choices = [
@@ -1137,7 +1267,7 @@ def _municipality_choices(profile_selection, applied=""):
     return choices
 
 
-def _source_choices(profile_selection, applied=""):
+def _source_choices(base_query, applied=""):
     """Which sites the subscriptions on screen actually hold listings from.
 
     Built from the same selection as every other dropdown, for the same
@@ -1149,15 +1279,14 @@ def _source_choices(profile_selection, applied=""):
     clause and this count then all derive the source from one function, and a
     second reading written in SQL is how a filter comes to disagree with the
     badge beside it. The column is short and the selection is at most the
-    whole table -- 730 rows on 2026-08-17.
+    whole table -- 730 rows on 2026-08-17. The rows the walk sees are the
+    page's own, with the source dimension left open, so the count is the
+    page picking that source opens: Idealista offered "(318)" over a page
+    finding 263 before it did.
     """
     from utils.listing_source import SOURCES, source_label, source_of_url
 
-    query = apply_profile_filter(
-        db.session.query(Property.url),
-        Property.search_profile_id,
-        profile_selection,
-    )
+    query = base_query.with_entities(Property.url)
     counts = {}
     for (url,) in query.all():
         key = source_of_url(url)
@@ -1176,7 +1305,7 @@ def _source_choices(profile_selection, applied=""):
     return choices
 
 
-def _advertiser_choices(profile_selection, applied=""):
+def _advertiser_choices(base_query, applied=""):
     """How many of the listings on screen are sold by whom.
 
     Counted in SQL, unlike `_source_choices` above, and the difference is
@@ -1190,14 +1319,13 @@ def _advertiser_choices(profile_selection, applied=""):
 
     Every state that exists in the selection is offered, `unchecked`
     included -- the list badges only `owner`, so this dropdown is where the
-    number of rows nobody could answer for is disclosed.
+    number of rows nobody could answer for is disclosed. Counted over the
+    page's own narrowing with the seller dimension left open, so the number
+    is the page picking that seller opens: "Not established" offered 430
+    over a page finding 376 before it did.
     """
     state = advertiser.state_expression(Property)
-    rows = apply_profile_filter(
-        db.session.query(state, func.count()),
-        Property.search_profile_id,
-        profile_selection,
-    ).group_by(state)
+    rows = base_query.with_entities(state, func.count()).group_by(state)
     counts = {key: total for key, total in rows.all() if key}
 
     choices = advertiser.options(counts)
@@ -1210,7 +1338,7 @@ def _advertiser_choices(profile_selection, applied=""):
     return choices
 
 
-def _owner_verdict_choices(profile_selection, applied=""):
+def _owner_verdict_choices(base_query, applied=""):
     """How many listings the owner decided what about.
 
     `undecided` is offered whenever it holds anything, and on this table it
@@ -1218,13 +1346,16 @@ def _owner_verdict_choices(profile_selection, applied=""):
     the three decided counts read as a tally of the whole page, and "nobody
     decided yet" is exactly the fact #98 says must not be folded into
     "rejected".
+
+    Counted over the page's own narrowing with the decision dimension left
+    open, under the current criteria mode. Under the default reading only
+    `undecided` can move -- a decided listing is exempt from the hide by the
+    same rule that makes it decided -- and it is exactly the count that
+    moved: "Not decided yet (453)" over a page finding 391, the 62
+    criteria-hidden rows entire (production 2026-09-01).
     """
     state = owner_review.decision_expression(Property)
-    rows = apply_profile_filter(
-        db.session.query(state, func.count()),
-        Property.search_profile_id,
-        profile_selection,
-    ).group_by(state)
+    rows = base_query.with_entities(state, func.count()).group_by(state)
     counts = {key: total for key, total in rows.all() if key}
 
     choices = owner_review.decision_options(counts)
@@ -1239,20 +1370,23 @@ def _owner_verdict_choices(profile_selection, applied=""):
     return choices
 
 
-def _next_action_choices(profile_selection, applied="", on_date=None):
+def _next_action_choices(base_query, applied="", on_date=None):
     """How many listings carry an outstanding action, and how many are late.
 
     `none` is not offered: it is most of the table, and an option that selects
     everything selects nothing anyone is looking for. The date is the caller's
     -- the same one the filter and the badges use, so the count cannot describe
     a different day from the rows under it.
+
+    Counted over the page's own narrowing with the action dimension left
+    open, like the other four. Under the DEFAULT reading that narrowing is a
+    no-op here -- an open action is one of the hide's own exemptions
+    (services/subscription_criteria.hidden_by_default_expression) -- but the
+    counts follow the current mode, and under `criteria=pass` an actioned
+    fail is not on the page its option opens.
     """
     state = owner_review.action_expression_portable(Property, on_date)
-    rows = apply_profile_filter(
-        db.session.query(state, func.count()),
-        Property.search_profile_id,
-        profile_selection,
-    ).group_by(state)
+    rows = base_query.with_entities(state, func.count()).group_by(state)
     counts = {key: total for key, total in rows.all() if key}
 
     choices = owner_review.action_options(counts)
@@ -1269,14 +1403,11 @@ def _next_action_choices(profile_selection, applied="", on_date=None):
 
 def _property_filter_options(
     profile_selection,
-    category_filter="",
-    subtype_filter="",
-    municipality_filter="",
-    source_filter="",
-    advertiser_filter="",
-    verdict_filter="",
-    action_filter="",
-    review_today=None,
+    scope_query,
+    bar,
+    review_today,
+    criteria_ctx,
+    criteria_filter,
 ):
     """Type / Subtype / Municipality choices for the subscriptions on screen.
 
@@ -1290,7 +1421,30 @@ def _property_filter_options(
     such rows exist in the selection, or when the filter is already on it.
     Ingestion can still produce a listing no classification rule matched, and
     hiding the only way to find those would trade dead UI for lost rows.
+
+    Every counted dropdown (municipality, source, advertiser, verdict,
+    action) is counted over `landing(dimension)`: `scope_query` -- the
+    toolbar scope, Favorites and Hide removed as the page has them -- through
+    `_apply_filter_bar` with that one dimension left open, under the
+    subscriptions on screen and the current criteria mode. That is exactly
+    the page an option opens, because the filter form carries every other
+    field, the subscription checkboxes and the criteria select with it. The
+    uncounted ones (category, subtype) offer values without numbers and are
+    left alone.
     """
+    category_filter = bar.get("category") or ""
+    subtype_filter = bar.get("subtype") or ""
+
+    def landing(dimension):
+        narrowed = _apply_filter_bar(scope_query, bar, review_today, skip=dimension)
+        narrowed = apply_profile_filter(
+            narrowed, Property.search_profile_id, profile_selection
+        )
+        narrowed, _ = subscription_criteria.apply_filter(
+            narrowed, criteria_ctx, criteria_filter
+        )
+        return narrowed
+
     if category_filter == UNCLASSIFIED_FILTER:
         category_clause = _unclassified_clause(Property.property_category)
     elif category_filter:
@@ -1309,11 +1463,19 @@ def _property_filter_options(
             ),
             subtype_filter,
         ),
-        "municipalities": _municipality_choices(profile_selection, municipality_filter),
-        "sources": _source_choices(profile_selection, source_filter),
-        "advertisers": _advertiser_choices(profile_selection, advertiser_filter),
-        "verdicts": _owner_verdict_choices(profile_selection, verdict_filter),
-        "actions": _next_action_choices(profile_selection, action_filter, review_today),
+        "municipalities": _municipality_choices(
+            landing("municipality"), bar.get("municipality") or ""
+        ),
+        "sources": _source_choices(landing("source"), bar.get("source") or ""),
+        "advertisers": _advertiser_choices(
+            landing("advertiser"), bar.get("advertiser") or ""
+        ),
+        "verdicts": _owner_verdict_choices(
+            landing("verdict"), bar.get("verdict") or ""
+        ),
+        "actions": _next_action_choices(
+            landing("action"), bar.get("action") or "", review_today
+        ),
         "has_unclassified_category": _selection_has_unclassified(
             Property.property_category, profile_selection
         ),
@@ -1402,7 +1564,32 @@ def properties():
         sea_distance_filter = request.args.get("sea_dist", "")
         build_filter = request.args.get("build", "")
         measured_filter = request.args.get("measured", "")
-        criteria_filter = request.args.get("criteria", "")
+        # The filter bar as one mapping, for `_apply_filter_bar`: the page's
+        # rows and every count beside its controls run the same function.
+        bar = {
+            "category": category_filter,
+            "subtype": subtype_filter,
+            "municipality": municipality_filter,
+            "source": source_filter,
+            "advertiser": advertiser_filter,
+            "verdict": verdict_filter,
+            "action": action_filter,
+            "search": search_query,
+            "inv_metr": investment_metrics_filter,
+            "sea_view": sea_view_filter,
+            "sea_dist": sea_distance_filter,
+            "build": build_filter,
+            "measured": measured_filter,
+        }
+        # Canonicalised at the boundary, for the reason /municipalities gives
+        # (closing-audit finding 5, the LOW one): `apply_filter` normalises
+        # internally, so `criteria=FAIL` APPLIED the fail mode — 62 rows on
+        # production 2026-09-01 — while the template, handed the raw string,
+        # matched no option and rendered the select on its default. The
+        # applied mode and the rendered control read one value now, through
+        # the one reading (`criteria_mode` over `read_filter_mode`), and the
+        # links rebuilt from `current_filters` carry the canonical spelling.
+        criteria_filter = criteria_mode(request.args.get("criteria", ""))
 
         # Hide removed: ON by default (similar to /lands), unless this request
         # came from the filter form with the box unticked.
@@ -1458,63 +1645,11 @@ def properties():
 
         filter_bar_scope = query
 
-        if category_filter:
-            if category_filter == UNCLASSIFIED_FILTER:
-                query = query.filter(_unclassified_clause(Property.property_category))
-            else:
-                query = query.filter(Property.property_category == category_filter)
-        if subtype_filter:
-            if subtype_filter == UNCLASSIFIED_FILTER:
-                query = query.filter(_unclassified_clause(Property.property_subtype))
-            else:
-                query = query.filter(Property.property_subtype == subtype_filter)
-        if municipality_filter:
-            query = query.filter(municipality_filter_clause(municipality_filter))
-        # Which site the listing is on. utils/listing_source.py owns the
-        # reading, so the four surfaces cannot drift apart on it.
-        source_clause = source_filter_clause(Property, source_filter)
-        if source_clause is not None:
-            query = query.filter(source_clause)
-        # Who is selling. services/advertiser.py owns the reading, so the
-        # badge, this filter and the count printed beside its option are one
-        # answer rather than three.
-        advertiser_clause = advertiser.filter_clause(Property, advertiser_filter)
-        if advertiser_clause is not None:
-            query = query.filter(advertiser_clause)
-        # What the owner decided, and what is still outstanding.
-        # services/owner_review.py owns both readings, so the badge, these two
-        # filters and the counts beside their options are one answer rather
-        # than several. Both filters are applied here rather than one of them
-        # here and the other elsewhere: a surface that keeps one parameter and
-        # drops the other is the regression these two are tested against
-        # together.
-        verdict_clause = owner_review.decision_filter_clause(Property, verdict_filter)
-        if verdict_clause is not None:
-            query = query.filter(verdict_clause)
-        action_clause = owner_review.action_filter_clause(
-            Property, action_filter, review_today
-        )
-        if action_clause is not None:
-            query = query.filter(action_clause)
-        # A pasted listing URL, or a bare listing id, is a search too --
-        # utils/listing_search.py owns what the box accepts.
-        search_clause = listing_search_clause(Property, search_query)
-        if search_clause is not None:
-            query = query.filter(search_clause)
-
-        if investment_metrics_filter:
-            query = filter_by_investment_rating(
-                query, Property, investment_metrics_filter
-            )
-
-        if sea_view_filter:
-            query = filter_by_sea_view(query, Property, sea_view_filter)
-        if sea_distance_filter:
-            query = filter_by_sea_distance(query, Property, sea_distance_filter)
-        if build_filter:
-            query = filter_by_land_classification(query, Property, build_filter)
-        if measured_filter:
-            query = filter_by_measured(query, Property, measured_filter)
+        # The filter bar, through the one function the counts beside its
+        # controls also run (`_apply_filter_bar`): a counted option is the
+        # size of the page picking it opens, and that holds only while the
+        # page and the count narrow through the same code.
+        query = _apply_filter_bar(query, bar, review_today)
 
         # Whether the filter bar narrowed anything. Object identity is the
         # honest reading: every applied clause produced a new query object,
@@ -1538,6 +1673,18 @@ def properties():
         # the option, the disclosure next to the total and the page the link
         # lands on cannot state three different figures under one filter.
         unassigned_count = query.filter(Property.search_profile_id.is_(None)).count()
+
+        # The chips' numbers, taken over THIS page's own narrowing -- every
+        # filter above and the criteria mode -- with only the subscription
+        # left open: the set each chip's href opens, since the href carries
+        # `base_args`. See `_listing_counts_by_profile` for the measurements
+        # and for #470's one exception. One group-by, shared with the menu's
+        # per-subscription counts and the hidden-subscription note.
+        criteria_ctx = _criteria_context()
+        chip_scope, _ = subscription_criteria.apply_filter(
+            query, criteria_ctx, criteria_filter
+        )
+        listing_counts = _listing_counts_by_profile(live_query=chip_scope)
         query = apply_profile_filter(
             query, Property.search_profile_id, profile_selection
         )
@@ -1551,7 +1698,6 @@ def properties():
         # the disclosure counts what was hidden FROM THIS SELECTION — a
         # count over other subscriptions' hidden rows would be a number
         # about a different page (the review's finding 6).
-        criteria_ctx = _criteria_context()
         query, criteria_hidden_count = subscription_criteria.apply_filter(
             query, criteria_ctx, criteria_filter, count_hidden=True
         )
@@ -1747,10 +1893,6 @@ def properties():
             shown_profile_ids, include_custom=selected_profile_id is not None
         )
 
-        # One group-by for the menu's per-subscription counts and for the
-        # hidden-subscription note under it.
-        listing_counts = _listing_counts_by_profile()
-
         # Which subscription a row belongs to, for the badge the list grows
         # when it is showing more than one of them.
         profile_names = {
@@ -1764,14 +1906,11 @@ def properties():
         # `_property_filter_options` for why they are not global lists.
         filter_options = _property_filter_options(
             profile_selection,
-            category_filter=category_filter,
-            subtype_filter=subtype_filter,
-            municipality_filter=municipality_filter,
-            source_filter=source_filter,
-            advertiser_filter=advertiser_filter,
-            verdict_filter=verdict_filter,
-            action_filter=action_filter,
-            review_today=review_today,
+            filter_bar_scope,
+            bar,
+            review_today,
+            criteria_ctx,
+            criteria_filter,
         )
 
         return render_template(
@@ -4123,29 +4262,57 @@ def map_view():
         if measured_filter:
             query = filter_by_measured(query, Property, measured_filter)
 
-        # The same criteria reading as the list (#445's rule: a filter one
-        # surface keeps and another drops is the regression, one filter over)
-        # -- pressing Map on the default view must not widen it with the
-        # hidden fails.
-        query, _ = subscription_criteria.apply_filter(
-            query, _criteria_context(), filters.get("criteria")
-        )
-
         if favorites_filter:
             query = query.filter(Property.is_favorite.is_(True))
 
         query = query.filter(Property.listing_status.notin_(DELISTED_LISTING_STATUSES))
 
+        # The same criteria reading as the list (#445's rule: a filter one
+        # surface keeps and another drops is the regression, one filter over)
+        # -- pressing Map on the default view must not widen it with the
+        # hidden fails. Applied to BOTH branches: the focus notice compares
+        # against `query_without_profile`, and a criteria-hidden focus row in
+        # another subscription must not read as "merely in another
+        # subscription" when picking that subscription would not plot it.
+        #
+        # The count is asked of the profile-filtered branch, after every
+        # other clause, so it says what was withheld from THIS map — hidden
+        # rows without coordinates are not markers this page could have
+        # drawn, which is why the number here is 8 where the list says 62
+        # (production 2026-09-01, profile 24: 149 markers against 157 under
+        # criteria=all, with templates/map.html not containing the word
+        # "criteria" at all). The map applied the default hide in silence,
+        # and on the one surface where an empty area IS the answer being
+        # read, a silent hide is #98's shape: nothing here reads as nothing
+        # there.
+        criteria_ctx = _criteria_context()
+        criteria_param = filters.get("criteria")
+        query_without_profile, _ = subscription_criteria.apply_filter(
+            query, criteria_ctx, criteria_param
+        )
         # The subscription filter goes on last so the query without it stays
         # in hand. That is what separates a focused listing that is merely in
         # another subscription -- the one case the page can offer a way out of
         # -- from one no filter here would have let through (#287). Identical
         # SQL either way: SQLAlchemy ANDs the clauses whatever their order.
-        query_without_profile = query
         query = apply_profile_filter(
             query, Property.search_profile_id, profile_selection
         )
+        query, criteria_hidden_count = subscription_criteria.apply_filter(
+            query, criteria_ctx, criteria_param, count_hidden=True
+        )
         props = query.all()
+
+        # The lift, in the only control this page has — a link. Same URL,
+        # criteria=all: `rebuilt_from` keeps the profile selection, the
+        # filters and the focus, and the mode is STATED rather than dropped
+        # because `criteria` is the one filter whose absence still filters
+        # (utils/listing_filters.CLEARED_NOT_ABSENT).
+        criteria_reveal_url = None
+        if criteria_hidden_count:
+            reveal_args = rebuilt_from(request.args, drop=("criteria",))
+            reveal_args["criteria"] = "all"
+            criteria_reveal_url = url_for("main.map_view", **reveal_args)
 
         focus_notice = _map_focus_notice(
             focus_id, focus_property, props, query_without_profile
@@ -4293,6 +4460,11 @@ def map_view():
             # that silently stopped plotting several subscriptions reads as
             # one showing everything there is.
             hidden_subscription_note=_hidden_subscription_note(profile_selection),
+            # And the same disclosure for the criteria hide, with the same
+            # one-home line the list draws beside its result count. None
+            # under every explicit mode and when nothing was hidden.
+            criteria_hidden_count=criteria_hidden_count,
+            criteria_reveal_url=criteria_reveal_url,
         )
 
     except Exception:
@@ -4309,6 +4481,8 @@ def map_view():
             focus_notice=None,
             # It failed before it could ask; "0 hidden" would be a claim.
             hidden_subscription_note=None,
+            criteria_hidden_count=None,
+            criteria_reveal_url=None,
         )
 
 
