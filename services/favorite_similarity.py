@@ -34,10 +34,13 @@ score prints how many of the eight facts it rests on.
   the parcel), so a parcel is never scored as a house and never scored twice.
 * `plot` — the same, on that module's parcel figure (`plot_area`, or `area`
   for bare land): "what is this listing's plot" has one answer on one page.
-  On production 2026-09-02 both favorites carry their plot only under a
-  dossier key (`attributes.plot_area_cadastre_m2`), so this component is
-  dormant until the column is filled — by a hand-set writer with a source
-  note, on the owner's word, not by this module and not by a bare UPDATE.
+  On production 2026-09-02 the two Galicia favorites carry their plot only
+  under a dossier key (`attributes.plot_area_cadastre_m2`), so the component
+  is dormant on THAT subscription until the column is filled — by a hand-set
+  writer with a source note, on the owner's word, not by this module and not
+  by a bare UPDATE. It is live wherever both sides are bare land, which is
+  most of the favorites: 18 of 22 are land (16 `plot`, 2 `developed`), and
+  there `area` is the parcel and this is the only surface compared.
 * `geography` — a linear decay to 0 at `GEOGRAPHY_SCALE_KM` (60 km: Malpica
   to Fisterra is 55 km, to the Rías Baixas 100+, to the Lugo coast 150+), on
   the row's own coordinate whatever its accuracy or, for a row with none, on
