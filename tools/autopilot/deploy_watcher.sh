@@ -97,6 +97,39 @@ DEFER_STATE="${AUTOPILOT_DEFER_STATE:-${REPO_DIR}/data/.deploy_deferrals}"
 # shape check alone.
 CONTAINER_SENTINEL="${AUTOPILOT_CONTAINER_SENTINEL-gunicorn}"
 
+# --- production quietly falling behind main (#532) ---------------------------
+# On 2026-09-01 this checkout sat on another session's branch with five
+# uncommitted files from 07:43 to 16:03, and every tick refused - correctly -
+# with the branch line below. Two merged commits never reached production,
+# healthz stayed green (the OLD image was healthy), the page check passed (the
+# OLD page rendered), and nobody was told: every liveness signal here answers
+# "is the app serving" and none answers "is the app current". It was found by
+# accident, in this log, eight hours later.
+#
+# The refusal is the guard and stays exactly as it is. What is new is that a
+# tick which ends WITHOUT deploying while origin/main is ahead of what serves
+# is counted, and from AUTOPILOT_STALL_THRESHOLD such ticks in a row the log
+# carries one grep-able `STALLED:` line per tick and data/.deploy_stalled
+# names the stall for anyone who reads files rather than logs. The alarm
+# leads to a person: nothing here stashes, switches branches, resets a tree
+# or deploys anyway - an alarm that leads to an automatic override is a new
+# incident.
+#
+# The counter is on disk because each tick is a fresh process, and it is NOT
+# keyed on the target commit the way the deferral budget is: main moving
+# further during a stall is more reason to shout, not a reason to start over.
+STALL_STATE="${AUTOPILOT_STALL_STATE:-${REPO_DIR}/data/.deploy_stall_ticks}"
+STALLED_MARKER="${AUTOPILOT_STALLED_MARKER:-${REPO_DIR}/data/.deploy_stalled}"
+# Refused ticks in a row before the alarm; 3 is fifteen minutes. Validated
+# once the log exists, further down, so garbage stops the tick loudly.
+STALL_THRESHOLD="${AUTOPILOT_STALL_THRESHOLD:-3}"
+# Whether this tick has fetched origin/${BRANCH} yet. A refusal that comes
+# before the fetch has to fetch for itself before it can say main is ahead.
+TICK_FETCHED=0
+# die() counts the tick it ends; this stops it counting twice should the
+# counting itself die.
+IN_STALL_NOTE=0
+
 # --- this watcher deploys its own source (#293) -----------------------------
 # The tick that rolled out #285 on 2026-08-14 16:33:30 ran the *pre*-#285
 # script: bash had read this file before the tick's own `git merge --ff-only`
@@ -139,6 +172,15 @@ log() {
 
 die() {
     log "FATAL: $*"
+    # A tick that dies after it fetched ends without deploying while main may
+    # be ahead: the parse gate's "refusing to deploy a watcher that cannot
+    # run" repeats every five minutes exactly as the branch refusal did, and
+    # a FATAL line nobody tails is as silent as an ordinary one (#532).
+    # Before the fetch the gap cannot be measured, and the count is left alone.
+    if [ "$TICK_FETCHED" = "1" ] && [ "$IN_STALL_NOTE" != "1" ]; then
+        IN_STALL_NOTE=1
+        note_refused_tick "FATAL: $*"
+    fi
     exit 1
 }
 
@@ -280,19 +322,151 @@ printf '' | grep -E "$INFLIGHT_PATTERN" >/dev/null 2>&1 || [ $? -eq 1 ] \
 git rev-parse --git-dir >/dev/null 2>&1 \
     || die "$(command -v git) ($(git --version 2>&1 | head -1)) cannot read ${REPO_DIR} - PATH is ${PATH}"
 
+# --- the stall counter (#532) -----------------------------------------------
+case "$STALL_THRESHOLD" in
+    '' | *[!0-9]*) die "AUTOPILOT_STALL_THRESHOLD must be a whole number of ticks, not '${STALL_THRESHOLD}'" ;;
+esac
+
+# "<count> <since>", or "0 " when the file is missing or damaged. The same
+# digits-or-nothing hygiene as read_deferrals: this lives in data/ where a
+# human can edit it, and every later use is arithmetic.
+read_stall() {
+    local count since
+    read -r count since <"$STALL_STATE" 2>/dev/null || true
+    case "${count:-}" in
+        '' | *[!0-9]*) printf '0 '; return 0 ;;
+    esac
+    printf '%s %s' "$count" "${since:-}"
+}
+
+# Atomic, like the deployment marker: a half-written count is a number that
+# never existed.
+write_stall() {
+    local count="$1" since="$2" tmp
+    tmp="$(mktemp "${STALL_STATE}.XXXXXX")" || return 1
+    printf '%s %s\n' "$count" "$since" >"$tmp" || { rm -f "$tmp"; return 1; }
+    mv -f "$tmp" "$STALL_STATE" || { rm -f "$tmp"; return 1; }
+}
+
+write_stalled_marker() {
+    local tmp
+    tmp="$(mktemp "${STALLED_MARKER}.XXXXXX")" || return 1
+    printf '%s\n' "$@" >"$tmp" || { rm -f "$tmp"; return 1; }
+    mv -f "$tmp" "$STALLED_MARKER" || { rm -f "$tmp"; return 1; }
+}
+
+# Production is current, so whatever was counted is over. Quiet unless there
+# was something to clear: this runs on every idle tick, and the log is read
+# by a human.
+clear_stall() {
+    local why="$1" had=0
+    if [ -e "$STALL_STATE" ] || [ -e "$STALLED_MARKER" ]; then
+        had=1
+    fi
+    rm -f "$STALL_STATE" "$STALLED_MARKER" 2>/dev/null || true
+    [ "$had" = "1" ] || return 0
+    if [ -e "$STALL_STATE" ] || [ -e "$STALLED_MARKER" ]; then
+        log "  ALERT: could not clear the stall marker (${why}) - ${STALLED_MARKER} may still name a stall that is over"
+        return 0
+    fi
+    log "stall cleared (${why})"
+}
+
+# Commits on origin/${BRANCH} that the serving build does not have. Prints
+# nothing and fails when that cannot be measured: no deployment marker, or a
+# marker naming a commit this clone does not hold. The deploy path already
+# shouts about both, so nothing is repeated here and the count is left alone.
+stall_gap() {
+    local deployed="$1" remote="$2"
+    [ -n "$deployed" ] || return 1
+    git rev-parse --verify --quiet "${deployed}^{commit}" >/dev/null 2>&1 || return 1
+    git rev-list --count "${deployed}..${remote}" 2>/dev/null
+}
+
+# Called wherever a tick ends without deploying: the branch and dirty-tree
+# refusals, a deferral, the handover-budget stop, and die() once the fetch has
+# happened. NOT called from the lock skip (another process owns that tick's
+# outcome and counts or clears it) nor from a failed build (that is a failure
+# with its own ROLLBACK line, and the watcher tried - a different class).
+note_refused_tick() {
+    local reason="$1" fresh=1 remote deployed gap state count since stale_note line
+    # The branch and dirty refusals come before the tick's own fetch, so
+    # origin/${BRANCH} here is only as fresh as the last session that fetched
+    # into this clone - which is how a gap can hide. Fetch, best effort, and
+    # ONLY the remote-tracking ref: a plain fetch also rewrites .git/FETCH_HEAD,
+    # and in this shared clone a developer paused between `git fetch origin
+    # feature` and `git merge FETCH_HEAD` would merge main instead (found by
+    # the plan review, reproduced against git 2.49: with the option FETCH_HEAD
+    # is byte-identical afterwards, without it it names main). Nothing else
+    # about the clone is touched - not the index, not the tree, not the branch.
+    if [ "$TICK_FETCHED" != "1" ]; then
+        if git fetch --no-write-fetch-head --quiet origin "$BRANCH" >>"$LOG_FILE" 2>&1; then
+            TICK_FETCHED=1
+        else
+            fresh=0
+        fi
+    fi
+    remote="$(git rev-parse --verify --quiet "refs/remotes/origin/${BRANCH}^{commit}" 2>/dev/null || true)"
+    [ -n "$remote" ] || return 0
+    deployed="$(cat "$DEPLOYED_MARKER" 2>/dev/null || true)"
+    gap="$(stall_gap "$deployed" "$remote")" || return 0
+    if [ "$gap" = "0" ]; then
+        # Production IS current; the tick only refused to look. Whatever was
+        # counted before is over - carrying it into the next stall would alarm
+        # after one refused tick of a stall that has barely started.
+        clear_stall "production is current at ${remote:0:7}; this tick only refused to look"
+        return 0
+    fi
+
+    state="$(read_stall)"
+    count="${state%% *}"
+    since="${state#* }"
+    count=$((count + 1))
+    if [ "$count" = "1" ] || [ -z "$since" ]; then
+        since="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    fi
+    if ! write_stall "$count" "$since"; then
+        log "  ALERT: could not record the refused tick in ${STALL_STATE} - the stall alarm cannot count"
+    fi
+    [ "$count" -ge "$STALL_THRESHOLD" ] || return 0
+
+    # One line, on every refused tick from the threshold on: a `tail` of this
+    # log at hour eight has to show it, not only the refusal it showed 97
+    # times before. The marker carries the same line first, then one fact per
+    # line for a script.
+    stale_note=""
+    if [ "$fresh" != "1" ]; then
+        stale_note=" (origin/${BRANCH} as last fetched - this tick's fetch failed)"
+    fi
+    line="STALLED: production is ${gap} commit(s) behind ${BRANCH} after ${count} refused tick(s) since ${since} - deployed ${deployed:0:7}, ${BRANCH} ${remote:0:7}${stale_note}; last reason: ${reason}"
+    log "$line"
+    write_stalled_marker "$line" \
+        "deployed=${deployed}" \
+        "main=${remote}" \
+        "branch=${BRANCH}" \
+        "gap=${gap}" \
+        "ticks=${count}" \
+        "since=${since}" \
+        "reason=${reason}" \
+        || log "  ALERT: could not write ${STALLED_MARKER}"
+}
+
 # --- is there anything to deploy? ------------------------------------------
 current_branch="$(git rev-parse --abbrev-ref HEAD)"
 if [ "$current_branch" != "$BRANCH" ]; then
     log "on branch '$current_branch', not '$BRANCH' - refusing to deploy someone's working tree"
+    note_refused_tick "on branch '${current_branch}', not '${BRANCH}'"
     exit 0
 fi
 
 if ! git diff --quiet || ! git diff --cached --quiet; then
     log "working tree is dirty - refusing to deploy over uncommitted work"
+    note_refused_tick "working tree is dirty"
     exit 0
 fi
 
 git fetch --quiet origin "$BRANCH" || die "git fetch failed"
+TICK_FETCHED=1
 
 local_sha="$(git rev-parse HEAD)"
 remote_sha="$(git rev-parse "origin/${BRANCH}")"
@@ -339,6 +513,11 @@ if [ "$local_sha" = "$remote_sha" ] && [ "$remote_sha" = "$deployed_sha" ]; then
     # Nothing new. Stay quiet: this runs every few minutes and the log is read
     # by a human - except after a handover, where silence would read as the
     # tick having disappeared.
+    # No gap, so no stall: said only if one was being counted (#532). The one
+    # way here without this watcher deploying is a person writing the
+    # deployment marker by hand, which is that person asserting production
+    # is current.
+    clear_stall "production is current at ${remote_sha:0:7}"
     if [ "$REEXEC_DEPTH" != "0" ]; then
         log "handed-over watcher found ${remote_sha:0:7} already deployed - nothing to build"
     fi
@@ -1081,6 +1260,7 @@ self_update_and_reexec() {
         log "  ALERT: already handed over ${REEXEC_DEPTH}x this tick and ${BRANCH} moved again"
         log "  refusing to deploy ${remote_sha:0:7} under the watcher from ${local_sha:0:7}"
         log "  the next tick runs ${local_sha:0:7}'s watcher and hands over to ${remote_sha:0:7} then"
+        note_refused_tick "handover budget spent and ${BRANCH} moved again to ${remote_sha:0:7}"
         exit 0
     fi
 
@@ -1194,6 +1374,7 @@ if [ "$inflight_count" != "0" ] || [ "$inflight_unknown" != "0" ]; then
             else
                 log "  deferring this tick (${deferrals}/${DEFER_BUDGET}) - ${blocking} job(s)/unknown(s) may lose work"
                 log "  set AUTOPILOT_DEFER_ON_INFLIGHT=0 to deploy immediately instead"
+                note_refused_tick "deferring this tick (${deferrals}/${DEFER_BUDGET}) to ${blocking} job(s)/unknown(s) in flight"
                 exit 0
             fi
         fi
@@ -1233,6 +1414,8 @@ else
     log "DEPLOYED ${deployed_sha:0:7} successfully, but the marker could not be written"
     clear_marker "the deploy succeeded but its marker could not be written"
 fi
+# Production is current whether or not the marker could say so (#532).
+clear_stall "deployed ${deployed_sha:0:7}"
 
 # Scheduler state is worth a line in the log: a 'not_initialized' scheduler is
 # the difference between an app that ingests and one that only looks alive

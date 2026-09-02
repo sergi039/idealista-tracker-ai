@@ -62,6 +62,11 @@ export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.invalid
 MARKER="${WORK}/deployed_sha"
 INFLIGHT_DIR="${WORK}/inflight"
 DEFER_STATE="${WORK}/deferrals"
+# The refused-tick counter and the alarm it raises (#532), which have to ride
+# the handover on disk - the scenarios at the end are the only place a tick
+# that hands over and then refuses can be built.
+STALL_STATE="${WORK}/stall_ticks"
+STALLED="${WORK}/deploy_stalled"
 TOP_FILE="${WORK}/docker-top.txt"
 mkdir -p "$INFLIGHT_DIR"
 : >"$TOP_FILE"
@@ -215,7 +220,7 @@ fresh_repo() {
 
     : >"${WORK}/watcher.log"
     : >"${WORK}/docker.log"
-    rm -f "$DEFER_STATE"
+    rm -f "$DEFER_STATE" "$STALL_STATE" "$STALLED"
     printf '%s\n' "0000000000000000000000000000000000000000" >"$MARKER"
 }
 
@@ -249,6 +254,8 @@ run_watcher() {
     AUTOPILOT_COMPOSE_FILE="docker-compose.yml" \
     AUTOPILOT_INFLIGHT_DIR="$INFLIGHT_DIR" \
     AUTOPILOT_DEFER_STATE="$DEFER_STATE" \
+    AUTOPILOT_STALL_STATE="$STALL_STATE" \
+    AUTOPILOT_STALLED_MARKER="$STALLED" \
     AUTOPILOT_SELF_UPDATE="${SELF_UPDATE:-1}" \
     ADVANCE_REF_TO="${ADVANCE_REF_TO:-}" \
     ADVANCE_REPO="$REPO" \
@@ -257,7 +264,10 @@ run_watcher() {
     ADVANCE_ONCE="${WORK}/advanced" \
     PERMISSIVE_BASH_N="${PERMISSIVE_BASH_N:-0}" \
     PATH_BASH_LOG="${WORK}/path-bash.log" \
+        env ${STALL_THRESHOLD:+AUTOPILOT_STALL_THRESHOLD="$STALL_THRESHOLD"} \
         "$WATCHER_BASH" "${REPO}/tools/autopilot/deploy_watcher.sh" >/dev/null 2>&1
+    # The stall threshold is passed only when a scenario sets one: a suite that
+    # always passed the default explicitly could not notice the default moving.
     WATCHER_RC=$?
     set -e
 }
@@ -567,3 +577,115 @@ logged "not a regular file" \
 [ "$(cat "$MARKER")" = "0000000000000000000000000000000000000000" ] \
     || fail "scenario 11 touched the deployment marker"
 printf 'OK: a watcher that is not a regular file is refused before the merge\n'
+
+# --- the stall alarm (#532), on the paths only this harness can reach --------
+stalled_lines() {
+    grep -c -- "STALLED:" "${WORK}/watcher.log" || true
+}
+
+stall_count() {
+    if [ -e "$STALL_STATE" ]; then
+        cut -d' ' -f1 "$STALL_STATE"
+    else
+        printf 'none'
+    fi
+}
+
+# --- scenario 12: a refusal at the parse gate counts as a refused tick ------
+# "refusing to deploy a watcher that cannot run" is a FATAL that repeats every
+# five minutes with main ahead - the 2026-09-01 shape with a different first
+# line. Three ticks are the default threshold, and the default is what is
+# under test here.
+fresh_repo
+printf '\nif [ ; then\n' >>"${REPO}/tools/autopilot/deploy_watcher.sh"
+publish "watcher change that does not parse"
+printf '%s\n' "$BASE_SHA" >"$MARKER"
+run_watcher
+run_watcher
+[ "$(stalled_lines)" = "0" ] || fail "scenario 12 alarmed below the threshold"
+[ "$(stall_count)" = "2" ] \
+    || fail "scenario 12 counted '$(stall_count)' after two parse-gate refusals, not 2"
+run_watcher
+[ "$(stalled_lines)" = "1" ] || fail "scenario 12 did not alarm after three parse-gate refusals"
+logged "last reason: FATAL: tools/autopilot/deploy_watcher.sh does not parse" \
+    || fail "scenario 12's STALLED line does not name the parse refusal"
+[ -e "$STALLED" ] || fail "scenario 12 alarmed without writing the stall marker"
+grep -qx "deployed=${BASE_SHA}" "$STALLED" || fail "scenario 12's marker does not name the serving commit"
+grep -qx "main=${NEW_SHA}" "$STALLED" || fail "scenario 12's marker does not name the unparseable main"
+[ "$(builds)" = "0" ] || fail "scenario 12 deployed a watcher that cannot run"
+[ "$(head_sha)" = "$BASE_SHA" ] || fail "scenario 12 advanced the checkout while refusing"
+[ "$(cat "$MARKER")" = "$BASE_SHA" ] || fail "scenario 12 touched the deployment marker while refusing"
+printf 'OK: a parse-gate refusal with main ahead counts, and alarms at the default threshold\n'
+
+# --- scenario 13: the counter survives the handover -------------------------
+# A tick that hands over to the watcher main brings and then defers to a job
+# in flight is ONE refused tick: counted once, by the handed-over process, and
+# read back by the fresh process of the next tick. The count lives on disk and
+# the handover happens before any refusal site, which is what makes both true.
+fresh_repo
+mark_new_watcher
+publish "watcher change deferred by a job in flight"
+printf '%s\n' "$BASE_SHA" >"$MARKER"
+{
+    printf 'UID PID PPID C STIME TTY TIME CMD\n'
+    printf 'appuser 4711 4700 0 12:00 ? 00:00:01 python -m utils.recalc_property_travel\n'
+} >"$TOP_FILE"
+printf '%s\n' '{"module":"recalc_property_travel","pid":4711,"resumable":false}' \
+    >"${INFLIGHT_DIR}/job.4711.json"
+PS_OUTPUT="idealista-app" DEFER_ON_INFLIGHT=1 DEFER_BUDGET=6 STALL_THRESHOLD=2 run_watcher
+logged "handing this tick over" || fail "scenario 13 never handed over"
+logged "deferring this tick" || fail "scenario 13 did not defer to the job in flight"
+[ "$(stall_count)" = "1" ] \
+    || fail "scenario 13 counted '$(stall_count)' across the handover, not exactly 1"
+[ "$(stalled_lines)" = "0" ] || fail "scenario 13 alarmed below the threshold"
+PS_OUTPUT="idealista-app" DEFER_ON_INFLIGHT=1 DEFER_BUDGET=6 STALL_THRESHOLD=2 run_watcher
+[ "$(stalled_lines)" = "1" ] \
+    || fail "scenario 13's fresh process lost the count the handed-over one wrote"
+logged "last reason: deferring this tick" || fail "scenario 13's STALLED line does not name the deferral"
+[ "$(builds)" = "0" ] || fail "scenario 13 built over the job it deferred to"
+
+# The job finishes; the next tick deploys and the alarm ends with it.
+: >"$TOP_FILE"
+rm -f "${INFLIGHT_DIR}"/*.json
+run_watcher
+logged "building\.\.\. NEW-WATCHER-SPEAKING" \
+    || fail "scenario 13 did not deploy under the new watcher once the job was gone"
+logged "stall cleared (deployed ${NEW_SHA:0:7})" || fail "scenario 13 deployed without ending the stall"
+[ ! -e "$STALLED" ] || fail "scenario 13 left the stall marker after a successful deploy"
+[ ! -e "$STALL_STATE" ] || fail "scenario 13 left the counter after a successful deploy"
+[ "$(cat "$MARKER")" = "$NEW_SHA" ] || fail "scenario 13 did not record the deploy"
+printf 'OK: the count rides the handover on disk, and the deploy that follows clears it\n'
+
+# --- scenario 14: the handover-budget stop is a refused tick too ------------
+# Scenario 10's shape with a measurable gap: the tick stops without deploying
+# while main is two commits ahead, so it counts; the next tick deploys and
+# clears. Threshold 1, so the one stop is enough to see the line.
+fresh_repo
+mark_new_watcher
+publish "watcher change"
+B_SHA="$NEW_SHA"
+printf '%s\n' "$BASE_SHA" >"$MARKER"
+git -C "$REPO" checkout -q --detach "$B_SHA"
+perl -0pi -e 's/NEW-WATCHER-SPEAKING/C-WATCHER-SPEAKING/' "${REPO}/tools/autopilot/deploy_watcher.sh"
+git -C "$REPO" add -A
+git -C "$REPO" commit --quiet -m "main moves again, changing the watcher again"
+C_SHA="$(git -C "$REPO" rev-parse HEAD)"
+git -C "$REPO" push --quiet origin "${C_SHA}:refs/heads/parked"
+git -C "$REPO" checkout -q main
+rm -f "${WORK}/advanced"
+STALL_THRESHOLD=1 ADVANCE_REMOTE_TO="$C_SHA" run_watcher
+logged "refusing to deploy" || fail "scenario 14 did not stop on a spent handover budget"
+[ "$(stalled_lines)" = "1" ] \
+    || fail "scenario 14 did not count the handover-budget stop as a refused tick"
+logged "last reason: handover budget spent" \
+    || fail "scenario 14's STALLED line does not name the handover stop"
+grep -qx "gap=2" "$STALLED" || fail "scenario 14's marker does not carry the two-commit gap"
+[ "$(builds)" = "0" ] || fail "scenario 14 built after spending its handover budget"
+[ "$(cat "$MARKER")" = "$BASE_SHA" ] || fail "scenario 14 touched the deployment marker while stopping"
+
+run_watcher
+logged "building\.\.\. C-WATCHER-SPEAKING" \
+    || fail "scenario 14's next tick did not deploy under its own watcher"
+[ ! -e "$STALLED" ] || fail "scenario 14 left the stall marker after the deploy that followed"
+[ "$(cat "$MARKER")" = "$C_SHA" ] || fail "scenario 14 did not record the deploy"
+printf 'OK: a spent handover budget counts as a refused tick, and the next deploy clears it\n'

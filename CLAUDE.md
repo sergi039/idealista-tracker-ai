@@ -2601,6 +2601,26 @@ and TODO.md; respect it if you ever run both side by side.
   `DEPLOY_RENDER_PATH` is empty and no page was rendered, on the rollback path
   as well as the forward one. `tests/test_deploy_page_check_shared.py` fails if
   either consumer grows its own copy.
+- **A production that stops taking merges looks identical to one with nothing
+  to take, so the watcher counts the ticks it refuses** (#532). On 2026-09-01
+  the mini's checkout sat on another session's branch with uncommitted files
+  for eight hours; `deploy_watcher.sh` refused every tick — correctly, and it
+  must keep refusing — while two merged commits never reached production,
+  healthz stayed green (the OLD image was healthy) and the page check passed
+  (the OLD page rendered). Nobody was told. So a tick that ends without
+  deploying while `origin/main` is ahead of `data/.deployed_sha` — branch,
+  dirty tree, deferral, handover stop, a FATAL after the fetch — is counted in
+  `data/.deploy_stall_ticks`, and from `AUTOPILOT_STALL_THRESHOLD` (3) such
+  ticks in a row every refused tick logs one grep-able `STALLED:` line naming
+  the reason, the deployed sha, main's sha, the gap and since when, and writes
+  `data/.deploy_stalled` with the same; `tools/backfill_status.sh` prints it
+  too. **The alarm leads to a person.** Nothing on that path deploys, stashes,
+  switches branches or resets a tree — the incident's resolution was a human
+  verifying the tree byte-identical to merged content before stashing it —
+  and deleting the marker is not a cure, the next refused tick rewrites it.
+  It clears on `DEPLOYED` and on any tick that measures no gap. A gap it
+  cannot measure (no marker, or one naming no commit here) is left uncounted
+  and said so in `tools/autopilot/README.md`, never rounded to zero.
 - **A deployer sweeps only what it can prove is dead, and only in its own
   lane.** `tools/autopilot/lib/docker_cleanup.sh` is the second shared contract,
   read by both deployers after a build is *serving* — never on the rollback
