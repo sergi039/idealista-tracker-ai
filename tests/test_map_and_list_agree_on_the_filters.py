@@ -82,6 +82,11 @@ FILTERS = [
     ("inv_metr", "EXCELLENT"),
     ("sea_dist", "800"),
     ("build", "solar"),
+    # Likeness to the subscription's favorites (services/favorite_similarity
+    # .py). `match_all` is the favorite, so it is the reference the rest are
+    # measured against; a row of another kind (`other_subtype`) is never
+    # similar, and a row nobody can place is never counted as similar.
+    ("similar", "70"),
 ]
 
 # Keys of `current_filters` that are not filters, and why. Anything else the
@@ -253,6 +258,10 @@ def listings(app):
                 next_action="Ask the agency for the cadastral reference",
                 next_action_due_on=date(2020, 1, 1),
             ),
+            # The one row `similar=70` drops: every other plot shares the
+            # favorite's coordinate and price and reads 100, this one is
+            # 150 km south and reads 50 (price 100, location 0).
+            "far_away": _make(pid, "far_away", coords=(42.24, -8.72)),
         }
         db.session.add_all(list(rows.values()))
         db.session.commit()

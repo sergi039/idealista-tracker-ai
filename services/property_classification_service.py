@@ -11,6 +11,67 @@ from services.search_profile_service import SearchProfileService
 # "Caserio **Casa** de Anes" was filed as a house inside a land subscription.
 _TITLE_LOCATION_SPLIT = re.compile(r"\s+(?:in|en)\s+", re.IGNORECASE)
 
+# What a listing IS, for the similarity reading (services/favorite_similarity
+# .py): category and subtype folded into one word. `land` is one kind
+# whatever the legacy `developed` word from utils/email_parser.py says --
+# docs/PROPERTY_TYPES.md knows `plot` as land's only subtype, and sub 17
+# stars 14 plots beside 2 "developed" parcels. A housing row without a
+# subtype has no kind: it is compared, never gated (#98).
+LAND_SUBTYPES = ("plot", "developed")
+KIND_LAND = "land"
+KIND_HOUSE = "house"
+
+
+def listing_kind(category: Any, subtype: Any) -> Optional[str]:
+    """One word for what the listing is, or None when nothing says."""
+    category_word = str(category or "").strip().lower()
+    subtype_word = str(subtype or "").strip().lower()
+    if category_word == "land" or subtype_word in LAND_SUBTYPES:
+        return KIND_LAND
+    if subtype_word == KIND_HOUSE:
+        return KIND_HOUSE
+    if subtype_word:
+        return subtype_word
+    return None
+
+
+# The house typology the title head states, on the owner's own definition
+# (/agencies, #474): "Detached house = idealista's chalet independiente +
+# casa rustica (casa de pueblo / rural / casona); adosados and pareados are
+# excluded". Read from `title_head` only, never from the address (#223: a
+# street called Pareada is not a terrace). A bare "Chalet" or "Casa", the
+# yaencontre shape, states nothing and reads None.
+TYPOLOGY_DETACHED = "detached"
+TYPOLOGY_ATTACHED = "attached"
+_DETACHED_RE = re.compile(
+    r"chalet\s+independiente|casa\s+independiente|independiente|casa\s+rural|"
+    r"casa\s+de\s+pueblo|casona|casa\s+r[uú]stica|casa\s+de\s+campo",
+    re.IGNORECASE,
+)
+_ATTACHED_RE = re.compile(
+    r"adosad[ao]|paread[ao]|terraced|semi-?detached|townhouse|end\s+of\s+terrace",
+    re.IGNORECASE,
+)
+
+
+def house_typology(title: Any) -> Optional[str]:
+    """`detached`, `attached`, or None when the title head states neither.
+    An attached word wins over a detached one in the same head ("chalet
+    independiente pareado" is not a thing anybody writes, but a head that
+    says both is not evidence of either)."""
+    head = PropertyClassificationService.title_head(title)
+    if not head:
+        return None
+    attached = bool(_ATTACHED_RE.search(head))
+    detached = bool(_DETACHED_RE.search(head))
+    if attached and detached:
+        return None
+    if attached:
+        return TYPOLOGY_ATTACHED
+    if detached:
+        return TYPOLOGY_DETACHED
+    return None
+
 
 class PropertyClassificationService:
     """Centralized category/subtype classification for Properties (regex-driven)."""

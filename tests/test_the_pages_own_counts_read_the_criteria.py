@@ -143,6 +143,9 @@ def world(app):
             galicia.id,
             url="https://www.idealista.com/inmueble/91523456/"
             "?utm_campaign=express_newAd_sale_particular",
+            location_lat=43.7,
+            location_lon=-8.2,
+            location_accuracy="approximate",
         ),
         "pass_2": _mk(galicia.id),
         "pass_fotocasa": _mk(
@@ -158,8 +161,25 @@ def world(app):
         ),
         "fail_ares_1": _fails(galicia.id, municipality="Ares"),
         "fail_ares_2": _fails(galicia.id, municipality="Ares"),
-        "fail_favorited": _fails(galicia.id, is_favorite=True),
-        "fail_reviewed": _fails(galicia.id, owner_verdict="rejected"),
+        # Located, so the similarity cut (services/favorite_similarity.py)
+        # has something to keep and something to drop: the favorite is the
+        # reference, the rejected row sits 100 m from it at the same size
+        # and price (kept by every cut), and pass_1 is 13 km away and twice
+        # the size (kept by none).
+        "fail_favorited": _fails(
+            galicia.id,
+            is_favorite=True,
+            location_lat=43.66,
+            location_lon=-8.06,
+            location_accuracy="precise",
+        ),
+        "fail_reviewed": _fails(
+            galicia.id,
+            owner_verdict="rejected",
+            location_lat=43.661,
+            location_lon=-8.061,
+            location_accuracy="precise",
+        ),
         "fail_actioned": _fails(galicia.id, next_action="Call the architect"),
         "asturias_fail_shape": _fails(asturias.id, municipality="Gijon"),
     }
@@ -238,6 +258,11 @@ PAGES = [
     "/properties?profile_id={G}&verdict=undecided",
     "/properties?profile_id={G}&favorites=on&criteria=all",
     "/properties?profile_id={G}&action=pending&criteria=fail",
+    # The similarity cut, alone and beside another filter-bar field: a
+    # FILTER_BAR_DIMENSIONS entry the chips and the counted options must
+    # count under like any other.
+    "/properties?profile_id={G}&similar=80",
+    "/properties?profile_id={G}&similar=70&municipality=Cedeira",
 ]
 
 

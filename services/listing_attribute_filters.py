@@ -80,6 +80,14 @@ SEA_VIEW_FILTER_VALUES = {
 }
 
 
+# The spellings of a legacy `true` as a JSON leaf read as text: PostgreSQL's
+# `->>` renders a JSON boolean as `true`, SQLite's json_extract as `1`. The
+# SQL reading below casts with `as_boolean()`; the Python reading in
+# services/favorite_similarity.py parses the text and imports this list so
+# the two cannot disagree about what a legacy flag says.
+LEGACY_SEA_VIEW_TRUE_TEXT = ("true", "1")
+
+
 def sea_view_state_expr(model):
     """Effective sea-view state, with the mirrored `Land` boolean folded in.
 

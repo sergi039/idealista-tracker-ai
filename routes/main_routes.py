@@ -43,6 +43,7 @@ from services.listing_attribute_filters import (
     score_coverage_share_expr,
 )
 from services import taste_service
+from services import favorite_similarity
 from services.coordinate_quality import shared_coordinate_peers
 from services import advertiser
 from services.hazard_service import (
@@ -301,6 +302,31 @@ def _nearest_beach_minutes(model):
     return model.travel["beaches"]["items"][0]["duration_min"].as_float()
 
 
+def _clear_filters_url():
+    """The narrowing note's "clear filters" link: every filter dropped,
+    the subscription selection, the sort, the view state and the toolbar
+    switches kept. `criteria` is dropped too (its absence is the default
+    hide the note's baseline is counted under), which is why this does NOT
+    apply `CLEARED_NOT_ABSENT` the way `_empty_state_scope` does."""
+    args = rebuilt_from(request.args, keep=NON_FILTERS | {"favorites", "hide_removed"})
+    args["page"] = 1
+    return url_for("main.properties", **args)
+
+
+def _similarity_scope(profile_selection):
+    """The subscriptions a listing surface may be asked to count under the
+    similarity clause: every visible one (live and archived, both carry a
+    count in the menu) and every one the URL named, hidden or not."""
+    from services.search_profile_service import SearchProfileService
+
+    scope = {
+        profile.id
+        for profile in SearchProfileService.list_visible_profiles(active_only=False)
+    }
+    scope.update(int(pid) for pid in (profile_selection.filter_ids or ()))
+    return sorted(scope)
+
+
 def _criteria_context():
     """This page family's criteria clauses, over `Property`.
 
@@ -333,10 +359,11 @@ FILTER_BAR_DIMENSIONS = (
     "sea_dist",
     "build",
     "measured",
+    "similar",
 )
 
 
-def _apply_filter_bar(query, bar, review_today, skip=None):
+def _apply_filter_bar(query, bar, review_today, skip=None, similarity_ctx=None):
     """Narrow `query` by every filter-bar value in `bar`, except `skip`.
 
     `bar` maps each of FILTER_BAR_DIMENSIONS to its raw request value. Every
@@ -350,9 +377,11 @@ def _apply_filter_bar(query, bar, review_today, skip=None):
     outstanding (services/owner_review.py, applied together -- a surface that
     keeps one of the pair and drops the other is the regression the two are
     tested against together), a pasted listing URL or bare id as a search
-    (utils/listing_search.py), and the five attribute filters
-    (services/listing_attribute_filters.py) all keep their one home; this
-    function only applies them in one order.
+    (utils/listing_search.py), the five attribute filters
+    (services/listing_attribute_filters.py) and the likeness to the
+    subscription's favorites (services/favorite_similarity.py, read through
+    `similarity_ctx`, the request's one reading of it) all keep their one
+    home; this function only applies them in one order.
     """
 
     def wanted(name):
@@ -405,6 +434,11 @@ def _apply_filter_bar(query, bar, review_today, skip=None):
     measured_filter = wanted("measured")
     if measured_filter:
         query = filter_by_measured(query, Property, measured_filter)
+    similar_filter = wanted("similar")
+    if similar_filter:
+        query = favorite_similarity.apply_filter(
+            query, Property, similarity_ctx, similar_filter
+        )
     return query
 
 
@@ -1408,6 +1442,7 @@ def _property_filter_options(
     review_today,
     criteria_ctx,
     criteria_filter,
+    similarity_ctx=None,
 ):
     """Type / Subtype / Municipality choices for the subscriptions on screen.
 
@@ -1436,7 +1471,13 @@ def _property_filter_options(
     subtype_filter = bar.get("subtype") or ""
 
     def landing(dimension):
-        narrowed = _apply_filter_bar(scope_query, bar, review_today, skip=dimension)
+        narrowed = _apply_filter_bar(
+            scope_query,
+            bar,
+            review_today,
+            skip=dimension,
+            similarity_ctx=similarity_ctx,
+        )
         narrowed = apply_profile_filter(
             narrowed, Property.search_profile_id, profile_selection
         )
@@ -1564,6 +1605,10 @@ def properties():
         sea_distance_filter = request.args.get("sea_dist", "")
         build_filter = request.args.get("build", "")
         measured_filter = request.args.get("measured", "")
+        # The least likeness to the subscription's favorites a row needs
+        # (services/favorite_similarity.py). Kept as typed: an unknown value
+        # narrows nothing and the control re-renders on its default.
+        similar_filter = request.args.get("similar", "")
         # The filter bar as one mapping, for `_apply_filter_bar`: the page's
         # rows and every count beside its controls run the same function.
         bar = {
@@ -1580,6 +1625,7 @@ def properties():
             "sea_dist": sea_distance_filter,
             "build": build_filter,
             "measured": measured_filter,
+            "similar": similar_filter,
         }
         # Canonicalised at the boundary, for the reason /municipalities gives
         # (closing-audit finding 5, the LOW one): `apply_filter` normalises
@@ -1609,8 +1655,18 @@ def properties():
 
         # Sorting. Picking a mode switches to that mode's score; a bare
         # /properties keeps its date order so the newest listings stay on top.
+        similarity_cut = favorite_similarity.read_filter_cut(similar_filter)
         if request.args.get("mode"):
             default_sort = PROPERTY_MODE_SORT_DEFAULTS[mode]
+        elif similarity_cut is not None:
+            # A known similarity cut asks for the most alike rows, so with
+            # neither a sort nor a mode named that is the order: most alike
+            # first, in the units the control itself speaks. A chosen mode
+            # stays the owner's, exactly as the page script leaves a chosen
+            # sort alone. The filter form always submits its sort select, so
+            # this decides hand-typed and cross-page links -- the map's List
+            # View link carries the cut and no sort.
+            default_sort = "similarity"
         else:
             default_sort = DEFAULT_PROPERTY_SORT
         sort_by = request.args.get("sort") or default_sort
@@ -1649,7 +1705,28 @@ def properties():
         # controls also run (`_apply_filter_bar`): a counted option is the
         # size of the page picking it opens, and that holds only while the
         # page and the count narrow through the same code.
-        query = _apply_filter_bar(query, bar, review_today)
+        # The likeness to the subscription's favorites, read ONCE for the
+        # request (services/favorite_similarity.py). Under a cut or a
+        # similarity sort it covers EVERY favorite-holding subscription: the
+        # chip counts and the hidden-subscription note run this clause with
+        # only the subscription left open, and a hidden subscription's rows
+        # nobody scored would count as 0 while naming it opens them. On an
+        # ordinary page it covers the subscriptions on screen -- live and
+        # archived, since both carry a count in the menu -- and whatever the
+        # URL selected by name, which is what the chip beside every score
+        # and the line beside the count need. One object for the page's
+        # rows, the counts beside its controls, the sort key and the chips.
+        similarity_ctx = favorite_similarity.build_context(
+            profile_ids=(
+                None
+                if similarity_cut is not None
+                or request.args.get("sort") == "similarity"
+                else _similarity_scope(profile_selection)
+            )
+        )
+        query = _apply_filter_bar(
+            query, bar, review_today, similarity_ctx=similarity_ctx
+        )
 
         # Whether the filter bar narrowed anything. Object identity is the
         # honest reading: every applied clause produced a new query object,
@@ -1806,6 +1883,57 @@ def properties():
             else None
         )
 
+        # And for the similarity cut: how many rows of THIS page's set the cut
+        # counts as similar, references aside, by the same predicate the
+        # filter applied -- so the line beside the count and the rows under
+        # it are one reading. None without a cut, and the line stays off.
+        similar_count = favorite_similarity.similar_count(
+            query, Property, similarity_ctx, similar_filter
+        )
+        # Under the Favorites switch the similar rows -- never favorites, by
+        # definition -- cannot be on the page, and "Similar: 0 at >= 70"
+        # would read as "nothing resembles them". So there the count is taken
+        # with the switch lifted, through the same chain, and the line says
+        # the switch is what hides them. One extra COUNT, only on that page.
+        similar_hidden_by_favorites = False
+        if similar_count is not None and favorites_filter:
+            unswitched = Property.query
+            if hide_removed_filter:
+                unswitched = unswitched.filter(
+                    Property.listing_status.notin_(DELISTED_LISTING_STATUSES)
+                )
+            unswitched = _apply_filter_bar(
+                unswitched, bar, review_today, similarity_ctx=similarity_ctx
+            )
+            unswitched = apply_profile_filter(
+                unswitched, Property.search_profile_id, profile_selection
+            )
+            unswitched, _ = subscription_criteria.apply_filter(
+                unswitched, criteria_ctx, criteria_filter
+            )
+            similar_count = favorite_similarity.similar_count(
+                unswitched, Property, similarity_ctx, similar_filter
+            )
+            similar_hidden_by_favorites = True
+        # What the rows of this page's set read as, counted by state -- the
+        # line beside the count has to say what a missing chip means here
+        # (cannot be placed, a different kind, no favorite to compare to),
+        # and how many of the rankable rest on price, area and location
+        # alone. One query for the ids; the reading is already in hand.
+        # Counted whenever the line will render -- which includes the state
+        # with no favorite anywhere, where the context is None and a cut has
+        # emptied the page: that is where the sentence is most needed, and
+        # reading the summary off the context alone suppressed it there
+        # (SIMILAR-001).
+        similarity_summary = (
+            favorite_similarity.summarize(
+                similarity_ctx,
+                (row_id for (row_id,) in query.with_entities(Property.id)),
+            )
+            if similarity_ctx is not None or similarity_cut is not None
+            else None
+        )
+
         # Sorting (safe allow-list). An unknown sort -- an old /lands bookmark
         # asking for travel_time_nearest_beach, say -- falls back to the
         # default *and says so*, so the page never claims an order it did not
@@ -1825,9 +1953,24 @@ def properties():
             "taste_score": taste_service.sortable_score_expression(
                 Property, taste_version
             ),
+            # Likeness to the subscription's favorites: the references first,
+            # then the rankable rows by score; a row that cannot be placed, a
+            # different kind of listing and a row with no favorite to compare
+            # against are NULL and sort last in both directions.
+            "similarity": favorite_similarity.sort_expression(Property, similarity_ctx),
         }
         if sort_by not in sort_columns and sort_by != "investment_metrics":
             sort_by = default_sort
+        if sort_by == "similarity" and similarity_ctx is None:
+            # No favorite anywhere: there is no likeness to order by, and a
+            # page ordered by the tie-breaker under a select reading
+            # "Similarity" would claim an order it did not apply. Fall back
+            # the way an unknown sort does, to the mode's order or the date.
+            sort_by = (
+                PROPERTY_MODE_SORT_DEFAULTS[mode]
+                if request.args.get("mode")
+                else DEFAULT_PROPERTY_SORT
+            )
 
         if sort_by == "investment_metrics":
             rank = investment_rating_rank(Property)
@@ -1911,6 +2054,32 @@ def properties():
             review_today,
             criteria_ctx,
             criteria_filter,
+            similarity_ctx=similarity_ctx,
+        )
+
+        # The similarity control is offered only while a subscription on
+        # screen holds a favorite -- with none there is nothing to be similar
+        # to -- and the disclosure line says how many favorites the rows were
+        # measured against. Both over the subscriptions actually shown.
+        similarity_reference_count = (
+            sum(
+                similarity_ctx.reference_count_for(profile_id)
+                for profile_id in shown_profile_ids
+            )
+            if similarity_ctx is not None
+            else 0
+        )
+        # References are per subscription, so under several favorite-holding
+        # subscriptions on screen the line names each one's own favorites
+        # rather than a summed basis no row was compared against.
+        similarity_reference_profiles = (
+            sum(
+                1
+                for profile_id in shown_profile_ids
+                if similarity_ctx.reference_count_for(profile_id)
+            )
+            if similarity_ctx is not None
+            else 0
         )
 
         return render_template(
@@ -1938,6 +2107,29 @@ def properties():
             score_full_basis_count=score_full_basis_count,
             taste_version=taste_version,
             taste_scored_count=taste_scored_count,
+            # The request's one similarity reading, for the chip beside every
+            # score; the control, only where a favorite exists to compare
+            # against; and the cut's own disclosure numbers.
+            similarity_ctx=similarity_ctx,
+            # Offered where a favorite exists to compare against, and kept
+            # on screen while a recognised cut is applied even with none,
+            # so the control that produced an empty page can undo itself
+            # (the `_keep_applied_choice` rule).
+            similarity_enabled=similarity_reference_count > 0
+            or similarity_cut is not None,
+            similarity_reference_count=similarity_reference_count,
+            similarity_reference_profiles=similarity_reference_profiles,
+            similarity_cut=similarity_cut,
+            similar_count=similar_count,
+            similarity_summary=similarity_summary,
+            # The clear-filters link, built from the record of what the
+            # request carried rather than from a list of filter names -- the
+            # same route's own `_empty_state_scope` precedent, because the
+            # hand-written list is the repository's most frequent stale copy
+            # (utils/listing_filters.py). It keeps the non-filters and the two
+            # toolbar switches, and lands on page 1.
+            clear_filters_url=_clear_filters_url(),
+            similar_hidden_by_favorites=similar_hidden_by_favorites,
             criteria_enabled=criteria_ctx is not None,
             criteria_hidden_count=criteria_hidden_count,
             # How the search box entry was read, so an empty result can say
@@ -1975,6 +2167,7 @@ def properties():
                 "sea_dist": sea_distance_filter,
                 "build": build_filter,
                 "measured": measured_filter,
+                "similar": similar_filter,
                 "criteria": criteria_filter,
                 "favorites": favorites_filter,
                 "hide_removed": hide_removed_filter,
@@ -2153,12 +2346,52 @@ def property_detail(property_id):
                 "subscription": getattr(prop.search_profile, "name", None),
             }
 
+        # The row's likeness to its own subscription's favorites, read
+        # through the same context the list reads, built for this one
+        # subscription (services/favorite_similarity.py). None when the row
+        # has no subscription: there is nothing to compare against.
+        similarity_ctx = (
+            favorite_similarity.build_context(
+                profile_ids=[prop.search_profile_id], candidate_ids=[prop.id]
+            )
+            if prop.search_profile_id is not None
+            else None
+        )
+        # Always a reading: with no favorite in the subscription (or no
+        # subscription at all) the card says there is nothing to compare
+        # against, rather than vanishing -- an absent card reads as "not
+        # similar", which is #98 by omission.
+        similarity_reading = (
+            similarity_ctx.read(prop.id)
+            if similarity_ctx is not None
+            else {
+                "state": favorite_similarity.STATE_NO_REFERENCE,
+                "score": None,
+                "reference_count": 0,
+            }
+        )
+        similarity_reference_count = (
+            similarity_ctx.reference_count_for(prop.search_profile_id)
+            if similarity_ctx is not None
+            else 0
+        )
+
         return render_template(
             "property_detail.html",
             property=prop,
             # None when the row's subscription carries no criteria: there is
             # no verdict to draw, and an empty card would invent one.
             criteria_reading=criteria_reading,
+            # `no_reference` when the subscription holds no favorite: the card
+            # then says so rather than drawing a number nothing was measured
+            # against.
+            similarity_reading=similarity_reading,
+            # The favorite's basis, only when it is the looser side: a
+            # precise row measured to a centroid favorite must say so.
+            similarity_weaker_reference_basis=favorite_similarity.weaker_basis(
+                similarity_reading
+            ),
+            similarity_reference_count=similarity_reference_count,
             openai_configured=bool(getattr(Config, "AI_BRIDGE_TOKEN", None)),
             openai_analysis=(openai_variant.analysis if openai_variant else None),
             openai_model=(openai_variant.model if openai_variant else None),
@@ -4213,6 +4446,10 @@ def map_view():
         # measured on production 2026-08-20, the list found 72 listings and the
         # map plotted 470.
         measured_filter = filters.get("measured")
+        # Likeness to the subscription's favorites, the same reading as the
+        # list (services/favorite_similarity.py). Read through `FilterArgs`
+        # like the rest, so the List View link carries it back.
+        similar_filter = filters.get("similar")
 
         if category_filter:
             if category_filter == UNCLASSIFIED_FILTER:
@@ -4271,6 +4508,18 @@ def map_view():
         # describe two sets across the two surfaces (#445).
         if measured_filter:
             query = filter_by_measured(query, Property, measured_filter)
+        # Same reading and same position as /properties (#445's rule: a
+        # filter one surface keeps and another drops is the regression).
+        # Built only under a cut: the map draws no chip and has no sort.
+        if similar_filter:
+            query = favorite_similarity.apply_filter(
+                query,
+                Property,
+                favorite_similarity.build_context(
+                    profile_ids=_similarity_scope(profile_selection)
+                ),
+                similar_filter,
+            )
 
         if favorites_filter:
             query = query.filter(Property.is_favorite.is_(True))
@@ -5422,6 +5671,14 @@ def export_properties_csv():
         # export returned 471 rows.
         measured_filter = request.args.get("measured", "")
         criteria_filter = request.args.get("criteria", "")
+        # Likeness to the subscription's favorites: the filter, the sort and
+        # the columns below all read the export's one context
+        # (services/favorite_similarity.py), built here because the columns
+        # need a reading per row whether or not the cut is on.
+        similar_filter = request.args.get("similar", "")
+        similarity_ctx = favorite_similarity.build_context(
+            profile_ids=_similarity_scope(profile_selection)
+        )
 
         # The same reading as /properties, from the same module, so an export
         # and the page it was taken from cannot disagree about which listings
@@ -5504,6 +5761,11 @@ def export_properties_csv():
         if measured_filter:
             query = filter_by_measured(query, Property, measured_filter)
 
+        if similar_filter:
+            query = favorite_similarity.apply_filter(
+                query, Property, similarity_ctx, similar_filter
+            )
+
         # The same criteria reading as the page and the map: an export of the
         # visible list must not smuggle the hidden fails back in, and
         # criteria=all must widen it the same way. The context is kept, not
@@ -5543,6 +5805,9 @@ def export_properties_csv():
             "taste_score": taste_service.sortable_score_expression(
                 Property, taste_version
             ),
+            # Same reading as the page, so an export link carrying
+            # sort=similarity hands back the page's order.
+            "similarity": favorite_similarity.sort_expression(Property, similarity_ctx),
         }
         if sort_by == "investment_metrics":
             rank = investment_rating_rank(Property)
@@ -5553,6 +5818,10 @@ def export_properties_csv():
                 Property.id.asc(),
             ).all()
         else:
+            if sort_by == "similarity" and similarity_ctx is None:
+                # The page's own fallback (no favorite, no likeness to order
+                # by), so the export and the page it came from agree.
+                sort_by = "created_at"
             sort_column = sort_columns.get(sort_by, Property.created_at)
             if sort_order == "asc":
                 props = query.order_by(
@@ -5738,6 +6007,17 @@ def export_properties_csv():
             "Taste State",
             "Taste Profile Version",
             "Taste Scored At",
+            # Likeness to the subscription's favorites
+            # (services/favorite_similarity.py). The state says whether the
+            # number ranks (`ok`), is a favorite itself (`reference`), or
+            # rests on too little to rank (`thin`) -- a spreadsheet sorting
+            # the score column could not tell without it -- and the last
+            # three columns say what it was measured against and on.
+            "Similarity",
+            "Similarity State",
+            "Similarity Nearest Favorite",
+            "Similarity Compared On",
+            "Similarity Location Basis",
             "Created At",
         ]
 
@@ -5782,6 +6062,12 @@ def export_properties_csv():
             # the context the filter above was built from -- so the column and
             # the row set it explains cannot be answers to two questions.
             criteria_row = subscription_criteria.row_verdict(prop, criteria_ctx)
+            # The export's one similarity reading, per row.
+            similarity_row = (
+                similarity_ctx.read(prop.id)
+                if similarity_ctx is not None
+                else {"state": favorite_similarity.STATE_NO_REFERENCE, "score": None}
+            )
 
             row = [
                 prop.id,
@@ -5845,6 +6131,18 @@ def export_properties_csv():
                 taste_row["state"],
                 taste_row.get("profile_version"),
                 taste_row.get("scored_at") or "",
+                similarity_row.get("score")
+                if similarity_row["state"]
+                in (
+                    favorite_similarity.STATE_OK,
+                    favorite_similarity.STATE_REFERENCE,
+                    favorite_similarity.STATE_THIN,
+                )
+                else None,
+                similarity_row["state"],
+                similarity_row.get("reference_id"),
+                " ".join(similarity_row.get("compared") or []),
+                similarity_row.get("geography_basis") or "",
                 prop.created_at.isoformat() if prop.created_at else "",
             ]
 
