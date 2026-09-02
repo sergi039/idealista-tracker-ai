@@ -1794,10 +1794,14 @@ the reading cannot see, and says so in its
 docstring: a municipality whose only located rows are wrongly geocoded (the
 median shrugs off one among several and cannot with one), a listing-pin
 coordinate (#524, which abstains on the wide side like a centroid), and the
-favorites' own plot, which on production sits under a dossier key
-(`attributes.plot_area_cadastre_m2`) and not in the column — the plot
-component is dormant until the column is filled, by a hand-set writer with a
-source note on the owner's word, not by a bare UPDATE.
+**Galicia's** two favorites' own plot, which on production sits under a
+dossier key (`attributes.plot_area_cadastre_m2`) and not in the column, so
+the plot component is dormant **there** until the column is filled, by a
+hand-set writer with a source note on the owner's word and not by a bare
+UPDATE. It is not dormant generally: 18 of the 22 favorites are bare land
+(16 `plot`, 2 `developed`, measured 2026-09-02), and for those `area` IS
+the parcel through `effective_figures`, so the component is live on the
+land subscriptions and carries the only surface those rows state.
 `tests/test_favorite_similarity.py` pins the reading by value (the neighbour's
 84.1 is hand-computed component by component) and every surface; the sweeps
 in `tests/test_map_and_list_agree_on_the_filters.py`,
