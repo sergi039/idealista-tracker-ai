@@ -215,7 +215,6 @@ class TestTheClearLink:
         cleared = client.get(href)
         assert "2 properties found" in cleared.get_data(as_text=True)
 
-
     def test_it_drops_every_filter_the_page_applies(self, app, client):
         """The class, not the example: the link is built from the record of
         the request (`_clear_filters_url`), so every key of `current_filters`
