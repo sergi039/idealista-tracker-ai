@@ -302,6 +302,17 @@ def _nearest_beach_minutes(model):
     return model.travel["beaches"]["items"][0]["duration_min"].as_float()
 
 
+def _clear_filters_url():
+    """The narrowing note's "clear filters" link: every filter dropped,
+    the subscription selection, the sort, the view state and the toolbar
+    switches kept. `criteria` is dropped too (its absence is the default
+    hide the note's baseline is counted under), which is why this does NOT
+    apply `CLEARED_NOT_ABSENT` the way `_empty_state_scope` does."""
+    args = rebuilt_from(request.args, keep=NON_FILTERS | {"favorites", "hide_removed"})
+    args["page"] = 1
+    return url_for("main.properties", **args)
+
+
 def _similarity_scope(profile_selection):
     """The subscriptions a listing surface may be asked to count under the
     similarity clause: every visible one (live and archived, both carry a
@@ -1644,15 +1655,18 @@ def properties():
 
         # Sorting. Picking a mode switches to that mode's score; a bare
         # /properties keeps its date order so the newest listings stay on top.
-        if favorite_similarity.read_filter_cut(similar_filter) is not None:
-            # A known similarity cut asks for the most alike rows, so with no
-            # sort named that is the order: most alike first, in the units
-            # the control itself speaks. The filter form always submits its
-            # sort select, so this decides hand-typed and cross-page links
-            # only; the page's own script moves the select the same way.
-            default_sort = "similarity"
-        elif request.args.get("mode"):
+        similarity_cut = favorite_similarity.read_filter_cut(similar_filter)
+        if request.args.get("mode"):
             default_sort = PROPERTY_MODE_SORT_DEFAULTS[mode]
+        elif similarity_cut is not None:
+            # A known similarity cut asks for the most alike rows, so with
+            # neither a sort nor a mode named that is the order: most alike
+            # first, in the units the control itself speaks. A chosen mode
+            # stays the owner's, exactly as the page script leaves a chosen
+            # sort alone. The filter form always submits its sort select, so
+            # this decides hand-typed and cross-page links -- the map's List
+            # View link carries the cut and no sort.
+            default_sort = "similarity"
         else:
             default_sort = DEFAULT_PROPERTY_SORT
         sort_by = request.args.get("sort") or default_sort
@@ -1692,15 +1706,23 @@ def properties():
         # size of the page picking it opens, and that holds only while the
         # page and the count narrow through the same code.
         # The likeness to the subscription's favorites, read ONCE for the
-        # request (services/favorite_similarity.py) over every subscription
-        # this page can be asked about: the chip counts below run this same
-        # clause with only the subscription left open, so the reading covers
-        # the visible subscriptions -- live and archived, since both carry a
-        # count in the menu -- and whatever the URL selected by name. The
-        # page's rows, the counts beside its controls, the sort key and the
-        # chip beside every score all read this one object.
+        # request (services/favorite_similarity.py). Under a cut or a
+        # similarity sort it covers EVERY favorite-holding subscription: the
+        # chip counts and the hidden-subscription note run this clause with
+        # only the subscription left open, and a hidden subscription's rows
+        # nobody scored would count as 0 while naming it opens them. On an
+        # ordinary page it covers the subscriptions on screen -- live and
+        # archived, since both carry a count in the menu -- and whatever the
+        # URL selected by name, which is what the chip beside every score
+        # and the line beside the count need. One object for the page's
+        # rows, the counts beside its controls, the sort key and the chips.
         similarity_ctx = favorite_similarity.build_context(
-            profile_ids=_similarity_scope(profile_selection)
+            profile_ids=(
+                None
+                if similarity_cut is not None
+                or request.args.get("sort") == "similarity"
+                else _similarity_scope(profile_selection)
+            )
         )
         query = _apply_filter_bar(
             query, bar, review_today, similarity_ctx=similarity_ctx
@@ -1893,6 +1915,18 @@ def properties():
                 unswitched, Property, similarity_ctx, similar_filter
             )
             similar_hidden_by_favorites = True
+        # What the rows of this page's set read as, counted by state -- the
+        # line beside the count has to say what a missing chip means here
+        # (cannot be placed, a different kind, no favorite to compare to),
+        # and how many of the rankable rest on price, area and location
+        # alone. One query for the ids; the reading is already in hand.
+        similarity_summary = (
+            similarity_ctx.summarize(
+                row_id for (row_id,) in query.with_entities(Property.id)
+            )
+            if similarity_ctx is not None
+            else None
+        )
 
         # Sorting (safe allow-list). An unknown sort -- an old /lands bookmark
         # asking for travel_time_nearest_beach, say -- falls back to the
@@ -2049,10 +2083,23 @@ def properties():
             # score; the control, only where a favorite exists to compare
             # against; and the cut's own disclosure numbers.
             similarity_ctx=similarity_ctx,
-            similarity_enabled=similarity_reference_count > 0,
+            # Offered where a favorite exists to compare against, and kept
+            # on screen while a recognised cut is applied even with none,
+            # so the control that produced an empty page can undo itself
+            # (the `_keep_applied_choice` rule).
+            similarity_enabled=similarity_reference_count > 0
+            or similarity_cut is not None,
             similarity_reference_count=similarity_reference_count,
-            similarity_cut=favorite_similarity.read_filter_cut(similar_filter),
+            similarity_cut=similarity_cut,
             similar_count=similar_count,
+            similarity_summary=similarity_summary,
+            # The clear-filters link, built from the record of what the
+            # request carried rather than from a list of filter names -- the
+            # same route's own `_empty_state_scope` precedent, because the
+            # hand-written list is the repository's most frequent stale copy
+            # (utils/listing_filters.py). It keeps the non-filters and the two
+            # toolbar switches, and lands on page 1.
+            clear_filters_url=_clear_filters_url(),
             similar_hidden_by_favorites=similar_hidden_by_favorites,
             criteria_enabled=criteria_ctx is not None,
             criteria_hidden_count=criteria_hidden_count,

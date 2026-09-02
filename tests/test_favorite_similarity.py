@@ -9,7 +9,7 @@ wins, and the number rests on a location or it does not rank at all.
 
 What is pinned here, and why each case is here:
 
-* **By value.** The neighbour's 85.0 is hand-computed from the module's own
+* **By value.** The neighbour's 84.1 is hand-computed from the module's own
   formulas in the test, component by component, so a weight that drifts or a
   component that silently stops being compared fails here rather than
   rendering politely (the None×None lesson).
@@ -132,8 +132,10 @@ def world(app):
             },
         ),
         # Everything stated, everything close: 275k, 292 m², 3.3 km away,
-        # the same bedrooms, one more bathroom, 100 m further from the sea,
-        # and no sea view where the favorite likely has one.
+        # the same bedrooms, one more bathroom, and no sea view where the
+        # favorite likely has one. Its sea distance is a centroid's figure
+        # (approximate coordinate), so against the favorite's precise 400 m
+        # the 5 km slack leaves the answer open and the component abstains.
         "neighbour": _mk(
             pid,
             title="The neighbour",
@@ -205,27 +207,30 @@ class TestTheReading:
             "geography",
             "bedrooms",
             "bathrooms",
-            "sea_distance",
             "sea_view",
         ]
         parts = reading["components"]
         assert parts["price"] == pytest.approx(_ratio(275000, 290000), abs=0.05)
         assert parts["area"] == pytest.approx(_ratio(292, 300), abs=0.05)
         # 5 bedrooms both; 3 bathrooms against 2 (a string in the JSON, parsed
-        # not cast); 500 m against 400 m from the sea; no view against likely.
+        # not cast); no view against likely; the sea distance abstains (the
+        # slack case is its own test below).
         assert parts["bedrooms"] == 100.0
         assert parts["bathrooms"] == 60.0
-        assert parts["sea_distance"] == pytest.approx(95.0, abs=0.05)
+        assert "sea_distance" not in parts
         assert parts["sea_view"] == 0.0
         # 3.3 km apart on a 60 km scale.
         assert 94.0 <= parts["geography"] <= 95.0
         assert reading["score"] == pytest.approx(_weighted(parts), abs=0.06)
-        assert reading["coverage"] == pytest.approx(
-            (fs.TOTAL_WEIGHT - fs.WEIGHTS["plot"]) / fs.TOTAL_WEIGHT, abs=0.001
-        )
+        assert reading["score"] == pytest.approx(84.1, abs=0.1)
+        assert reading["coverage"] == pytest.approx(10.5 / fs.TOTAL_WEIGHT, abs=0.001)
+        assert reading["compared_count"] == 6 and reading["fact_count"] == 8
+        assert reading["base_only"] is False
         # The approximate coordinate is the row's own point, labelled as
-        # the locality's.
-        assert reading["geography_basis"] == fs.BASIS_LOCALITY
+        # approximate (a pin or a locality centroid: the label does not
+        # claim to know which).
+        assert reading["geography_basis"] == fs.BASIS_APPROXIMATE
+        assert reading["municipality_point_n"] is None
 
     def test_an_absent_fact_abstains_and_lowers_the_coverage(self, world):
         reading = _reading(world, "unlocated")
@@ -244,9 +249,11 @@ class TestTheReading:
         # rows (the favorite, the neighbour and the plot), which lands on the
         # neighbour's point 3.3 km from the favorite.
         assert reading["geography_basis"] == fs.BASIS_MUNICIPALITY
+        assert reading["municipality_point_n"] == 3
         assert reading["components"]["geography"] == pytest.approx(94.5, abs=0.1)
         # (3 x 78.6 + 2 x 100 + 3 x 94.5) / 8
         assert reading["score"] == pytest.approx(89.9, abs=0.1)
+        assert reading["base_only"] is True
 
     def test_a_far_row_scores_zero_on_location_and_stays_rankable(self, world):
         reading = _reading(world, "far")
@@ -262,6 +269,72 @@ class TestTheReading:
         reading = _reading(world, "plot")
         assert reading["state"] == fs.STATE_DIFFERENT_KIND
         assert reading["score"] is None
+
+    def test_the_kind_folds_land_together_and_leaves_an_unstated_side_alone(self, app):
+        """Sub 17's shape: 14 starred `plot` rows beside 2 legacy `developed`
+        parcels -- one kind, compared; a flat against a house is gated; a
+        housing row with no subtype is compared, never gated (#98)."""
+        land = _profile("Plots")
+        ref = _mk(
+            land.id,
+            is_favorite=True,
+            property_category="land",
+            property_subtype="plot",
+            area=2100,
+            area_type="plot",
+            coords=MALPICA,
+        )
+        developed = _mk(
+            land.id,
+            property_category="land",
+            property_subtype="developed",
+            area=2000,
+            area_type="plot",
+            coords=MALPICA,
+        )
+        houses = _profile("Houses")
+        _mk(houses.id, is_favorite=True, coords=MALPICA)
+        flat = _mk(houses.id, property_subtype="apartment", coords=MALPICA)
+        untyped = _mk(houses.id, property_subtype=None, coords=MALPICA)
+        ctx = fs.build_context()
+        assert ctx.read(developed.id)["state"] == fs.STATE_OK
+        assert ctx.read(developed.id)["reference_id"] == ref.id
+        assert ctx.read(flat.id)["state"] == fs.STATE_DIFFERENT_KIND
+        assert ctx.read(untyped.id)["state"] == fs.STATE_OK
+
+    def test_an_attached_house_is_not_similar_to_a_detached_one(self, world):
+        """The owner's own definition (/agencies): adosados and pareados are
+        not detached houses; casa de pueblo and casa rural are. Read from
+        the title head only -- a street called Pareada is not a terrace."""
+        pid = world["pid"]
+        terraced = _mk(pid, title="Casa adosada en venta en Malpica", coords=MALPICA)
+        paired = _mk(pid, title="Chalet pareado en Ponteceso", coords=PONTECESO)
+        village = _mk(pid, title="Casa de pueblo en Laxe", coords=PONTECESO)
+        bare = _mk(
+            pid, title="Chalet en venta en calle Pareada, Malpica", coords=MALPICA
+        )
+        ctx = fs.build_context()
+        # The favorite's title states no typology, so nothing is gated on it
+        # yet; a detached favorite gates the attached rows.
+        assert ctx.read(terraced.id)["state"] == fs.STATE_OK
+        detached_ref = _mk(
+            pid,
+            title="Casa o chalet independiente en venta en Malpica",
+            is_favorite=True,
+            coords=MALPICA,
+        )
+        ctx = fs.build_context()
+        assert ctx.read(terraced.id)["reference_id"] == world["ids"]["favorite"]
+        assert ctx.read(village.id)["state"] == fs.STATE_OK
+        assert ctx.read(bare.id)["state"] == fs.STATE_OK
+        # Against the detached favorite alone, the attached rows are gated.
+        world["rows"]["favorite"].is_favorite = False
+        db.session.commit()
+        ctx = fs.build_context()
+        assert ctx.read(terraced.id)["state"] == fs.STATE_DIFFERENT_KIND
+        assert ctx.read(paired.id)["state"] == fs.STATE_DIFFERENT_KIND
+        assert ctx.read(village.id)["reference_id"] == detached_ref.id
+        assert ctx.read(bare.id)["reference_id"] == detached_ref.id
 
     def test_a_row_nobody_can_place_is_thin_and_never_kept(self, world):
         reading = _reading(world, "nowhere")
@@ -310,8 +383,46 @@ class TestTheReading:
         for name in ("bedrooms", "bathrooms", "sea_distance"):
             assert name not in reading["components"], name
 
+    def test_a_coordinate_off_the_globe_is_no_coordinate(self, world):
+        """NaN and a latitude of 400 are bad input, not a location: such a
+        row takes the municipality path instead of scoring 60 km away under
+        basis `coordinate`."""
+        row = list(
+            (
+                99,
+                world["pid"],
+                False,
+                "housing",
+                "house",
+                "Casa",
+                290000,
+                300,
+                "built",
+                None,
+                None,
+                None,
+                None,
+                float("nan"),
+                -8.86,
+                "precise",
+                "Malpica de Bergantiños",
+                None,
+                None,
+                None,
+            )
+        )
+        facts = fs.facts_from_row(row)
+        assert facts.lat is None and facts.lon is None
+        row[13], row[14] = 400.0, -8.86
+        assert fs.facts_from_row(row).lat is None
+        points = fs.municipality_points()
+        located = fs.locate(facts, points)
+        assert located is not None and located[2] == fs.BASIS_MUNICIPALITY
+
     def test_the_plot_is_the_criteria_modules_reading(self, app):
-        """Bare land: `area` IS the plot where `plot_area` is unstated."""
+        """Bare land: `area` IS the plot where `plot_area` is unstated, and
+        it is then compared ONCE, as the plot -- never a second time as a
+        built surface."""
         profile = _profile("Plots")
         ref = _mk(
             profile.id,
@@ -336,6 +447,133 @@ class TestTheReading:
         assert reading["components"]["plot"] == pytest.approx(
             _ratio(2000, 2100), abs=0.05
         )
+        assert "area" not in reading["components"]
+        assert reading["compared"] == ["price", "geography", "plot"]
+
+    def test_a_house_whose_area_is_the_parcel_abstains_on_area(self, world):
+        """Production rows 1550/1551's shape: subtype `house`, `area_type`
+        plot -- the parcel is not scored as a built surface."""
+        row = _mk(world["pid"], area=2142, area_type="plot", coords=MALPICA)
+        reading = fs.build_context().read(row.id)
+        assert reading["state"] == fs.STATE_OK
+        assert "area" not in reading["components"]
+        assert "plot" not in reading["components"]
+
+    def test_the_sea_distance_abstains_wherever_the_slack_leaves_it_open(self, world):
+        """The #358 rule the scorer applies: an approximate coordinate's sea
+        distance is a band 5 km either way, and against a 2 km scale the
+        band settles the component only when it cannot come within the
+        scale (then 0) -- never by its endpoints, since the decay peaks at
+        the reference and a band can contain the peak while both ends
+        score 0."""
+        pid = world["pid"]
+
+        def row(distance, accuracy):
+            return _mk(
+                pid,
+                coords=MALPICA,
+                location_accuracy=accuracy,
+                enrichment={"sea": {"status": "ok", "distance_m": distance}},
+            )
+
+        a = row(1500.0, "approximate")  # band [0, 6500] straddles 400
+        b = row(9000.0, "approximate")  # band [4000, 14000]: gap 3600 >= 2000
+        c = row(1000.0, "approximate")  # band [0, 6000] contains 400; ends 0
+        d = row(1300.0, "precise")  # a point against a point: 100 - 900/2000
+        ctx = fs.build_context()
+        assert "sea_distance" not in ctx.read(a.id)["components"]
+        assert ctx.read(b.id)["components"]["sea_distance"] == 0.0
+        assert ctx.read(b.id)["sea_distance_basis"] == fs.SEA_BASIS_BAND
+        assert "sea_distance" not in ctx.read(c.id)["components"]
+        assert ctx.read(d.id)["components"]["sea_distance"] == pytest.approx(
+            55.0, abs=0.1
+        )
+        assert ctx.read(d.id)["sea_distance_basis"] == fs.SEA_BASIS_PARCEL
+        # (e) the reference's own slack counts too: an approximate favorite at
+        # 2000 m is a band [0, 7000], and a precise 9500 m row is past it.
+        other = _profile("Approximate favorite")
+        _mk(
+            other.id,
+            is_favorite=True,
+            coords=MALPICA,
+            location_accuracy="approximate",
+            enrichment={"sea": {"status": "ok", "distance_m": 2000.0}},
+        )
+        e = _mk(
+            other.id,
+            coords=MALPICA,
+            location_accuracy="precise",
+            enrichment={"sea": {"status": "ok", "distance_m": 9500.0}},
+        )
+        near = _mk(
+            other.id,
+            coords=MALPICA,
+            location_accuracy="precise",
+            enrichment={"sea": {"status": "ok", "distance_m": 3000.0}},
+        )
+        ctx = fs.build_context()
+        assert ctx.read(e.id)["components"]["sea_distance"] == 0.0
+        assert "sea_distance" not in ctx.read(near.id)["components"]
+
+    def test_the_loader_reads_the_sea_facts_as_the_filters_do(self, app):
+        """The loader parses JSON in Python where the filters cast in SQL;
+        one fixture through both, so the two readings cannot drift -- and a
+        hand-edited leaf reads as absent instead of raising."""
+        from services.listing_attribute_filters import (
+            sea_distance_m_expr,
+            sea_view_state_expr,
+        )
+
+        profile = _profile()
+        shapes = {
+            "precise": {"sea": {"status": "ok", "distance_m": 350.0}},
+            "centroid": {
+                "sea": {
+                    "status": "approximate_origin",
+                    "distance_m": None,
+                    "origin_distance_m": 620.0,
+                }
+            },
+            "computed": {"environment": {"sea_view": "yes"}},
+            "legacy_true": {"legacy_land": {"environment": {"sea_view": True}}},
+            "legacy_false": {"legacy_land": {"environment": {"sea_view": False}}},
+            "junk": {
+                "sea": {"status": "ok", "distance_m": "junk"},
+                "environment": {"sea_view": "maybe"},
+                "legacy_land": {"environment": {"sea_view": "maybe"}},
+            },
+            "nothing": None,
+        }
+        ids = {
+            name: _mk(profile.id, is_favorite=(name == "precise"), enrichment=block).id
+            for name, block in shapes.items()
+        }
+        by_id = {facts.id: facts for facts in fs.load_facts([profile.id])}
+        sql = {
+            row_id: (distance, state)
+            for row_id, distance, state in db.session.query(
+                Property.id,
+                sea_distance_m_expr(Property),
+                sea_view_state_expr(Property),
+            ).filter(Property.search_profile_id == profile.id)
+        }
+        for name, row_id in ids.items():
+            if name == "junk":
+                # The hazard itself: SQLite hands the text through its CAST
+                # and PostgreSQL raises on it, so the SQL side has no one
+                # answer to agree with. The loader's answer is asserted
+                # below: absent, never an exception.
+                continue
+            facts = by_id[row_id]
+            distance, state = sql[row_id]
+            assert facts.sea_distance_m == (
+                float(distance) if distance is not None else None
+            ), name
+            assert facts.sea_view_state == state, name
+        assert by_id[ids["centroid"]].sea_distance_m == 620.0
+        assert by_id[ids["legacy_true"]].sea_view_state == "likely"
+        assert by_id[ids["junk"]].sea_distance_m is None
+        assert by_id[ids["junk"]].sea_view_state is None
 
     def test_the_nearest_reference_wins_and_a_rankable_one_beats_a_thin_one(
         self, world
@@ -352,6 +590,29 @@ class TestTheReading:
         assert reading["state"] == fs.STATE_OK
         assert reading["reference_id"] == second.id
         assert reading["reference_count"] == 3
+
+    def test_a_duplicate_of_a_favorite_never_sorts_above_it(self, app):
+        """The table holds the same house under two portals. A copy scores
+        100 on every fact; the favorite still leads, whatever their ids."""
+        profile = _profile("Twins")
+        copy = _mk(
+            profile.id,
+            coords=MALPICA,
+            location_accuracy="precise",
+            attributes={"bedrooms": 5, "bathrooms": 2},
+        )
+        favorite = _mk(
+            profile.id,
+            is_favorite=True,
+            coords=MALPICA,
+            location_accuracy="precise",
+            attributes={"bedrooms": 5, "bathrooms": 2},
+        )
+        assert copy.id < favorite.id
+        ctx = fs.build_context()
+        assert ctx.read(copy.id)["score"] == 100.0
+        keys = ctx.sort_keys()
+        assert keys[favorite.id] > keys[copy.id] == 100.0
 
     def test_references_are_per_subscription(self, world):
         """A favorite elsewhere is nobody else's reference, and a
@@ -524,15 +785,37 @@ class TestTheList:
             ids["far"],
         ]
         assert set(shown[4:]) == {ids["plot"], ids["nowhere"]}
-        assert _coverage_line(body) is None
+        # Without a cut the line says what is rankable at all, and its
+        # tooltip counts what a missing chip means on this page.
+        assert _coverage_line(body) == "Similar: 3 of 6 rankable against 1 favorite"
+        tooltip = re.search(r'id="similarity-coverage"[^>]*title="([^"]*)"', body)
+        assert tooltip and unescape(tooltip.group(1)).startswith(
+            "1 cannot be placed · 1 of a different kind · 0 with no favorite to "
+            "compare to · 2 of the rankable rest on price, area and location "
+            "alone · plot compared on 0."
+        )
 
-    def test_an_unknown_value_narrows_nothing_and_says_nothing(self, client, world):
+    def test_an_unknown_value_narrows_nothing_and_is_not_a_cut(self, client, world):
         body = client.get("/properties?profile_id=all&similar=banana").get_data(
             as_text=True
         )
         assert _count(body) == 6
-        assert _coverage_line(body) is None
+        assert _coverage_line(body) == "Similar: 3 of 6 rankable against 1 favorite"
         assert "Filters:" not in body
+
+    def test_a_chosen_mode_outranks_the_cuts_default_sort(self, client, world):
+        """The cut moves only the bare date default: a mode named in the
+        URL keeps its own score order, as the page script leaves a chosen
+        sort alone."""
+        ids = world["ids"]
+        world["rows"]["far"].score_investment = 99
+        world["rows"]["neighbour"].score_investment = 50
+        world["rows"]["unlocated"].score_investment = 10
+        db.session.commit()
+        body = client.get(
+            "/properties?profile_id=all&similar=60&mode=investment"
+        ).get_data(as_text=True)
+        assert _shown(body)[:3] == [ids["far"], ids["neighbour"], ids["unlocated"]]
 
     def test_the_control_is_drawn_only_with_a_favorite_on_screen(self, client, world):
         body = client.get("/properties?profile_id=all").get_data(as_text=True)
@@ -542,12 +825,24 @@ class TestTheList:
         _mk(other.id, coords=MALPICA)
         body = client.get(f"/properties?profile_id={other.id}").get_data(as_text=True)
         assert 'id="similar"' not in body
-        # A cut typed into the URL still travels with the form, like `source`.
+        assert _coverage_line(body) is None
+        # An applied cut keeps its control on screen even with nothing to
+        # compare to, so the page it emptied can be undone on the control
+        # itself; the hint says why it keeps nothing.
         body = client.get(f"/properties?profile_id={other.id}&similar=70").get_data(
             as_text=True
         )
-        assert 'name="similar" value="70"' in body
+        assert 'id="similar"' in body
+        assert 'value="70" selected' in body
+        assert "no favorites yet, so this cut keeps nothing" in body
         assert _count(body) == 0
+        assert _coverage_line(body) == "Similar: 0 at ≥ 70 to 0 favorites"
+        # An unrecognised value is not a cut: it travels as a hidden input.
+        body = client.get(f"/properties?profile_id={other.id}&similar=banana").get_data(
+            as_text=True
+        )
+        assert 'name="similar" value="banana"' in body
+        assert _count(body) == 1
 
     def test_the_chip_rides_beside_the_score_with_the_facts_it_rests_on(
         self, client, world
@@ -557,23 +852,26 @@ class TestTheList:
         )
         chips = re.findall(
             r'class="badge d-block mt-1 similarity-chip" data-similarity-state="(\w+)"'
-            r'[^>]*title="([^"]*)"[^>]*>&asymp; (\d+)</span>',
+            r'[^>]*title="([^"]*)"[^>]*>&asymp; ([\d.]+)(?: <span class="opacity-75">'
+            r"(\d+/\d+)</span>)?</span>",
             body,
         )
         by_state = {}
-        for state, title, number in chips:
-            by_state.setdefault(state, []).append((unescape(title), int(number)))
+        for state, title, number, facts in chips:
+            by_state.setdefault(state, []).append((unescape(title), number, facts))
         favorite = world["ids"]["favorite"]
         assert (
-            f"Similarity 85 to favorite #{favorite}, on: price, built area, location, "
-            "bedrooms, bathrooms, distance to the sea, sea view",
-            85,
+            f"Similarity 84.1 to favorite #{favorite}, on: price, built area, "
+            "location, bedrooms, bathrooms, sea view",
+            "84.1",
+            "6/8",
         ) in by_state["ok"]
         assert any(
             title.startswith("Not ranked")
             and "price, built area" in title
-            and number == 100
-            for title, number in by_state["thin"]
+            and number == "100.0"
+            and facts == "2/8"
+            for title, number, facts in by_state["thin"]
         )
         # Three rankable rows, one thin; the favorite, the plot draw none.
         assert len(by_state["ok"]) == 3
@@ -587,6 +885,8 @@ class TestTheList:
         assert price_header and "similar=70" in unescape(price_header.group(1))
         clear = re.search(r'href="([^"]+)">clear filters</a>', body)
         assert clear and "similar=" not in unescape(clear.group(1))
+        export = re.search(r'href="(/properties/export\.csv\?[^"]*)"', body)
+        assert export and "similar=70" in unescape(export.group(1))
 
     def test_the_option_counts_follow_the_cut(self, client, world):
         """The municipality dropdown counts the page each option opens: under
@@ -637,12 +937,12 @@ class TestTheOtherSurfaces:
         ]
         neighbour = by_id[ids["neighbour"]]
         assert neighbour["Similarity State"] == "ok"
-        assert float(neighbour["Similarity"]) == pytest.approx(85.0, abs=0.1)
+        assert float(neighbour["Similarity"]) == pytest.approx(84.1, abs=0.1)
         assert neighbour["Similarity Nearest Favorite"] == str(ids["favorite"])
         assert neighbour["Similarity Compared On"] == (
-            "price area geography bedrooms bathrooms sea_distance sea_view"
+            "price area geography bedrooms bathrooms sea_view"
         )
-        assert neighbour["Similarity Location Basis"] == "locality"
+        assert neighbour["Similarity Location Basis"] == "approximate"
         assert by_id[ids["favorite"]]["Similarity State"] == "reference"
         assert by_id[ids["plot"]]["Similarity State"] == "different_kind"
         assert by_id[ids["plot"]]["Similarity"] == ""
@@ -670,7 +970,7 @@ class TestTheOtherSurfaces:
             ids["unlocated"],
         }
         by_id = {p["id"]: p for p in payload["properties"]}
-        assert by_id[ids["neighbour"]]["similarity"] == pytest.approx(85.0, abs=0.1)
+        assert by_id[ids["neighbour"]]["similarity"] == pytest.approx(84.1, abs=0.1)
         assert by_id[ids["neighbour"]]["similarity_state"] == "ok"
         assert by_id[ids["favorite"]]["similarity_state"] == "reference"
         assert "similar" in payload["scope"]["filters_read"]
@@ -738,11 +1038,18 @@ class TestThePropertyPage:
         text = _card(
             client.get(f"/properties/{ids['neighbour']}").get_data(as_text=True)
         )
-        assert "85/100" in text
+        assert "84.1/100" in text
         assert f"nearest favorite: #{ids['favorite']}" in text
         assert "price 92, built area 96, location 9" in text
-        assert "bedrooms 100, bathrooms 60, distance to the sea 95, sea view 0" in text
-        assert "location from the locality centroid" in text
+        assert "bedrooms 100, bathrooms 60, sea view 0" in text
+        assert "location from the listing's approximate coordinate" in text
+        assert "6 of 8 facts" in text
+        # The municipality point says how many rows made it, by value.
+        text = _card(
+            client.get(f"/properties/{ids['unlocated']}").get_data(as_text=True)
+        )
+        assert "the municipality's located listings (3)" in text
+        assert "3 of 8 facts" in text
         assert "Show the listings most similar to the favorites" in text
 
     def test_the_favorite_reads_as_a_reference(self, client, world):
@@ -756,7 +1063,7 @@ class TestThePropertyPage:
         text = _card(
             client.get(f"/properties/{world['ids']['nowhere']}").get_data(as_text=True)
         )
-        assert "100/100" in text
+        assert "100.0/100" in text
         assert "Not ranked" in text
 
     def test_the_plot_and_a_subscription_without_favorites_say_why(self, client, world):

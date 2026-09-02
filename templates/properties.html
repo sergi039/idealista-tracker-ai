@@ -1006,12 +1006,15 @@
                     {# Likeness to the subscription's favorites
                        (services/favorite_similarity.py): the least similarity a
                        row needs, in the units the chip beside every score shows.
-                       Drawn only while a subscription on screen holds a favorite
-                       -- with none there is nothing to be similar to; a value
-                       typed into the URL still travels, like `source`. #}
+                       Drawn while a subscription on screen holds a favorite, and
+                       kept on screen while a recognised cut is applied even with
+                       none -- the control that produced an empty page has to be
+                       able to undo itself (the `_keep_applied_choice` rule); an
+                       unrecognised value typed into the URL travels as a hidden
+                       input and narrows nothing. #}
                     {% if similarity_enabled is defined and similarity_enabled %}
                     <select class="form-select form-select-sm properties-filter-select" id="similar" name="similar"
-                            aria-label="{{ t('similar_filter') }}">
+                            aria-label="{{ t('similar_filter') }}"{% if not similarity_reference_count %} title="{{ t('similar_no_reference_hint') }}"{% endif %}>
                         <option value="" {{ 'selected' if not current_filters.similar }}>{{ t('similar_any') }}</option>
                         <option value="80" {{ 'selected' if current_filters.similar == '80' }}>{{ t('similar_80') }}</option>
                         <option value="70" {{ 'selected' if current_filters.similar == '70' }}>{{ t('similar_70') }}</option>
@@ -1161,7 +1164,7 @@
                         <span id="filter-bar-narrowing-note" class="text-body-secondary small">
                             <i class="fas fa-filter me-1"></i>{{ t('filter_bar_narrowing')|format(pagination.total, filter_bar_scope_total) }}
                             (<a id="clear-filters-link"
-                                href="{{ url_for('main.properties', **dict(base_args, search=None, category=None, subtype=None, municipality=None, source=None, advertiser=None, verdict=None, action=None, inv_metr=None, sea_view=None, sea_dist=None, build=None, measured=None, similar=None, criteria=None, page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">{{ t('clear_filters_link') }}</a>)
+                                href="{{ clear_filters_url }}">{{ t('clear_filters_link') }}</a>)
                         </span>
                     {% endif %}
                     {# Whether that total covers the listings with no subscription
@@ -1254,16 +1257,19 @@
                             <i class="fas fa-heart me-1"></i>{{ t('taste_coverage')|format(taste_scored_count, pagination.total, taste_version) }}
                         </span>
                     {% endif %}
-                    {# What the similarity cut kept: how many rows of this set
-                       are at or above it, references aside, and how many
-                       favorites the subscriptions on screen hold -- the
-                       number the rows were measured against. Rendered only
-                       under a cut, from the same predicate the filter applied
-                       (services/favorite_similarity.py). #}
-                    {% if similar_count is defined and similar_count is not none and pagination %}
+                    {# The likeness to the favorites, said beside the count
+                       whenever the control is on screen (the taste line's
+                       rule): "no chip" means three different things on one
+                       page -- cannot be placed, a different kind, no favorite
+                       to compare to -- and the tooltip counts each. Under a cut
+                       the line says how many rows of this set are at or above
+                       it, references aside, and how many favorites they were
+                       measured against, from the same predicate the filter
+                       applied (services/favorite_similarity.py). #}
+                    {% if similarity_enabled is defined and similarity_enabled and similarity_summary and pagination %}
                         <span id="similarity-coverage" class="text-body-secondary small"
-                              title="{{ t('similar_coverage_tooltip') }}">
-                            <i class="fas fa-equals me-1"></i>{{ t('similar_coverage')|format(similar_count, similarity_cut|int) }} {{ tn('similarity_references', similarity_reference_count) }}{% if similar_hidden_by_favorites is defined and similar_hidden_by_favorites %} {{ t('similar_hidden_by_favorites') }}{% endif %}
+                              title="{{ t('similarity_counts_line')|format(similarity_summary.thin, similarity_summary.different_kind, similarity_summary.no_reference, similarity_summary.base_only, similarity_summary.plot_compared) }} {{ t('similar_coverage_tooltip') }}">
+                            <i class="fas fa-equals me-1"></i>{% if similar_count is defined and similar_count is not none %}{{ t('similar_coverage')|format(similar_count, similarity_cut|int) }}{% else %}{{ t('similar_rankable')|format(similarity_summary.ok, pagination.total) }}{% endif %} {{ tn('similarity_references', similarity_reference_count) }}{% if similar_hidden_by_favorites is defined and similar_hidden_by_favorites %} {{ t('similar_hidden_by_favorites') }}{% endif %}
                         </span>
                     {% endif %}
                     {# How many listings are waiting on something that is now
@@ -1341,7 +1347,7 @@
                        export never re-derives a default the page has already
                        resolved. #}
                     <a class="btn btn-success btn-sm"
-                       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, verdict=current_filters.verdict or None, action=current_filters.action or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, sea_dist=current_filters.sea_dist or None, build=current_filters.build or None, measured=current_filters.measured or None, criteria=current_filters.criteria or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else 'off', sort=current_filters.sort_by, order=current_filters.order) }}"
+                       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, verdict=current_filters.verdict or None, action=current_filters.action or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, sea_dist=current_filters.sea_dist or None, build=current_filters.build or None, measured=current_filters.measured or None, similar=current_filters.similar or None, criteria=current_filters.criteria or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else 'off', sort=current_filters.sort_by, order=current_filters.order) }}"
                        title="Download filtered data as CSV">
                         <i class="fas fa-download me-1"></i>{{ t('export_csv') }}
                     </a>
@@ -1456,7 +1462,7 @@
                                                         {% for _name in _sim.compared %}{% set _ = _facts.append(t('similarity_component_' ~ _name)) %}{% endfor %}
                                                         <span class="badge d-block mt-1 similarity-chip" data-similarity-state="{{ _sim.state }}"
                                                               style="background-color: {{ '#0d6efd' if _sim.state == 'ok' else '#6c757d' }}; font-size: 0.65em;"
-                                                              title="{% if _sim.state == 'thin' %}{{ t('similarity_thin_hint')|format(_facts|join(', ')) }}{% else %}{{ t('similarity_chip_title')|format('%.0f'|format(_sim.score), _sim.reference_id, _facts|join(', ')) }}{% endif %}">&asymp; {{ '%.0f'|format(_sim.score) }}</span>
+                                                              title="{% if _sim.state == 'thin' %}{{ t('similarity_thin_hint')|format(_facts|join(', ')) }}{% else %}{{ t('similarity_chip_title')|format('%.1f'|format(_sim.score), _sim.reference_id, _facts|join(', ')) }}{% endif %}">&asymp; {{ '%.1f'|format(_sim.score) }}{% if _sim.compared_count < _sim.fact_count %} <span class="opacity-75">{{ _sim.compared_count }}/{{ _sim.fact_count }}</span>{% endif %}</span>
                                                     {% endif %}
                                                 {% endif %}
                                             </td>
@@ -2000,14 +2006,17 @@
     (function () {
         const similar = document.getElementById('similar');
         const sort = document.getElementById('sort');
+        const order = document.querySelector('select[name="order"]');
         if (!similar || !sort) {
             return;
         }
         similar.addEventListener('change', function () {
             if (similar.value && sort.value === 'created_at') {
                 sort.value = 'similarity';
+                if (order) { order.value = 'desc'; }
             } else if (!similar.value && sort.value === 'similarity') {
                 sort.value = 'created_at';
+                if (order) { order.value = 'desc'; }
             }
         });
     })();

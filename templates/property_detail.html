@@ -565,7 +565,7 @@
                 </h2>
                 {% if similarity_reading.state in ('ok', 'thin') %}
                     <span class="badge {{ 'text-bg-primary' if similarity_reading.state == 'ok' else 'text-bg-secondary' }}" id="similarity-score">
-                        {{ '%.0f'|format(similarity_reading.score) }}/100
+                        {{ '%.1f'|format(similarity_reading.score) }}/100
                     </span>
                 {% endif %}
             </div>
@@ -587,8 +587,13 @@
                         <a href="{{ url_for('main.property_detail', property_id=similarity_reading.reference_id) }}">#{{ similarity_reading.reference_id }}</a>
                         · {{ t('similarity_compared_on') }}:
                         {% for name in similarity_reading.compared %}{{ t('similarity_component_' ~ name) }} {{ '%.0f'|format(similarity_reading.components[name]) }}{% if not loop.last %}, {% endif %}{% endfor %}
-                        {% if similarity_reading.geography_basis %}
+                        {% if similarity_reading.geography_basis == 'municipality' %}
+                            · {{ t('similarity_location_basis') }} {{ t('similarity_basis_municipality_n')|format(similarity_reading.municipality_point_n) }}
+                        {% elif similarity_reading.geography_basis %}
                             · {{ t('similarity_location_basis') }} {{ t('similarity_basis_' ~ similarity_reading.geography_basis) }}
+                        {% endif %}
+                        {% if similarity_reading.compared_count < similarity_reading.fact_count %}
+                            · {{ t('similarity_facts_short')|format(similarity_reading.compared_count, similarity_reading.fact_count) }}
                         {% endif %}
                     </p>
                 {% endif %}

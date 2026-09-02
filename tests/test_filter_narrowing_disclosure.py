@@ -216,6 +216,56 @@ class TestTheClearLink:
         assert "2 properties found" in cleared.get_data(as_text=True)
 
 
+    def test_it_drops_every_filter_the_page_applies(self, app, client):
+        """The class, not the example: the link is built from the record of
+        the request (`_clear_filters_url`), so every key of `current_filters`
+        that is a filter must be absent from it, whichever filters tomorrow
+        adds — the hand-written list it replaces was the repository's most
+        frequent stale copy (utils/listing_filters.py)."""
+        from flask import template_rendered
+        from urllib.parse import parse_qs, urlparse
+
+        from utils.listing_filters import NON_FILTERS
+
+        seen = []
+
+        def record(sender, template, context, **extra):
+            if template.name == "properties.html":
+                seen.append(context)
+
+        template_rendered.connect(record, app)
+        try:
+            response = client.get(
+                "/properties",
+                query_string={
+                    "profile_id": "all",
+                    "sea_view": "likely",
+                    "search": "Plot",
+                    "similar": "70",
+                    "favorites": "on",
+                },
+            )
+        finally:
+            template_rendered.disconnect(record, app)
+        assert response.status_code == 200 and seen
+        href = _clear_link_href(response.get_data(as_text=True))
+        carried = set(parse_qs(urlparse(href).query).keys())
+        not_filters = set(NON_FILTERS) | {
+            "favorites",
+            "hide_removed",
+            "sort_by",
+            "active_mode",
+        }
+        leaked = sorted(
+            key
+            for key in seen[-1]["current_filters"]
+            if key not in not_filters and key in carried
+        )
+        assert not leaked, f"the clear link still carries: {leaked}"
+        assert "profile_id=all" in href and "favorites=on" in href
+        assert "page=1" in href
+
+
 class TestNoNoteWithoutANarrowing:
     def test_a_bare_page_carries_no_note_and_really_rendered(self, client):
         response = client.get("/properties", query_string={"profile_id": "all"})

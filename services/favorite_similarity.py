@@ -4,67 +4,98 @@ The owner's ask (2026-09-02): from the whole Galicia subscription, "the
 objects most similar by their characteristics" to the two listings they
 favorited, as a filter of its own on /properties. This module is that
 reading, and it is deliberately a reading of what the table already holds —
-nothing here makes a request, spends anything, or writes a row.
+nothing here makes a request, spends anything, or writes a row. The numbers
+are derived per request and never stored, so there is no staleness
+machinery: a CSV or API value moves the moment a favorite or a located row
+changes.
 
 **The references are the favorites of the row's OWN subscription**, exactly
 as the criteria are its own subscription's bounds
 (services/subscription_criteria.py): a listing in one saved search is never
 measured against a favorite in another, an unassigned row has no reference at
 all, and the control is offered only while some subscription on screen holds
-a favorite. The favorites themselves read as `reference` — kept by every cut
-and sorted first, because they are the definition the cut is made against.
+a favorite or a cut is applied. The favorites themselves read as
+`reference` — kept by every cut and sorted first, because they are the
+definition the cut is made against.
 
 **What is compared, and how each fact abstains.** Every component is 0–100
 or absent, and absent means *one side or the other has not stated the fact*
 (#98: a fact nobody stated is not a fact that differs). The score is the
 weighted mean over the components both sides state, the nearest reference
 wins, and the row reports which facts it rests on — a reader can always see
-that a 90 stands on price, area and location alone.
+that a 90 stands on price, area and location alone, and the chip beside the
+score prints how many of the eight facts it rests on.
 
 * `price` and `area` — the log ratio, 100 for equal and 0 at twice or half.
-* `plot` — the same, on the criteria module's own reading of the parcel
-  (`plot_area`, or `area` for bare land). Read there and not re-derived,
-  because "what is this listing's plot" has one answer on one page; on
-  production 2026-09-02 both favorites carry it only under a dossier key
-  (`attributes.plot_area_cadastre_m2`), so this component is dormant until
-  the column is filled.
+  The area is the BUILT surface on the criteria module's own reading
+  (`effective_figures`: `area` unless the row says `plot`, where `area` IS
+  the parcel), so a parcel is never scored as a house and never scored twice.
+* `plot` — the same, on that module's parcel figure (`plot_area`, or `area`
+  for bare land): "what is this listing's plot" has one answer on one page.
+  On production 2026-09-02 both favorites carry their plot only under a
+  dossier key (`attributes.plot_area_cadastre_m2`), so this component is
+  dormant until the column is filled — by a hand-set writer with a source
+  note, on the owner's word, not by this module and not by a bare UPDATE.
 * `geography` — a linear decay to 0 at `GEOGRAPHY_SCALE_KM` (60 km: Malpica
   to Fisterra is 55 km, to the Rías Baixas 100+, to the Lugo coast 150+), on
-  the row's own coordinate whatever its accuracy (a locality centroid is
-  within 5 km of the parcel, which is nothing at this scale) or, for a row
-  with none, on the **municipality point**: the median of the coordinates
-  the table already holds for that municipality, under the same key the
-  /properties dropdown groups on. That is derived, never stored, and the
-  reading says which basis it used. 299 of 543 Galicia rows have no
-  coordinate; without this they would have no location at all.
+  the row's own coordinate whatever its accuracy or, for a row with none, on
+  the **municipality point**: the median of the coordinates the table
+  already holds for that municipality, under the same key the /properties
+  dropdown groups on. Derived, never stored, and the reading says which
+  basis it used and how many located rows made the point. Measured on
+  subscription 24 (2026-09-02): a 5 km locality slack is 8.3 points of this
+  component (~2 of the total at full coverage, ~3 at the price+area+location
+  coverage most rows have); leave-one-out of the municipality point over the
+  228 located rows moved the total by median 0.0, p90 1.5, max 5.4 points
+  and flipped 0 rows at the 80 cut, 3 at 70, 5 at 60. 299 of 543 rows have
+  no coordinate; without the point they would have no location at all.
 * `bedrooms` / `bathrooms` — a count difference of 0/1/2 scores 100/60/20.
   Bedrooms read `attributes.bedrooms` (the ingester's key) and then
-  `attributes.rooms` (the dossier's key for idealista's *habitaciones*; the
-  two favorites carry only that one).
-* `sea_distance` — metres from the sea on the same reading the `sea_dist`
-  filter cuts on, 0 at a 2 km difference.
-* `sea_view` — the verdict's bucket (yes/likely against no); `unknown` abstains.
+  `attributes.rooms` (the hand-import scripts' key for idealista's
+  *habitaciones*: 24 production rows carry it, the one row carrying both
+  agrees).
+* `sea_distance` — metres from the sea on the `sea_dist` filter's own two
+  keys, 0 at a 2 km difference — but ONLY where the answer is the same at
+  every point the coordinate's slack allows (the #358 rule the scorer
+  applies): an approximate coordinate's figure is the locality's, a 5 km
+  slack against a 2 km scale, so a non-precise side is a band and the
+  component is 0 when the bands cannot come within the scale, the plain
+  figure when both sides are precise, and absent otherwise. The reading
+  says which (`sea_distance_basis`). A listing-pin coordinate (#524, 2 km
+  slack) is not told apart here and abstains on the wide side.
+* `sea_view` — the verdict's bucket (yes/likely against no); `unknown`
+  abstains. Binary, and under nearest-wins it scores 100 for every measured
+  row while the favorites span both buckets (they do on production), so it
+  lifts measured rows rather than separating candidates.
 
 **A different kind of listing is not scored** (`different_kind`): a plot is
-not similar to a house whatever its price, so a stated subtype that differs
-from the reference's is a gate, not a component. **A row that cannot be
-placed is not ranked** (`thin`): location is the one component a claim of
-similarity cannot do without, so a row with neither a coordinate nor a
-municipality point keeps its number for the reader and never passes a cut,
-and sorts last in both directions.
+not similar to a house whatever its price, and a terraced house is not what
+the owner means by a detached one (the /agencies definition, #474). The kind
+comes from category and subtype together — `land` is one kind whatever the
+legacy `developed` word says, since sub 17 stars 14 plots beside 2
+"developed" parcels — and, for houses, from the typology the title head
+states (`property_classification_service.house_typology`); a side that
+states neither is compared, never gated. **A row that cannot be placed is
+not ranked** (`thin`): location is the one component a claim of similarity
+cannot do without, so a row with neither a coordinate nor a municipality
+point keeps its number for the reader and never passes a cut, and sorts
+last in both directions.
 
 The reading is Python, once per request over the rows of the subscriptions
-in scope (measured on production 2026-09-02: ~90 ms for subscription 24's 563
-rows, ~60 of them the two `enrichment` JSON readings PostgreSQL parses per
-row — kept as the filters' own SQL expressions rather than a Python twin, one
-home over 35 ms), and the SQL is *derived* from it — an `id IN (...)` clause and a
+in scope, and the SQL is *derived* from it — an `id IN (...)` clause and a
 `CASE id WHEN ...` sort key — so the list, the map, the CSV, the API and the
-row's own page cannot disagree about which rows are similar: there is one
-reading and no twin to drift from it.
+row's own page cannot disagree: there is one reading and no twin to drift
+from it. The loader reads JSON as text or sub-documents and parses here,
+never with a CAST in SQL: a hand-edited value would raise on PostgreSQL and
+take the whole page with it (the hazard-service lesson). Measured on
+production 2026-09-02: ~90 ms for subscription 24's 563 rows through the
+filters' casting expressions, most of it PostgreSQL parsing `enrichment`
+per row; the sub-document reads below are what that was traded for.
 """
 
 from __future__ import annotations
 
+import json
 import math
 import statistics
 from dataclasses import dataclass
@@ -74,9 +105,10 @@ from sqlalchemy import and_, case, false, or_
 
 from models import Property, db
 from services import subscription_criteria
-from services.coordinate_quality import is_precise
-from services.listing_attribute_filters import sea_distance_m_expr, sea_view_state_expr
-from services.sea_view_service import haversine_m
+from services.coordinate_quality import APPROXIMATE_COORD_SLACK_M, is_precise
+from services.listing_attribute_filters import LEGACY_SEA_VIEW_TRUE_TEXT
+from services.property_classification_service import house_typology, listing_kind
+from services.sea_view_service import VALID_STATES, haversine_m
 from utils.municipality_grouping import group_key
 
 # The weights are a statement of what "similar" means to a house buyer:
@@ -85,7 +117,9 @@ from utils.municipality_grouping import group_key
 # and 1282): the Seiruga neighbour at 3 km, 275k, 292 m² scored 94; the
 # Ponteceso / Laxe / Cabana houses of 240–320 m² at 250–300k scored 80–88;
 # Camariñas and Arteixo at 27–36 km scored ~70; the Rías Baixas scored 0 on
-# location and fell below 50.
+# location and fell below 50. Most rows compare on three facts (price, area,
+# location: 8 of 13 weight), which the chip and the line beside the count
+# both say.
 WEIGHTS: Dict[str, float] = {
     "price": 3.0,
     "area": 2.0,
@@ -97,11 +131,15 @@ WEIGHTS: Dict[str, float] = {
     "sea_view": 1.0,
 }
 TOTAL_WEIGHT = sum(WEIGHTS.values())
+FACT_COUNT = len(WEIGHTS)
 
 # The components without which a similarity claim is not made. Location is
 # the one: price and area alone would rank a house 150 km away above the one
 # in the next village.
 REQUIRED_COMPONENTS: Tuple[str, ...] = ("geography",)
+# The three facts nearly every row states; a row resting on these alone is
+# counted as such in the disclosure line.
+BASE_COMPONENTS: Tuple[str, ...] = ("price", "area", "geography")
 
 # The log ratio at which price, area and plot reach 0: twice or half.
 RATIO_ZERO_AT = math.log(2.0)
@@ -115,7 +153,10 @@ _NEGATIVE_SEA_VIEW = ("no",)
 
 # The `similar` parameter's vocabulary: the least similarity a row needs.
 # Numbers rather than words, the `sea_dist` precedent: the chip beside every
-# row shows the same number, so the cut reads in the row's own units.
+# row shows the same number, so the cut reads in the row's own units. One
+# rounding rule for the cut, the chip and the count: the score is kept to
+# one decimal and printed to one decimal, so a 79.6 never prints as 80 while
+# the ≥ 80 cut leaves it out.
 FILTER_VALUES: Dict[str, float] = {"80": 80.0, "70": 70.0, "60": 60.0}
 
 STATE_REFERENCE = "reference"
@@ -126,24 +167,35 @@ STATE_NO_REFERENCE = "no_reference"
 STATE_NOTHING_COMPARED = "nothing_compared"
 
 BASIS_COORDINATE = "coordinate"
-BASIS_LOCALITY = "locality"
+BASIS_APPROXIMATE = "approximate"
 BASIS_MUNICIPALITY = "municipality"
+
+SEA_BASIS_PARCEL = "parcel"
+SEA_BASIS_BAND = "band"
+
+# A reference sorts above every score, whatever a duplicate of it scores:
+# the page breaks ties by id, and a copy of a favorite under a lower id
+# would otherwise sort above the favorite the cut is made against.
+REFERENCE_SORT_KEY = 101.0
 
 
 @dataclass(frozen=True)
 class ListingFacts:
     """The facts one row states, as the comparison reads them.
 
-    Loaded by `load_facts` through the SAME SQL readings the filters use
-    (`sea_distance_m_expr`, `sea_view_state_expr`), so a row's sea distance
-    here is the number the `sea_dist` filter would cut on. There is no
-    second loader from an ORM row on purpose: one loader cannot disagree
-    with itself, and a detail page reads its row through the same context.
+    Loaded by `load_facts`, the module's ONE loader — there is no second
+    loader from an ORM row on purpose: one loader cannot disagree with
+    itself, and a detail page reads its row through the same context with
+    `candidate_ids`. The sea readings mirror the `sea_dist` and `sea_view`
+    filters' SQL expressions key for key, pinned by a test that runs both
+    over one fixture.
     """
 
     id: int
     profile_id: Optional[int]
     is_favorite: bool
+    kind: Optional[str]
+    typology: Optional[str]
     subtype: Optional[str]
     price: Optional[float]
     area: Optional[float]
@@ -176,6 +228,22 @@ def _positive_number(value: Any) -> Optional[float]:
     return number
 
 
+def _coordinate(value: Any, limit: float) -> Optional[float]:
+    """A coordinate on the globe, or None: NaN, infinity and a latitude of
+    400 are bad input, not a location — the `sea_distance_service` rule —
+    and a row carrying one takes the municipality path like a row with no
+    coordinate at all."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or abs(number) > limit:
+        return None
+    return number
+
+
 def _text(value: Any) -> Optional[str]:
     text = str(value).strip() if value is not None else ""
     return text or None
@@ -187,6 +255,47 @@ def _count(value: Any) -> Optional[float]:
     return number if number is not None and number < 1000 else None
 
 
+def _as_dict(value: Any) -> Dict[str, Any]:
+    """A JSON sub-document as a dict: SQLAlchemy hands back a dict on both
+    dialects for an indexed JSON column, and text is parsed defensively."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def sea_distance_from(sea: Any) -> Optional[float]:
+    """The `sea_dist` filter's reading of `enrichment["sea"]`, in Python:
+    `distance_m` first (the parcel figure, written only for a precise
+    coordinate), then `origin_distance_m` (the centroid figure) — the same
+    two keys in the same order as `sea_distance_m_expr`, parsed here."""
+    block = _as_dict(sea)
+    distance = _positive_number(block.get("distance_m"))
+    if distance is not None:
+        return distance
+    return _positive_number(block.get("origin_distance_m"))
+
+
+def sea_view_state_from(environment: Any, legacy_environment: Any) -> Optional[str]:
+    """The `sea_view` filter's reading, in Python: the computed state where it
+    is one of the four known ones, else a legacy `true` reads `likely` and
+    never `yes`, else None — `sea_view_state_expr` branch for branch."""
+    computed = _text(_as_dict(environment).get("sea_view"))
+    if computed in VALID_STATES:
+        return computed
+    legacy = _as_dict(legacy_environment).get("sea_view")
+    if legacy is True or (
+        _text(legacy) is not None and _text(legacy).lower() in LEGACY_SEA_VIEW_TRUE_TEXT
+    ):
+        return "likely"
+    return None
+
+
 def facts_from_row(row: Sequence[Any]) -> ListingFacts:
     """One `load_facts` tuple into `ListingFacts`; the column order is the
     query's own, below, and nowhere else."""
@@ -194,7 +303,9 @@ def facts_from_row(row: Sequence[Any]) -> ListingFacts:
         row_id,
         profile_id,
         is_favorite,
+        category,
         subtype,
+        title,
         price,
         area,
         area_type,
@@ -206,13 +317,19 @@ def facts_from_row(row: Sequence[Any]) -> ListingFacts:
         lon,
         accuracy,
         municipality,
-        sea_distance_m,
-        sea_view_state,
+        sea,
+        environment,
+        legacy_environment,
     ) = row
+    latitude, longitude = _coordinate(lat, 90.0), _coordinate(lon, 180.0)
+    if latitude is None or longitude is None:
+        latitude = longitude = None
     return ListingFacts(
         id=int(row_id),
         profile_id=int(profile_id) if profile_id is not None else None,
         is_favorite=bool(is_favorite),
+        kind=listing_kind(category, subtype),
+        typology=house_typology(title),
         subtype=_text(subtype),
         price=_positive_number(price),
         area=_positive_number(area),
@@ -220,12 +337,12 @@ def facts_from_row(row: Sequence[Any]) -> ListingFacts:
         plot_area=_positive_number(plot_area),
         bedrooms=_count(bedrooms) if _count(bedrooms) is not None else _count(rooms),
         bathrooms=_count(bathrooms),
-        lat=float(lat) if lat is not None else None,
-        lon=float(lon) if lon is not None else None,
+        lat=latitude,
+        lon=longitude,
         accuracy=_text(accuracy),
         municipality_key=group_key(municipality),
-        sea_distance_m=_positive_number(sea_distance_m),
-        sea_view_state=_text(sea_view_state),
+        sea_distance_m=sea_distance_from(sea),
+        sea_view_state=sea_view_state_from(environment, legacy_environment),
     )
 
 
@@ -234,10 +351,11 @@ def load_facts(
 ) -> List[ListingFacts]:
     """The rows of the given subscriptions, as facts — every row, or with
     `candidate_ids` only the favorites plus those rows (a page that reads one
-    row must not pay for scoring a subscription). Typed columns and JSON
-    paths only — no whole `enrichment` blob per row, and the JSON values are
-    read as text and parsed here rather than cast in SQL, where a hand-edited
-    value raises on PostgreSQL and takes the page with it."""
+    row must not pay for scoring a subscription).
+
+    Typed columns, JSON leaves as text and three small JSON sub-documents;
+    nothing is CAST in SQL, and the whole `enrichment` blob never travels.
+    """
     ids = sorted({int(pid) for pid in profile_ids})
     if not ids:
         return []
@@ -253,7 +371,9 @@ def load_facts(
             Property.id,
             Property.search_profile_id,
             Property.is_favorite,
+            Property.property_category,
             Property.property_subtype,
+            Property.title,
             Property.price,
             Property.area,
             Property.area_type,
@@ -265,8 +385,9 @@ def load_facts(
             Property.location_lon,
             Property.location_accuracy,
             Property.municipality,
-            sea_distance_m_expr(Property),
-            sea_view_state_expr(Property),
+            Property.enrichment["sea"],
+            Property.enrichment["environment"],
+            Property.enrichment["legacy_land"]["environment"],
         )
         .filter(membership)
         .order_by(Property.id.asc())
@@ -281,11 +402,12 @@ def municipality_points() -> Dict[str, Tuple[float, float, int]]:
     The median latitude and longitude of every located row sharing the
     municipality key, whatever subscription it is in and whatever its
     accuracy — an approximate row IS the locality's centroid, which is the
-    shape of point wanted here. Derived on read, never stored, and only for
-    a row that has no coordinate of its own. What it cannot do is notice a
-    municipality whose only located rows are wrongly geocoded; with several
-    rows the median shrugs one off, with one it cannot, and the reading says
-    `municipality` so the reader knows which basis they are looking at.
+    shape of point wanted here — with the number of rows that made it.
+    Derived on read, never stored, and only for a row that has no coordinate
+    of its own. What it cannot do is notice a municipality whose only located
+    rows are wrongly geocoded; with several rows the median shrugs one off,
+    with one it cannot, and the reading carries the count so the reader
+    knows which they are looking at.
     """
     rows = (
         db.session.query(
@@ -302,13 +424,10 @@ def municipality_points() -> Dict[str, Tuple[float, float, int]]:
         key = group_key(municipality)
         if not key:
             continue
-        try:
-            point = (float(lat), float(lon))
-        except (TypeError, ValueError):
+        latitude, longitude = _coordinate(lat, 90.0), _coordinate(lon, 180.0)
+        if latitude is None or longitude is None:
             continue
-        if not (math.isfinite(point[0]) and math.isfinite(point[1])):
-            continue
-        by_key.setdefault(key, []).append(point)
+        by_key.setdefault(key, []).append((latitude, longitude))
     return {
         key: (
             statistics.median(lat for lat, _ in points),
@@ -321,14 +440,15 @@ def municipality_points() -> Dict[str, Tuple[float, float, int]]:
 
 def locate(
     facts: ListingFacts, points: Dict[str, Tuple[float, float, int]]
-) -> Optional[Tuple[float, float, str]]:
-    """The row's point and the basis it rests on, or None."""
+) -> Optional[Tuple[float, float, str, Optional[int]]]:
+    """The row's point, the basis it rests on, and how many rows made a
+    municipality point (None for the row's own coordinate)."""
     if facts.lat is not None and facts.lon is not None:
-        basis = BASIS_COORDINATE if is_precise(facts.accuracy) else BASIS_LOCALITY
-        return facts.lat, facts.lon, basis
+        basis = BASIS_COORDINATE if is_precise(facts.accuracy) else BASIS_APPROXIMATE
+        return facts.lat, facts.lon, basis, None
     if facts.municipality_key and facts.municipality_key in points:
-        lat, lon, _ = points[facts.municipality_key]
-        return lat, lon, BASIS_MUNICIPALITY
+        lat, lon, count = points[facts.municipality_key]
+        return lat, lon, BASIS_MUNICIPALITY, count
     return None
 
 
@@ -345,8 +465,38 @@ def _geography_score(metres: float) -> float:
     return max(0.0, 1.0 - (metres / 1000.0) / GEOGRAPHY_SCALE_KM) * 100.0
 
 
-def _sea_distance_score(metres: float, reference: float) -> float:
-    return max(0.0, 1.0 - abs(metres - reference) / SEA_DISTANCE_SCALE_M) * 100.0
+def _sea_band(facts: ListingFacts) -> Optional[Tuple[float, float]]:
+    """The metres a side's sea distance may really be: a point for a precise
+    coordinate, the locality slack either way for anything else."""
+    if facts.sea_distance_m is None:
+        return None
+    if is_precise(facts.accuracy):
+        return facts.sea_distance_m, facts.sea_distance_m
+    return (
+        max(0.0, facts.sea_distance_m - APPROXIMATE_COORD_SLACK_M),
+        facts.sea_distance_m + APPROXIMATE_COORD_SLACK_M,
+    )
+
+
+def _sea_distance_component(
+    facts: ListingFacts, reference: ListingFacts
+) -> Optional[Tuple[float, str]]:
+    """The component and its basis, or None where the slack leaves the
+    answer open. The decay `1 - |d - d_ref| / scale` is a triangle whose
+    only flat region is zero, so the bands settle it in exactly two cases:
+    both are points, or they cannot come within the scale of each other."""
+    band, reference_band = _sea_band(facts), _sea_band(reference)
+    if band is None or reference_band is None:
+        return None
+    lower, upper = band
+    reference_lower, reference_upper = reference_band
+    if lower == upper and reference_lower == reference_upper:
+        score = max(0.0, 1.0 - abs(lower - reference_lower) / SEA_DISTANCE_SCALE_M)
+        return score * 100.0, SEA_BASIS_PARCEL
+    smallest_gap = max(0.0, lower - reference_upper, reference_lower - upper)
+    if smallest_gap >= SEA_DISTANCE_SCALE_M:
+        return 0.0, SEA_BASIS_BAND
+    return None
 
 
 def _sea_view_bucket(state: Optional[str]) -> Optional[str]:
@@ -357,10 +507,14 @@ def _sea_view_bucket(state: Optional[str]) -> Optional[str]:
     return None
 
 
-def _plot_of(facts: ListingFacts) -> Optional[float]:
-    """The criteria module's reading of the parcel, so the plot compared
-    here is the plot the criteria verdict on the same page was made on."""
-    return subscription_criteria.effective_figures(facts)["plot_m2"]
+def _gated(facts: ListingFacts, reference: ListingFacts) -> bool:
+    """A different kind, or a different house typology, when both sides
+    state one. A side stating neither is compared, never gated (#98)."""
+    if facts.kind and reference.kind and facts.kind != reference.kind:
+        return True
+    return bool(
+        facts.typology and reference.typology and facts.typology != reference.typology
+    )
 
 
 def compare(
@@ -370,18 +524,25 @@ def compare(
 ) -> Dict[str, Any]:
     """One row against one reference: the components both state, the score
     over them, and what the comparison rests on."""
-    if facts.subtype and reference.subtype and facts.subtype != reference.subtype:
+    if _gated(facts, reference):
         return {"state": STATE_DIFFERENT_KIND, "reference_id": reference.id}
 
     components: Dict[str, float] = {}
     basis: Optional[str] = None
+    point_count: Optional[int] = None
+    sea_basis: Optional[str] = None
     if facts.price and reference.price:
         components["price"] = _ratio_score(facts.price, reference.price)
-    if facts.area and reference.area:
-        components["area"] = _ratio_score(facts.area, reference.area)
-    plot, reference_plot = _plot_of(facts), _plot_of(reference)
-    if plot and reference_plot:
-        components["plot"] = _ratio_score(plot, reference_plot)
+    figures = subscription_criteria.effective_figures(facts)
+    reference_figures = subscription_criteria.effective_figures(reference)
+    if figures["house_m2"] and reference_figures["house_m2"]:
+        components["area"] = _ratio_score(
+            figures["house_m2"], reference_figures["house_m2"]
+        )
+    if figures["plot_m2"] and reference_figures["plot_m2"]:
+        components["plot"] = _ratio_score(
+            figures["plot_m2"], reference_figures["plot_m2"]
+        )
     if facts.bedrooms is not None and reference.bedrooms is not None:
         components["bedrooms"] = _count_score(facts.bedrooms, reference.bedrooms)
     if facts.bathrooms is not None and reference.bathrooms is not None:
@@ -391,11 +552,10 @@ def compare(
         components["geography"] = _geography_score(
             haversine_m(here[0], here[1], there[0], there[1])
         )
-        basis = here[2]
-    if facts.sea_distance_m and reference.sea_distance_m:
-        components["sea_distance"] = _sea_distance_score(
-            facts.sea_distance_m, reference.sea_distance_m
-        )
+        basis, point_count = here[2], here[3]
+    sea = _sea_distance_component(facts, reference)
+    if sea is not None:
+        components["sea_distance"], sea_basis = sea
     bucket, reference_bucket = (
         _sea_view_bucket(facts.sea_view_state),
         _sea_view_bucket(reference.sea_view_state),
@@ -410,14 +570,20 @@ def compare(
     score = sum(WEIGHTS[name] * value for name, value in components.items())
     score /= compared_weight
     missing_required = [name for name in REQUIRED_COMPONENTS if name not in components]
+    compared = [name for name in WEIGHTS if name in components]
     return {
         "state": STATE_THIN if missing_required else STATE_OK,
         "score": round(score, 1),
         "coverage": round(compared_weight / TOTAL_WEIGHT, 3),
         "components": {name: round(value, 1) for name, value in components.items()},
-        "compared": [name for name in WEIGHTS if name in components],
+        "compared": compared,
+        "compared_count": len(compared),
+        "fact_count": FACT_COUNT,
+        "base_only": all(name in BASE_COMPONENTS for name in compared),
         "missing_required": missing_required,
         "geography_basis": basis,
+        "municipality_point_n": point_count,
+        "sea_distance_basis": sea_basis,
         "reference_id": reference.id,
     }
 
@@ -455,8 +621,13 @@ def read_against(
             "coverage": None,
             "components": {},
             "compared": [],
+            "compared_count": 0,
+            "fact_count": FACT_COUNT,
+            "base_only": False,
             "reference_id": None,
             "geography_basis": None,
+            "municipality_point_n": None,
+            "sea_distance_basis": None,
             "reference_count": len(references),
         }
     if not references:
@@ -536,13 +707,44 @@ class SimilarityContext:
         ]
 
     def sort_keys(self) -> Dict[int, float]:
-        """The ORDER BY value per row: 100 for a reference, the score for a
-        rankable row, and nothing for the rest so they sort last both ways."""
-        return {
-            row_id: float(reading["score"])
-            for row_id, reading in self.readings.items()
-            if reading["state"] in (STATE_REFERENCE, STATE_OK)
+        """The ORDER BY value per row: above every score for a reference, the
+        score for a rankable row, and nothing for the rest so they sort last
+        both ways."""
+        keys: Dict[int, float] = {}
+        for row_id, reading in self.readings.items():
+            if reading["state"] == STATE_REFERENCE:
+                keys[row_id] = REFERENCE_SORT_KEY
+            elif reading["state"] == STATE_OK:
+                keys[row_id] = float(reading["score"])
+        return keys
+
+    def summarize(self, property_ids: Iterable[int]) -> Dict[str, int]:
+        """What the given rows read as, counted by state — for the line
+        beside the result count, which has to say what "no chip" means on
+        this page: unplaceable, a different kind, or nothing to compare to.
+        `base_only` counts the rankable rows resting on price, area and
+        location alone; `plot_compared` the rankable rows whose plot was."""
+        counts = {
+            STATE_REFERENCE: 0,
+            STATE_OK: 0,
+            STATE_THIN: 0,
+            STATE_DIFFERENT_KIND: 0,
+            STATE_NO_REFERENCE: 0,
+            STATE_NOTHING_COMPARED: 0,
+            "base_only": 0,
+            "plot_compared": 0,
+            "total": 0,
         }
+        for property_id in property_ids:
+            reading = self.read(property_id)
+            counts[reading["state"]] = counts.get(reading["state"], 0) + 1
+            counts["total"] += 1
+            if reading["state"] == STATE_OK:
+                if reading.get("base_only"):
+                    counts["base_only"] += 1
+                if "plot" in reading.get("compared", ()):
+                    counts["plot_compared"] += 1
+        return counts
 
 
 def build_context(
@@ -553,14 +755,15 @@ def build_context(
     None). None when none of them holds a favorite — the dormant state, in
     which no control is drawn and no query is touched.
 
-    A listing surface hands in the subscriptions it will be asked about --
-    the visible ones and the selected ones, because the chip counts run the
-    clause with only the subscription left open -- and gets every row of
-    those that hold a favorite. A page about ONE row hands in `candidate_ids`
-    and gets the favorites plus that row: measured on production 2026-09-02,
-    scoring subscription 24's 563 rows costs ~67 ms and every subscription
-    with a favorite ~177 ms, which is a price a list pays once and a detail
-    page should not pay at all.
+    A listing surface hands in the subscriptions it will be asked about —
+    the visible ones and the selected ones on an ordinary page, EVERY
+    favorite-holding one under a cut or a similarity sort, because then the
+    hidden-subscription note counts rows that have to have been scored — and
+    gets every row of those that hold a favorite. A page about ONE row hands
+    in `candidate_ids` and gets the favorites plus that row. Measured on
+    production 2026-09-02 before the sub-document loader: scoring
+    subscription 24's 563 rows cost ~67 ms and every subscription with a
+    favorite ~177 ms.
 
     Costs two queries: the rows, and the located rows of the whole table for
     the municipality points.
