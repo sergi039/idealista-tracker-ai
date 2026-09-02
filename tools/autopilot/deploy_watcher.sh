@@ -336,7 +336,12 @@ read_stall() {
     case "${count:-}" in
         '' | *[!0-9]*) printf '0 '; return 0 ;;
     esac
-    printf '%s %s' "$count" "${since:-}"
+    # Digits are not enough: bash 3.2 -- which launchd execs -- reads a leading
+    # zero as octal, so `$((08 + 1))` dies with "value too great for base" and
+    # takes the whole tick with it. The alarm would then be silent in exactly
+    # the situation it exists for. Normalise to base 10 HERE, in the one place
+    # that validates, so no caller can inherit the trap.
+    printf '%s %s' "$((10#$count))" "${since:-}"
 }
 
 # Atomic, like the deployment marker: a half-written count is a number that

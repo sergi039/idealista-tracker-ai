@@ -470,3 +470,23 @@ STALL_THRESHOLD=2 run_watcher
 [ "$(builds)" = "0" ] || fail "scenario 9 built from a refused tick"
 [ "$(branch_now)" = "codex/unmeasured" ] || fail "scenario 9 switched branches: now on $(branch_now)"
 printf 'OK: a refused tick that measures no gap ends the count; the next stall starts from one\n'
+
+# --- scenario 10: a counter with a leading zero still counts ----------------
+# The range gate's failing input, verbatim: `08` passes the digits-only
+# validation and then bash 3.2 -- the shell launchd execs -- reads it as an
+# invalid octal literal, so `$((count + 1))` dies and the tick exits before
+# counting or alarming. The alarm would be silent in exactly the stall it
+# exists for. A counter can acquire that shape from a hand edit or a restore
+# in this shared clone, so the value is normalised where it is validated.
+rm -f "$STALLED"
+printf '%s %s\n' "08" "2026-09-01T05:43:14Z" >"$STALL_STATE"
+: >"${WORK}/watcher.log"
+STALL_THRESHOLD=3 run_watcher
+logged "on branch 'codex/unmeasured'" || fail "scenario 10 did not refuse the foreign branch"
+[ "$(stall_count)" = "9" ] \
+    || fail "scenario 10 counted '$(stall_count)' from a leading-zero counter, expected 9"
+[ "$(stalled_lines)" = "1" ] || fail "scenario 10 did not alarm past the threshold"
+logged "after 9 refused tick(s) since 2026-09-01T05:43:14Z" \
+    || fail "scenario 10 lost the count or the since-when carried by the counter"
+[ "$(builds)" = "0" ] || fail "scenario 10 built from a refused tick"
+printf 'OK: a counter with a leading zero is read as base 10, counted and alarmed\n'
