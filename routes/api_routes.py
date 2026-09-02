@@ -20,6 +20,7 @@ from utils.listing_filters import FilterArgs, RecordedArgs
 from services import advertiser
 from services import owner_review
 from services import subscription_criteria
+from services import favorite_similarity
 from services import listing_attribute_filters
 from services import taste_service
 from utils.listing_source import source_filter_clause
@@ -1872,6 +1873,24 @@ def get_properties():
                 unrecognized_filter_values.append((name, raw_value))
             query = narrowed
 
+        # Likeness to the favorites of THIS subscription
+        # (services/favorite_similarity.py), the reading `/properties` narrows
+        # and sorts with. Built for the one subscription this endpoint
+        # answers for, and built whether or not a cut was asked for, because
+        # both payload shapes carry the row's reading. A known cut always
+        # narrows -- a subscription with no favorite has nothing to be similar
+        # to and the note below says so -- and an unknown value narrows
+        # nothing and is named, the shape the attribute filters have.
+        similar_raw = (filters.get("similar") or "").strip()
+        similarity_cut = favorite_similarity.read_filter_cut(similar_raw)
+        similarity_ctx = favorite_similarity.build_context(
+            profile_ids=[profile_id] if profile_id is not None else None
+        )
+        if similar_raw:
+            query = favorite_similarity.apply_filter(
+                query, Property, similarity_ctx, similar_raw
+            )
+
         # The same clauses `/properties` narrows with, from the same module.
         # Applied BEFORE `total` and the subscription mix below, or the scope
         # block would describe a population the payload is not a page of.
@@ -1896,6 +1915,7 @@ def get_properties():
             "score_total": Property.score_total,
             "score_investment": Property.score_investment,
             "score_lifestyle": Property.score_lifestyle,
+            "similarity": favorite_similarity.sort_expression(Property, similarity_ctx),
         }
         sort_column = sort_columns.get(sort_by, Property.created_at)
         if sort_order == "asc":
@@ -1938,6 +1958,13 @@ def get_properties():
                 data["criteria_state"] = subscription_criteria.row_verdict(
                     p, criteria_ctx
                 )["state"]
+                similarity_row = similarity_ctx.read(p.id) if similarity_ctx else None
+                data["similarity"] = favorite_similarity.payload_score(similarity_row)
+                data["similarity_state"] = (
+                    similarity_row["state"]
+                    if similarity_row
+                    else favorite_similarity.STATE_NO_REFERENCE
+                )
                 properties_data.append(data)
         else:
             properties_data = []
@@ -1993,6 +2020,18 @@ def get_properties():
                         "taste_state": taste_service.read_taste(p, taste_version)[
                             "state"
                         ],
+                        # Likeness to the subscription's favorites, with the
+                        # state that says whether the number ranks (`ok`), is
+                        # a favorite (`reference`) or rests on too little
+                        # (`thin`); None where nothing was compared.
+                        "similarity": favorite_similarity.payload_score(
+                            similarity_ctx.read(p.id) if similarity_ctx else None
+                        ),
+                        "similarity_state": (
+                            similarity_ctx.read(p.id)["state"]
+                            if similarity_ctx
+                            else favorite_similarity.STATE_NO_REFERENCE
+                        ),
                         "created_at": p.created_at.isoformat()
                         if p.created_at
                         else None,
@@ -2089,6 +2128,37 @@ def get_properties():
                 "answer. A listing of a subscription that sets no criteria has "
                 "no verdict and is in none of these three modes."
             )
+
+        # The similarity cut, said out loud: what the rows were measured
+        # against, or that there was nothing to measure against and the
+        # answer is therefore empty -- a `total: 0` with nothing saying why
+        # reads as "nothing here resembles the favorites".
+        if similar_raw and similarity_cut is None:
+            notes.append(
+                f"similar={similar_raw!r} is not a value this filter reads; it "
+                "did not narrow the answer. It takes: "
+                f"{', '.join(favorite_similarity.FILTER_VALUES)}."
+            )
+        elif similarity_cut is not None:
+            reference_count = (
+                similarity_ctx.reference_count_for(profile_id) if similarity_ctx else 0
+            )
+            if reference_count:
+                notes.append(
+                    f"similar={int(similarity_cut)}: only listings whose likeness "
+                    f"to the nearest of subscription {profile_id}'s "
+                    f"{reference_count} favorite(s) is at least "
+                    f"{int(similarity_cut)} are in this answer, plus those "
+                    "favorites themselves. A listing that cannot be placed (no "
+                    "coordinate and no located listing in its municipality) is "
+                    "never counted as similar."
+                )
+            else:
+                notes.append(
+                    f"similar={int(similarity_cut)} selected nothing: subscription "
+                    f"{profile_id} holds no favorites, so no listing has a "
+                    "reference to be similar to."
+                )
 
         # A value none of this endpoint's readings recognise narrowed nothing,
         # and the caller cannot see that from the rows: `sea_view=banana`

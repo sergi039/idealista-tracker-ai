@@ -82,6 +82,11 @@ FILTERS = [
     ("inv_metr", "EXCELLENT"),
     ("sea_dist", "800"),
     ("build", "solar"),
+    # Likeness to the subscription's favorites (services/favorite_similarity
+    # .py). `match_all` is the favorite, so it is the reference the rest are
+    # measured against; a row of another kind (`other_subtype`) is never
+    # similar, and a row nobody can place is never counted as similar.
+    ("similar", "70"),
 ]
 
 # Keys of `current_filters` that are not filters, and why. Anything else the

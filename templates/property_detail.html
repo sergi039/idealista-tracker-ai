@@ -552,6 +552,53 @@
             </div>
         </details>
 
+        {# Likeness to the subscription's favorites
+           (services/favorite_similarity.py): the row's nearest favorite, the
+           facts the number rests on and where its location came from -- the
+           same reading the list's chip and cut use. Asserted BY VALUE in
+           tests, the None×None lesson. #}
+        {% if similarity_reading is defined and similarity_reading %}
+        <div class="card mb-4" id="similarity-card">
+            <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
+                <h2 class="h6 mb-0">
+                    <i class="fas fa-equals me-2 text-primary"></i>{{ t('similarity_title') }}
+                </h2>
+                {% if similarity_reading.state in ('ok', 'thin') %}
+                    <span class="badge {{ 'text-bg-primary' if similarity_reading.state == 'ok' else 'text-bg-secondary' }}" id="similarity-score">
+                        {{ '%.0f'|format(similarity_reading.score) }}/100
+                    </span>
+                {% endif %}
+            </div>
+            <div class="card-body py-2 small">
+                {% if similarity_reading.state == 'reference' %}
+                    <p class="mb-1">{{ t('similarity_reference') }}</p>
+                {% elif similarity_reading.state == 'no_reference' %}
+                    <p class="text-body-secondary mb-1">{{ t('similarity_no_reference') }}</p>
+                {% elif similarity_reading.state == 'different_kind' %}
+                    <p class="text-body-secondary mb-1">{{ t('similarity_different_kind') }}</p>
+                {% elif similarity_reading.state == 'nothing_compared' %}
+                    <p class="text-body-secondary mb-1">{{ t('similarity_nothing_compared') }}</p>
+                {% else %}
+                    {% if similarity_reading.state == 'thin' %}
+                        <div class="alert alert-warning py-1 px-2 mb-2">{{ t('similarity_not_ranked_thin') }}</div>
+                    {% endif %}
+                    <p class="mb-1" id="similarity-facts">
+                        {{ t('similarity_nearest') }}:
+                        <a href="{{ url_for('main.property_detail', property_id=similarity_reading.reference_id) }}">#{{ similarity_reading.reference_id }}</a>
+                        · {{ t('similarity_compared_on') }}:
+                        {% for name in similarity_reading.compared %}{{ t('similarity_component_' ~ name) }} {{ '%.0f'|format(similarity_reading.components[name]) }}{% if not loop.last %}, {% endif %}{% endfor %}
+                        {% if similarity_reading.geography_basis %}
+                            · {{ t('similarity_location_basis') }} {{ t('similarity_basis_' ~ similarity_reading.geography_basis) }}
+                        {% endif %}
+                    </p>
+                {% endif %}
+                {% if similarity_reference_count and property.search_profile_id %}
+                    <a id="similarity-see-list" href="{{ url_for('main.properties', profile_id=property.search_profile_id, similar='70', sort='similarity', order='desc') }}">{{ t('similarity_see_list') }}</a>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
         {# The owner's taste (#498): how this listing scores against the
            profile distilled from their own review comments. Values are
            asserted by tests BY VALUE (the None×None lesson) -- a card full

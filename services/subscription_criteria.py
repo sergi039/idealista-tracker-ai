@@ -109,8 +109,14 @@ def read_criteria(profile: Any) -> Optional[Dict[str, float]]:
     return cleaned or None
 
 
-def _effective_figures(prop: Any) -> Dict[str, Optional[float]]:
+def effective_figures(prop: Any) -> Dict[str, Optional[float]]:
     """Which stored number answers which requirement, honestly.
+
+    Public since the favorite-similarity reading (services/
+    favorite_similarity.py) compares plots: "what is this listing's plot" has
+    one answer on one page, so that module reads it here rather than growing
+    a second one. `prop` is anything carrying `area`, `plot_area` and
+    `area_type` attributes.
 
     `area` is built surface unless the row says `plot`; `plot_area` wins for
     the parcel where stated, and for bare land the `area` IS the parcel.
@@ -145,7 +151,7 @@ def read_verdict(prop: Any, criteria: Optional[Dict[str, float]]) -> Dict[str, A
     """pass / fail / unknown for one row, with the figures it was judged on."""
     if not criteria:
         return {"state": "no_criteria"}
-    figures = _effective_figures(prop)
+    figures = effective_figures(prop)
     checks: Dict[str, Optional[bool]] = {}
     if "min_house_m2" in criteria:
         value = figures["house_m2"]

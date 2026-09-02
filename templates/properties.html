@@ -35,6 +35,7 @@
     'sea_dist': current_filters.sea_dist or None,
     'build': current_filters.build or None,
     'measured': current_filters.measured or None,
+    'similar': current_filters.similar or None,
     'criteria': current_filters.criteria or None,
     'verdict': current_filters.verdict or None,
     'action': current_filters.action or None,
@@ -1002,6 +1003,24 @@
                     </select>
                     {% endif %}
 
+                    {# Likeness to the subscription's favorites
+                       (services/favorite_similarity.py): the least similarity a
+                       row needs, in the units the chip beside every score shows.
+                       Drawn only while a subscription on screen holds a favorite
+                       -- with none there is nothing to be similar to; a value
+                       typed into the URL still travels, like `source`. #}
+                    {% if similarity_enabled is defined and similarity_enabled %}
+                    <select class="form-select form-select-sm properties-filter-select" id="similar" name="similar"
+                            aria-label="{{ t('similar_filter') }}">
+                        <option value="" {{ 'selected' if not current_filters.similar }}>{{ t('similar_any') }}</option>
+                        <option value="80" {{ 'selected' if current_filters.similar == '80' }}>{{ t('similar_80') }}</option>
+                        <option value="70" {{ 'selected' if current_filters.similar == '70' }}>{{ t('similar_70') }}</option>
+                        <option value="60" {{ 'selected' if current_filters.similar == '60' }}>{{ t('similar_60') }}</option>
+                    </select>
+                    {% elif current_filters.similar %}
+                        <input type="hidden" name="similar" value="{{ current_filters.similar }}"/>
+                    {% endif %}
+
                     <select class="form-select form-select-sm properties-filter-select" id="inv_metr" name="inv_metr"
                             aria-label="Investment metrics rating">
                         <option value="" {{ 'selected' if not current_filters.inv_metr }}>Inv. metr: all</option>
@@ -1042,6 +1061,11 @@
                                profile; stale and unscored rows sort last in
                                both directions (#498). #}
                             <option value="taste_score" {{ 'selected' if current_filters.sort_by == 'taste_score' }}>{{ t('taste_score_label') }}</option>
+                            {# Most alike the subscription's favorites first; the
+                               favorites themselves lead, and a row that cannot be
+                               placed, a different kind of listing or one with no
+                               favorite to compare against sorts last both ways. #}
+                            <option value="similarity" {{ 'selected' if current_filters.sort_by == 'similarity' }}>{{ t('similarity_sort_label') }}</option>
                         </select>
                         <select class="form-select properties-filter-order" name="order" aria-label="Sort direction">
                             <option value="desc" {{ 'selected' if current_filters.order == 'desc' }}>↓</option>
@@ -1137,7 +1161,7 @@
                         <span id="filter-bar-narrowing-note" class="text-body-secondary small">
                             <i class="fas fa-filter me-1"></i>{{ t('filter_bar_narrowing')|format(pagination.total, filter_bar_scope_total) }}
                             (<a id="clear-filters-link"
-                                href="{{ url_for('main.properties', **dict(base_args, search=None, category=None, subtype=None, municipality=None, source=None, advertiser=None, verdict=None, action=None, inv_metr=None, sea_view=None, sea_dist=None, build=None, measured=None, criteria=None, page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">{{ t('clear_filters_link') }}</a>)
+                                href="{{ url_for('main.properties', **dict(base_args, search=None, category=None, subtype=None, municipality=None, source=None, advertiser=None, verdict=None, action=None, inv_metr=None, sea_view=None, sea_dist=None, build=None, measured=None, similar=None, criteria=None, page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">{{ t('clear_filters_link') }}</a>)
                         </span>
                     {% endif %}
                     {# Whether that total covers the listings with no subscription
@@ -1228,6 +1252,18 @@
                         <span id="taste-coverage" class="text-body-secondary small"
                               title="{{ t('taste_coverage_tooltip') }}">
                             <i class="fas fa-heart me-1"></i>{{ t('taste_coverage')|format(taste_scored_count, pagination.total, taste_version) }}
+                        </span>
+                    {% endif %}
+                    {# What the similarity cut kept: how many rows of this set
+                       are at or above it, references aside, and how many
+                       favorites the subscriptions on screen hold -- the
+                       number the rows were measured against. Rendered only
+                       under a cut, from the same predicate the filter applied
+                       (services/favorite_similarity.py). #}
+                    {% if similar_count is defined and similar_count is not none and pagination %}
+                        <span id="similarity-coverage" class="text-body-secondary small"
+                              title="{{ t('similar_coverage_tooltip') }}">
+                            <i class="fas fa-equals me-1"></i>{{ t('similar_coverage')|format(similar_count, similarity_cut|int) }} {{ tn('similarity_references', similarity_reference_count) }}{% if similar_hidden_by_favorites is defined and similar_hidden_by_favorites %} {{ t('similar_hidden_by_favorites') }}{% endif %}
                         </span>
                     {% endif %}
                     {# How many listings are waiting on something that is now
@@ -1405,6 +1441,22 @@
                                                     {% if _t.state == 'ok' %}
                                                         <span class="badge d-block mt-1" style="background-color: #d63384; font-size: 0.65em;"
                                                               title="{{ t('taste_score_label') }}">&hearts; {{ '%.0f'|format(_t.score) }}</span>
+                                                    {% endif %}
+                                                {% endif %}
+                                                {# Likeness to the subscription's favorites, beside the
+                                                   score in every mode for the reason the taste chip is
+                                                   (services/favorite_similarity.py). The tooltip names
+                                                   the favorite it is nearest to and the facts it rests
+                                                   on; a row that cannot be placed keeps its number,
+                                                   muted, with the reason it never ranks. #}
+                                                {% if similarity_ctx is defined and similarity_ctx %}
+                                                    {% set _sim = similarity_ctx.read(p.id) %}
+                                                    {% if _sim.state in ('ok', 'thin') %}
+                                                        {% set _facts = [] %}
+                                                        {% for _name in _sim.compared %}{% set _ = _facts.append(t('similarity_component_' ~ _name)) %}{% endfor %}
+                                                        <span class="badge d-block mt-1 similarity-chip" data-similarity-state="{{ _sim.state }}"
+                                                              style="background-color: {{ '#0d6efd' if _sim.state == 'ok' else '#6c757d' }}; font-size: 0.65em;"
+                                                              title="{% if _sim.state == 'thin' %}{{ t('similarity_thin_hint')|format(_facts|join(', ')) }}{% else %}{{ t('similarity_chip_title')|format('%.0f'|format(_sim.score), _sim.reference_id, _facts|join(', ')) }}{% endif %}">&asymp; {{ '%.0f'|format(_sim.score) }}</span>
                                                     {% endif %}
                                                 {% endif %}
                                             </td>
@@ -1937,6 +1989,27 @@
         // selected id with no checkbox, an explicit selection that matched
         // nothing). Recomputing here would overwrite a correct state with a
         // guess.
+    })();
+
+    // Picking a similarity cut asks for the most alike rows, so the sort
+    // follows -- the form always submits its sort select, and "similar to
+    // the favorites, in date order" is not what the control says. Only the
+    // default sort is moved: a sort the owner chose stays theirs. Clearing
+    // the cut moves it back, and without JavaScript the sort select still
+    // offers the same order by hand.
+    (function () {
+        const similar = document.getElementById('similar');
+        const sort = document.getElementById('sort');
+        if (!similar || !sort) {
+            return;
+        }
+        similar.addEventListener('change', function () {
+            if (similar.value && sort.value === 'created_at') {
+                sort.value = 'similarity';
+            } else if (!similar.value && sort.value === 'similarity') {
+                sort.value = 'created_at';
+            }
+        });
     })();
 </script>
 {% endblock %}

@@ -1698,6 +1698,69 @@ against profile vX") reads the same predicate the sort does. The seeds are
 969 and 1282 — the owner's two named tops, recorded through `set_review` with
 dossier-derived reasons that name their provenance.
 
+**"Similar to the favorites" is a reading of the table, not a model, and it
+is per subscription** (owner request 2026-09-02: from the whole Galicia
+subscription, the listings most alike the two they starred, as a filter of
+its own). `services/favorite_similarity.py` compares every row of a
+subscription with that subscription's OWN favorites — the criteria rule, one
+axis over — on the facts both sides state: price and built area as log
+ratios (0 at twice or half), location on a 60 km linear scale, the plot
+through `subscription_criteria.effective_figures` (one answer to "what is
+this listing's plot" per page), bedrooms/bathrooms as count differences, the
+sea distance and sea view on the `sea_dist`/`sea_view` filters' own SQL
+readings. A fact one side lacks abstains and lowers the coverage the row
+reports; it never scores 0 (#98). Two rules are gates rather than
+components, and both were measured before they were written: a stated
+subtype that differs (`different_kind`: a plot is not similar to a house
+whatever its price — 22 of subscription 24's 565 rows), and a row that
+cannot be placed (`thin`: no coordinate, and no located row in its
+municipality — the 5 Ares rows), which keeps its number for the reader,
+muted, and never passes a cut or ranks. **299 of 543 Galicia rows have no
+coordinate, so the municipality point exists**: the median of the
+coordinates the whole table holds under the same key `/properties` groups
+municipalities by, derived on read, never stored, and named as the basis
+(`municipality`, against `locality` for an approximate coordinate and
+`coordinate` for a precise one). The favorites read as `reference`: kept by
+every cut and sorted first, because they are the definition the cut is made
+against, and the disclosure beside the count says how many the rows were
+measured against ("Similar: 38 at ≥ 70 to 2 favorites" on production).
+
+Three things about the wiring are load bearing. **There is no SQL twin.**
+The reading is Python, once per request over the subscriptions the surface
+can be asked about (the visible ones, live and archived, plus whatever the
+URL named — the chip counts run the clause with only the subscription left
+open), and the clause and the sort key are *derived* from it (`id IN (...)`,
+`CASE id WHEN ...`), so the list, the map, the CSV, the API and the row's own
+page cannot disagree. Measured on production: ~90 ms for subscription 24,
+~60 of them the two `enrichment` JSON expressions PostgreSQL parses per row
+— accepted, rather than a Python twin of two readings that already have a
+home. The detail page hands in `candidate_ids` and pays for one row. **A
+known cut always narrows**, favorites or none: a subscription without one
+has nothing to be similar to, and a page showing every row under a control
+reading "≥ 70" would be a filter that did not apply — the API says
+"selected nothing: subscription N holds no favorites", the page discloses
+the narrowing and offers the clear link. This is deliberately not the
+criteria module's dormant rule, because there the absent parameter is a
+hide and here it is nothing. And **under the Favorites switch the similar
+rows cannot be on the page** (they are never favorites, by definition), so
+the disclosure counts with the switch lifted and says the switch is what
+hides them — the owner's own URL carries `favorites=on`, and "Similar: 0 at
+≥ 70" there would have read as "nothing resembles them". The cut's
+vocabulary is numbers (`similar=80|70|60`), the `sea_dist` precedent,
+because the chip beside every score shows the same number; picking a cut
+moves the sort select to `similarity` unless the owner chose a sort, and a
+hand-typed cut with no sort named orders by likeness. What the reading
+cannot see, and says so in its docstring: a municipality whose only located
+rows are wrongly geocoded (the median shrugs off one among several and
+cannot with one), and the favorites' own plot, which on production sits
+under a dossier key (`attributes.plot_area_cadastre_m2`) and not in the
+column — the plot component is dormant until the column is filled, by the
+person who established the figure. `tests/test_favorite_similarity.py` pins
+the reading by value and every surface; the sweeps in
+`tests/test_map_and_list_agree_on_the_filters.py` and
+`tests/test_api_properties_reads_the_pages_filters.py` walk `similar=70`
+with the rest.
+
 **Four reference files are committed on purpose, and `.gitignore` re-includes
 them one at a time.** `data/*` excludes the runtime artifacts — backfill
 snapshots, ledgers, logs — and `!data/ine_municipal.json`,
