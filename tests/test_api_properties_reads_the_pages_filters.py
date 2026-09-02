@@ -20,6 +20,11 @@ Two repairs, both pinned here:
   record of the reads, `utils/listing_filters.FilterArgs`) and what arrived
   without being read (`scope.params_ignored`) — measured, not maintained, so
   the next filter cannot go missing while the block reads as complete.
+  Since #534 `filters_read` is per request — the filters THIS request
+  carried and the endpoint read with a value — so the two lists partition
+  what the caller sent; the endpoint's whole vocabulary is named in the note
+  an ignored parameter earns, and nowhere as a field. The same ticket
+  silenced the `criteria` note at zero: the count stays, the sentence goes.
 
 The acceptance condition follows `tests/test_map_and_list_agree_on_the_filters
 .py`: **one URL, one set**, walked over the whole filter vocabulary rather
@@ -275,12 +280,75 @@ class TestTheScopeBlockStatesWhatWasReadAndWhatWasNot:
     complete while five parameters were dropped in silence."""
 
     def test_every_filter_the_endpoint_reads_is_in_filters_read(self, client, world):
-        reported = _api(client, f"profile_id={world['pid']}")["scope"]["filters_read"]
-        swept = {name for name, _ in FILTERS}
-        missing = sorted(swept - set(reported))
-        assert not missing, (
-            f"filters this endpoint applies and does not report: {missing}"
-        )
+        """Sent all at once, because `filters_read` is per request (#534): a
+        bare request reads no filter and reports none, so the check that
+        every swept filter is reported has to send every swept filter — and
+        it asserts the whole list by value, so a sixteenth name that is not
+        in the sweep is as loud as a swept one that is missing."""
+        every = "&".join(f"{name}={value}" for name, value in FILTERS)
+        reported = _api(client, f"profile_id={world['pid']}&{every}")["scope"][
+            "filters_read"
+        ]
+        assert reported == sorted(name for name, _ in FILTERS)
+
+    def test_filters_read_is_what_this_request_carried(self, client, world):
+        """By value, on exactly two filters and on none (#534). Before this
+        the field named all sixteen filters the endpoint knows on a request
+        that sent no filter at all — a capability list under a name that
+        reads as "these narrowed your result". A presence-only assertion
+        passes either way and proves neither, which is why both lists are
+        compared whole."""
+        pid = world["pid"]
+        two = _api(client, f"profile_id={pid}&sea_view=yes&category=land")["scope"]
+        assert two["filters_read"] == ["category", "sea_view"]
+        assert two["params_ignored"] == []
+
+        none = _api(client, f"profile_id={pid}&limit=5")["scope"]
+        assert none["filters_read"] == []
+        assert none["params_ignored"] == []
+
+    def test_filters_read_and_params_ignored_partition_what_was_sent(
+        self, client, world
+    ):
+        """Every key the caller sent is in exactly one of the two lists, less
+        the endpoint's own parameters — so a caller accounts for each
+        parameter they sent from the structured block alone, without the
+        prose. A blank value is the page's spelling for "no filter" and is in
+        neither: it was read, and it applied nothing."""
+        pid = world["pid"]
+        scope = _api(
+            client,
+            f"profile_id={pid}&limit=5&category=land&advertiser=owner"
+            "&page=3&municipality=",
+        )["scope"]
+        assert scope["filters_read"] == ["advertiser", "category"]
+        assert scope["params_ignored"] == ["page"]
+        # And the note that names an ignored parameter is where the whole
+        # vocabulary now lives, since the field no longer carries it.
+        note = next(line for line in scope["notes"] if "page" in line)
+        for name, _ in FILTERS:
+            assert name in note, (name, note)
+
+    def test_the_criteria_note_is_silent_when_nothing_was_hidden(self, client, world):
+        """The count stays — `criteria_hidden_by_default: 0` is data — and
+        the sentence goes: a note saying nothing was hidden, on a request
+        where nothing was, is noise, and noise is how a true disclosure stops
+        being read (#534). Pinned against the SAME fixture in both states, so
+        a suppression that also silenced the non-zero case is caught here
+        and not only in test_criteria_on_every_surface.py."""
+        pid = world["pid"]
+        narrowed = _api(client, f"profile_id={pid}&sea_view=yes")["scope"]
+        assert narrowed["criteria_applied"] == "default"
+        assert narrowed["criteria_hidden_by_default"] == 0
+        assert not any(
+            "hidden by the default reading" in line for line in narrowed["notes"]
+        ), narrowed["notes"]
+
+        bare = _api(client, f"profile_id={pid}")["scope"]
+        assert bare["criteria_hidden_by_default"] == 1
+        assert any("criteria: 1 listing(s)" in line for line in bare["notes"]), bare[
+            "notes"
+        ]
 
     def test_a_parameter_nothing_reads_is_named_ignored(self, client, world):
         payload = _api(client, f"profile_id={world['pid']}&page=2&banana=1")
@@ -313,7 +381,7 @@ class TestTheScopeBlockStatesWhatWasReadAndWhatWasNot:
             "another_one",
             "tomorrows_page_filter",
         ]
-        assert "sea_view" in payload["scope"]["filters_read"]
+        assert payload["scope"]["filters_read"] == ["sea_view"]
 
     def test_the_endpoint_reads_the_request_through_the_record_only(self):
         """Structural: `get_properties` touches the request's argument
@@ -350,6 +418,12 @@ class TestTheScopeBlockStatesWhatWasReadAndWhatWasNot:
         assert "banana" in note and "likely" in note, (
             "the note names the value and the vocabulary the filter reads"
         )
+        # A refused value is still a READ: the parameter stays in
+        # `filters_read` (it is in neither list otherwise, and the two are
+        # meant to partition what was sent) and the note beside it says what
+        # the value did, which is nothing.
+        assert payload["scope"]["filters_read"] == ["sea_view"]
+        assert payload["scope"]["params_ignored"] == []
 
     def test_a_recognized_value_gets_no_unrecognized_note(self, client, world):
         payload = _api(client, f"profile_id={world['pid']}&sea_view=yes")
