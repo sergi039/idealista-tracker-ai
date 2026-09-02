@@ -355,6 +355,81 @@ asserts the stub was never consulted. `WATCHER_BASH` picks the interpreter —
 under a bash 5 as well before believing it, because that is the only bash CI
 has.
 
+## A stall is an alarm, not a deploy
+
+On 2026-09-01 the mini's checkout sat on branch `codex/issue-473` with five
+uncommitted files from 07:43 to 16:03, and every tick refused — correctly,
+100+ times — while two merged commits never reached production (#532).
+`/api/healthz` was green because the *old* image was healthy; the page check
+passed because the *old* page rendered. Every liveness signal here answers
+"is the app serving" and none answers "is the app current", so a production
+that stops taking merges looks identical to one with nothing to take. It was
+found by accident, in the log, eight hours later.
+
+The refusal stays. What the watcher does now is count the ticks that **end
+without deploying while `origin/main` is ahead of `data/.deployed_sha`** —
+the branch refusal, the dirty-tree refusal, an in-flight deferral, the
+handover-budget stop, and a `FATAL` after the fetch (the parse gate's
+"refusing to deploy a watcher that cannot run" repeats every five minutes
+exactly as the branch refusal did). From `AUTOPILOT_STALL_THRESHOLD` such
+ticks in a row (3, fifteen minutes) every refused tick logs one line
+
+```
+STALLED: production is 2 commit(s) behind main after 3 refused tick(s) since 2026-09-01T05:43:14Z - deployed b286668, main 4a69583; last reason: on branch 'codex/issue-473', not 'main'
+```
+
+and writes `data/.deploy_stalled` — that line first, then `deployed=`, `main=`,
+`branch=`, `gap=`, `ticks=`, `since=`, `reason=` one per line — so a session
+that reads files rather than logs can see it; `tools/backfill_status.sh`
+prints it too, without changing its verdict. The line repeats on every refused
+tick past the threshold on purpose: a `tail` of the log at hour eight has to
+show it, not only the refusal it showed 97 times before.
+
+**The alarm leads to a person.** Nothing on this path deploys, `git stash`es,
+switches branches or resets a tree. The primitive makes one git write — a
+`git fetch --no-write-fetch-head` of the remote-tracking ref, because the
+branch and dirty refusals come before the tick's own fetch and a stale
+`origin/main` is how a gap hides; the option matters because a plain fetch
+also rewrites `.git/FETCH_HEAD`, and a developer paused between `git fetch
+origin feature` and `git merge FETCH_HEAD` in this shared clone would merge
+main instead (found by the plan review, reproduced, and pinned) — and touches
+two files under `data/`. The incident's own resolution was the orchestrator
+verifying the tree byte-identical to merged content before stashing it, and
+that is what the alarm asks for. Deleting `data/.deploy_stalled` is not a
+cure; the next refused tick rewrites it.
+
+It clears itself when production is current again: on `DEPLOYED`, and on any
+tick that measures a gap of zero — the "nothing new" path, or a refused tick
+after somebody deployed by hand and wrote the marker — because a count carried
+into the next stall would alarm after one refused tick of it. The count is
+**not** keyed on the target commit the way the deferral budget is: main moving
+further during a stall is more reason to shout, not a reason to start over.
+
+What it cannot see, stated rather than discovered. A gap it cannot measure —
+no `data/.deployed_sha`, or a marker naming a commit this clone does not hold;
+the deploy path already shouts about both — leaves the count alone. A `FATAL`
+before the fetch (a missing contract, a failed fetch) is not counted for the
+same reason. The lock skip is not counted because another process owns that
+tick's outcome. A failed build is not a refusal: it is a failure with its own
+`ROLLBACK` line, and the watcher tried. And a fetch that fails inside the
+refusal path measures against `origin/main` as last fetched and says so in the
+line — main is protected, so that is a lower bound, never a fabrication.
+
+| Variable | Default | Does |
+|---|---|---|
+| `AUTOPILOT_STALL_THRESHOLD` | `3` | refused ticks in a row before `STALLED:`; `0` alarms on the first |
+| `AUTOPILOT_STALL_STATE` | `data/.deploy_stall_ticks` | the counter, `<count> <since>` |
+| `AUTOPILOT_STALLED_MARKER` | `data/.deploy_stalled` | the alarm, for anyone who reads files |
+
+`tools/autopilot/deploy_stall_test.sh` (wrapped by
+`tests/test_deploy_watcher_stall.py`, under `/bin/bash` and the PATH bash)
+pins it: the incident's shape with `origin/main` stale in the clone, the
+not-ahead case, the clear, the deferral, the hand-written marker, a bad
+threshold, an unmeasurable gap, and the zero-gap reset. The parse-gate
+refusal, the handover's continuity across the `exec` and the handover-budget
+stop live in `deploy_self_update_test.sh`, the one harness where the watcher
+is inside the repository it deploys.
+
 ## Why it is shaped like this
 
 **One agent per issue.** PRs #57 and #58 both fixed issue #17, in different

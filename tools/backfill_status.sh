@@ -252,6 +252,22 @@ for marker in "${REPO_ROOT}"/data/.inflight/*.json; do
     say "marker: $(basename "$marker") - a run started and did not clean up (a report, not a lock)"
 done
 
+# --- 4. is the deploy chain stalled? ----------------------------------------
+# Informational, and about a different question: this script answers "may I
+# start a backfill", and a stalled deployer does not make one unsafe. It is
+# read here because this is the file sessions consult before touching the
+# mini, and data/.deploy_stalled is the watcher's own alarm (#532): written
+# once main has been ahead of what serves for AUTOPILOT_STALL_THRESHOLD refused
+# ticks in a row, rewritten every refused tick after, and cleared by the next
+# successful deploy. On 2026-09-01 that state lasted eight hours and was found
+# by accident in a log. Deleting the file is not the cure; making the checkout
+# deployable is. The verdict below does not read it.
+stalled_marker="${REPO_ROOT}/data/.deploy_stalled"
+if [ -e "$stalled_marker" ]; then
+    stalled_line="$(head -n 1 "$stalled_marker" 2>/dev/null || true)"
+    say "deploy chain: ${stalled_line:-STALLED (marker present but unreadable)} - ${stalled_marker}, the watcher's own alarm (#532), cleared by the next successful deploy"
+fi
+
 for r in ${reasons+"${reasons[@]}"}; do say "  $r"; done
 
 case "$verdict" in

@@ -278,3 +278,22 @@ set -e
 grep -q "VERDICT: idle" "${WORK}/out" \
     || fail "scenario 13 did not reach a real verdict through the fallback"
 printf 'OK: docker found at its absolute path still measures, it does not degrade\n'
+
+# --- scenario 14: the deploy watcher's stall alarm is surfaced, read-only ---
+# data/.deploy_stalled is written by tools/autopilot/deploy_watcher.sh once
+# main has been ahead of production for a threshold of refused ticks (#532),
+# and this is the script sessions consult before touching the mini - so it
+# says so. It changes no verdict: a stalled deployer is not a running backfill.
+set_top; clear_locks; clear_markers
+printf '%s\n' \
+    "STALLED: production is 2 commit(s) behind main after 3 refused tick(s) since 2026-09-01T05:43:14Z - deployed b286668, main 4a69583; last reason: on branch 'codex/issue-473', not 'main'" \
+    "deployed=b286668" "main=4a69583" "gap=2" "ticks=3" >"${WORK}/repo/data/.deploy_stalled"
+run_status
+[ "$RC" = "0" ] || fail "scenario 14: a stalled deploy chain changed the backfill verdict (rc=$RC)"
+grep -q "VERDICT: idle" "${WORK}/out" || fail "scenario 14 did not stay idle under a stalled deploy chain"
+grep -q "deploy chain: STALLED: production is 2 commit(s) behind main after 3 refused tick(s)" "${WORK}/out" \
+    || fail "scenario 14 did not surface the watcher's stall alarm"
+rm -f "${WORK}/repo/data/.deploy_stalled"
+run_status
+grep -q "deploy chain:" "${WORK}/out" && fail "scenario 14 reported a stall after the marker was gone"
+printf 'OK: a stalled deploy chain is surfaced, and the backfill verdict is not its business\n'
