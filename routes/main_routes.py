@@ -1920,11 +1920,17 @@ def properties():
         # (cannot be placed, a different kind, no favorite to compare to),
         # and how many of the rankable rest on price, area and location
         # alone. One query for the ids; the reading is already in hand.
+        # Counted whenever the line will render -- which includes the state
+        # with no favorite anywhere, where the context is None and a cut has
+        # emptied the page: that is where the sentence is most needed, and
+        # reading the summary off the context alone suppressed it there
+        # (SIMILAR-001).
         similarity_summary = (
-            similarity_ctx.summarize(
-                row_id for (row_id,) in query.with_entities(Property.id)
+            favorite_similarity.summarize(
+                similarity_ctx,
+                (row_id for (row_id,) in query.with_entities(Property.id)),
             )
-            if similarity_ctx is not None
+            if similarity_ctx is not None or similarity_cut is not None
             else None
         )
 

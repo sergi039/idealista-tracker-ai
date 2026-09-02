@@ -777,17 +777,7 @@ class SimilarityContext:
         this page: unplaceable, a different kind, or nothing to compare to.
         `base_only` counts the rankable rows resting on price, area and
         location alone; `plot_compared` the rankable rows whose plot was."""
-        counts = {
-            STATE_REFERENCE: 0,
-            STATE_OK: 0,
-            STATE_THIN: 0,
-            STATE_DIFFERENT_KIND: 0,
-            STATE_NO_REFERENCE: 0,
-            STATE_NOTHING_COMPARED: 0,
-            "base_only": 0,
-            "plot_compared": 0,
-            "total": 0,
-        }
+        counts = _empty_summary()
         for property_id in property_ids:
             reading = self.read(property_id)
             counts[reading["state"]] = counts.get(reading["state"], 0) + 1
@@ -798,6 +788,42 @@ class SimilarityContext:
                 if "plot" in reading.get("compared", ()):
                     counts["plot_compared"] += 1
         return counts
+
+
+def _empty_summary() -> Dict[str, int]:
+    return {
+        STATE_REFERENCE: 0,
+        STATE_OK: 0,
+        STATE_THIN: 0,
+        STATE_DIFFERENT_KIND: 0,
+        STATE_NO_REFERENCE: 0,
+        STATE_NOTHING_COMPARED: 0,
+        "base_only": 0,
+        "plot_compared": 0,
+        "total": 0,
+    }
+
+
+def summarize(
+    ctx: Optional[SimilarityContext], property_ids: Iterable[int]
+) -> Dict[str, int]:
+    """`SimilarityContext.summarize`, and the same answer with NO context.
+
+    With no favorite anywhere in the table there is no context, and every
+    row reads `no_reference` — which is the honest count and exactly the
+    state where the line beside the result count matters most, because a
+    cut has then emptied the page. Reading it off the context alone left
+    the sentence unrendered in that one state (SIMILAR-001, found by the
+    independent review's third round and reproduced): every fixture in the
+    suite held a favorite somewhere, so nothing could see it.
+    """
+    if ctx is not None:
+        return ctx.summarize(property_ids)
+    counts = _empty_summary()
+    for _ in property_ids:
+        counts[STATE_NO_REFERENCE] += 1
+        counts["total"] += 1
+    return counts
 
 
 def build_context(

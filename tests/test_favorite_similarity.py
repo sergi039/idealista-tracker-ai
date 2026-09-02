@@ -978,6 +978,43 @@ class TestTheList:
         ).get_json()
         assert [p["id"] for p in payload["properties"]] == [older.id, newer.id]
 
+    def test_with_no_favorite_anywhere_the_cut_still_says_what_it_did(
+        self, client, app
+    ):
+        """SIMILAR-001. With no favorite in the WHOLE table there is no
+        context, and a cut empties the page — which is exactly where the
+        line beside the count is needed. Every other fixture in this file
+        holds a favorite somewhere, which is why nothing saw this."""
+        profile = _profile("No favorites here")
+        for _ in range(3):
+            _mk(profile.id, coords=MALPICA)
+        assert fs.build_context() is None
+        body = client.get(f"/properties?profile_id={profile.id}&similar=70").get_data(
+            as_text=True
+        )
+        assert _count(body) == 0
+        assert _coverage_line(body) == "Similar: 0 at ≥ 70 to 0 favorites"
+        # The tooltip counts the rows ON SCREEN, as it does under any cut,
+        # so here it is all zeros -- the visible sentence is what carries
+        # the fact, and "0 favorites" is what explains the empty page.
+        tooltip = re.search(r'id="similarity-coverage"[^>]*title="([^"]*)"', body)
+        assert tooltip and unescape(tooltip.group(1)).startswith(
+            "0 cannot be placed · 0 of a different kind · 0 with no favorite to "
+            "compare to · 0 of the rankable rest on price, area and location "
+            "alone · plot compared on 0."
+        )
+        # And the way out is on screen: the control keeps the cut it applied.
+        assert 'value="70" selected' in body
+        # Without a cut nothing is claimed at all.
+        body = client.get(f"/properties?profile_id={profile.id}").get_data(as_text=True)
+        assert _coverage_line(body) is None
+        # The same state, without the cut narrowing it away: the rows really
+        # are `no_reference`, and the summary says so rather than reading as
+        # "nothing to disclose".
+        summary = fs.summarize(None, [row.id for row in Property.query])
+        assert summary["no_reference"] == 3 and summary["total"] == 3
+        assert summary["ok"] == 0 and summary["thin"] == 0
+
     def test_the_control_is_drawn_only_with_a_favorite_on_screen(self, client, world):
         body = client.get("/properties?profile_id=all").get_data(as_text=True)
         assert 'id="similar"' in body
