@@ -415,11 +415,21 @@ note_refused_tick() {
     [ -n "$remote" ] || return 0
     deployed="$(cat "$DEPLOYED_MARKER" 2>/dev/null || true)"
     gap="$(stall_gap "$deployed" "$remote")" || return 0
-    if [ "$gap" = "0" ]; then
+    if [ "$gap" = "0" ] && [ "$fresh" = "1" ]; then
         # Production IS current; the tick only refused to look. Whatever was
         # counted before is over - carrying it into the next stall would alarm
         # after one refused tick of a stall that has barely started.
         clear_stall "production is current at ${remote:0:7}; this tick only refused to look"
+        return 0
+    fi
+    if [ "$gap" = "0" ]; then
+        # Zero against an origin/main this tick could not refresh is a LOWER
+        # BOUND, not a measurement: the real remote may already be ahead. The
+        # range gate's second finding, verbatim - clearing here deletes a real
+        # stall's counter and marker on stale information, which is the alarm
+        # going quiet for the reason it exists. Leave both alone and say so;
+        # the next tick that fetches decides.
+        log "  stall: cannot judge - origin/${BRANCH} could not be refreshed and the gap against the last-known ${remote:0:7} is 0; leaving the alarm state as it is"
         return 0
     fi
 

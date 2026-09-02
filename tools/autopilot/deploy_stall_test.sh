@@ -490,3 +490,40 @@ logged "after 9 refused tick(s) since 2026-09-01T05:43:14Z" \
     || fail "scenario 10 lost the count or the since-when carried by the counter"
 [ "$(builds)" = "0" ] || fail "scenario 10 built from a refused tick"
 printf 'OK: a counter with a leading zero is read as base 10, counted and alarmed\n'
+
+# --- scenario 11: a zero gap measured against a stale remote clears nothing --
+# The range gate's second finding, verbatim: with the deployed marker and the
+# clone's origin/main both at B while the real remote is already at C, a
+# refused tick whose fetch FAILS measures a gap of 0 -- against information it
+# could not refresh. Zero is then a lower bound, not a measurement, and
+# clearing on it deletes a real stall's counter and marker: the alarm going
+# quiet for the very reason it exists.
+rm -f "$STALL_STATE" "$STALLED"
+printf '%s\n' "$(git -C "$REPO" rev-parse origin/main)" >"$MARKER"
+: >"${WORK}/watcher.log"
+STALL_THRESHOLD=1 run_watcher   # gap 0, fetch fine: nothing counted
+[ ! -e "$STALL_STATE" ] || fail "scenario 11 counted while production was current"
+advance_remote "merged while the clone cannot fetch"
+git -C "$REPO" remote set-url origin "${WORK}/no-such-remote.git"
+: >"${WORK}/watcher.log"
+STALL_THRESHOLD=1 run_watcher
+logged "cannot judge - origin/main could not be refreshed" \
+    || fail "scenario 11 did not say it could not judge a zero gap against a stale remote"
+[ ! -e "$STALL_STATE" ] || fail "scenario 11 counted a tick it could not judge"
+[ "$(stalled_lines)" = "0" ] || fail "scenario 11 alarmed on information it could not refresh"
+git -C "$REPO" remote set-url origin "$REMOTE"
+: >"${WORK}/watcher.log"
+STALL_THRESHOLD=1 run_watcher
+[ "$(stall_count)" = "1" ] || fail "scenario 11 did not count once the fetch worked again"
+[ "$(stalled_lines)" = "1" ] || fail "scenario 11 did not alarm once the real gap was measurable"
+# And the half that matters: an EXISTING stall survives the unjudgeable tick.
+git -C "$REPO" remote set-url origin "${WORK}/no-such-remote.git"
+printf '%s\n' "$(git -C "$REPO" rev-parse origin/main)" >"$MARKER"
+: >"${WORK}/watcher.log"
+STALL_THRESHOLD=1 run_watcher
+[ "$(stall_count)" = "1" ] \
+    || fail "scenario 11 cleared a real stall's counter on a zero gap it could not refresh"
+[ -e "$STALLED" ] || fail "scenario 11 deleted the stall marker on stale information"
+git -C "$REPO" remote set-url origin "$REMOTE"
+[ "$(builds)" = "0" ] || fail "scenario 11 built from a refused tick"
+printf 'OK: a zero gap against a remote this tick could not refresh judges nothing\n'
