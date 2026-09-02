@@ -18,6 +18,7 @@ from services.coordinate_quality import (
 
 from models import Property
 from services.enrichment_write import check_writable, locked_write
+from services.yaencontre_source import split_district
 from utils.geocoding import GeocodingService
 from utils.municipality_codes import load_name_index
 from utils.municipality_codes import match as match_municipality
@@ -46,6 +47,33 @@ _LOCATION_FROM_TITLE_RE = re.compile(r"\b(?:in|en)\s+(?P<loc>.+)$", re.IGNORECAS
 # Past it the whole title is used, which is what a title carrying no marker
 # already does.
 _LOCATION_MARKER_MAX_WORDS = 4
+
+# The Spanish portals put the type's own "en" in front of the separator:
+# "Chalet en venta en calle Fiobre, Bergondo" (yaencontre), "Terreno en venta
+# en Llaranes, Avilés" (fotocasa), "Casa o chalet independiente en venta en
+# Estrada de Castela, 907, Narón" (idealista's Spanish alert). Read with the
+# leftmost-marker rule above, the separator is the `en` at word 2 and the
+# query handed to the geocoder was `venta en calle Fiobre, Bergondo, Spain`:
+# 375 production rows carried such a query on 2026-09-02, 203 of them in the
+# Galicia subscription (GEO-003 in #265). So the portal's own grammar is the
+# anchor -- `<type> en (venta|alquiler) en <location>` -- and the type name
+# goes as a whole, whatever prepositions it carries.
+#
+# The type is bounded by the same cap, for the same reason: a description that
+# happens to say "en venta en" is not a title. Measured over the 451
+# production titles carrying the grammar on 2026-09-02 -- yaencontre 377,
+# fotocasa 64, idealista 10 -- the type is one word in 345, two in 73, three
+# in 25 and four in 8, and the four is "Casa o chalet independiente",
+# idealista's longest type name, sitting exactly on the cap. A longer prefix
+# falls through to the rule above, and from there to the whole title.
+#
+# Non-greedy on the type, so the LEFTMOST "en venta en" is the separator,
+# which is the reading `_LOCATION_FROM_TITLE_RE.search()` already gives.
+_PORTAL_SALE_MARKER_RE = re.compile(
+    r"^\S+(?:\s+\S+){0,%d}?\s+en\s+(?:venta|alquiler)\s+en\s+(?P<loc>.+)$"
+    % (_LOCATION_MARKER_MAX_WORDS - 1),
+    re.IGNORECASE,
+)
 
 # Idealista writes a missing street number as the literal "n/a", and it rides
 # into the query as an address component: "Tiñana, n/a, Viella-Granda-Meres,
@@ -397,18 +425,49 @@ def _normalize_query(value: str) -> Optional[str]:
     return text or None
 
 
+def _district_as_component(location: str) -> str:
+    """`"calle De Castela, Feal-Xuvia en Narón"` -> `"calle De Castela, Feal-Xuvia, Narón"`.
+
+    Yaencontre's second "en" sits between a district and its municipality,
+    and 137 of the 451 grammar titles on production carry it, every one of
+    them yaencontre's and every tail the row's own `municipality`. The split
+    is `services.yaencontre_source.split_district`, the reading that column
+    was stored with, so the query's last component is that same string.
+
+    Two readings were rejected against row 1377's title, and both lose the
+    street. Splitting on the LAST "en" gives `Narón`. Re-applying the
+    leftmost-marker rule to what the grammar leaves gives `Narón` too: the
+    prefix "calle De Castela, Feal-Xuvia" is exactly four words and passes
+    the cap. What the grammar leaves is the location; it is not searched again.
+    """
+    head, comma, segment = location.rpartition(",")
+    split = split_district(segment.strip())
+    if split is None:
+        return location
+    district, municipality = split
+    tail = f"{district}, {municipality}"
+    return f"{head}, {tail}" if comma else tail
+
+
+def _location_from_title(title: str) -> Optional[str]:
+    """The place a title names, or the whole title when it names none."""
+    portal = _PORTAL_SALE_MARKER_RE.match(title)
+    if portal:
+        return _normalize_query(_district_as_component(portal.group("loc")))
+    match = _LOCATION_FROM_TITLE_RE.search(title)
+    # A marker buried in a sentence is not a separator. Fall back to the
+    # whole title, exactly as a title with no marker at all already does.
+    if match and len(title[: match.start()].split()) <= _LOCATION_MARKER_MAX_WORDS:
+        return _normalize_query(match.group("loc"))
+    return title
+
+
 def _build_geocoding_queries(prop: Property) -> List[str]:
     queries: List[str] = []
 
     title = _normalize_query(prop.title or "")
     if title:
-        match = _LOCATION_FROM_TITLE_RE.search(title)
-        # A marker buried in a sentence is not a separator. Fall back to the
-        # whole title, exactly as a title with no marker at all already does.
-        if match and len(title[: match.start()].split()) <= _LOCATION_MARKER_MAX_WORDS:
-            loc = _normalize_query(match.group("loc"))
-        else:
-            loc = title
+        loc = _location_from_title(title)
         if loc:
             queries.append(loc)
 

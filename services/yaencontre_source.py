@@ -35,7 +35,7 @@ import html as html_entities
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 from utils.idealista_extractors import extract_area_m2, extract_price
@@ -146,6 +146,24 @@ class YaencontreCard:
     attributes: Dict[str, Any] = field(default_factory=dict)
 
 
+def split_district(segment: Optional[str]) -> Optional[Tuple[str, str]]:
+    """`"Teis en Vigo"` -> `("Teis", "Vigo")`; None when no district is named.
+
+    The one reading of the portal's `<district> en <municipality>` form. The
+    municipality column below is read with it, and so is the geocoding query
+    (`services/property_location_service.py`, GEO-003 in #265), which writes
+    the pair as `<district>, <municipality>` -- so the query's last component
+    and the municipality this parser stores are one split, and cannot
+    disagree. It is the LAST " en " on purpose: the district itself may carry
+    the word ("Lugar en Medio en Foz" is a shape, if not a measured one),
+    while no municipality name does.
+    """
+    if not segment or _DISTRICT_SEPARATOR not in segment:
+        return None
+    district, municipality = segment.rsplit(_DISTRICT_SEPARATOR, 1)
+    return district.strip(), municipality.strip()
+
+
 def _municipality_from_title(title: Optional[str]) -> Optional[str]:
     """The municipality the card title names, or None.
 
@@ -169,8 +187,9 @@ def _municipality_from_title(title: Optional[str]) -> Optional[str]:
         return None
     had_comma = "," in title
     head = title.rsplit(",", 1)[1].strip() if had_comma else title.strip()
-    if _DISTRICT_SEPARATOR in head:
-        head = head.rsplit(_DISTRICT_SEPARATOR, 1)[1].strip()
+    split = split_district(head)
+    if split is not None:
+        head = split[1]
     elif not had_comma:
         return None
     return head or None
