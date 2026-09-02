@@ -76,6 +76,7 @@ TRANSLATIONS = {
         "profile_hidden_flash": "“%s” is hidden from the property views",
         "profile_shown_flash": "“%s” is shown again",
         "profile_default_cannot_hide": "The default profile receives every email that matches nothing else, so it cannot be hidden. Make another profile the default first.",
+        "profile_hidden_cannot_be_default": "This profile is hidden, and the default profile cannot be: it receives every email that matches nothing else, so a hidden default would take listings off the page as they arrive. Show the profile first.",
         # Property list
         "property_overview": "Property Overview",
         "total_properties": "Total Properties",
@@ -886,6 +887,7 @@ TRANSLATIONS = {
         "profile_hidden_flash": "«%s» queda oculta en las vistas de anuncios",
         "profile_shown_flash": "«%s» vuelve a mostrarse",
         "profile_default_cannot_hide": "El perfil predeterminado recibe todos los correos que no coinciden con nada más, por eso no se puede ocultar. Haz predeterminado otro perfil primero.",
+        "profile_hidden_cannot_be_default": "Este perfil está oculto y el predeterminado no puede estarlo: recibe todos los correos que no coinciden con nada más, así que un predeterminado oculto quitaría anuncios de la página según llegan. Muestra el perfil primero.",
         # Property list
         "property_overview": "Resumen de Propiedades",
         "total_properties": "Total de Propiedades",

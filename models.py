@@ -76,6 +76,19 @@ class SearchProfile(db.Model):
             "source_search_key IS NULL OR is_default IS NOT TRUE",
             name="ck_search_profiles_default_has_no_search_key",
         ),
+        # The catch-all cannot be hidden either (migration 028, #533): it
+        # receives every email that matches nothing else, so a hidden
+        # catch-all takes listings off the page as they arrive.
+        # `set_profile_hidden` and `edit_profile` refuse it first; this is
+        # what refuses it for the writers that never reach a route --
+        # curation SQL through `docker exec` is a supported workflow. The
+        # hiding half of 025's `ck_search_profiles_catch_all_never_routes`,
+        # on the same shape: `IS NOT TRUE` on both sides, because a NULL
+        # `is_default` is nobody's catch-all.
+        CheckConstraint(
+            "is_hidden IS NOT TRUE OR is_default IS NOT TRUE",
+            name="ck_search_profiles_catch_all_never_hidden",
+        ),
     )
 
     id = db.Column(db.Integer, primary_key=True)
@@ -97,7 +110,8 @@ class SearchProfile(db.Model):
     # It says nothing about ingestion: a hidden subscription keeps receiving
     # its own alert emails, keeps its `email_matchers`, and keeps every
     # listing it already holds. See services/search_profile_service.py for
-    # the one clause every surface reads.
+    # the one clause every surface reads. Never TRUE on the catch-all: the
+    # CHECK in `__table_args__` refuses the pair from either side.
     is_hidden = db.Column(
         db.Boolean, nullable=False, default=False, server_default=db.text("FALSE")
     )

@@ -297,8 +297,16 @@ showing — the owner chose this, so it is a disclosure and not a warning, but
 without it "all subscriptions" reads as the whole table. And the **catch-all
 cannot be hidden at all**: it receives every email that matches nothing else,
 so hiding it would take listings off the page as they arrive, which is why
-`edit_profile` already forces the default profile active.
-`tests/test_hidden_subscriptions.py` pins all of it.
+`edit_profile` already forces the default profile active — and since #533
+the database refuses it too: `ck_search_profiles_catch_all_never_hidden`
+(migration 028) is the hiding half of 025's
+`ck_search_profiles_catch_all_never_routes`, on the same shape, because
+curation SQL through `docker exec` never meets a route. A CHECK on a pair
+refuses the pair from either side, so a hidden subscription cannot be made
+the default either, and `edit_profile` says so instead of answering a 500.
+`tests/test_hidden_subscriptions.py` pins the UI half and
+`tests/test_postgres_migrations.py` the constraint — SQLite never runs the
+migration, so only the PostgreSQL suite can prove it.
 
 **And routing one is a third question, because hiding does not stop mail**
 (#502, owner request 2026-08-31). Hiding takes a subscription off the

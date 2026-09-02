@@ -336,6 +336,47 @@ class TestTheControlOnProfiles:
                 "it would take listings off the page as they arrive"
             )
 
+    def test_a_hidden_subscription_cannot_be_made_the_catch_all(
+        self, app, client, subscriptions
+    ):
+        """The same pair from the other side (#533).
+
+        Migration 028 refuses `is_default AND is_hidden` at the database, and
+        a CHECK on a pair refuses the pair whichever column moved last -- so
+        the "make default" tick on a hidden subscription's edit form, which
+        /profiles offers for every subscription including the hidden ones,
+        used to be a 500 waiting to happen. The route refuses it first and
+        says why, the way `set_profile_hidden` refuses the other direction.
+        """
+        from utils.i18n import TRANSLATIONS
+
+        response = client.post(
+            "/profiles/{}/edit".format(subscriptions["hidden"]),
+            data={
+                "action": "save_profile_settings",
+                "is_active": "on",
+                "is_default": "on",
+                "description": "still hidden",
+            },
+            follow_redirects=True,
+        )
+        body = response.get_data(as_text=True)
+        assert TRANSLATIONS["en"]["profile_hidden_cannot_be_default"] in body
+        assert "profile_hidden_cannot_be_default" in TRANSLATIONS["es"]
+
+        with app.app_context():
+            hidden = db.session.get(SearchProfile, subscriptions["hidden"])
+            assert hidden.is_default is False, (
+                "a hidden catch-all would take listings off the page as they "
+                "arrive; the database refuses it and so must the form"
+            )
+            assert hidden.is_hidden is True, "refusing must not un-hide it either"
+            assert hidden.description == "still hidden", (
+                "the rest of the form is saved; only the tick is refused"
+            )
+            catch_all = db.session.get(SearchProfile, subscriptions["default"])
+            assert catch_all.is_default is True, "the real catch-all keeps its role"
+
     def test_the_import_destination_drops_the_hidden_ones(
         self, app, client, subscriptions
     ):
@@ -362,9 +403,20 @@ class TestTheControlOnProfiles:
     def test_it_says_so_when_every_destination_is_hidden(
         self, app, client, subscriptions
     ):
-        """An empty `required` select explains nothing on its own."""
+        """An empty `required` select explains nothing on its own.
+
+        The catch-all is un-defaulted before everything is hidden: since
+        migration 028 (#533) the schema refuses a hidden catch-all -- the
+        model carries the CHECK, so SQLite refuses it here too -- which is
+        exactly the state the first version of this test built. "Every
+        destination is hidden" is therefore reachable only on a database
+        with no catch-all at all, a transient state `get_default_profile()`
+        repairs on the next ingest; the guard is kept because an empty
+        `required` select still explains nothing while it lasts.
+        """
         with app.app_context():
             for profile in SearchProfile.query.all():
+                profile.is_default = False
                 profile.is_hidden = True
             db.session.commit()
             job_id = _preview_job()
