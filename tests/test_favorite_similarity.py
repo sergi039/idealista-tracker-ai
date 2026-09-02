@@ -40,6 +40,7 @@ import pytest
 from app import create_app, db
 from models import Property, SearchProfile
 from services import favorite_similarity as fs
+from services import subscription_criteria
 from tests import setup_test_environment
 
 # Malpica de Bergantiños, the two production favorites' municipality; Vigo is
@@ -459,6 +460,55 @@ class TestTheReading:
         assert (
             "the favorite's location from the listing's approximate coordinate" in text
         )
+
+    def test_the_surface_ceiling_is_not_applied_to_prices(self, world):
+        """A bound about square metres says nothing about euros: a price at
+        the criteria module's surface ceiling is still a price, and twice
+        the favorite's price still scores 0 rather than abstaining."""
+        pid = world["pid"]
+        dear = _mk(
+            pid,
+            price=subscription_criteria.MAX_CREDIBLE_M2,
+            coords=MALPICA,
+            location_accuracy="precise",
+        )
+        reference = world["rows"]["favorite"]
+        reference.price = subscription_criteria.MAX_CREDIBLE_M2 / 2
+        db.session.commit()
+        reading = fs.build_context().read(dear.id)
+        assert reading["components"]["price"] == 0.0
+        assert dear.id not in fs.build_context().kept_ids(80.0)
+        # A surface past the ceiling is still an absence, as the criteria
+        # module reads it.
+        huge = _mk(pid, area=subscription_criteria.MAX_CREDIBLE_M2, coords=MALPICA)
+        assert "area" not in fs.build_context().read(huge.id)["components"]
+
+    def test_the_typology_gates_houses_only(self, app):
+        """Two parcels whose titles carry house words are land, and land
+        has no typology: they are compared, never gated."""
+        profile = _profile("Parcels")
+        ref = _mk(
+            profile.id,
+            title="Parcela con casa independiente en Ares",
+            is_favorite=True,
+            property_category="land",
+            property_subtype="plot",
+            area=2000,
+            area_type="plot",
+            coords=MALPICA,
+        )
+        row = _mk(
+            profile.id,
+            title="Parcela con casa adosada en Ares",
+            property_category="land",
+            property_subtype="plot",
+            area=2100,
+            area_type="plot",
+            coords=MALPICA,
+        )
+        reading = fs.build_context().read(row.id)
+        assert reading["state"] == fs.STATE_OK
+        assert reading["reference_id"] == ref.id
 
     def test_a_coordinate_off_the_globe_is_no_coordinate(self, world):
         """NaN and a latitude of 400 are bad input, not a location: such a

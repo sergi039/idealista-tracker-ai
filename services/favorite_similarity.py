@@ -109,7 +109,11 @@ from models import Property, db
 from services import subscription_criteria
 from services.coordinate_quality import APPROXIMATE_COORD_SLACK_M, is_precise
 from services.listing_attribute_filters import LEGACY_SEA_VIEW_TRUE_TEXT
-from services.property_classification_service import house_typology, listing_kind
+from services.property_classification_service import (
+    KIND_HOUSE,
+    house_typology,
+    listing_kind,
+)
 from services.sea_view_service import VALID_STATES, haversine_m
 from utils.municipality_grouping import group_key
 
@@ -234,10 +238,13 @@ class ListingFacts:
     sea_view_state: Optional[str]
 
 
-def _positive_number(value: Any) -> Optional[float]:
+def _positive_number(value: Any, ceiling: Optional[float] = None) -> Optional[float]:
     """A finite positive number, or None. A JSON value may arrive as an int,
-    a float, a Decimal or the text a JSON path returns; a NaN, an absurd
-    surface and fotocasa's `0` blank are all absences."""
+    a float, a Decimal or the text a JSON path returns; a NaN and fotocasa's
+    `0` blank are absences. `ceiling` is for a SURFACE (the criteria
+    module's credibility bound, which is what excludes a PostgreSQL NaN
+    there) and is never applied to a price or a distance — a bound about
+    square metres says nothing about euros."""
     if value is None or isinstance(value, bool):
         return None
     try:
@@ -246,9 +253,14 @@ def _positive_number(value: Any) -> Optional[float]:
         return None
     if not math.isfinite(number) or number <= 0:
         return None
-    if number >= subscription_criteria.MAX_CREDIBLE_M2:
+    if ceiling is not None and number >= ceiling:
         return None
     return number
+
+
+def _surface(value: Any) -> Optional[float]:
+    """A credible surface in m²: the criteria module's own bound."""
+    return _positive_number(value, ceiling=subscription_criteria.MAX_CREDIBLE_M2)
 
 
 def _coordinate(value: Any, limit: float) -> Optional[float]:
@@ -355,9 +367,9 @@ def facts_from_row(row: Sequence[Any]) -> ListingFacts:
         typology=house_typology(title),
         subtype=_text(subtype),
         price=_positive_number(price),
-        area=_positive_number(area),
+        area=_surface(area),
         area_type=_text(area_type),
-        plot_area=_positive_number(plot_area),
+        plot_area=_surface(plot_area),
         bedrooms=_count(bedrooms) if _count(bedrooms) is not None else _count(rooms),
         bathrooms=_count(bathrooms),
         lat=latitude,
@@ -530,11 +542,21 @@ def _sea_view_bucket(state: Optional[str]) -> Optional[str]:
     return None
 
 
+def _typology_applies(facts: ListingFacts) -> bool:
+    """The house typology is a fact about houses: it gates only a side that
+    is a house or of unknown kind. A parcel titled "Parcela con casa
+    adosada" is land, and its title's typology says nothing about it."""
+    return facts.kind in (None, KIND_HOUSE)
+
+
 def _gated(facts: ListingFacts, reference: ListingFacts) -> bool:
-    """A different kind, or a different house typology, when both sides
-    state one. A side stating neither is compared, never gated (#98)."""
+    """A different kind, or -- between houses -- a different house typology,
+    when both sides state one. A side stating neither is compared, never
+    gated (#98)."""
     if facts.kind and reference.kind and facts.kind != reference.kind:
         return True
+    if not (_typology_applies(facts) and _typology_applies(reference)):
+        return False
     return bool(
         facts.typology and reference.typology and facts.typology != reference.typology
     )
