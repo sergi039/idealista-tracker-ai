@@ -2053,6 +2053,18 @@ def properties():
             if similarity_ctx is not None
             else 0
         )
+        # References are per subscription, so under several favorite-holding
+        # subscriptions on screen the line names each one's own favorites
+        # rather than a summed basis no row was compared against.
+        similarity_reference_profiles = (
+            sum(
+                1
+                for profile_id in shown_profile_ids
+                if similarity_ctx.reference_count_for(profile_id)
+            )
+            if similarity_ctx is not None
+            else 0
+        )
 
         return render_template(
             "properties.html",
@@ -2090,6 +2102,7 @@ def properties():
             similarity_enabled=similarity_reference_count > 0
             or similarity_cut is not None,
             similarity_reference_count=similarity_reference_count,
+            similarity_reference_profiles=similarity_reference_profiles,
             similarity_cut=similarity_cut,
             similar_count=similar_count,
             similarity_summary=similarity_summary,
@@ -2357,6 +2370,11 @@ def property_detail(property_id):
             # then says so rather than drawing a number nothing was measured
             # against.
             similarity_reading=similarity_reading,
+            # The favorite's basis, only when it is the looser side: a
+            # precise row measured to a centroid favorite must say so.
+            similarity_weaker_reference_basis=favorite_similarity.weaker_basis(
+                similarity_reading
+            ),
             similarity_reference_count=similarity_reference_count,
             openai_configured=bool(getattr(Config, "AI_BRIDGE_TOKEN", None)),
             openai_analysis=(openai_variant.analysis if openai_variant else None),

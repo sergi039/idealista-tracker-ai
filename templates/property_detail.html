@@ -592,6 +592,9 @@
                         {% elif similarity_reading.geography_basis %}
                             · {{ t('similarity_location_basis') }} {{ t('similarity_basis_' ~ similarity_reading.geography_basis) }}
                         {% endif %}
+                        {% if similarity_weaker_reference_basis %}
+                            ({{ t('similarity_to_favorites_basis') }} {{ t('similarity_basis_' ~ similarity_weaker_reference_basis) }})
+                        {% endif %}
                         {% if similarity_reading.compared_count < similarity_reading.fact_count %}
                             · {{ t('similarity_facts_short')|format(similarity_reading.compared_count, similarity_reading.fact_count) }}
                         {% endif %}

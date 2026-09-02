@@ -1269,7 +1269,7 @@
                     {% if similarity_enabled is defined and similarity_enabled and similarity_summary and pagination %}
                         <span id="similarity-coverage" class="text-body-secondary small"
                               title="{{ t('similarity_counts_line')|format(similarity_summary.thin, similarity_summary.different_kind, similarity_summary.no_reference, similarity_summary.base_only, similarity_summary.plot_compared) }} {{ t('similar_coverage_tooltip') }}">
-                            <i class="fas fa-equals me-1"></i>{% if similar_count is defined and similar_count is not none %}{{ t('similar_coverage')|format(similar_count, similarity_cut|int) }}{% else %}{{ t('similar_rankable')|format(similarity_summary.ok, pagination.total) }}{% endif %} {{ tn('similarity_references', similarity_reference_count) }}{% if similar_hidden_by_favorites is defined and similar_hidden_by_favorites %} {{ t('similar_hidden_by_favorites') }}{% endif %}
+                            <i class="fas fa-equals me-1"></i>{% if similar_count is defined and similar_count is not none %}{{ t('similar_coverage')|format(similar_count, similarity_cut|int) }}{% else %}{{ t('similar_rankable')|format(similarity_summary.ok, pagination.total) }}{% endif %} {% if similarity_reference_profiles is defined and similarity_reference_profiles > 1 %}{{ t('similarity_references_each')|format(similarity_reference_count) }}{% else %}{{ tn('similarity_references', similarity_reference_count) }}{% endif %}{% if similar_hidden_by_favorites is defined and similar_hidden_by_favorites %} {{ t('similar_hidden_by_favorites') }}{% endif %}
                         </span>
                     {% endif %}
                     {# How many listings are waiting on something that is now

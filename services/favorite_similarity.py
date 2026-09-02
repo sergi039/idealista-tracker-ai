@@ -113,13 +113,18 @@ from utils.municipality_grouping import group_key
 
 # The weights are a statement of what "similar" means to a house buyer:
 # where it is and what it costs first, then how big it is, then the rest.
-# Calibrated against subscription 24 on 2026-09-02 (543 rows, favorites 969
-# and 1282): the Seiruga neighbour at 3 km, 275k, 292 m² scored 94; the
-# Ponteceso / Laxe / Cabana houses of 240–320 m² at 250–300k scored 80–88;
-# Camariñas and Arteixo at 27–36 km scored ~70; the Rías Baixas scored 0 on
-# location and fell below 50. Most rows compare on three facts (price, area,
-# location: 8 of 13 weight), which the chip and the line beside the count
-# both say.
+# Measured against production subscription 24 on 2026-09-02 with the rules
+# in this module (565 rows, favorites 969 and 1282): 500 rankable, 56 of a
+# different kind (22 non-houses, 34 attached houses), 5 unplaceable; the
+# Seiruga neighbour at 3 km, 275k, 292 m² scored 93.7; the Ponteceso / Laxe /
+# Cabana houses of 240–320 m² at 250–300k scored 80–88; Camariñas and
+# Arteixo at 27–36 km scored ~70; the Rías Baixas scored 0 on location and
+# fell below 50. The cuts kept 11 / 42 / 80 rows at ≥ 80 / 70 / 60, of which
+# 10 / 30 / 44 rest on price, area and location alone — 305 of the 500 rows
+# state only those three facts, which the chip ("3/8") and the line beside
+# the count both say. On a LAND subscription the parcel enters the score
+# once, at the plot's 1.5 (never again as `area`): that weight was not
+# calibrated by the sub-24 run, and changing it is the owner's call.
 WEIGHTS: Dict[str, float] = {
     "price": 3.0,
     "area": 2.0,
@@ -169,6 +174,22 @@ STATE_NOTHING_COMPARED = "nothing_compared"
 BASIS_COORDINATE = "coordinate"
 BASIS_APPROXIMATE = "approximate"
 BASIS_MUNICIPALITY = "municipality"
+
+# Firm to loose, for a surface that says when the favorite's basis is the
+# weaker side of a distance.
+BASIS_ORDER = (BASIS_COORDINATE, BASIS_APPROXIMATE, BASIS_MUNICIPALITY)
+
+
+def weaker_basis(reading: Dict[str, Any]) -> Optional[str]:
+    """The reference's basis when it is looser than the row's own, else None."""
+    own, theirs = (
+        reading.get("geography_basis"),
+        reading.get("reference_geography_basis"),
+    )
+    if own not in BASIS_ORDER or theirs not in BASIS_ORDER:
+        return None
+    return theirs if BASIS_ORDER.index(theirs) > BASIS_ORDER.index(own) else None
+
 
 SEA_BASIS_PARCEL = "parcel"
 SEA_BASIS_BAND = "band"
@@ -548,11 +569,13 @@ def compare(
     if facts.bathrooms is not None and reference.bathrooms is not None:
         components["bathrooms"] = _count_score(facts.bathrooms, reference.bathrooms)
     here, there = locate(facts, points), locate(reference, points)
+    reference_basis: Optional[str] = None
     if here and there:
         components["geography"] = _geography_score(
             haversine_m(here[0], here[1], there[0], there[1])
         )
         basis, point_count = here[2], here[3]
+        reference_basis = there[2]
     sea = _sea_distance_component(facts, reference)
     if sea is not None:
         components["sea_distance"], sea_basis = sea
@@ -583,6 +606,10 @@ def compare(
         "missing_required": missing_required,
         "geography_basis": basis,
         "municipality_point_n": point_count,
+        # The favorite's own basis: a precise row measured to a favorite
+        # that is a centroid must not read as a coordinate-to-coordinate
+        # distance (sub 6's favorite 218 is a centroid, its plots precise).
+        "reference_geography_basis": reference_basis,
         "sea_distance_basis": sea_basis,
         "reference_id": reference.id,
     }
@@ -627,6 +654,7 @@ def read_against(
             "reference_id": None,
             "geography_basis": None,
             "municipality_point_n": None,
+            "reference_geography_basis": None,
             "sea_distance_basis": None,
             "reference_count": len(references),
         }

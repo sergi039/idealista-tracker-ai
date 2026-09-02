@@ -383,6 +383,83 @@ class TestTheReading:
         for name in ("bedrooms", "bathrooms", "sea_distance"):
             assert name not in reading["components"], name
 
+    def test_a_row_stating_many_facts_but_no_location_is_still_thin(self, world):
+        """The rule is the location, not a share of the weight: a row on
+        price, area, bedrooms, bathrooms and a sea view (7.5 of 13) with
+        nowhere to be placed is thin, exactly like the two-fact one."""
+        row = _mk(
+            world["pid"],
+            municipality="Ares",
+            attributes={"bedrooms": 5, "bathrooms": 2},
+            enrichment={"environment": {"sea_view": "likely"}},
+        )
+        ctx = fs.build_context()
+        reading = ctx.read(row.id)
+        assert reading["state"] == fs.STATE_THIN
+        assert reading["compared"] == [
+            "price",
+            "area",
+            "bedrooms",
+            "bathrooms",
+            "sea_view",
+        ]
+        assert reading["missing_required"] == ["geography"]
+        assert row.id not in ctx.kept_ids(60.0)
+        assert row.id not in ctx.sort_keys()
+
+    def test_a_detached_house_is_gated_by_an_attached_favorite_too(self, app):
+        """The typology gate works in both directions."""
+        profile = _profile("Attached")
+        _mk(
+            profile.id,
+            title="Casa adosada en venta en Malpica",
+            is_favorite=True,
+            coords=MALPICA,
+        )
+        detached = _mk(
+            profile.id, title="Casa o chalet independiente en Malpica", coords=MALPICA
+        )
+        bare = _mk(profile.id, title="Casa en Malpica", coords=MALPICA)
+        ctx = fs.build_context()
+        assert ctx.read(detached.id)["state"] == fs.STATE_DIFFERENT_KIND
+        assert ctx.read(bare.id)["state"] == fs.STATE_OK
+
+    def test_one_rounding_rule_for_the_chip_and_the_cut(self, world):
+        """A row at 79.6: printed as 79.6, left out by the 80 cut, kept by
+        the 70 cut -- the chip and the count can never disagree."""
+        # Same coordinate and area as the favorite; the price ratio alone
+        # sets the score: (3 x 45.6 + 2 x 100 + 3 x 100) / 8 = 79.6.
+        row = _mk(
+            world["pid"], price=422820, coords=MALPICA, location_accuracy="precise"
+        )
+        ctx = fs.build_context()
+        reading = ctx.read(row.id)
+        assert 79.5 <= reading["score"] < 79.7
+        assert row.id not in ctx.kept_ids(80.0)
+        assert row.id in ctx.kept_ids(70.0)
+
+    def test_the_favorites_own_basis_is_named_when_it_is_the_looser_side(
+        self, client, app
+    ):
+        """Sub 6's shape: the favorite is a locality centroid, the row is
+        precise -- the distance is to a centroid and the page says so."""
+        profile = _profile("Centroid favorite")
+        _mk(
+            profile.id,
+            is_favorite=True,
+            coords=MALPICA,
+            location_accuracy="approximate",
+        )
+        precise = _mk(profile.id, coords=NEAR_MALPICA, location_accuracy="precise")
+        reading = fs.build_context().read(precise.id)
+        assert reading["geography_basis"] == fs.BASIS_COORDINATE
+        assert reading["reference_geography_basis"] == fs.BASIS_APPROXIMATE
+        assert fs.weaker_basis(reading) == fs.BASIS_APPROXIMATE
+        text = _card(client.get(f"/properties/{precise.id}").get_data(as_text=True))
+        assert (
+            "the favorite's location from the listing's approximate coordinate" in text
+        )
+
     def test_a_coordinate_off_the_globe_is_no_coordinate(self, world):
         """NaN and a latitude of 400 are bad input, not a location: such a
         row takes the municipality path instead of scoring 60 km away under
@@ -902,6 +979,20 @@ class TestTheList:
         labels = {v.strip(): k for k, v in options.items()}
         assert "Vigo" not in " ".join(labels)
         assert "Malpica de Bergantiños (3)" in labels
+
+    def test_under_several_subscriptions_the_line_names_each_ones_favorites(
+        self, client, world
+    ):
+        other = _profile("Asturias")
+        _mk(other.id, is_favorite=True, coords=VIGO)
+        _mk(other.id, coords=VIGO)
+        body = client.get("/properties?profile_id=all&per_page=100").get_data(
+            as_text=True
+        )
+        assert _coverage_line(body) == (
+            "Similar: 4 of 8 rankable against each subscription's own favorites "
+            "(2 in all)"
+        )
 
     def test_spanish(self, client, world):
         with client.session_transaction() as session:
