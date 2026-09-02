@@ -2374,6 +2374,16 @@ def edit_profile(profile_id):
                 requested_default = False
                 requested_active = True
 
+            if requested_default and profile.is_hidden:
+                # The catch-all cannot be hidden (#533): it receives every
+                # email that matches nothing else, which is why
+                # `set_profile_hidden` refuses the toggle on the default. This
+                # is the same pair from the other side, and the database
+                # refuses it too (migration 028); refusing here turns a 500
+                # into an explanation, the shape of the guard above.
+                flash(t("profile_hidden_cannot_be_default"), "error")
+                requested_default = False
+
             if requested_default:
                 # Keep defaults visible in active-only UIs.
                 profile.is_active = True

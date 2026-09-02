@@ -67,6 +67,7 @@ IDENTITY_COLUMNS = ("source_search_key", "source_search_url", "is_auto_created")
 IDENTITY_INDEX = "ux_search_profiles_source_search_key"
 LABEL_INDEX = "ux_search_profiles_name_without_key"
 CATCH_ALL_CONSTRAINT = "ck_search_profiles_default_has_no_search_key"
+CATCH_ALL_HIDDEN_CONSTRAINT = "ck_search_profiles_catch_all_never_hidden"
 BACKGROUND_JOBS_DEDUPE_INDEX = "ux_background_jobs_active_dedupe_key"
 BACKGROUND_JOBS_STATUS_CHECK = "ck_background_jobs_status_enum"
 PROPERTY_AI_VARIANT_MIGRATION = "017_property_ai_variant_unique"
@@ -80,6 +81,7 @@ TASTE_MIGRATION = "024_add_property_taste"
 ROUTING_MIGRATION = "025_add_profile_routing_and_criteria"
 LOCK_ORDER_MIGRATION = "026_canonicalize_locks_in_id_order"
 ROUTE_RETRY_MIGRATION = "027_retry_route_resolution_on_stale_read"
+CATCH_ALL_HIDDEN_MIGRATION = "028_catch_all_never_hidden"
 PROPERTY_VARIANT_UNIQUE_CONSTRAINT = (
     "ux_property_ai_analysis_variants_property_provider"
 )
@@ -502,6 +504,7 @@ def test_013_frees_the_label_on_a_database_that_already_holds_rows(
             ROUTING_MIGRATION,
             LOCK_ORDER_MIGRATION,
             ROUTE_RETRY_MIGRATION,
+            CATCH_ALL_HIDDEN_MIGRATION,
         ]
 
         # Two *identified* subscriptions may now share the label...
@@ -1730,6 +1733,7 @@ def test_017_deduplicates_existing_rows_and_adds_the_unique_constraint(
             ROUTING_MIGRATION,
             LOCK_ORDER_MIGRATION,
             ROUTE_RETRY_MIGRATION,
+            CATCH_ALL_HIDDEN_MIGRATION,
         ]
 
         with engine.begin() as connection:
@@ -1922,6 +1926,7 @@ def test_017_deduplicates_existing_land_variants_and_adds_the_unique_constraint(
             ROUTING_MIGRATION,
             LOCK_ORDER_MIGRATION,
             ROUTE_RETRY_MIGRATION,
+            CATCH_ALL_HIDDEN_MIGRATION,
         ]
 
         with engine.begin() as connection:
@@ -3054,3 +3059,309 @@ def test_027_a_route_change_landing_in_the_resolution_gap_no_longer_deadlocks(
         )
     finally:
         engine.dispose()
+
+
+def test_028_the_catch_all_cannot_be_hidden_at_the_database(postgres_url):
+    """The hiding half of the catch-all rule, refused where every writer meets.
+
+    `set_profile_hidden` refuses the toggle on the default profile, and that
+    is the UI path only: nothing refused `UPDATE search_profiles SET
+    is_hidden = TRUE WHERE is_default` through `docker exec ... psql`, which
+    is a supported workflow here (#533). Migration 025 gave the routing half
+    of the same rule `ck_search_profiles_catch_all_never_routes`; 028 is the
+    sibling for hiding, on the same shape. SQLite never runs the file, so
+    this is the only proof the constraint exists and bites.
+
+    Both directions are asserted -- hiding the catch-all, and making a hidden
+    profile the catch-all -- because a CHECK on a pair refuses the pair, and
+    `edit_profile`'s "make default" tick on a hidden subscription is the
+    other way into it. The refusal is matched by constraint NAME: the
+    class-level IntegrityError would also match the NOT NULL on `name`, and
+    read "the CHECK bites" for a write that never reached it (the 027
+    lesson, pgcode 55P03). And a NULL `is_default` may be hidden: it is
+    nobody's catch-all, the reading every sibling CHECK and
+    `get_default_profile()` already take.
+
+    Mutation, measured both ways: dropping the ADD from 028 reddens this
+    test at its first refusal while the permit test below stays green --
+    its writes are exactly the ones a missing constraint allows, which is
+    why the two are separate tests. An over-broad constraint (one that
+    forbids hiding anything) reddens both, this one at the single permitted
+    write it needs to reach the second direction.
+    """
+    from sqlalchemy.exc import IntegrityError as PgIntegrityError
+
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+        assert CATCH_ALL_HIDDEN_CONSTRAINT in {
+            constraint["name"]
+            for constraint in inspect(engine).get_check_constraints("search_profiles")
+        }
+
+        with engine.begin() as connection:
+            catch_all = connection.execute(
+                text(
+                    "INSERT INTO search_profiles (name, is_active, is_default) "
+                    "VALUES ('Default', TRUE, TRUE) RETURNING id"
+                )
+            ).scalar_one()
+            ordinary = connection.execute(
+                text(
+                    "INSERT INTO search_profiles (name, is_active, is_default) "
+                    "VALUES ('Asturias', TRUE, FALSE) RETURNING id"
+                )
+            ).scalar_one()
+
+        def _refused(statement, params):
+            with pytest.raises(PgIntegrityError) as refused:
+                with engine.begin() as connection:
+                    connection.execute(text(statement), params)
+            assert CATCH_ALL_HIDDEN_CONSTRAINT in str(refused.value), (
+                "the write was refused for a different reason than the "
+                "catch-all CHECK: " + repr(refused.value)
+            )
+
+        # The issue's own statement, verbatim in intent.
+        _refused(
+            "UPDATE search_profiles SET is_hidden = TRUE WHERE id = :i",
+            {"i": catch_all},
+        )
+        # Born hidden and default.
+        _refused(
+            "INSERT INTO search_profiles (name, is_active, is_default, is_hidden) "
+            "VALUES ('Hidden default', TRUE, TRUE, TRUE)",
+            {},
+        )
+        # The other way into the pair: a hidden ordinary profile may not
+        # become the catch-all (`edit_profile`'s "make default" tick).
+        with engine.begin() as connection:
+            connection.execute(
+                text("UPDATE search_profiles SET is_hidden = TRUE WHERE id = :i"),
+                {"i": ordinary},
+            )
+        _refused(
+            "UPDATE search_profiles SET is_default = TRUE WHERE id = :i",
+            {"i": ordinary},
+        )
+
+        # Re-running the file is what a redeploy of a repaired database does;
+        # it must not fail -- and the constraint must still bite afterwards,
+        # because a DROP with no ADD is idempotent and dead.
+        sql = (MIGRATIONS_DIR / f"{CATCH_ALL_HIDDEN_MIGRATION}.sql").read_text(
+            encoding="utf-8"
+        )
+        with engine.begin() as connection:
+            connection.exec_driver_sql(sql)
+        _refused(
+            "UPDATE search_profiles SET is_hidden = TRUE WHERE id = :i",
+            {"i": catch_all},
+        )
+    finally:
+        engine.dispose()
+
+
+def test_028_an_ordinary_subscription_still_hides(postgres_url):
+    """The constraint refuses the PAIR and nothing else.
+
+    Two permitted writes, read back by value: an ordinary subscription
+    hides (the whole point of `is_hidden`, and production carries twenty
+    of them), and so does one whose `is_default` is NULL -- nobody's
+    catch-all, the reading `get_default_profile()` and both sibling CHECKs
+    take of a NULL there. Measured: a constraint written without the `OR`
+    (`CHECK (is_hidden IS NOT TRUE)`, forbidding hiding anything) reddens
+    this test at the UPDATE; one whose ADD is missing leaves it green,
+    which is what the refusal test above is for.
+    """
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+        with engine.begin() as connection:
+            catch_all = connection.execute(
+                text(
+                    "INSERT INTO search_profiles (name, is_active, is_default) "
+                    "VALUES ('Default', TRUE, TRUE) RETURNING id"
+                )
+            ).scalar_one()
+            ordinary = connection.execute(
+                text(
+                    "INSERT INTO search_profiles (name, is_active, is_default) "
+                    "VALUES ('Asturias', TRUE, FALSE) RETURNING id"
+                )
+            ).scalar_one()
+            unstated = connection.execute(
+                text(
+                    "INSERT INTO search_profiles (name, is_active, is_default) "
+                    "VALUES ('Legacy Lands', FALSE, NULL) RETURNING id"
+                )
+            ).scalar_one()
+            connection.execute(
+                text(
+                    "UPDATE search_profiles SET is_hidden = TRUE WHERE id IN (:a, :b)"
+                ),
+                {"a": ordinary, "b": unstated},
+            )
+        with engine.connect() as connection:
+            stored = {
+                row.id: (row.is_hidden, row.is_default)
+                for row in connection.execute(
+                    text(
+                        "SELECT id, is_hidden, is_default FROM search_profiles "
+                        "WHERE id IN (:a, :b, :c)"
+                    ),
+                    {"a": catch_all, "b": ordinary, "c": unstated},
+                )
+            }
+        assert stored == {
+            catch_all: (False, True),
+            ordinary: (True, False),
+            unstated: (True, None),
+        }
+    finally:
+        engine.dispose()
+
+
+def test_028_a_judged_row_that_fails_the_criteria_is_still_shown_on_postgres(
+    postgres_url, monkeypatch
+):
+    """The three exemptions of `hidden_by_default_expression`, on the engine
+    production runs.
+
+    The default reading hides a MEASURED fail and never a row the owner has
+    favorited, reviewed or left an action on (#502). Measured on production
+    2026-09-01: of the 65 measured fails, 0 carry any of the three -- so the
+    "shown anyway because you judged it" branch has no live case, and
+    "`criteria=fail` and the default-hidden set are disjoint" is a fact
+    about today's data, not about the code (#533). The branch had only ever
+    run under SQLite, and one of its three clauses is dialect-split:
+    `open_action_expression` is a POSIX regex (`~ '[^[:space:]]'`) on
+    PostgreSQL and an operator form on SQLite, so the SQLite suite never
+    executed the predicate the deployment runs.
+
+    Seven rows on one subscription carrying the owner's own bounds (a 150 m2
+    house on a 700 m2 plot). The assertions are set EQUALITIES, not
+    memberships, so a hide that swallows a passing row or a fail that leaks
+    an unknown one is red too; the Python twin (`hidden_by_default`,
+    `row_verdict`) runs over every row, the `advertiser.py` contract; the
+    `criteria=fail` answer minus the default-hidden answer is exactly the
+    judged rows -- the difference the issue measured as empty on production,
+    here as the non-empty set it is meant to be; and `GET /api/properties`,
+    the surface every reading of `criteria` is shared with, answers the same
+    two sets over the same server.
+
+    Mutation: dropping `is_favorite.isnot(True)` from the expression hides
+    the favorited row (red at the default-view equality); loosening the
+    PostgreSQL regex to `.` counts the whitespace-only action as an action
+    (red at the hidden count and the default view).
+    """
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+    finally:
+        engine.dispose()
+
+    from tests import setup_test_environment
+
+    setup_test_environment()
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    from config import Config as _Config
+
+    monkeypatch.setattr(_Config, "DATABASE_URL", postgres_url)
+    monkeypatch.setattr(_Config, "SQLALCHEMY_DATABASE_URI", postgres_url, raising=False)
+
+    from app import create_app, db as _db
+    from models import Property as _Property, SearchProfile as _SearchProfile
+    from services import subscription_criteria
+
+    application = create_app()
+    application.config["TESTING"] = True
+    with application.app_context():
+        assert _db.session.get_bind().dialect.name == "postgresql"
+        profile = _SearchProfile(
+            name="PG criteria",
+            is_active=True,
+            criteria={"min_house_m2": 150, "min_plot_m2": 700},
+        )
+        _db.session.add(profile)
+        _db.session.commit()
+        criteria = subscription_criteria.read_criteria(profile)
+        assert criteria == {"min_house_m2": 150.0, "min_plot_m2": 700.0}
+
+        def _row(tag, **overrides):
+            values = dict(
+                source_email_id=f"pg-crit:{tag}",
+                title=tag,
+                price=100000,
+                search_profile_id=profile.id,
+                area=100,
+                area_type="built",
+                plot_area=500,
+            )
+            values.update(overrides)
+            prop = _Property(**values)
+            _db.session.add(prop)
+            _db.session.commit()
+            return prop.id
+
+        plain = _row("plain fail")
+        favorite = _row("favorited fail", is_favorite=True)
+        reviewed = _row("reviewed fail", owner_verdict="rejected")
+        actioned = _row("actioned fail", next_action="call the architect")
+        # Whitespace is not an action: the regex must refuse it, exactly as
+        # `read_action` does in Python.
+        blank_action = _row("blank action fail", next_action=" \t\n ")
+        passing = _row("passing", area=200, plot_area=800)
+        unknown = _row("unknown plot", area=200, plot_area=None)
+        every_id = {plain, favorite, reviewed, actioned, blank_action, passing, unknown}
+
+        ctx = subscription_criteria.profile_context(_Property)
+        assert ctx is not None and dict(ctx["by_profile"]) == {profile.id: criteria}
+        base = _Property.query.filter(_Property.search_profile_id == profile.id)
+        shown_query, hidden_count = subscription_criteria.apply_filter(
+            base, ctx, "", count_hidden=True
+        )
+        fail_query, _ = subscription_criteria.apply_filter(base, ctx, "fail")
+        shown = {p.id for p in shown_query}
+        fails = {p.id for p in fail_query}
+
+        assert shown == {favorite, reviewed, actioned, passing, unknown}
+        assert fails == {plain, favorite, reviewed, actioned, blank_action}
+        assert hidden_count == 2
+        # The judged rows are exactly what `criteria=fail` holds and the
+        # default view does not hide.
+        assert fails - (every_id - shown) == {favorite, reviewed, actioned}
+
+        expected_state = {
+            plain: "fail",
+            favorite: "fail",
+            reviewed: "fail",
+            actioned: "fail",
+            blank_action: "fail",
+            passing: "pass",
+            unknown: "unknown",
+        }
+        for prop in base.all():
+            assert subscription_criteria.hidden_by_default(prop, criteria) == (
+                prop.id not in shown
+            ), f"Python and SQL disagree about hiding {prop.title!r}"
+            assert (
+                subscription_criteria.row_verdict(prop, ctx)["state"]
+                == expected_state[prop.id]
+            ), prop.title
+
+        client = application.test_client()
+        by_default = client.get(
+            f"/api/properties?profile_id={profile.id}&limit=200"
+        ).get_json()
+        assert {p["id"] for p in by_default["properties"]} == shown
+        only_fails = client.get(
+            f"/api/properties?profile_id={profile.id}&criteria=fail&limit=200"
+        ).get_json()
+        assert {p["id"] for p in only_fails["properties"]} == fails
+        _db.session.remove()
