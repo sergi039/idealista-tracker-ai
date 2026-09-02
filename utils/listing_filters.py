@@ -126,7 +126,33 @@ class FilterArgs:
         return {name: (value or None) for name, value in self._read.items()}
 
     def names_read(self) -> frozenset[str]:
+        """Every filter the route ASKED this record for.
+
+        A route asks for every filter it knows on every request, so on a bare
+        request this is the route's whole vocabulary -- measured off the
+        reads rather than maintained, which is what it is for.
+        """
         return frozenset(self._read)
+
+    def names_applied(self) -> frozenset[str]:
+        """The filters read with a value: what THIS request narrowed with.
+
+        `names_read()` answered sixteen names to a request that sent no
+        filter at all, and under the name `filters_read` that invited the
+        reading "these sixteen narrowed your result" (#534). This is the
+        other reading of the same record: a name whose value is not blank
+        once stripped -- the test every route applies before it reads one,
+        and the reason `link_args()` drops an empty value, which "would claim
+        a filter that is not applied". Whether a non-blank value was one the
+        filter recognises is the filter's own verdict and not this record's;
+        a surface that has to say so measures it (`GET /api/properties` reads
+        query identity) and says it beside this list, not instead of it.
+        """
+        return frozenset(
+            name
+            for name, value in self._read.items()
+            if value and (not isinstance(value, str) or value.strip())
+        )
 
 
 class RecordedArgs:

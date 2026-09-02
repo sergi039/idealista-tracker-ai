@@ -1740,9 +1740,10 @@ def get_properties():
         # `measured` and `inv_metr` accepted and ignored until the closing
         # audit of that same work measured `?profile_id=24&sea_view=likely`
         # answering `scope.total: 393` against a page showing 18 (production,
-        # 2026-09-01). What was read is reported in `scope.filters_read`, and
-        # what arrived without being read in `scope.params_ignored` — both
-        # measured off the record, so neither can go stale silently.
+        # 2026-09-01). What this request carried and was read is reported in
+        # `scope.filters_read`, and what arrived without being read in
+        # `scope.params_ignored` — both measured off the record, so neither
+        # can go stale silently.
         filters = FilterArgs(args)
         category_filter = (filters.get("category") or "").strip()
         subtype_filter = (filters.get("subtype") or "").strip()
@@ -2060,14 +2061,22 @@ def get_properties():
         elif criteria_mode == "default":
             # Counted on this endpoint's own selection, after every other
             # filter, so it describes what was withheld from THIS answer and
-            # not what some wider set holds.
-            notes.append(
-                f"criteria: {criteria_hidden} listing(s) failing their "
-                "subscription's criteria are hidden by the default reading and "
-                "are not counted in `total`; pass criteria=all to include them. "
-                "A favorited, reviewed or still-actioned listing is never "
-                "hidden, and `unknown` is not `fail`."
-            )
+            # not what some wider set holds. Said only when something WAS
+            # withheld: `notes` carries what a consumer must know, and a
+            # sentence reporting that nothing was hidden -- measured on
+            # production at `?profile_id=24&sea_view=likely`, where the
+            # narrowing left no measured fail to hide -- is noise, and noise
+            # is how a true disclosure stops being read (#534). The count
+            # itself stays in `criteria_hidden_by_default` at zero: a field
+            # is data, a sentence is a claim.
+            if criteria_hidden:
+                notes.append(
+                    f"criteria: {criteria_hidden} listing(s) failing their "
+                    "subscription's criteria are hidden by the default reading "
+                    "and are not counted in `total`; pass criteria=all to "
+                    "include them. A favorited, reviewed or still-actioned "
+                    "listing is never hidden, and `unknown` is not `fail`."
+                )
         elif criteria_mode == "all":
             notes.append(
                 "criteria=all: the default hide of measured fails was lifted, so "
@@ -2104,11 +2113,17 @@ def get_properties():
         # ignores them without saying so reads as page 2.
         params_ignored = args.unread()
         if params_ignored:
+            # The vocabulary is named here, in the one note where a caller
+            # needs it, and nowhere as a field: `filters_read` below is what
+            # THIS request carried, and the full list -- every name the
+            # route asked the record for -- is `names_read()`, measured off
+            # the same record and not a list anybody maintains.
             notes.append(
                 f"parameter(s) not read by this endpoint: "
-                f"{', '.join(params_ignored)}. They did not narrow the answer; "
-                "the filters this endpoint reads are listed in "
-                "`scope.filters_read`."
+                f"{', '.join(params_ignored)}. They did not narrow the answer. "
+                "The filters this endpoint reads are "
+                f"{', '.join(sorted(filters.names_read()))}; those read from "
+                "this request are in `scope.filters_read`."
             )
 
         population = Population(
@@ -2152,15 +2167,22 @@ def get_properties():
                     # and one fact under two names in one object is what this
                     # block exists to stop happening between objects.
                     "offset": offset,
-                    # Every filter parameter this endpoint consulted for THIS
-                    # answer, from the record of the reads themselves — not a
-                    # hand-maintained list, which is how the five above went
-                    # missing while the scope block read as complete. A name
-                    # here with an unrecognised value is called out in
-                    # `notes`; a parameter absent from here AND from
-                    # `params_ignored` is one this endpoint answers itself
-                    # (profile_id, sort/order, limit/offset, full).
-                    "filters_read": sorted(filters.names_read()),
+                    # The filters THIS request carried and this endpoint read
+                    # with a value, from the record of the reads themselves —
+                    # not a hand-maintained list, which is how the five above
+                    # went missing while the scope block read as complete.
+                    # Per request rather than the endpoint's vocabulary: the
+                    # vocabulary answered sixteen names to a request that sent
+                    # no filter at all, and the name invited the reading
+                    # "these sixteen narrowed your result" (#534). With
+                    # `params_ignored` it partitions what the caller sent,
+                    # less this endpoint's own parameters (profile_id,
+                    # sort/order, limit/offset, full), which are read and are
+                    # not filters. A name here whose value the reading refused
+                    # is still here — it was read — and is called out in
+                    # `notes`; a blank value is the page's spelling for "no
+                    # filter" and is in neither list.
+                    "filters_read": sorted(filters.names_applied()),
                     # What arrived and was read by nothing: the request's
                     # own key set minus every key read through the record,
                     # `RecordedArgs.unread()`. Empty means every parameter
