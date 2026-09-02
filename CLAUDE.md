@@ -1738,9 +1738,10 @@ are precise).
 Measured: a 5 km slack is 8.3 points of the location component; leave-one-
 out of the point over 228 located rows moved the total by median 0.0, p90
 1.5, max 5.4, and flipped 0 rows at the 80 cut, 3 at 70, 5 at 60. The
-favorites read as `reference`: kept by every cut and sorted first (a sort
-key above every score, so a duplicate of a favorite under a lower id cannot
-lead), and the line beside the count says what the rows were measured
+favorites read as `reference`: kept by every cut and carrying the highest
+sort key — they lead the descending order and close the ascending one, which
+lists the least alike first, and a duplicate of a favorite under a lower id
+cannot lead — and the line beside the count says what the rows were measured
 against — "Similar: 42 at ≥ 70 to 2 favorites" on production, "Similar: 500
 of 565 rankable against 2 favorites" without a cut, with a tooltip that
 counts what a missing chip means (cannot be placed, a different kind, no
@@ -1785,7 +1786,11 @@ leaves it out. The cut's vocabulary is numbers (`similar=80|70|60`), the
 `sea_dist` precedent; picking a cut moves the sort select to `similarity`
 (and the order to descending) unless the owner chose a sort, a hand-typed
 cut with neither a sort nor a mode named orders by likeness, and a chosen
-mode keeps its own order. What the reading cannot see, and says so in its
+mode keeps its own order. With no favorite anywhere there is no likeness to
+order by: the Similarity option is not offered, and a `sort=similarity` typed
+into the URL falls back to the mode's order or the date the way an unknown
+sort does, rather than ordering by the tie-breaker under that label. What
+the reading cannot see, and says so in its
 docstring: a municipality whose only located rows are wrongly geocoded (the
 median shrugs off one among several and cannot with one), a listing-pin
 coordinate (#524, which abstains on the wide side like a centroid), and the

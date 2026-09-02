@@ -15,8 +15,10 @@ as the criteria are its own subscription's bounds
 measured against a favorite in another, an unassigned row has no reference at
 all, and the control is offered only while some subscription on screen holds
 a favorite or a cut is applied. The favorites themselves read as
-`reference` — kept by every cut and sorted first, because they are the
-definition the cut is made against.
+`reference` — kept by every cut and carrying the highest sort key, because
+they are the definition the cut is made against: they lead the descending
+order (the default), and the ascending order, which lists the least alike
+first, closes with them.
 
 **What is compared, and how each fact abstains.** Every component is 0–100
 or absent, and absent means *one side or the other has not stated the fact*
@@ -735,7 +737,8 @@ class SimilarityContext:
         ]
 
     def sort_keys(self) -> Dict[int, float]:
-        """The ORDER BY value per row: above every score for a reference, the
+        """The ORDER BY value per row: above every score for a reference (so
+        it leads the descending order and closes the ascending one), the
         score for a rankable row, and nothing for the rest so they sort last
         both ways."""
         keys: Dict[int, float] = {}

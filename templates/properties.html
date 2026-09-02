@@ -1065,10 +1065,17 @@
                                both directions (#498). #}
                             <option value="taste_score" {{ 'selected' if current_filters.sort_by == 'taste_score' }}>{{ t('taste_score_label') }}</option>
                             {# Most alike the subscription's favorites first; the
-                               favorites themselves lead, and a row that cannot be
-                               placed, a different kind of listing or one with no
-                               favorite to compare against sorts last both ways. #}
+                               favorites themselves lead the descending order, and
+                               a row that cannot be placed, a different kind of
+                               listing or one with no favorite to compare against
+                               sorts last both ways. Offered only where a favorite
+                               exists to compare against (or while applied): with
+                               none there is no likeness to order by, and the
+                               route falls back rather than order by the
+                               tie-breaker under this label. #}
+                            {% if (similarity_enabled is defined and similarity_enabled) or current_filters.sort_by == 'similarity' %}
                             <option value="similarity" {{ 'selected' if current_filters.sort_by == 'similarity' }}>{{ t('similarity_sort_label') }}</option>
+                            {% endif %}
                         </select>
                         <select class="form-select properties-filter-order" name="order" aria-label="Sort direction">
                             <option value="desc" {{ 'selected' if current_filters.order == 'desc' }}>↓</option>

@@ -1955,6 +1955,16 @@ def properties():
         }
         if sort_by not in sort_columns and sort_by != "investment_metrics":
             sort_by = default_sort
+        if sort_by == "similarity" and similarity_ctx is None:
+            # No favorite anywhere: there is no likeness to order by, and a
+            # page ordered by the tie-breaker under a select reading
+            # "Similarity" would claim an order it did not apply. Fall back
+            # the way an unknown sort does, to the mode's order or the date.
+            sort_by = (
+                PROPERTY_MODE_SORT_DEFAULTS[mode]
+                if request.args.get("mode")
+                else DEFAULT_PROPERTY_SORT
+            )
 
         if sort_by == "investment_metrics":
             rank = investment_rating_rank(Property)
@@ -5802,6 +5812,10 @@ def export_properties_csv():
                 Property.id.asc(),
             ).all()
         else:
+            if sort_by == "similarity" and similarity_ctx is None:
+                # The page's own fallback (no favorite, no likeness to order
+                # by), so the export and the page it came from agree.
+                sort_by = "created_at"
             sort_column = sort_columns.get(sort_by, Property.created_at)
             if sort_order == "asc":
                 props = query.order_by(

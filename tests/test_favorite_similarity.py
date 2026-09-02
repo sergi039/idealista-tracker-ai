@@ -894,6 +894,40 @@ class TestTheList:
         ).get_data(as_text=True)
         assert _shown(body)[:3] == [ids["far"], ids["neighbour"], ids["unlocated"]]
 
+    def test_without_a_favorite_the_similarity_sort_is_neither_offered_nor_applied(
+        self, client, app
+    ):
+        """No favorite anywhere: there is no likeness to order by, so the
+        option is absent and a typed `sort=similarity` falls back to the
+        date order the select then shows -- never the tie-breaker under a
+        label claiming similarity. The CSV and the API fall back alike."""
+        profile = _profile("Asturias")
+        older = _mk(profile.id, coords=MALPICA, price=100000)
+        newer = _mk(profile.id, coords=VIGO, price=900000)
+        body = client.get("/properties?profile_id=all").get_data(as_text=True)
+        assert 'value="similarity"' not in body
+        body = client.get(
+            "/properties?profile_id=all&sort=similarity&order=asc"
+        ).get_data(as_text=True)
+        # Date ascending: the older row first; the select shows the date.
+        assert _shown(body) == [older.id, newer.id]
+        assert 'value="created_at" selected' in body
+        assert 'value="similarity"' not in body
+        rows = list(
+            csv.DictReader(
+                io.StringIO(
+                    client.get(
+                        "/properties/export.csv?profile_id=all&sort=similarity&order=asc"
+                    ).get_data(as_text=True)
+                )
+            )
+        )
+        assert [int(row["ID"]) for row in rows] == [older.id, newer.id]
+        payload = client.get(
+            f"/api/properties?profile_id={profile.id}&sort=similarity&order=asc"
+        ).get_json()
+        assert [p["id"] for p in payload["properties"]] == [older.id, newer.id]
+
     def test_the_control_is_drawn_only_with_a_favorite_on_screen(self, client, world):
         body = client.get("/properties?profile_id=all").get_data(as_text=True)
         assert 'id="similar"' in body

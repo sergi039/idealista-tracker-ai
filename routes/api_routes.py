@@ -1917,6 +1917,10 @@ def get_properties():
             "score_lifestyle": Property.score_lifestyle,
             "similarity": favorite_similarity.sort_expression(Property, similarity_ctx),
         }
+        if sort_by == "similarity" and similarity_ctx is None:
+            # No favorite in this subscription: no likeness to order by, so
+            # the default order applies rather than the tie-breaker's.
+            sort_by = "created_at"
         sort_column = sort_columns.get(sort_by, Property.created_at)
         if sort_order == "asc":
             query = query.order_by(sort_column.asc().nullslast())
