@@ -1731,7 +1731,10 @@ coordinates the whole table holds under the key `/properties` groups
 municipalities by, derived on read, never stored, named as the basis with
 the number of rows that made it (`municipality (3)`, against `approximate`
 for a row's own non-precise coordinate — a pin or a locality centroid, the
-label does not claim to know which — and `coordinate` for a precise one).
+label does not claim to know which — and `coordinate` for a precise one;
+the favorite's own basis is recorded too and the row's page prints it when
+it is the looser side, since sub 6's favorite is a centroid and its plots
+are precise).
 Measured: a 5 km slack is 8.3 points of the location component; leave-one-
 out of the point over 228 located rows moved the total by median 0.0, p90
 1.5, max 5.4, and flipped 0 rows at the 80 cut, 3 at 70, 5 at 60. The
@@ -1743,7 +1746,10 @@ of 565 rankable against 2 favorites" without a cut, with a tooltip that
 counts what a missing chip means (cannot be placed, a different kind, no
 favorite to compare to) and how many of the kept rest on price, area and
 location alone (30 of the 42), since most rows state three facts and the
-chip says so ("≈ 87.6 3/8").
+chip says so ("≈ 87.6 3/8"). Under several favorite-holding subscriptions on
+screen the line says "each subscription's own favorites (N in all)": the
+references are per subscription, and a summed basis is one no row was
+compared against.
 
 Four things about the wiring are load bearing. **There is no SQL twin.**
 The reading is Python, once per request — over the subscriptions on screen
