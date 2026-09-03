@@ -1759,7 +1759,11 @@ presenting it at 83.1, because the facts it CAN see (265k, 483 m², Laxe)
 really are close to a favorite. `rejected` is therefore a state of its own:
 the score is still computed and shown, the row's own page says how alike it
 looked and that it was left out, and the line beside the count says how many
-were set aside — a row that vanished in silence would read as a defect. It
+were set aside — counted off the page's own selection with the similarity
+clause left off, the `criteria_hidden_count` shape, because the summary
+describes the rows that SURVIVED and under a cut the rejected ones are gone
+from it (measured on production 2026-09-03: it read `0 you rejected` exactly
+where the number was needed) — a row that vanished in silence would read as a defect. It
 is the ONE verdict that removes a row: `interested` and `waiting` are not
 refusals, `undecided` is most of the table, and a rejected FAVORITE stays a
 reference, because the star is what defines the selection. The verdict is

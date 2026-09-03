@@ -793,6 +793,25 @@ class SimilarityContext:
             if self.readings[row_id]["state"] != STATE_REFERENCE
         ]
 
+    def set_aside_ids(self, cut: float) -> List[int]:
+        """The ids a cut WOULD have kept but for the owner's rejection.
+
+        The number the disclosure line prints beside the count, in the shape
+        `criteria_hidden_count` already has: a count of what was withheld,
+        not of what is on screen. Measured on production 2026-09-03, the
+        summary alone could not carry it — under a cut it describes the rows
+        that survived, so the rejected ones it exists to disclose are gone
+        from it and it read `0 you rejected` exactly where the reader needed
+        the number.
+        """
+        return sorted(
+            row_id
+            for row_id, reading in self.readings.items()
+            if reading["state"] == STATE_REJECTED
+            and reading.get("score") is not None
+            and reading["score"] >= cut
+        )
+
     def sort_keys(self) -> Dict[int, float]:
         """The ORDER BY value per row: above every score for a reference (so
         it leads the descending order and closes the ascending one), the
@@ -975,6 +994,22 @@ def similar_count(
     if cut is None:
         return None
     ids = ctx.similar_ids(cut) if ctx is not None else []
+    if not ids:
+        return 0
+    return query.filter(model.id.in_(ids)).count()
+
+
+def set_aside_count(
+    query, model, ctx: Optional[SimilarityContext], raw_value: Any
+) -> Optional[int]:
+    """How many rows of `query` the cut withheld because the owner rejected
+    them. `query` is the page's own selection with the similarity clause
+    LEFT OFF — those rows are not in the narrowed set, which is the whole
+    point of the number. None when no cut applies."""
+    cut = read_filter_cut(raw_value)
+    if cut is None:
+        return None
+    ids = ctx.set_aside_ids(cut) if ctx is not None else []
     if not ids:
         return 0
     return query.filter(model.id.in_(ids)).count()
