@@ -963,7 +963,7 @@ class TestTheList:
         tooltip = re.search(r'id="similarity-coverage"[^>]*title="([^"]*)"', body)
         assert tooltip and unescape(tooltip.group(1)).startswith(
             "1 cannot be placed · 1 of a different kind · 0 with no favorite to "
-            "compare to · 0 you rejected, set aside · 2 of the rankable rest on "
+            "compare to · 0 you rejected · 2 of the rankable rest on "
             "price, area and location alone · plot compared on 0."
         )
 
@@ -1045,7 +1045,7 @@ class TestTheList:
         tooltip = re.search(r'id="similarity-coverage"[^>]*title="([^"]*)"', body)
         assert tooltip and unescape(tooltip.group(1)).startswith(
             "0 cannot be placed · 0 of a different kind · 0 with no favorite to "
-            "compare to · 0 you rejected, set aside · 0 of the rankable rest on "
+            "compare to · 0 you rejected · 0 of the rankable rest on "
             "price, area and location alone · plot compared on 0."
         )
         # And the way out is on screen: the control keeps the cut it applied.
@@ -1176,7 +1176,10 @@ class TestTheList:
             as_text=True
         )
         tooltip = re.search(r'id="similarity-coverage"[^>]*title="([^"]*)"', body)
-        assert tooltip and "1 you rejected, set aside" in unescape(tooltip.group(1))
+        # The tooltip reads the SAME number as the visible line: under a cut
+        # that is the withheld count, never the zero the survivors give
+        # (the rx blocker on this branch -- two numbers for one fact).
+        assert tooltip and "1 you rejected" in unescape(tooltip.group(1))
         # And its own page still shows what it would have scored.
         text = _card(
             client.get(f"/properties/{ids['neighbour']}").get_data(as_text=True)
@@ -1266,6 +1269,12 @@ class TestTheList:
         assert _coverage_line(body) == (
             "Similar: 1 at ≥ 70 to 1 favorite — 1 you rejected set aside"
         )
+        # The tooltip carries the SAME number as the visible line -- the
+        # rx blocker this branch answers was the visible sentence saying
+        # "1 you rejected set aside" beside a tooltip still reading 0,
+        # which is two numbers for one fact.
+        tooltip = re.search(r'id="similarity-coverage"[^>]*title="([^"]*)"', body)
+        assert tooltip and "· 1 you rejected ·" in unescape(tooltip.group(1))
         # Without a cut there is nothing to withhold, so no such clause.
         body = client.get("/properties?profile_id=all").get_data(as_text=True)
         assert "you rejected set aside" not in _coverage_line(body)
