@@ -563,7 +563,7 @@
                 <h2 class="h6 mb-0">
                     <i class="fas fa-equals me-2 text-primary"></i>{{ t('similarity_title') }}
                 </h2>
-                {% if similarity_reading.state in ('ok', 'thin') %}
+                {% if similarity_reading.state in ('ok', 'thin', 'rejected') %}
                     <span class="badge {{ 'text-bg-primary' if similarity_reading.state == 'ok' else 'text-bg-secondary' }}" id="similarity-score">
                         {{ '%.1f'|format(similarity_reading.score) }}/100
                     </span>
@@ -576,6 +576,8 @@
                     <p class="text-body-secondary mb-1">{{ t('similarity_no_reference') }}</p>
                 {% elif similarity_reading.state == 'different_kind' %}
                     <p class="text-body-secondary mb-1">{{ t('similarity_different_kind') }}</p>
+                {% elif similarity_reading.state == 'rejected' %}
+                    <p class="mb-1" id="similarity-rejected">{{ t('similarity_rejected') }}</p>
                 {% elif similarity_reading.state == 'nothing_compared' %}
                     <p class="text-body-secondary mb-1">{{ t('similarity_nothing_compared') }}</p>
                 {% else %}

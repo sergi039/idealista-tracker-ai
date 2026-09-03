@@ -1752,6 +1752,20 @@ screen the line says "each subscription's own favorites (N in all)": the
 references are per subscription, and a summed basis is one no row was
 compared against.
 
+**A listing the owner has rejected is not offered as similar** (owner
+request 2026-09-03). They turned one down for reasons the table holds no
+column for — "маленькие комнаты, рядом много построек" — and the cut went on
+presenting it at 83.1, because the facts it CAN see (265k, 483 m², Laxe)
+really are close to a favorite. `rejected` is therefore a state of its own:
+the score is still computed and shown, the row's own page says how alike it
+looked and that it was left out, and the line beside the count says how many
+were set aside — a row that vanished in silence would read as a defect. It
+is the ONE verdict that removes a row: `interested` and `waiting` are not
+refusals, `undecided` is most of the table, and a rejected FAVORITE stays a
+reference, because the star is what defines the selection. The verdict is
+read through `owner_review.read_decision`, never by a second test of the
+column.
+
 Four things about the wiring are load bearing. **There is no SQL twin.**
 The reading is Python, once per request — over the subscriptions on screen
 plus whatever the URL named on an ordinary page, over EVERY favorite-holding
