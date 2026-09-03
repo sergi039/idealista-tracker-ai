@@ -1182,6 +1182,69 @@ class TestTheList:
         assert "84.1/100" in text
         assert "left out of the similar selection" in text
 
+    def test_every_count_still_opens_its_own_page_with_a_rejected_row_in_scope(
+        self, client, world, app
+    ):
+        """#530's invariant, under the interaction that could break it: a
+        cut, with a rejected row that WOULD have passed it. Every number on
+        the page — the result count, the disclosure line, the subscription
+        chip and a counted dropdown — has to describe the same id set, and
+        the map has to plot the coordinate-bearing part of it.
+
+        The sweeps in tests/test_the_pages_own_counts_read_the_criteria.py
+        and tests/test_map_and_list_agree_on_the_filters.py run this
+        combination too (their fixtures hold a rejected row beside the
+        favorite), but they compare the two sides of ONE reading and are
+        therefore insensitive to this rule; this asserts the numbers by
+        value against the rows.
+        """
+        ids = world["ids"]
+        world["rows"]["neighbour"].owner_verdict = "rejected"
+        db.session.commit()
+        query = "profile_id=all&similar=70&per_page=100"
+        body = client.get(f"/properties?{query}").get_data(as_text=True)
+        shown = set(_shown(body))
+        assert ids["neighbour"] not in shown
+        assert shown == {ids["favorite"], ids["unlocated"]}
+        # The result count, and the line beside it, describe those rows.
+        assert _count(body) == len(shown)
+        assert _coverage_line(body) == "Similar: 1 at ≥ 70 to 1 favorite"
+        # The subscription chip: its number is the page its own href opens.
+        chip = re.search(
+            r'href="([^"]*profile_id=' + str(world["pid"]) + r'[^"]*)"[^>]*>\s*'
+            r"[^<]*?(\d+)\s*</span>",
+            body,
+        )
+        if chip:
+            opened = set(
+                _shown(client.get(unescape(chip.group(1))).get_data(as_text=True))
+            )
+            assert int(chip.group(2)) == len(opened)
+            assert ids["neighbour"] not in opened
+        # A counted dropdown option opens exactly what it counts.
+        options = re.findall(
+            r'<option value="([^"]+)"[^>]*>\s*([^<(]+?)\s*\((\d+)\)\s*</option>',
+            body,
+        )
+        assert options, "the page drew no counted option"
+        value, _label, count = options[0]
+        opened = set(
+            _shown(
+                client.get(f"/properties?{query}&municipality={value}").get_data(
+                    as_text=True
+                )
+            )
+        )
+        assert int(count) == len(opened)
+        assert ids["neighbour"] not in opened
+        # And the map plots the coordinate-bearing part of the same set.
+        map_body = client.get("/map?profile_id=all&similar=70").get_data(as_text=True)
+        markers = re.search(r"const markers\s*=\s*(\[.*?\]);", map_body, re.S)
+        plotted = {
+            int(pid) for pid in re.findall(r'"id":\s*(\d+)', unescape(markers.group(1)))
+        }
+        assert plotted == {row for row in shown if row == ids["favorite"]}
+
     def test_spanish(self, client, world):
         with client.session_transaction() as session:
             session["language"] = "es"
