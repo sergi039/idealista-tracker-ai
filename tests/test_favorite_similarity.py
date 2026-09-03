@@ -963,7 +963,7 @@ class TestTheList:
         tooltip = re.search(r'id="similarity-coverage"[^>]*title="([^"]*)"', body)
         assert tooltip and unescape(tooltip.group(1)).startswith(
             "1 cannot be placed · 1 of a different kind · 0 with no favorite to "
-            "compare to · 0 you rejected, set aside · 2 of the rankable rest on "
+            "compare to · 0 you rejected · 2 of the rankable rest on "
             "price, area and location alone · plot compared on 0."
         )
 
@@ -1045,7 +1045,7 @@ class TestTheList:
         tooltip = re.search(r'id="similarity-coverage"[^>]*title="([^"]*)"', body)
         assert tooltip and unescape(tooltip.group(1)).startswith(
             "0 cannot be placed · 0 of a different kind · 0 with no favorite to "
-            "compare to · 0 you rejected, set aside · 0 of the rankable rest on "
+            "compare to · 0 you rejected · 0 of the rankable rest on "
             "price, area and location alone · plot compared on 0."
         )
         # And the way out is on screen: the control keeps the cut it applied.
@@ -1168,13 +1168,18 @@ class TestTheList:
             as_text=True
         )
         assert ids["neighbour"] not in _shown(body)
-        assert _coverage_line(body) == "Similar: 1 at ≥ 70 to 1 favorite"
+        assert _coverage_line(body) == (
+            "Similar: 1 at ≥ 70 to 1 favorite — 1 you rejected set aside"
+        )
         # Not silent: the tooltip counts the one that was set aside.
         body = client.get("/properties?profile_id=all&per_page=100").get_data(
             as_text=True
         )
         tooltip = re.search(r'id="similarity-coverage"[^>]*title="([^"]*)"', body)
-        assert tooltip and "1 you rejected, set aside" in unescape(tooltip.group(1))
+        # The tooltip reads the SAME number as the visible line: under a cut
+        # that is the withheld count, never the zero the survivors give
+        # (the rx blocker on this branch -- two numbers for one fact).
+        assert tooltip and "1 you rejected" in unescape(tooltip.group(1))
         # And its own page still shows what it would have scored.
         text = _card(
             client.get(f"/properties/{ids['neighbour']}").get_data(as_text=True)
@@ -1208,7 +1213,9 @@ class TestTheList:
         assert shown == {ids["favorite"], ids["unlocated"]}
         # The result count, and the line beside it, describe those rows.
         assert _count(body) == len(shown)
-        assert _coverage_line(body) == "Similar: 1 at ≥ 70 to 1 favorite"
+        assert _coverage_line(body) == (
+            "Similar: 1 at ≥ 70 to 1 favorite — 1 you rejected set aside"
+        )
         # The subscription chip: its number is the page its own href opens.
         chip = re.search(
             r'href="([^"]*profile_id=' + str(world["pid"]) + r'[^"]*)"[^>]*>\s*'
@@ -1244,6 +1251,47 @@ class TestTheList:
             int(pid) for pid in re.findall(r'"id":\s*(\d+)', unescape(markers.group(1)))
         }
         assert plotted == {row for row in shown if row == ids["favorite"]}
+
+    def test_the_line_counts_what_the_cut_set_aside(self, client, world):
+        """Measured on production 2026-09-03: under a cut the summary
+        describes the rows that SURVIVED, so the rejected ones it exists to
+        disclose were gone from it and it read `0 you rejected` exactly
+        where the reader needed the number. The count is taken off the
+        page's own selection with the similarity clause left off -- the
+        `criteria_hidden_count` shape, a number about what was withheld."""
+        ids = world["ids"]
+        world["rows"]["neighbour"].owner_verdict = "rejected"
+        db.session.commit()
+        body = client.get("/properties?profile_id=all&similar=70").get_data(
+            as_text=True
+        )
+        assert ids["neighbour"] not in _shown(body)
+        assert _coverage_line(body) == (
+            "Similar: 1 at ≥ 70 to 1 favorite — 1 you rejected set aside"
+        )
+        # The tooltip carries the SAME number as the visible line -- the
+        # rx blocker this branch answers was the visible sentence saying
+        # "1 you rejected set aside" beside a tooltip still reading 0,
+        # which is two numbers for one fact.
+        tooltip = re.search(r'id="similarity-coverage"[^>]*title="([^"]*)"', body)
+        assert tooltip and "· 1 you rejected ·" in unescape(tooltip.group(1))
+        # Without a cut there is nothing to withhold, so no such clause.
+        body = client.get("/properties?profile_id=all").get_data(as_text=True)
+        assert "you rejected set aside" not in _coverage_line(body)
+        # And a cut the rejected row would not have passed anyway says
+        # nothing: `far` scores 62.5, so at 70 it is not set aside by the
+        # rejection -- it simply scores too low -- while at 60 it is.
+        world["rows"]["neighbour"].owner_verdict = None
+        world["rows"]["far"].owner_verdict = "rejected"
+        db.session.commit()
+        line = _coverage_line(
+            client.get("/properties?profile_id=all&similar=70").get_data(as_text=True)
+        )
+        assert "you rejected set aside" not in line
+        line = _coverage_line(
+            client.get("/properties?profile_id=all&similar=60").get_data(as_text=True)
+        )
+        assert line.endswith("— 1 you rejected set aside")
 
     def test_spanish(self, client, world):
         with client.session_transaction() as session:

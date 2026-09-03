@@ -1915,6 +1915,29 @@ def properties():
                 unswitched, Property, similarity_ctx, similar_filter
             )
             similar_hidden_by_favorites = True
+        # And how many the cut withheld because the owner rejected them --
+        # counted off THIS page's selection with the similarity clause left
+        # off, since those rows are by definition not in the narrowed set.
+        # The `criteria_hidden_count` shape: a number about what was
+        # withheld, which the summary (rows on screen) cannot carry.
+        similar_set_aside = None
+        if similarity_cut is not None:
+            without_cut = _apply_filter_bar(
+                filter_bar_scope,
+                bar,
+                review_today,
+                skip="similar",
+                similarity_ctx=similarity_ctx,
+            )
+            without_cut = apply_profile_filter(
+                without_cut, Property.search_profile_id, profile_selection
+            )
+            without_cut, _ = subscription_criteria.apply_filter(
+                without_cut, criteria_ctx, criteria_filter
+            )
+            similar_set_aside = favorite_similarity.set_aside_count(
+                without_cut, Property, similarity_ctx, similar_filter
+            )
         # What the rows of this page's set read as, counted by state -- the
         # line beside the count has to say what a missing chip means here
         # (cannot be placed, a different kind, no favorite to compare to),
@@ -2121,6 +2144,7 @@ def properties():
             similarity_reference_profiles=similarity_reference_profiles,
             similarity_cut=similarity_cut,
             similar_count=similar_count,
+            similar_set_aside=similar_set_aside,
             similarity_summary=similarity_summary,
             # The clear-filters link, built from the record of what the
             # request carried rather than from a list of filter names -- the
