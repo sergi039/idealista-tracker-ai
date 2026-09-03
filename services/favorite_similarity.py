@@ -73,6 +73,18 @@ score prints how many of the eight facts it rests on.
   row while the favorites span both buckets (they do on production), so it
   lifts measured rows rather than separating candidates.
 
+**A listing the owner has rejected is not offered as similar**
+(`rejected`), on their request of 2026-09-03. They had turned one down for
+reasons the table holds no column for ("маленькие комнаты, рядом много
+построек"), and the cut went on presenting it at 83.1, because the facts it
+CAN see really are close. The score is still computed and still shown — the
+row's own page says how alike it looked, and the line beside the count says
+how many were set aside — since dropping it in silence would leave the
+reader wondering where it went. It is the one verdict that removes a row:
+`interested` and `waiting` are not refusals, and `undecided` is most of the
+table. The reading is `owner_review.read_decision`'s, never a second test
+of the column.
+
 **A different kind of listing is not scored** (`different_kind`): a plot is
 not similar to a house whatever its price, and a terraced house is not what
 the owner means by a detached one (the /agencies definition, #474). The kind
@@ -104,12 +116,13 @@ import json
 import math
 import statistics
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from sqlalchemy import and_, case, false, or_
 
 from models import Property, db
-from services import subscription_criteria
+from services import owner_review, subscription_criteria
 from services.coordinate_quality import APPROXIMATE_COORD_SLACK_M, is_precise
 from services.listing_attribute_filters import LEGACY_SEA_VIEW_TRUE_TEXT
 from services.property_classification_service import (
@@ -179,6 +192,7 @@ STATE_THIN = "thin"
 STATE_DIFFERENT_KIND = "different_kind"
 STATE_NO_REFERENCE = "no_reference"
 STATE_NOTHING_COMPARED = "nothing_compared"
+STATE_REJECTED = "rejected"
 
 BASIS_COORDINATE = "coordinate"
 BASIS_APPROXIMATE = "approximate"
@@ -224,6 +238,7 @@ class ListingFacts:
     id: int
     profile_id: Optional[int]
     is_favorite: bool
+    is_rejected: bool
     kind: Optional[str]
     typology: Optional[str]
     subtype: Optional[str]
@@ -341,6 +356,7 @@ def facts_from_row(row: Sequence[Any]) -> ListingFacts:
         row_id,
         profile_id,
         is_favorite,
+        owner_verdict,
         category,
         subtype,
         title,
@@ -366,6 +382,12 @@ def facts_from_row(row: Sequence[Any]) -> ListingFacts:
         id=int(row_id),
         profile_id=int(profile_id) if profile_id is not None else None,
         is_favorite=bool(is_favorite),
+        # The one reading of a verdict (services/owner_review.py), so the
+        # cut and the badge cannot disagree about what `rejected` means.
+        is_rejected=owner_review.read_decision(
+            SimpleNamespace(owner_verdict=owner_verdict)
+        )["state"]
+        == owner_review.REJECTED,
         kind=listing_kind(category, subtype),
         typology=house_typology(title),
         subtype=_text(subtype),
@@ -409,6 +431,7 @@ def load_facts(
             Property.id,
             Property.search_profile_id,
             Property.is_favorite,
+            Property.owner_verdict,
             Property.property_category,
             Property.property_subtype,
             Property.title,
@@ -701,7 +724,14 @@ def read_against(
             STATE_DIFFERENT_KIND if gated == len(references) else STATE_NOTHING_COMPARED
         )
         return {"state": state, "score": None, "reference_count": len(references)}
-    return {**nearest, "reference_count": len(references)}
+    reading = {**nearest, "reference_count": len(references)}
+    if facts.is_rejected:
+        # The owner has already said no. The number stays -- the row's own
+        # page shows how alike it looked -- but the state takes it out of
+        # `kept_ids` and out of the sort, and the line beside the count says
+        # how many were set aside, so nothing vanishes in silence.
+        reading["state"] = STATE_REJECTED
+    return reading
 
 
 class SimilarityContext:
@@ -745,7 +775,9 @@ class SimilarityContext:
 
     def kept_ids(self, cut: float) -> List[int]:
         """The ids a cut keeps: every reference, and every rankable row at or
-        above it. A thin row is never kept, whatever its number says."""
+        above it. A thin row is never kept, whatever its number says, and
+        neither is one the owner rejected -- both carry a number, and
+        neither is an answer to "show me what to look at next"."""
         return sorted(
             row_id
             for row_id, reading in self.readings.items()
@@ -801,6 +833,7 @@ def _empty_summary() -> Dict[str, int]:
         STATE_DIFFERENT_KIND: 0,
         STATE_NO_REFERENCE: 0,
         STATE_NOTHING_COMPARED: 0,
+        STATE_REJECTED: 0,
         "base_only": 0,
         "plot_compared": 0,
         "total": 0,
@@ -885,7 +918,12 @@ def payload_score(reading: Optional[Dict[str, Any]]) -> Optional[float]:
     beside it says which), None where nothing was compared."""
     if not reading:
         return None
-    if reading.get("state") in (STATE_OK, STATE_REFERENCE, STATE_THIN):
+    if reading.get("state") in (
+        STATE_OK,
+        STATE_REFERENCE,
+        STATE_THIN,
+        STATE_REJECTED,
+    ):
         return reading.get("score")
     return None
 

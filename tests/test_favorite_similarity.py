@@ -266,6 +266,50 @@ class TestTheReading:
         )
         assert reading["score"] < 70
 
+    def test_a_rejected_listing_is_kept_out_of_the_cut_but_keeps_its_score(self, world):
+        """The owner's request of 2026-09-03: they rejected a listing for
+        reasons no column holds, and the cut went on offering it because
+        price, area and location really are close. It leaves the cut and
+        the sort; the number stays, so the row's own page can say how alike
+        it looked and the line beside the count can say one was set aside."""
+        ids = world["ids"]
+        before = fs.build_context()
+        assert before.read(ids["neighbour"])["state"] == fs.STATE_OK
+        assert ids["neighbour"] in before.kept_ids(70.0)
+        world["rows"]["neighbour"].owner_verdict = "rejected"
+        world["rows"]["neighbour"].owner_verdict_reason = "маленькие комнаты"
+        db.session.commit()
+        after = fs.build_context()
+        reading = after.read(ids["neighbour"])
+        assert reading["state"] == fs.STATE_REJECTED
+        assert reading["score"] == pytest.approx(84.1, abs=0.1)
+        assert reading["reference_id"] == ids["favorite"]
+        assert ids["neighbour"] not in after.kept_ids(70.0)
+        assert ids["neighbour"] not in after.similar_ids(70.0)
+        assert ids["neighbour"] not in after.sort_keys()
+        assert after.summarize([ids["neighbour"]])[fs.STATE_REJECTED] == 1
+
+    def test_only_a_rejection_removes_a_row_not_any_verdict(self, world):
+        """`interested` and `waiting` are not refusals: a row the owner is
+        pursuing must stay in the selection they are pursuing it through."""
+        ids = world["ids"]
+        for verdict in ("interested", "waiting"):
+            world["rows"]["neighbour"].owner_verdict = verdict
+            db.session.commit()
+            ctx = fs.build_context()
+            assert ctx.read(ids["neighbour"])["state"] == fs.STATE_OK, verdict
+            assert ids["neighbour"] in ctx.kept_ids(70.0), verdict
+
+    def test_a_rejected_favorite_is_still_a_reference(self, world):
+        """The star is what defines the selection; a verdict on it does not
+        take the definition away."""
+        ids = world["ids"]
+        world["rows"]["favorite"].owner_verdict = "rejected"
+        db.session.commit()
+        ctx = fs.build_context()
+        assert ctx.read(ids["favorite"])["state"] == fs.STATE_REFERENCE
+        assert ids["favorite"] in ctx.kept_ids(70.0)
+
     def test_a_different_kind_is_gated_not_scored(self, world):
         reading = _reading(world, "plot")
         assert reading["state"] == fs.STATE_DIFFERENT_KIND
@@ -519,6 +563,7 @@ class TestTheReading:
                 99,
                 world["pid"],
                 False,
+                None,
                 "housing",
                 "house",
                 "Casa",
@@ -540,7 +585,7 @@ class TestTheReading:
         )
         facts = fs.facts_from_row(row)
         assert facts.lat is None and facts.lon is None
-        row[13], row[14] = 400.0, -8.86
+        row[14], row[15] = 400.0, -8.86
         assert fs.facts_from_row(row).lat is None
         points = fs.municipality_points()
         located = fs.locate(facts, points)
@@ -918,8 +963,8 @@ class TestTheList:
         tooltip = re.search(r'id="similarity-coverage"[^>]*title="([^"]*)"', body)
         assert tooltip and unescape(tooltip.group(1)).startswith(
             "1 cannot be placed · 1 of a different kind · 0 with no favorite to "
-            "compare to · 2 of the rankable rest on price, area and location "
-            "alone · plot compared on 0."
+            "compare to · 0 you rejected, set aside · 2 of the rankable rest on "
+            "price, area and location alone · plot compared on 0."
         )
 
     def test_an_unknown_value_narrows_nothing_and_is_not_a_cut(self, client, world):
@@ -1000,8 +1045,8 @@ class TestTheList:
         tooltip = re.search(r'id="similarity-coverage"[^>]*title="([^"]*)"', body)
         assert tooltip and unescape(tooltip.group(1)).startswith(
             "0 cannot be placed · 0 of a different kind · 0 with no favorite to "
-            "compare to · 0 of the rankable rest on price, area and location "
-            "alone · plot compared on 0."
+            "compare to · 0 you rejected, set aside · 0 of the rankable rest on "
+            "price, area and location alone · plot compared on 0."
         )
         # And the way out is on screen: the control keeps the cut it applied.
         assert 'value="70" selected' in body
@@ -1114,6 +1159,28 @@ class TestTheList:
             "Similar: 4 of 8 rankable against each subscription's own favorites "
             "(2 in all)"
         )
+
+    def test_the_page_leaves_out_the_rejected_row_and_says_it_did(self, client, world):
+        ids = world["ids"]
+        world["rows"]["neighbour"].owner_verdict = "rejected"
+        db.session.commit()
+        body = client.get("/properties?profile_id=all&similar=70").get_data(
+            as_text=True
+        )
+        assert ids["neighbour"] not in _shown(body)
+        assert _coverage_line(body) == "Similar: 1 at ≥ 70 to 1 favorite"
+        # Not silent: the tooltip counts the one that was set aside.
+        body = client.get("/properties?profile_id=all&per_page=100").get_data(
+            as_text=True
+        )
+        tooltip = re.search(r'id="similarity-coverage"[^>]*title="([^"]*)"', body)
+        assert tooltip and "1 you rejected, set aside" in unescape(tooltip.group(1))
+        # And its own page still shows what it would have scored.
+        text = _card(
+            client.get(f"/properties/{ids['neighbour']}").get_data(as_text=True)
+        )
+        assert "84.1/100" in text
+        assert "left out of the similar selection" in text
 
     def test_spanish(self, client, world):
         with client.session_transaction() as session:
