@@ -197,7 +197,7 @@ def _capture(entries: List[Optional[Dict[str, Any]]], published: int) -> Dict[st
     return {"items": items, "published": published}
 
 
-def from_fotocasa_payload(estate: Any, detail: Any) -> List[Dict[str, Any]]:
+def from_fotocasa_payload(estate: Any, detail: Any) -> Dict[str, Any]:
     """The listing's photographs from a fotocasa `__initial_props__` payload.
 
     Both blocks carry the same nine URLs in the same order in the committed
@@ -212,9 +212,14 @@ def from_fotocasa_payload(estate: Any, detail: Any) -> List[Dict[str, Any]]:
             items = block[key]
             break
     entries: List[Optional[Dict[str, Any]]] = []
+    # `published` below counts the RAW list, not these entries, so an item
+    # dropped here is still counted as one the payload named -- which is what
+    # keeps a payload of nothing but junk from reporting "the portal published
+    # none". A `None` appended here would be skipped by `_capture` and change
+    # nothing; an earlier version had one, and the mutation that removed it
+    # was equivalent, which is how it was found.
     for item in items:
         if not isinstance(item, dict):
-            entries.append(None)
             continue
         url = normalise_photo_url(item.get("src") or item.get("url"))
         if url is None or _FOTOCASA_LISTING_PATH not in urlparse(url).path:
@@ -224,13 +229,12 @@ def from_fotocasa_payload(estate: Any, detail: Any) -> List[Dict[str, Any]]:
             # guard has never been observed to fire on real data — which is
             # why it is tested directly rather than through the fixture, where
             # its absence changed nothing and read as coverage.
-            entries.append(None)
             continue
         entries.append(_entry(url, item.get("type")))
     return _capture(entries, len(items))
 
 
-def from_milanuncios_ad(ad: Any) -> List[Dict[str, Any]]:
+def from_milanuncios_ad(ad: Any) -> Dict[str, Any]:
     """The ad's photographs from a milanuncios `__INITIAL_PROPS__` payload.
 
     `ad.images` is a flat list of strings -- the ad's own media and nothing
@@ -242,7 +246,7 @@ def from_milanuncios_ad(ad: Any) -> List[Dict[str, Any]]:
     return _capture([_entry(normalise_photo_url(item)) for item in images], len(images))
 
 
-def from_yaencontre_card(markup: Any) -> List[Dict[str, Any]]:
+def from_yaencontre_card(markup: Any) -> Dict[str, Any]:
     """The listing's photographs from one yaencontre alert-email card.
 
     The email is 24 `<img>` tags of which 13 are template chrome and one is a
