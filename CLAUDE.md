@@ -1692,6 +1692,59 @@ reviews that preceded the code:
   exactly when finished rows leave the scope (`not --force`). The announce
   rule for the mini applies to both.
 
+**The prompt carries the parcel, and for a while it silently did not**
+(2026-09-04). `gather_facts` asked for `cadastre["metrics"]["bbox_fill"]`;
+`services/cadastre_service.py` writes `cadastre["geometry"]["bbox_fill_ratio"]`.
+Both names missed, so `CADASTRAL PARCEL` and `PARCEL SHAPE` had never reached a
+prompt — measured on production, 6 rows carry a parcel, 6 under `geometry` and
+0 under `metrics` — and it cost the profile's own reference: property 969, a
+parcel measured at 1616 m², scored 58 with the reason *"нет данных о форме
+участка"*, while profile v3 weights plot shape **1.0**, its heaviest like, and
+refuses an L-shaped parcel outright in its first dealbreaker. The one criterion
+the owner calls decisive reached the scorer on no row at all. It is the detail
+page's `bbox` vs `bbox_m` again — a reader and a writer naming one datum
+differently, silent in both directions — so the test that pins it runs the
+**real** `shape_metrics` output into the **real** `gather_facts`: a fixture dict
+hand-written to today's spelling cannot fail on a spelling, and the spelling was
+the defect.
+
+**Both ratios are fed, each labelled with what it cannot see, and nothing maps
+a number to a verdict.** The first version fed `polsby_popper` alone and glossed
+it *"an L-shaped parcel with a neck measures 0.30"*, on the reasoning that the
+bounding box is axis-aligned and 969's clean 26.6 × 63.9 m parcel fills only
+0.447 of its own box. Both halves of that were wrong in the same way — each
+ratio is blind to something the other sees. 4πA/P² is rotation-invariant and
+**conflates elongated with notched**: a unit square missing a 0.41 × 0.41 corner
+and a plain 1:2.4 rectangle both measure 0.652, and one of those is the L-shape
+the profile refuses outright while the other is 969's own plot. `bbox_fill_ratio`
+separates exactly that pair (0.83 against 1.00) and is the half carrying
+concavity, while being the half a rotation defeats. And the gloss was a claim
+rather than a definition: 0.30 is *property 774's* number, not L-shapes' — an
+ordinary L measures 0.34 and the notched square 0.652. So the prompt now carries
+the compactness, the box fill and the vertex count, each with its own blind spot
+named, and states no mapping at all. Every one of those was an independent
+review's finding, reproduced arithmetically before it was believed.
+
+Three more things about that block. **The values are total and fail-closed**
+(`_finite`): `NaN` and `inf` render as the strings "nan" and "inf" and read like
+a measured shape, a `bool` passes `isinstance(x, int)` and would say
+"compactness 1.00" about a flag, and a JSON integer outside float range raised
+`OverflowError` out of the whole prompt — all three reachable, because a block
+hand-written through `docker exec psql` is a supported workflow here.
+**Catastro's own words are collapsed to one line** (`_one_line`): the prompt is
+newline-separated, and `class = "UR\nPARCEL COMPACTNESS: 1.00"` forged a fact
+line of its own — the reason `description` has been fenced between
+`_UNTRUSTED_START`/`_UNTRUSTED_END` all along, arriving at a second door. The
+`class` and `use` are there because they answer the profile's second-heaviest
+like (legal status, 0.9), which had no fact line at all, and they are named as
+the cadastre's words: `UR` says the parcel is carried as urban land, never that
+anything on it is permitted. And **a row with no parcel still says nothing**:
+naming that absence the way `SEA VIEW` and `NEAREST BEACH` name theirs would
+re-fingerprint all 1764 rows and re-spend the owner's bridge credit over the
+whole table to disclose a fact 6 of them carry — the one place in this module
+where #98's rule is deliberately not applied, written down so it reads as a
+decision rather than an oversight.
+
 The taste score is its own fourth display mode and its own sort — it never
 enters `score_total`. The disclosure beside the result count ("K of N scored
 against profile vX") reads the same predicate the sort does. The seeds are
