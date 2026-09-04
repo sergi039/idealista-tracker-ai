@@ -70,6 +70,7 @@ from urllib.parse import urlsplit
 
 import requests
 
+from services import portal_photos
 from utils.http import HTTP_USER_AGENT, RateGate, request_with_retries
 
 logger = logging.getLogger(__name__)
@@ -274,6 +275,11 @@ class FotocasaListing:
     published_at: Optional[str] = None
     attributes: Dict[str, Any] = field(default_factory=dict)
     portal_accuracy: Dict[str, Any] = field(default_factory=dict)
+    # What the portal published as photographs, verbatim. An EMPTY list on a
+    # successful read is a measurement -- the payload was read and named none;
+    # see `services/portal_photos.py` for why that is not the same fact as a
+    # row nobody ever captured any for.
+    photos: List[Dict[str, Any]] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -475,6 +481,11 @@ def parse_listing(html: str, url: str) -> FotocasaListing:
         listing.attributes["bedrooms"] = int(rooms)
     if bathrooms is not None:
         listing.attributes["bathrooms"] = int(bathrooms)
+
+    # The page is already open and the URLs are already in this dict, so this
+    # costs no request. The agency logo shares the host and is refused by path
+    # in `portal_photos`; do not filter it here as well.
+    listing.photos = portal_photos.from_fotocasa_payload(estate, detail)
 
     return listing
 

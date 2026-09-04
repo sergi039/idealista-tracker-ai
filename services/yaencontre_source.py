@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
+from services import portal_photos
 from utils.idealista_extractors import extract_area_m2, extract_price
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,11 @@ class YaencontreCard:
     deal_type: str = "sale"
     municipality: Optional[str] = None
     attributes: Dict[str, Any] = field(default_factory=dict)
+    # The card's own photograph. This email is the ONLY source for these rows
+    # -- the portal answers DataDome to this machine -- and the card carries
+    # one, which this parser used to discard along with the rest of the markup
+    # (services/portal_photos.py).
+    photos: List[Dict[str, Any]] = field(default_factory=list)
 
 
 def split_district(segment: Optional[str]) -> Optional[Tuple[str, str]]:
@@ -282,6 +288,7 @@ def cards_in_email(body: Optional[str]) -> List[YaencontreCard]:
             area=area,
             area_type=_area_type_for(url, area),
             municipality=_municipality_from_title(title),
+            photos=portal_photos.from_yaencontre_card(segment),
         )
         bedrooms = _BEDROOMS.search(flat)
         bathrooms = _BATHROOMS.search(flat)
