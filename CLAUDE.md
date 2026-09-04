@@ -1692,6 +1692,39 @@ reviews that preceded the code:
   exactly when finished rows leave the scope (`not --force`). The announce
   rule for the mini applies to both.
 
+**The prompt carries the parcel, and for a while it silently did not**
+(2026-09-04). `gather_facts` asked for `cadastre["metrics"]["bbox_fill"]`;
+`services/cadastre_service.py` writes `cadastre["geometry"]["bbox_fill_ratio"]`.
+Both names missed, so `CADASTRAL PARCEL` and `PARCEL SHAPE` had never reached a
+prompt — measured on production, 6 rows carry a parcel, 6 under `geometry` and
+0 under `metrics` — and it cost the profile's own reference: property 969, a
+parcel measured at 1616 m², scored 58 with the reason *"нет данных о форме
+участка"*, while profile v3 weights plot shape **1.0**, its heaviest like, and
+refuses an L-shaped parcel outright in its first dealbreaker. The one criterion
+the owner calls decisive reached the scorer on no row at all. It is the detail
+page's `bbox` vs `bbox_m` again — a reader and a writer naming one datum
+differently, silent in both directions — so the test that pins it runs the
+**real** `shape_metrics` output into the **real** `gather_facts`: a fixture dict
+hand-written to today's spelling cannot fail on a spelling, and the spelling was
+the defect.
+
+What the prompt is fed is `polsby_popper` and deliberately **not**
+`bbox_fill_ratio`. The bounding box is axis-aligned, so a *rotated* rectangle
+fills little of it and reads as irregular: 969's clean 26.6 × 63.9 m parcel
+fills 0.447 of its box, and feeding that would have taught the model the
+opposite of the truth about the listing the owner starred. 4πA/P² is
+rotation-invariant and separates the owner's own verdicts cleanly — 774
+("L-shaped with a neck", rejected) at 0.30 against 0.65–0.81 for every parcel
+they accepted, where the box fill puts 774 at 0.35 and 969 at 0.447. The
+cadastre's `class` and `use` ride along as the cadastre's words and never as a
+planning verdict, because they answer the profile's second-heaviest like (legal
+status, 0.9), which had no fact line at all. And a row with **no** parcel still
+says nothing: naming that absence the way `SEA VIEW` and `NEAREST BEACH` name
+theirs would re-fingerprint all 1764 rows and re-spend the owner's bridge credit
+over the whole table to disclose a fact 6 of them carry — the one place in this
+module where #98's rule is deliberately not applied, written down so it reads as
+a decision rather than an oversight.
+
 The taste score is its own fourth display mode and its own sort — it never
 enters `score_total`. The disclosure beside the result count ("K of N scored
 against profile vX") reads the same predicate the sort does. The seeds are
