@@ -275,11 +275,11 @@ class FotocasaListing:
     published_at: Optional[str] = None
     attributes: Dict[str, Any] = field(default_factory=dict)
     portal_accuracy: Dict[str, Any] = field(default_factory=dict)
-    # What the portal published as photographs, verbatim. An EMPTY list on a
-    # successful read is a measurement -- the payload was read and named none;
-    # see `services/portal_photos.py` for why that is not the same fact as a
-    # row nobody ever captured any for.
-    photos: List[Dict[str, Any]] = field(default_factory=list)
+    # What the portal published as photographs: `{"items": [...],
+    # "published": N}`. `published` is how many the payload NAMED, which is
+    # what keeps eight refused URLs from reading as a portal with no pictures
+    # -- see `services/portal_photos.py`.
+    photos: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:

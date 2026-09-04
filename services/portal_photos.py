@@ -73,19 +73,39 @@ STATE_CAPTURED = "captured"
 STATE_NONE_PUBLISHED = "none_published"
 STATE_NOT_CAPTURED = "not_captured"
 
-# Query parameter names that make a URL a credential. Refused rather than
-# stripped: a URL that needs a secret to work does not work without it, and
-# storing a broken URL is worse than storing nothing.
-_SECRET_QUERY_KEYS = (
-    "apikey",
-    "api_key",
+# Tokens that make a parameter NAME a credential, matched as substrings so that
+# `apikey`, `x-amz-signature`, `sessionid` and `accessToken` are all caught by
+# one entry. Refused rather than stripped: a URL that needs a secret to work
+# does not work without it, and storing a broken URL is worse than nothing.
+#
+# This is a heuristic and cannot be complete -- a secret in the PATH
+# (`/img/<token>/x.jpg`) is indistinguishable from a path segment, and a
+# parameter named something nobody guessed is not caught. It is written down
+# rather than hidden because the mitigation is a fact about the source, not
+# about this list: these URLs come from a portal's PUBLIC listing payload and
+# point at a public CDN, so a credential in one is an anomaly rather than the
+# normal case. The list is the cheap catch for the anomaly, not a proof.
+#
+# Safe against the real data by construction: fotocasa's only parameter is
+# `rule=original`, milanuncios' and yaencontre's photo URLs carry none, and
+# `tests/test_portal_photos_captured.py` asserts that on the committed
+# fixtures -- a tightening here that started refusing real photographs would
+# go red rather than quietly capture nothing.
+_SECRET_NAME_TOKENS = (
+    "key",
     "token",
-    "access_token",
     "auth",
     "signature",
     "sig",
     "password",
+    "passwd",
+    "pwd",
     "secret",
+    "session",
+    "credential",
+    "hmac",
+    "jwt",
+    "bearer",
 )
 
 # fotocasa serves a listing's photographs and its agency's logo from ONE host,
@@ -99,17 +119,36 @@ _YAENCONTRE_PHOTO_HOST = "media.yaencontre.com"
 _IMG_SRC = re.compile(r"<img\b[^>]*?\bsrc\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
 
 
-def _has_credential(url: str) -> bool:
-    try:
-        query = urlparse(url).query
-    except ValueError:
-        return True
-    if not query:
+def _names_a_secret(blob: str) -> bool:
+    if not blob:
         return False
-    for key, _value in parse_qsl(query, keep_blank_values=True):
-        if key.strip().lower() in _SECRET_QUERY_KEYS:
+    for key, _value in parse_qsl(blob, keep_blank_values=True):
+        lowered = key.strip().lower()
+        if any(token in lowered for token in _SECRET_NAME_TOKENS):
             return True
     return False
+
+
+def _has_credential(url: str) -> bool:
+    """Whether this URL carries a secret anywhere it can be seen.
+
+    Three places, and the first is the one that also matters for a reason that
+    is not confidentiality at all. `https://media.yaencontre.com@evil.test/x.jpg`
+    has a HOST of `evil.test` -- the trusted name is userinfo -- so a URL with
+    an `@` in its authority is refused outright rather than parsed further: a
+    photo from a portal has no business carrying credentials, and the same
+    syntax is how a hostile string reads as a trusted one. The query is the
+    obvious place. The FRAGMENT is the third: it never reaches the origin, but
+    it is stored here and rendered into an href, so it travels wherever the
+    page travels and lands in browser history.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return True
+    if "@" in parsed.netloc:
+        return True
+    return _names_a_secret(parsed.query) or _names_a_secret(parsed.fragment)
 
 
 def normalise_photo_url(value: Any) -> Optional[str]:
@@ -135,18 +174,27 @@ def _entry(url: Optional[str], kind: Any = None) -> Optional[Dict[str, Any]]:
     return entry
 
 
-def _collect(entries: List[Optional[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-    """De-duplicated by URL, in the portal's own order, bounded."""
+def _capture(entries: List[Optional[Dict[str, Any]]], published: int) -> Dict[str, Any]:
+    """What was captured, and how many the payload NAMED.
+
+    The second number is the whole point and it was missing: a payload naming
+    eight photographs of which the guard refuses all eight leaves an empty
+    list, and an empty list stored on its own is indistinguishable from a
+    portal that published none -- so a refusal was about to be reported as a
+    measurement, which is the #98 defect this module exists to avoid, one
+    layer inside it. Found by the independent review of the first version and
+    reproduced before it was believed.
+    """
     seen = set()
-    out: List[Dict[str, Any]] = []
+    items: List[Dict[str, Any]] = []
     for entry in entries:
         if entry is None or entry["url"] in seen:
             continue
         seen.add(entry["url"])
-        out.append(entry)
-        if len(out) >= MAX_PHOTOS:
+        items.append(entry)
+        if len(items) >= MAX_PHOTOS:
             break
-    return out
+    return {"items": items, "published": published}
 
 
 def from_fotocasa_payload(estate: Any, detail: Any) -> List[Dict[str, Any]]:
@@ -166,6 +214,7 @@ def from_fotocasa_payload(estate: Any, detail: Any) -> List[Dict[str, Any]]:
     entries: List[Optional[Dict[str, Any]]] = []
     for item in items:
         if not isinstance(item, dict):
+            entries.append(None)
             continue
         url = normalise_photo_url(item.get("src") or item.get("url"))
         if url is None or _FOTOCASA_LISTING_PATH not in urlparse(url).path:
@@ -175,9 +224,10 @@ def from_fotocasa_payload(estate: Any, detail: Any) -> List[Dict[str, Any]]:
             # guard has never been observed to fire on real data — which is
             # why it is tested directly rather than through the fixture, where
             # its absence changed nothing and read as coverage.
+            entries.append(None)
             continue
         entries.append(_entry(url, item.get("type")))
-    return _collect(entries)
+    return _capture(entries, len(items))
 
 
 def from_milanuncios_ad(ad: Any) -> List[Dict[str, Any]]:
@@ -188,8 +238,8 @@ def from_milanuncios_ad(ad: Any) -> List[Dict[str, Any]]:
     """
     images = ad.get("images") if isinstance(ad, dict) else None
     if not isinstance(images, list):
-        return []
-    return _collect([_entry(normalise_photo_url(item)) for item in images])
+        return _capture([], 0)
+    return _capture([_entry(normalise_photo_url(item)) for item in images], len(images))
 
 
 def from_yaencontre_card(markup: Any) -> List[Dict[str, Any]]:
@@ -199,16 +249,24 @@ def from_yaencontre_card(markup: Any) -> List[Dict[str, Any]]:
     tracking pixel carrying an apikey; the host is what separates them.
     """
     if not isinstance(markup, str) or not markup:
-        return []
+        return _capture([], 0)
     entries: List[Optional[Dict[str, Any]]] = []
+    published = 0
     for src in _IMG_SRC.findall(markup):
-        url = normalise_photo_url(src.replace("&amp;", "&"))
-        if url is None:
+        cleaned = src.replace("&amp;", "&")
+        try:
+            host = urlparse(cleaned).netloc.lower()
+        except ValueError:
+            host = ""
+        # Only an image on the photo host was ever a candidate here; the mail
+        # chrome and the tracking pixel are not photographs the portal
+        # published, so they are not counted as refused ones either.
+        if host != _YAENCONTRE_PHOTO_HOST:
             continue
-        if urlparse(url).netloc.lower() != _YAENCONTRE_PHOTO_HOST:
-            continue
-        entries.append(_entry(url))
-    return _collect(entries)
+        published += 1
+        url = normalise_photo_url(cleaned)
+        entries.append(_entry(url) if url is not None else None)
+    return _capture(entries, published)
 
 
 def read_photos(prop: Any) -> Dict[str, Any]:
@@ -219,30 +277,50 @@ def read_photos(prop: Any) -> Dict[str, Any]:
     against the same guard the writer used, so a value edited straight into the
     database through `docker exec psql` -- a supported workflow here -- cannot
     reach an `href` on the strength of having once been written.
+
+    Three states, and the distinction between the last two is the module's
+    reason for existing: `none_published` is a MEASUREMENT (a payload was read
+    and named no photographs) while `not_captured` is an absence (nobody
+    looked, or what was there could not be stored). An empty list is only the
+    first when the capture also says the payload named none -- otherwise
+    somebody's eight refused URLs would be reported as a portal with no
+    pictures.
     """
+    absent = {"state": STATE_NOT_CAPTURED, "photos": [], "count": 0}
     enrichment = getattr(prop, "enrichment", None)
     if not isinstance(enrichment, dict):
-        return {"state": STATE_NOT_CAPTURED, "photos": [], "count": 0}
+        return absent
     block = enrichment.get("import")
     if not isinstance(block, dict) or ENRICHMENT_KEY not in block:
-        return {"state": STATE_NOT_CAPTURED, "photos": [], "count": 0}
+        return absent
     stored = block.get(ENRICHMENT_KEY)
-    if not isinstance(stored, list):
-        # Present but unreadable: nobody can say what the portal published.
-        return {"state": STATE_NOT_CAPTURED, "photos": [], "count": 0}
-    photos = _collect(
+    if isinstance(stored, dict):
+        raw = stored.get("items")
+        published = stored.get("published")
+    elif isinstance(stored, list):
+        # A bare list: a block written by hand. Nothing here can say what the
+        # payload named, so its own length is the only honest reading.
+        raw = stored
+        published = len(stored)
+    else:
+        return absent
+    if not isinstance(raw, list):
+        return absent
+    if not isinstance(published, int) or isinstance(published, bool) or published < 0:
+        return absent
+    capture = _capture(
         [
             _entry(normalise_photo_url(item.get("url")), item.get("type"))
             if isinstance(item, dict)
             else None
-            for item in stored
-        ]
+            for item in raw
+        ],
+        published,
     )
-    if not photos:
-        # An empty list is a measurement: the payload was read and named none.
-        # A list whose every entry the guard refuses is NOT -- somebody wrote
-        # something here and it cannot be shown, which is not the portal
-        # saying it has no photographs.
-        state = STATE_NONE_PUBLISHED if not stored else STATE_NOT_CAPTURED
-        return {"state": state, "photos": [], "count": 0}
-    return {"state": STATE_CAPTURED, "photos": photos, "count": len(photos)}
+    photos = capture["items"]
+    if photos:
+        return {"state": STATE_CAPTURED, "photos": photos, "count": len(photos)}
+    # Nothing to show. Which of the two facts that is depends entirely on
+    # whether the payload named anything in the first place.
+    state = STATE_NONE_PUBLISHED if published == 0 else STATE_NOT_CAPTURED
+    return {"state": state, "photos": [], "count": 0}

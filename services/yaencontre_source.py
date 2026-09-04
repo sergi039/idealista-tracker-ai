@@ -145,11 +145,12 @@ class YaencontreCard:
     deal_type: str = "sale"
     municipality: Optional[str] = None
     attributes: Dict[str, Any] = field(default_factory=dict)
-    # The card's own photograph. This email is the ONLY source for these rows
-    # -- the portal answers DataDome to this machine -- and the card carries
-    # one, which this parser used to discard along with the rest of the markup
+    # The card's own photograph, as `{"items": [...], "published": N}`.
+    # This email is the ONLY source for these rows -- the portal answers
+    # DataDome to this machine -- and the card carries one, which this parser
+    # used to discard along with the rest of the markup
     # (services/portal_photos.py).
-    photos: List[Dict[str, Any]] = field(default_factory=list)
+    photos: Dict[str, Any] = field(default_factory=dict)
 
 
 def split_district(segment: Optional[str]) -> Optional[Tuple[str, str]]:

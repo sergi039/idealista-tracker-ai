@@ -114,8 +114,9 @@ class TestCaptureFromTheRealPayloads:
         )
 
         assert listing.ok
-        assert len(listing.photos) == 9
-        assert listing.photos[0] == {"url": FOTOCASA_FIRST, "type": "image"}
+        assert listing.photos["published"] == 9
+        assert len(listing.photos["items"]) == 9
+        assert listing.photos["items"][0] == {"url": FOTOCASA_FIRST, "type": "image"}
 
     def test_the_agency_logo_is_refused_by_path(self):
         """A guard that has NOT been observed to fire on real data, tested
@@ -137,10 +138,15 @@ class TestCaptureFromTheRealPayloads:
             ]
         }
 
-        photos = portal_photos.from_fotocasa_payload(estate, None)
+        capture = portal_photos.from_fotocasa_payload(estate, None)
 
-        assert [photo["url"] for photo in photos] == [FOTOCASA_FIRST]
-        assert not any(FOTOCASA_AGENCY_LOGO_PATH in photo["url"] for photo in photos)
+        assert [photo["url"] for photo in capture["items"]] == [FOTOCASA_FIRST]
+        assert not any(
+            FOTOCASA_AGENCY_LOGO_PATH in photo["url"] for photo in capture["items"]
+        )
+        # The payload NAMED two: one captured, one refused. A row like this
+        # must never read as "the portal published none".
+        assert capture["published"] == 2
 
     def test_milanuncios_eight_photos(self):
         row = milanuncios_source.parse_listing(
@@ -149,18 +155,19 @@ class TestCaptureFromTheRealPayloads:
         )
 
         assert row["status"] == "new"
-        assert len(row["photos"]) == 8
-        assert row["photos"][0] == {"url": MILANUNCIOS_FIRST}
+        assert row["photos"]["published"] == 8
+        assert len(row["photos"]["items"]) == 8
+        assert row["photos"]["items"][0] == {"url": MILANUNCIOS_FIRST}
 
     def test_yaencontre_every_card_carries_one_and_no_chrome(self):
         cards = yaencontre_source.cards_in_email(_fixture(YAENCONTRE_FIXTURE))
 
         assert len(cards) == 10
-        assert all(card.photos for card in cards), (
+        assert all(card.photos["items"] for card in cards), (
             "this email is the ONLY source for these rows and every card has a photo"
         )
-        assert cards[0].photos == [{"url": YAENCONTRE_FIRST}]
-        captured = [photo["url"] for card in cards for photo in card.photos]
+        assert cards[0].photos == {"items": [{"url": YAENCONTRE_FIRST}], "published": 1}
+        captured = [photo["url"] for card in cards for photo in card.photos["items"]]
         assert not any("static-mail.yaencontre.com" in url for url in captured)
         assert not any("apicondor.yaencontre.com" in url for url in captured)
 
@@ -172,6 +179,13 @@ class TestWhatMayBeCaptured:
             ("https://media.example.com/p.jpg?apikey=SECRET", "apikey"),
             ("https://media.example.com/p.jpg?token=SECRET", "token"),
             ("https://media.example.com/p.jpg?signature=abc", "signature"),
+            ("https://media.example.com/p.jpg?sessionid=abc", "an unlisted name"),
+            ("https://user:pass@media.example.com/p.jpg", "userinfo"),
+            (
+                "https://media.yaencontre.com@evil.example.com/p.jpg",
+                "the host is evil.example.com; the trusted name is userinfo",
+            ),
+            ("https://media.example.com/p.jpg#access_token=abc", "the fragment"),
         ],
     )
     def test_a_url_carrying_a_credential_is_refused_not_stripped(self, url, why):
@@ -195,16 +209,45 @@ class TestWhatMayBeCaptured:
         url = "https://media.example.com/img/photo/w630/1/2-3.jpg"
         assert portal_photos.normalise_photo_url(url) == url
 
+    @pytest.mark.parametrize(
+        "url", [FOTOCASA_FIRST, MILANUNCIOS_FIRST, YAENCONTRE_FIRST]
+    )
+    def test_the_guard_never_refuses_a_real_portal_photograph(self, url):
+        """The credential check matches parameter names by SUBSTRING, so it is
+        deliberately broad. This is what stops a future tightening from
+        quietly capturing nothing: fotocasa's only parameter is
+        `rule=original`, and the other two carry none."""
+        assert portal_photos.normalise_photo_url(url) == url
+
 
 class TestTheTwoFactsTheBadgeCouldNotTellApart:
     def test_a_read_payload_that_named_none_is_a_measurement(self, app, profile):
-        row = _prop(profile, "none-published", enrichment={"import": {"photos": []}})
+        row = _prop(
+            profile,
+            "none-published",
+            enrichment={"import": {"photos": {"items": [], "published": 0}}},
+        )
 
         assert portal_photos.read_photos(row) == {
             "state": "none_published",
             "photos": [],
             "count": 0,
         }
+
+    def test_refused_entries_are_not_a_portal_with_no_pictures(self, app, profile):
+        """The independent review's finding, reproduced then fixed: a payload
+        naming eight photographs of which the guard refuses all eight leaves an
+        empty list, and an empty list on its own is indistinguishable from a
+        portal that published none -- a refusal reported as a measurement,
+        which is #98 one layer inside the module written to avoid it."""
+        capture = portal_photos.from_milanuncios_ad(
+            {"images": ["https://cdn.example.com/x.jpg?signature=dummy"]}
+        )
+        assert capture == {"items": [], "published": 1}
+
+        row = _prop(profile, "all-refused", enrichment={"import": {"photos": capture}})
+
+        assert portal_photos.read_photos(row)["state"] == "not_captured"
 
     def test_no_key_at_all_means_nobody_looked(self, app, profile):
         row = _prop(profile, "not-captured", enrichment={"import": {"source": "x"}})
@@ -216,7 +259,12 @@ class TestTheTwoFactsTheBadgeCouldNotTellApart:
             profile,
             "captured",
             enrichment={
-                "import": {"photos": [{"url": FOTOCASA_FIRST, "type": "image"}]}
+                "import": {
+                    "photos": {
+                        "items": [{"url": FOTOCASA_FIRST, "type": "image"}],
+                        "published": 1,
+                    }
+                }
             },
         )
 
@@ -233,6 +281,12 @@ class TestTheTwoFactsTheBadgeCouldNotTellApart:
             ({"photos": [{"url": "javascript:alert(1)"}]}, "never reaches an href"),
             ({"photos": [{"url": None}]}, "a null url"),
             ({"photos": ["https://media.example.com/x.jpg"]}, "bare strings"),
+            (
+                {"photos": {"items": [{"url": "javascript:x"}], "published": 1}},
+                "refused",
+            ),
+            ({"photos": {"items": [], "published": "nine"}}, "a non-integer count"),
+            ({"photos": {"items": [], "published": -1}}, "a negative count"),
         ],
     )
     def test_a_block_written_by_hand_cannot_force_a_claim(
@@ -262,15 +316,17 @@ class TestTheWriter:
 
         # preview_row is the layer a background job persists; a field that
         # stops here is dropped as surely as one never read.
-        assert len(row["photos"]) == 9
+        assert len(row["photos"]["items"]) == 9
         assert json.loads(json.dumps(row["photos"])) == row["photos"]
 
         prop = fotocasa_import.build_property(
             row, source="fotocasa", method="paste", profile_id=profile.id
         )
 
-        assert len(prop.enrichment["import"]["photos"]) == 9
-        assert prop.enrichment["import"]["photos"][0]["url"] == FOTOCASA_FIRST
+        stored = prop.enrichment["import"]["photos"]
+        assert stored["published"] == 9
+        assert len(stored["items"]) == 9
+        assert stored["items"][0]["url"] == FOTOCASA_FIRST
 
     def test_a_row_with_no_photos_key_leaves_the_block_without_one(self, app, profile):
         prop = fotocasa_import.build_property(
@@ -288,11 +344,22 @@ class TestThePage:
         "enrichment, expect, forbid",
         [
             (
-                {"import": {"photos": [{"url": FOTOCASA_FIRST}]}},
+                {
+                    "import": {
+                        "photos": {
+                            "items": [{"url": FOTOCASA_FIRST}],
+                            "published": 1,
+                        }
+                    }
+                },
                 "1 photos",
                 "No photos",
             ),
-            ({"import": {"photos": []}}, "No photos", "not captured"),
+            (
+                {"import": {"photos": {"items": [], "published": 0}}},
+                "No photos",
+                "not captured",
+            ),
             ({"import": {"source": "idealista"}}, "not captured", "No photos"),
             (None, "not captured", "No photos"),
         ],

@@ -167,7 +167,7 @@ def preview_row(listing) -> Dict[str, Any]:
         # A field added to the dataclass and not here is dropped again at this
         # layer -- this dict, not the dataclass, is what a background job
         # persists and a later request reads back.
-        "photos": [dict(photo) for photo in (listing.photos or [])],
+        "photos": dict(listing.photos or {}),
     }
     if not listing.ok:
         row["status"] = STATUS_REFUSED
@@ -387,10 +387,13 @@ def build_property(
     # "the payload was read and named none" -- two different facts, and the
     # page says which (services/portal_photos.py).
     photos = row.get("photos")
-    if isinstance(photos, list):
-        prop.enrichment["import"][portal_photos.ENRICHMENT_KEY] = [
-            dict(photo) for photo in photos if isinstance(photo, dict)
-        ]
+    if isinstance(photos, dict) and isinstance(photos.get("items"), list):
+        prop.enrichment["import"][portal_photos.ENRICHMENT_KEY] = {
+            "items": [
+                dict(photo) for photo in photos["items"] if isinstance(photo, dict)
+            ],
+            "published": photos.get("published"),
+        }
     if record_advertiser:
         # Who is selling, recorded on the way past. The page has been
         # fetched already, so this costs nothing and spares the row the one
