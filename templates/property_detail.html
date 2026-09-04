@@ -904,11 +904,27 @@
                             {% endif %}
                         {% endif %}
                     {% endfor %}
-                    {# The alerts carry no images, so the page says so instead
-                       of just having none (D6; photo sourcing is question 4). #}
-                    <span class="small text-body-secondary ms-auto" title="{{ t('no_photos_tooltip') }}">
-                        <i class="far fa-image me-1"></i>{{ t('no_photos') }}
-                    </span>
+                    {# Three states, because "the portal published none" and
+                       "nobody captured any" are different facts and this badge
+                       used to assert the first one unconditionally -- on every
+                       row, including the ones whose portal published nine
+                       (services/portal_photos.py). The URLs are not rendered
+                       as images: whether these CDNs serve them to this app is
+                       unmeasured, and hotlinking is the owner's decision. #}
+                    {% set _photos = photo_reading if photo_reading is defined else none %}
+                    {% if _photos and _photos.state == 'captured' %}
+                        <span class="small text-body-secondary ms-auto" title="{{ t('photos_captured_tooltip') }}">
+                            <i class="far fa-image me-1"></i>{{ t('photos_captured')|format(_photos.count) }}
+                        </span>
+                    {% elif _photos and _photos.state == 'none_published' %}
+                        <span class="small text-body-secondary ms-auto" title="{{ t('no_photos_tooltip') }}">
+                            <i class="far fa-image me-1"></i>{{ t('no_photos') }}
+                        </span>
+                    {% else %}
+                        <span class="small text-body-secondary ms-auto" title="{{ t('photos_unknown_tooltip') }}">
+                            <i class="far fa-image me-1"></i>{{ t('photos_unknown') }}
+                        </span>
+                    {% endif %}
                 </div>
             </div>
         </div>
