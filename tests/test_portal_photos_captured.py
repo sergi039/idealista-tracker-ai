@@ -116,10 +116,31 @@ class TestCaptureFromTheRealPayloads:
         assert listing.ok
         assert len(listing.photos) == 9
         assert listing.photos[0] == {"url": FOTOCASA_FIRST, "type": "image"}
-        # Same host, different path segment: the agency's logo, not the plot.
-        assert not any(
-            FOTOCASA_AGENCY_LOGO_PATH in photo["url"] for photo in listing.photos
-        )
+
+    def test_the_agency_logo_is_refused_by_path(self):
+        """A guard that has NOT been observed to fire on real data, tested
+        directly because of that. Measured on the committed fixture: the logo
+        sits at `publisher.logo` / `agency.logo` / `promotionLogo` and zero of
+        the nine `multimedia` entries carry `/images/client/` — so the earlier
+        version of this file, which asserted the logo's absence from the parsed
+        result, passed whether or not the filter existed. Removing the filter
+        left all 26 tests green. Fotocasa serves both from ONE host, so the
+        guard stays; it is worth exactly what a test that can fail is worth."""
+        estate = {
+            "multimedia": [
+                {"src": FOTOCASA_FIRST, "type": "image"},
+                {
+                    "src": "https://static.fotocasa.es/images/client/9202765912278/"
+                    "632581-20201218101205.jpg?rule=original",
+                    "type": "image",
+                },
+            ]
+        }
+
+        photos = portal_photos.from_fotocasa_payload(estate, None)
+
+        assert [photo["url"] for photo in photos] == [FOTOCASA_FIRST]
+        assert not any(FOTOCASA_AGENCY_LOGO_PATH in photo["url"] for photo in photos)
 
     def test_milanuncios_eight_photos(self):
         row = milanuncios_source.parse_listing(

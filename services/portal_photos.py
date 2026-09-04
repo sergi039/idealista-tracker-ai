@@ -169,7 +169,12 @@ def from_fotocasa_payload(estate: Any, detail: Any) -> List[Dict[str, Any]]:
             continue
         url = normalise_photo_url(item.get("src") or item.get("url"))
         if url is None or _FOTOCASA_LISTING_PATH not in urlparse(url).path:
-            # The agency logo lives at /images/client/ on the same host.
+            # The agency logo lives at /images/client/ on the same host. On
+            # the one fixture measured it sits OUTSIDE this block entirely
+            # (`publisher.logo`, `agency.logo`, `promotionLogo`), so this
+            # guard has never been observed to fire on real data — which is
+            # why it is tested directly rather than through the fixture, where
+            # its absence changed nothing and read as coverage.
             continue
         entries.append(_entry(url, item.get("type")))
     return _collect(entries)
