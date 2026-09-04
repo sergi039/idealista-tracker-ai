@@ -49,6 +49,7 @@ scope for the next run.
 import hashlib
 import json
 import logging
+import math
 import re
 import threading
 from datetime import datetime, timezone
@@ -162,6 +163,42 @@ BATCH_SCORE_SCHEMA: Dict[str, Any] = {
 # --------------------------------------------------------------------------
 # Facts: what the app already knows about a row, stated honestly.
 # --------------------------------------------------------------------------
+
+
+def _finite(value: Any) -> Optional[float]:
+    """A real number, or nothing.
+
+    Three ways a stored value is not a measurement, all of them reachable: a
+    hand-written block through `docker exec psql` is a supported workflow here.
+    `NaN` and `inf` render as the strings "nan" and "inf", which read like a
+    measured shape and are not one (the rule this repository already writes
+    down for `plot_area`). A `bool` passes `isinstance(x, int)` and would say
+    "compactness 1.00" about a flag. And a JSON integer far outside float range
+    raises `OverflowError` inside `float()` — the one input here that took the
+    whole prompt down rather than merely lying in it.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _one_line(value: Any, limit: int = 120) -> Optional[str]:
+    """A stored string as ONE prompt line, or nothing.
+
+    Catastro's words reach the prompt, and the prompt is newline-separated: a
+    value carrying a newline forges a fact line of its own. The listing
+    description is already fenced between `_UNTRUSTED_START`/`_UNTRUSTED_END`
+    for this reason; a short attribute is better collapsed than fenced, so the
+    whitespace is normalized and the length bounded.
+    """
+    if not isinstance(value, str):
+        return None
+    text = re.sub(r"\s+", " ", value).strip()[:limit].strip()
+    return text or None
 
 
 def _fmt_number(value: Any, unit: str = "") -> Optional[str]:
@@ -297,44 +334,67 @@ def gather_facts(prop: Property) -> List[str]:
             if isinstance(cadastre.get("geometry"), dict)
             else {}
         )
-        parcel_area = _fmt_number(geometry.get("area_m2"), " m2")
+        parcel_area = _fmt_number(_finite(geometry.get("area_m2")), " m2")
         if parcel_area:
             facts.append(f"CADASTRAL PARCEL: {parcel_area}")
-        # `polsby_popper`, and deliberately NOT `bbox_fill_ratio`: the bounding
-        # box is axis-aligned, so a *rotated* rectangle fills little of it and
-        # reads as irregular. 969's parcel is a clean 26.6 x 63.9 m rectangle
-        # and fills 0.447 of its box — feeding that would have taught the model
-        # the opposite of the truth about the listing the owner starred.
-        # 4*pi*A/P^2 is rotation-invariant, and it separates the real cases:
-        # 774 (rejected, "L-shaped with a neck") 0.30 against 0.65-0.81 for
-        # every parcel the owner accepted.
-        compactness = geometry.get("polsby_popper")
-        if isinstance(compactness, (int, float)) and not isinstance(compactness, bool):
+        # BOTH ratios, each with what it cannot see, and no mapping from a
+        # number to a verdict. Neither one alone answers the owner's question.
+        # `polsby_popper` is rotation-invariant but conflates elongated with
+        # notched: a unit square missing a 0.41 x 0.41 corner and a plain 1:2.4
+        # rectangle both measure 0.652, and one of those is the L-shape the
+        # profile refuses outright while the other is property 969's own plot.
+        # `bbox_fill_ratio` separates exactly that pair (0.83 against 1.00) and
+        # is the half that carries concavity — but its box is axis-aligned, so
+        # 969's clean 26.6 x 63.9 m rectangle, lying diagonally, fills only
+        # 0.447 of its own box. Feeding either as "the shape" teaches something
+        # false; feeding both, labelled, is the honest reading. An earlier
+        # version of this block fed compactness alone and glossed it with
+        # "an L-shaped parcel measures 0.30" — a calibration that is true of
+        # property 774 and not true of L-shapes.
+        compactness = _finite(geometry.get("polsby_popper"))
+        if compactness is not None:
             facts.append(
-                f"PARCEL SHAPE: compactness {float(compactness):.2f} "
-                "(4*pi*area/perimeter^2, rotation-invariant: a circle is 1.00, "
-                "a square 0.79, a 1:2.4 rectangle 0.65; an L-shaped parcel with "
-                "a neck measures 0.30)"
+                f"PARCEL COMPACTNESS: {compactness:.2f} "
+                "(4*pi*area/perimeter^2, rotation-invariant; it falls for an "
+                "elongated outline and for a notched one alike and does not "
+                "distinguish them)"
             )
-        # The cadastre's own class and use. Named as the cadastre's words and
-        # nothing more: `UR` says the parcel is carried as urban land, not that
-        # anything on it is permitted — reading a planning verdict out of a
-        # classification code would be the STATUS-002 mistake in a prompt.
+        box_fill = _finite(geometry.get("bbox_fill_ratio"))
+        if box_fill is not None:
+            facts.append(
+                f"PARCEL BOUNDING-BOX FILL: {box_fill:.2f} "
+                "(share of its AXIS-ALIGNED bounding box; a regular parcel "
+                "lying diagonally also fills little, so a low fill is not by "
+                "itself irregularity — read it beside the compactness)"
+            )
+        vertices = geometry.get("vertices")
+        if (
+            isinstance(vertices, int)
+            and not isinstance(vertices, bool)
+            and vertices > 0
+        ):
+            facts.append(f"PARCEL OUTLINE: {vertices} vertices")
+        # The cadastre's own class and use, collapsed to one line each. Named as
+        # the cadastre's words and nothing more: `UR` says the parcel is carried
+        # as urban land, not that anything on it is permitted — reading a
+        # planning verdict out of a classification code would be the STATUS-002
+        # mistake in a prompt. They come off an external XML document, so they
+        # are untrusted text and go through `_one_line`.
         attributes = (
             cadastre.get("attributes")
             if isinstance(cadastre.get("attributes"), dict)
             else {}
         )
-        parcel_class = attributes.get("class")
-        if isinstance(parcel_class, str) and parcel_class.strip():
+        parcel_class = _one_line(attributes.get("class"))
+        if parcel_class:
             facts.append(
-                f"CADASTRAL CLASS: {parcel_class.strip()} "
+                f"CADASTRAL CLASS: {parcel_class} "
                 "(the cadastre's own class — UR urbano, RU rustico — which is "
                 "not a planning permission)"
             )
-        parcel_use = attributes.get("use")
-        if isinstance(parcel_use, str) and parcel_use.strip():
-            facts.append(f"CADASTRAL USE: {parcel_use.strip()}")
+        parcel_use = _one_line(attributes.get("use"))
+        if parcel_use:
+            facts.append(f"CADASTRAL USE: {parcel_use}")
     # A row with NO cadastral block says nothing here, which is this module's
     # shipped treatment of the parcel and is left alone on purpose. Naming the
     # absence the way SEA VIEW and NEAREST BEACH name theirs would re-fingerprint
