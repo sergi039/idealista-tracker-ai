@@ -279,17 +279,68 @@ def gather_facts(prop: Property) -> List[str]:
     else:
         facts.append("INDUSTRIAL NEIGHBOURS: not scanned")
 
+    # The parcel, read where `services/cadastre_service.py` actually writes it.
+    # This block asked for `cadastre["metrics"]["bbox_fill"]` and the writer
+    # stores `cadastre["geometry"]["bbox_fill_ratio"]`, so BOTH names missed and
+    # neither line had ever reached a prompt: measured on production 2026-09-04,
+    # 6 rows carry a cadastral parcel, 6 under `geometry` and 0 under `metrics`.
+    # It cost the profile's own reference — 969, a parcel measured at 1616 m2,
+    # was scored 58 with the reason "нет данных о форме участка", while profile
+    # v3 weights plot shape 1.0 (its heaviest like) and refuses an L-shaped
+    # parcel outright (its first dealbreaker). The same class as the detail
+    # page's `bbox` vs `bbox_m` (#430): a reader and a writer naming one datum
+    # differently, silent in both directions.
     cadastre = enrichment.get("cadastre")
     if isinstance(cadastre, dict):
-        metrics = (
-            cadastre.get("metrics") if isinstance(cadastre.get("metrics"), dict) else {}
+        geometry = (
+            cadastre.get("geometry")
+            if isinstance(cadastre.get("geometry"), dict)
+            else {}
         )
-        parcel_area = _fmt_number(metrics.get("area_m2"), " m2")
+        parcel_area = _fmt_number(geometry.get("area_m2"), " m2")
         if parcel_area:
             facts.append(f"CADASTRAL PARCEL: {parcel_area}")
-        fill = metrics.get("bbox_fill")
-        if isinstance(fill, (int, float)):
-            facts.append(f"PARCEL SHAPE: fills {float(fill):.2f} of its bounding box")
+        # `polsby_popper`, and deliberately NOT `bbox_fill_ratio`: the bounding
+        # box is axis-aligned, so a *rotated* rectangle fills little of it and
+        # reads as irregular. 969's parcel is a clean 26.6 x 63.9 m rectangle
+        # and fills 0.447 of its box — feeding that would have taught the model
+        # the opposite of the truth about the listing the owner starred.
+        # 4*pi*A/P^2 is rotation-invariant, and it separates the real cases:
+        # 774 (rejected, "L-shaped with a neck") 0.30 against 0.65-0.81 for
+        # every parcel the owner accepted.
+        compactness = geometry.get("polsby_popper")
+        if isinstance(compactness, (int, float)) and not isinstance(compactness, bool):
+            facts.append(
+                f"PARCEL SHAPE: compactness {float(compactness):.2f} "
+                "(4*pi*area/perimeter^2, rotation-invariant: a circle is 1.00, "
+                "a square 0.79, a 1:2.4 rectangle 0.65; an L-shaped parcel with "
+                "a neck measures 0.30)"
+            )
+        # The cadastre's own class and use. Named as the cadastre's words and
+        # nothing more: `UR` says the parcel is carried as urban land, not that
+        # anything on it is permitted — reading a planning verdict out of a
+        # classification code would be the STATUS-002 mistake in a prompt.
+        attributes = (
+            cadastre.get("attributes")
+            if isinstance(cadastre.get("attributes"), dict)
+            else {}
+        )
+        parcel_class = attributes.get("class")
+        if isinstance(parcel_class, str) and parcel_class.strip():
+            facts.append(
+                f"CADASTRAL CLASS: {parcel_class.strip()} "
+                "(the cadastre's own class — UR urbano, RU rustico — which is "
+                "not a planning permission)"
+            )
+        parcel_use = attributes.get("use")
+        if isinstance(parcel_use, str) and parcel_use.strip():
+            facts.append(f"CADASTRAL USE: {parcel_use.strip()}")
+    # A row with NO cadastral block says nothing here, which is this module's
+    # shipped treatment of the parcel and is left alone on purpose. Naming the
+    # absence the way SEA VIEW and NEAREST BEACH name theirs would re-fingerprint
+    # all 1764 rows and therefore re-spend the owner's bridge credit on the whole
+    # table, to disclose a fact 6 of them carry. Revisit when cadastral coverage
+    # is worth that; the scorer already reads a missing line as "нет данных".
 
     if prop.description:
         desc = re.sub(r"\s+", " ", prop.description).strip()[:900]
