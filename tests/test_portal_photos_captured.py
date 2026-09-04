@@ -249,6 +249,45 @@ class TestTheTwoFactsTheBadgeCouldNotTellApart:
 
         assert portal_photos.read_photos(row)["state"] == "not_captured"
 
+    def test_an_unreadable_count_is_unknown_and_never_none_published(
+        self, app, profile
+    ):
+        """A malformed `published` must not read as "the portal published
+        none", and must not throw away photographs that ARE readable. The
+        first version refused the whole block, which did both wrongs at once
+        and was invisible: a mutation removing it left every test green."""
+        empty = _prop(
+            profile,
+            "bad-count-empty",
+            enrichment={"import": {"photos": {"items": [], "published": "nine"}}},
+        )
+        assert portal_photos.read_photos(empty)["state"] == "not_captured"
+
+        readable = _prop(
+            profile,
+            "bad-count-readable",
+            enrichment={
+                "import": {
+                    "photos": {
+                        "items": [{"url": FOTOCASA_FIRST}],
+                        "published": "nine",
+                    }
+                }
+            },
+        )
+        reading = portal_photos.read_photos(readable)
+        assert reading["state"] == "captured"
+        assert [photo["url"] for photo in reading["photos"]] == [FOTOCASA_FIRST]
+
+    def test_an_entry_the_payload_named_but_nobody_can_read_still_counts(self):
+        """Otherwise a payload of nothing but junk entries reports
+        `published: 0` and the row reads as a portal with no pictures."""
+        capture = portal_photos.from_fotocasa_payload(
+            {"multimedia": ["not-a-dict", 42, None]}, None
+        )
+
+        assert capture == {"items": [], "published": 3}
+
     def test_no_key_at_all_means_nobody_looked(self, app, profile):
         row = _prop(profile, "not-captured", enrichment={"import": {"source": "x"}})
 
@@ -287,6 +326,10 @@ class TestTheTwoFactsTheBadgeCouldNotTellApart:
             ),
             ({"photos": {"items": [], "published": "nine"}}, "a non-integer count"),
             ({"photos": {"items": [], "published": -1}}, "a negative count"),
+            (
+                {"photos": {"items": [{"url": "javascript:x"}], "published": 0}},
+                "a count that disagrees with its own refused entry",
+            ),
         ],
     )
     def test_a_block_written_by_hand_cannot_force_a_claim(

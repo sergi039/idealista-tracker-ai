@@ -307,7 +307,17 @@ def read_photos(prop: Any) -> Dict[str, Any]:
     if not isinstance(raw, list):
         return absent
     if not isinstance(published, int) or isinstance(published, bool) or published < 0:
-        return absent
+        # Unknown, not zero. Refusing the whole block here was the first
+        # version and it was wrong in two directions at once: it discarded
+        # photographs that are perfectly readable because a sibling count is
+        # not, and it read no differently from the malformed case it was meant
+        # to catch, so a mutation removing it left every test green.
+        published = None
+    elif published < len(raw):
+        # The block contradicts itself -- it carries more entries than it says
+        # the payload named -- so the count cannot support a measurement
+        # either. Unknown, and never "the portal published none".
+        published = None
     capture = _capture(
         [
             _entry(normalise_photo_url(item.get("url")), item.get("type"))
@@ -315,12 +325,13 @@ def read_photos(prop: Any) -> Dict[str, Any]:
             else None
             for item in raw
         ],
-        published,
+        published if published is not None else len(raw),
     )
     photos = capture["items"]
     if photos:
         return {"state": STATE_CAPTURED, "photos": photos, "count": len(photos)}
     # Nothing to show. Which of the two facts that is depends entirely on
-    # whether the payload named anything in the first place.
+    # whether the payload named anything in the first place -- and an unknown
+    # count (`None`) is not "none", so it falls to the absence.
     state = STATE_NONE_PUBLISHED if published == 0 else STATE_NOT_CAPTURED
     return {"state": state, "photos": [], "count": 0}
