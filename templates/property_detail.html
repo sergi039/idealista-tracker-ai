@@ -908,15 +908,13 @@
                        "nobody captured any" are different facts and this badge
                        used to assert the first one unconditionally -- on every
                        row, including the ones whose portal published nine
-                       (services/portal_photos.py). The URLs are not rendered
-                       as images: whether these CDNs serve them to this app is
-                       unmeasured, and hotlinking is the owner's decision. #}
-                    {% set _photos = photo_reading if photo_reading is defined else none %}
-                    {% if _photos and _photos.state == 'captured' %}
+                       (services/portal_photos.py). #}
+                    {% set _photos = photos_for(property) %}
+                    {% if _photos.state == 'captured' %}
                         <span class="small text-body-secondary ms-auto" title="{{ t('photos_captured_tooltip') }}">
-                            <i class="far fa-image me-1"></i>{{ t('photos_captured')|format(_photos.count) }}
+                            <i class="far fa-image me-1"></i>{{ tn('photos_captured', _photos.count) }}
                         </span>
-                    {% elif _photos and _photos.state == 'none_published' %}
+                    {% elif _photos.state == 'none_published' %}
                         <span class="small text-body-secondary ms-auto" title="{{ t('no_photos_tooltip') }}">
                             <i class="far fa-image me-1"></i>{{ t('no_photos') }}
                         </span>
@@ -926,6 +924,46 @@
                         </span>
                     {% endif %}
                 </div>
+                {# The photographs themselves. The model never sees them -- the
+                   subscription bridge is text-only -- so this strip is the
+                   whole point of capturing them: 711 rows carry no description
+                   at all, and for those a picture is the only judgeable thing
+                   on the page. Served straight from the portal's CDN, measured
+                   2026-09-06: static.fotocasa.es and media.yaencontre.com both
+                   answer 206 with an image and check no Referer.
+                   `referrerpolicy` is set anyway -- they do not need to be told
+                   which listing is being looked at. The FIRST photograph is
+                   eager and the rest are lazy, which is the whole of this
+                   application's eager loading: measured in a browser pane, a
+                   lazy image here sometimes never started its request at all
+                   (`currentSrc` empty) while the same URL fetched in 316 ms
+                   through `new Image()` -- and an image whose request never
+                   starts never fires `onerror` either, so the note below
+                   stays hidden and a dead URL reads as a blank. Making the
+                   whole strip eager fixed that and cost up to 40 originals a
+                   page; one eager image guarantees something appears without
+                   it. The list and the cards are entirely lazy, because
+                   `per_page` reaches 100 there. A URL that has
+                   rotted swaps itself for a note saying so, because a gap
+                   where a photograph was is not the portal publishing none.
+                   Inline `onerror`, deliberately: this page has exactly ONE
+                   inline script element and `tests/test_issue_23_...` finds it
+                   by searching for the literal opening tag, so neither a
+                   second element nor that tag spelled out in a comment may
+                   appear above it. #}
+                {% if _photos.state == 'captured' %}
+                    <div class="listing-photos mt-3" data-photo-count="{{ _photos.count }}">
+                        {% for _photo in _photos.photos %}
+                            <span class="listing-photo-frame">
+                                <a href="{{ _photo.url }}" target="_blank" rel="noopener noreferrer">
+                                    <img src="{{ _photo.url }}" class="listing-photo" alt=""
+                                         {% if not loop.first %}loading="lazy" {% endif %}decoding="async" referrerpolicy="no-referrer"
+                                         onerror="this.hidden=true;if(this.parentElement.nextElementSibling){this.parentElement.nextElementSibling.hidden=false;}">
+                                </a><span class="listing-photo-gone small text-body-secondary" hidden>{{ t('photo_gone') }}</span>
+                            </span>
+                        {% endfor %}
+                    </div>
+                {% endif %}
             </div>
         </div>
 

@@ -326,6 +326,13 @@ def create_app(testing: bool = False):
 
     app.jinja_env.globals["taste_for"] = taste_for
 
+    # What the portal published as photographs (#548), read by the list, the
+    # cards and the property page through the one fail-closed reader -- the
+    # `taste_for` pattern. Pure and query-free, so 300 rows cost nothing.
+    from services.portal_photos import read_photos as photos_for
+
+    app.jinja_env.globals["photos_for"] = photos_for
+
     # Which site a listing is on, derived from its URL. The templates get the
     # same two functions the filter clause is built from, so a badge cannot
     # say one thing while the dropdown beside it counts another.
