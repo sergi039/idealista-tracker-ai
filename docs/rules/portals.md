@@ -210,3 +210,99 @@ is the existing chain (matchers, then the catch-all). The fixtures under
 `tests/data/` -- both alert bodies, the milanuncios payload -- are the real
 2026-08-30 artifacts, token-redacted; `tests/test_portal_alert_ingestion.py`
 and `tests/test_fotocasa_email_ingestion.py` pin all of it.
+
+**The portal's own photographs, captured on the way past and put on the page**
+(#548, #550; 2026-09-04..06). Measured on production: of 1893 rows exactly one
+row's `enrichment` and four rows' `attributes` mentioned an image, while the
+property page asserted *"No photos"* on every listing unconditionally -- an
+absence rendered as a measurement (#98), on the one datum the owner was being
+asked to judge listings by. The URLs were already in memory and were being
+dropped: `fotocasa_source.parse_listing` names neither `realEstate.multimedia`
+nor `realEstateAdDetailEntityV2.multimedias` (9 in the fixture),
+`milanuncios_source.parse_listing` does not read `ad.images` (8), and
+`yaencontre_source.cards_in_email` holds each card's markup and discards the
+`<img>` in it. Capture costs **no request, no money and no migration**:
+`enrichment` is a JSON column and `enrichment["import"]` already carries
+`portal_accuracy` for exactly this reason.
+
+**yaencontre is why it matters most**: 737 rows, 26 with any description, and a
+photograph on every card. Those rows cannot be judged from text at all.
+
+`services/portal_photos.py` owns all of it, and four rules are load bearing.
+**A URL carrying a credential is refused wherever it can be seen** -- an `@` in
+the authority (`https://media.yaencontre.com@evil.test/x.jpg` has a host of
+`evil.test`), the query, and the fragment; names match by substring, and the
+module says plainly that a secret in the PATH is undetectable and that the real
+mitigation is a fact about the source rather than about the list. **A URL that
+is not a listing photograph is refused, per portal**: fotocasa serves the agency
+logo from `/images/client/` on the same host as `/images/ads/`, and a yaencontre
+email carries 24 `<img>` tags of which 13 are chrome and one is a tracking pixel
+whose query is `apikey=`. **What the payload NAMED is stored beside what was
+captured** (`{"items": [...], "published": N}`), because eight refused URLs left
+an empty list and an empty list alone reads as a portal that published none.
+And **the reader re-validates every stored URL**, since a block can be written
+straight into the database by hand.
+
+Rendering is one reading on three surfaces -- `photos_for` is
+`portal_photos.read_photos` as a jinja global, the `taste_for` pattern -- and
+the model never sees a pixel: the subscription bridge is text-only (0 of 3
+refuters could break that), so the owner is the sensor and the point is that
+they can look before they write the review comment the profile learns from.
+Three things were found only by looking at a real browser, and none of them
+could have been caught by a test. **`width: auto` broke lazy loading outright**:
+an unloaded image is 0px wide, a zero-width box never counts as near the
+viewport, so the request never started and the width never arrived -- the strip
+stayed blank while the same URL fetched in 316 ms through `new Image()`. **A
+lazy image that never starts never fires `onerror` either**, so a dead URL sat
+as a grey block for good. The first answer to that was to make the strip and
+the card image eager, and an adversarial review killed half of it: `per_page`
+reaches 100, so an eager card image is up to a hundred full-resolution portal
+originals on one page load -- a certain cost bought with an observation from a
+browser pane that may not paint offscreen content. So **exactly one image in
+the whole application loads eagerly**: the first in the property page's strip,
+where there is one listing and the reader opened the page to look at it.
+Everything else is lazy. And the badge said *"1 photos"*. An
+adversarial review then found three more, all of them in the rendering rather
+than in the module: a tooltip still saying the photographs were not shown,
+twenty lines above them; `col-photo` missing from `tests/
+test_tablet_list_layout.py`'s hardcoded tuple, so the guard the stylesheet cites
+could not see the column that comment was written for; and a rotted URL saying
+*"photo gone"* on the property page while the list and the cards said nothing,
+which is the module's own two facts thrown away by two templates.
+
+Bytes are never stored: the images stay on the portal's CDN (measured 2026-09-06
+-- static.fotocasa.es and media.yaencontre.com both answer with a real image,
+Referer or not; `referrerpolicy="no-referrer"` is set anyway). idealista, 1141
+rows, is not covered at all: DataDome.
+
+**And the rows that arrived before all that are filled from the emails**
+(`utils/backfill_yaencontre_photos.py`). yaencontre is the only portal where a
+backfill is both possible and worth doing: fotocasa's and milanuncios' rows all
+carry a description already, idealista cannot be reached at all, and yaencontre's
+737 rows carry 26 descriptions between them. The alert emails that carried those
+photographs are still in the mailbox, so the backfill is one **read-only** IMAP
+pass -- no portal request, no Google, nothing created.
+
+Five rules, each a way a read-only tool could do harm rather than good. It does
+**not touch the UID cursor**: that cursor is the ingester's, and moving it would
+make the ingester skip mail nobody has read -- the one way a read-only tool
+loses listings. It **never creates a row**; a card naming a listing this
+database does not hold is counted and skipped, because creating one is
+ingestion and the profile resolution, the dedup key and the advertiser rules all
+live in `fotocasa_import.build_property`. It **never overwrites** a photograph a
+row already carries, nor an empty `{"items": [], "published": 0}`, which is a
+measurement and not an absence. The write is **locked** and re-reads under the
+lock (#339). And an **empty sender list is a refusal**, not a fall-through to
+`ALL`: a machine configured not to read that portal's mail must not read the
+whole mailbox instead.
+
+The work is `fill_from_bodies`, deliberately separate from `main`, because the
+first version put it inside a function that built its own application -- so the
+rules above could only be tested through a mailbox. Two mutations then survived
+the first test round and both were instructive: removing `locked=True` changed
+nothing observable, since SQLite has no row lock (the lock is asserted as a
+*call* now, the `owner_review` shape, with the docstring saying what that does
+not prove), and removing the outer "already answered" check was **equivalent** --
+the re-read under the lock caught it -- so what went untested was that check's
+real purpose, which is not taking `FOR UPDATE` on the 82 rows that need nothing.
+
