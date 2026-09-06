@@ -210,3 +210,62 @@ is the existing chain (matchers, then the catch-all). The fixtures under
 `tests/data/` -- both alert bodies, the milanuncios payload -- are the real
 2026-08-30 artifacts, token-redacted; `tests/test_portal_alert_ingestion.py`
 and `tests/test_fotocasa_email_ingestion.py` pin all of it.
+
+**The portal's own photographs, captured on the way past and put on the page**
+(#548, #550; 2026-09-04..06). Measured on production: of 1893 rows exactly one
+row's `enrichment` and four rows' `attributes` mentioned an image, while the
+property page asserted *"No photos"* on every listing unconditionally -- an
+absence rendered as a measurement (#98), on the one datum the owner was being
+asked to judge listings by. The URLs were already in memory and were being
+dropped: `fotocasa_source.parse_listing` names neither `realEstate.multimedia`
+nor `realEstateAdDetailEntityV2.multimedias` (9 in the fixture),
+`milanuncios_source.parse_listing` does not read `ad.images` (8), and
+`yaencontre_source.cards_in_email` holds each card's markup and discards the
+`<img>` in it. Capture costs **no request, no money and no migration**:
+`enrichment` is a JSON column and `enrichment["import"]` already carries
+`portal_accuracy` for exactly this reason.
+
+**yaencontre is why it matters most**: 737 rows, 26 with any description, and a
+photograph on every card. Those rows cannot be judged from text at all.
+
+`services/portal_photos.py` owns all of it, and four rules are load bearing.
+**A URL carrying a credential is refused wherever it can be seen** -- an `@` in
+the authority (`https://media.yaencontre.com@evil.test/x.jpg` has a host of
+`evil.test`), the query, and the fragment; names match by substring, and the
+module says plainly that a secret in the PATH is undetectable and that the real
+mitigation is a fact about the source rather than about the list. **A URL that
+is not a listing photograph is refused, per portal**: fotocasa serves the agency
+logo from `/images/client/` on the same host as `/images/ads/`, and a yaencontre
+email carries 24 `<img>` tags of which 13 are chrome and one is a tracking pixel
+whose query is `apikey=`. **What the payload NAMED is stored beside what was
+captured** (`{"items": [...], "published": N}`), because eight refused URLs left
+an empty list and an empty list alone reads as a portal that published none.
+And **the reader re-validates every stored URL**, since a block can be written
+straight into the database by hand.
+
+Rendering is one reading on three surfaces -- `photos_for` is
+`portal_photos.read_photos` as a jinja global, the `taste_for` pattern -- and
+the model never sees a pixel: the subscription bridge is text-only (0 of 3
+refuters could break that), so the owner is the sensor and the point is that
+they can look before they write the review comment the profile learns from.
+Three things were found only by looking at a real browser, and none of them
+could have been caught by a test. **`width: auto` broke lazy loading outright**:
+an unloaded image is 0px wide, a zero-width box never counts as near the
+viewport, so the request never started and the width never arrived -- the strip
+stayed blank while the same URL fetched in 316 ms through `new Image()`. **A
+lazy image that never starts never fires `onerror` either**, so a dead URL sat
+as a grey block for good; the strip and the card image are therefore not lazy
+and the table's 25 thumbnails are. And the badge said *"1 photos"*. An
+adversarial review then found three more, all of them in the rendering rather
+than in the module: a tooltip still saying the photographs were not shown,
+twenty lines above them; `col-photo` missing from `tests/
+test_tablet_list_layout.py`'s hardcoded tuple, so the guard the stylesheet cites
+could not see the column that comment was written for; and a rotted URL saying
+*"photo gone"* on the property page while the list and the cards said nothing,
+which is the module's own two facts thrown away by two templates.
+
+Bytes are never stored: the images stay on the portal's CDN (measured 2026-09-06
+-- static.fotocasa.es and media.yaencontre.com both answer with a real image,
+Referer or not; `referrerpolicy="no-referrer"` is set anyway). idealista, 1141
+rows, is not covered at all: DataDome.
+
