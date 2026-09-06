@@ -1676,14 +1676,21 @@
                                        card is indistinguishable from one whose portal published
                                        nothing, which is the pair this module exists to keep
                                        apart. The image hides and says so in its place. #}
-                                    {# Not lazily: a card's photograph IS the card, six fit a
-                                       screen, and a lazy image that never starts its request
-                                       also never fires `onerror` -- measured in a real browser,
-                                       a dead URL then sat as a grey 390x160 block for good.
-                                       The 64x48 thumbnail in the table keeps `lazy`: there are
-                                       25 of them, and its worst case is a grey square. #}
+                                    {# Lazily, like the table's thumbnail. An earlier version
+                                       was eager, because a lazy image that never starts its
+                                       request never fires `onerror` either and a dead URL then
+                                       sat as a grey block -- but `per_page` reaches 100
+                                       (routes/main_routes.py), so eager here means up to a
+                                       hundred full-resolution portal originals on one page
+                                       load. That cost is certain; the observation it was
+                                       bought with came from a browser pane that may not paint
+                                       offscreen content, so it is not a safe basis for paying
+                                       it. Eager loading is kept for exactly one image on the
+                                       whole application: the FIRST one in the property page's
+                                       strip, where there is a single listing and the reader
+                                       opened the page to look at it. #}
                                     <img src="{{ _card_photos.photos[0].url }}" class="listing-card-photo" alt=""
-                                         decoding="async" referrerpolicy="no-referrer"
+                                         loading="lazy" decoding="async" referrerpolicy="no-referrer"
                                          onerror="this.hidden=true;if(this.parentElement.nextElementSibling){this.parentElement.nextElementSibling.hidden=false;}">
                                 </a><span class="listing-card-photo-missing small text-body-secondary" hidden>
                                     <i class="fas fa-triangle-exclamation me-1"></i>{{ t('photo_gone') }}

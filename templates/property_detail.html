@@ -932,14 +932,18 @@
                    2026-09-06: static.fotocasa.es and media.yaencontre.com both
                    answer 206 with an image and check no Referer.
                    `referrerpolicy` is set anyway -- they do not need to be told
-                   which listing is being looked at. There is deliberately NO
-                   `loading="lazy"` here, unlike the list: measured in a real
-                   browser, a lazy image in this strip sometimes never starts
-                   its request at all (`currentSrc` empty) while the same URL
-                   fetched in 316 ms through `new Image()`, and a handful of
-                   photographs on a page somebody opened to look at them is
-                   not worth that risk. The list keeps it -- 25 rows is where
-                   it pays. A URL that has
+                   which listing is being looked at. The FIRST photograph is
+                   eager and the rest are lazy, which is the whole of this
+                   application's eager loading: measured in a browser pane, a
+                   lazy image here sometimes never started its request at all
+                   (`currentSrc` empty) while the same URL fetched in 316 ms
+                   through `new Image()` -- and an image whose request never
+                   starts never fires `onerror` either, so the note below
+                   stays hidden and a dead URL reads as a blank. Making the
+                   whole strip eager fixed that and cost up to 40 originals a
+                   page; one eager image guarantees something appears without
+                   it. The list and the cards are entirely lazy, because
+                   `per_page` reaches 100 there. A URL that has
                    rotted swaps itself for a note saying so, because a gap
                    where a photograph was is not the portal publishing none.
                    Inline `onerror`, deliberately: this page has exactly ONE
@@ -953,7 +957,7 @@
                             <span class="listing-photo-frame">
                                 <a href="{{ _photo.url }}" target="_blank" rel="noopener noreferrer">
                                     <img src="{{ _photo.url }}" class="listing-photo" alt=""
-                                         decoding="async" referrerpolicy="no-referrer"
+                                         {% if not loop.first %}loading="lazy" {% endif %}decoding="async" referrerpolicy="no-referrer"
                                          onerror="this.hidden=true;if(this.parentElement.nextElementSibling){this.parentElement.nextElementSibling.hidden=false;}">
                                 </a><span class="listing-photo-gone small text-body-secondary" hidden>{{ t('photo_gone') }}</span>
                             </span>

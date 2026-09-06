@@ -254,8 +254,14 @@ an unloaded image is 0px wide, a zero-width box never counts as near the
 viewport, so the request never started and the width never arrived -- the strip
 stayed blank while the same URL fetched in 316 ms through `new Image()`. **A
 lazy image that never starts never fires `onerror` either**, so a dead URL sat
-as a grey block for good; the strip and the card image are therefore not lazy
-and the table's 25 thumbnails are. And the badge said *"1 photos"*. An
+as a grey block for good. The first answer to that was to make the strip and
+the card image eager, and an adversarial review killed half of it: `per_page`
+reaches 100, so an eager card image is up to a hundred full-resolution portal
+originals on one page load -- a certain cost bought with an observation from a
+browser pane that may not paint offscreen content. So **exactly one image in
+the whole application loads eagerly**: the first in the property page's strip,
+where there is one listing and the reader opened the page to look at it.
+Everything else is lazy. And the badge said *"1 photos"*. An
 adversarial review then found three more, all of them in the rendering rather
 than in the module: a tooltip still saying the photographs were not shown,
 twenty lines above them; `col-photo` missing from `tests/

@@ -419,15 +419,33 @@ class TestRendering:
         # Served from a third-party CDN: the portal is not told which listing
         # is being looked at.
         assert body.count('referrerpolicy="no-referrer"') >= 3
-        # And NOT lazily, unlike the list. Measured in a real browser: a lazy
-        # image in this strip sometimes never starts its request at all
-        # (`currentSrc` empty, `complete` false) while the same URL fetched in
-        # 316 ms through `new Image()` -- and an image whose request never
-        # starts also never fires `onerror`, so the "photo gone" note stayed
-        # hidden too. A handful of photographs on a page somebody opened in
-        # order to look at them is not worth that.
+        # The FIRST is eager and the rest are lazy -- the whole of this
+        # application's eager loading. A lazy image that never starts its
+        # request never fires `onerror` either, so an all-lazy strip can read
+        # as a blank; an all-eager one costs up to 40 originals a page, and
+        # the list and cards, where `per_page` reaches 100, are entirely lazy.
         strip = body[body.index('class="listing-photos') :]
-        assert 'loading="lazy"' not in strip[: strip.index("</div>")]
+        strip = strip[: strip.index("</div>")]
+        assert strip.count('loading="lazy"') == 2, "one eager photograph, the rest lazy"
+
+    def test_the_list_and_the_cards_never_load_a_photograph_eagerly(
+        self, app, client, profile
+    ):
+        """`per_page` reaches 100 (routes/main_routes.py), so one eager image
+        per row is up to a hundred full-resolution portal originals on a single
+        page load. Raised by an adversarial review of the first version, which
+        had made the card image eager."""
+        self._with_photos(profile, "eagerness", [FOTOCASA_FIRST])
+
+        for url, cls in (
+            ("/properties?view_type=list", "listing-thumb"),
+            ("/properties?view_type=cards", "listing-card-photo"),
+        ):
+            body = client.get(url).get_data(as_text=True)
+            assert "properties found" in body, url
+            tag = body[body.index(f'class="{cls}"') - 400 :]
+            tag = tag[: tag.index(">", tag.index(f'class="{cls}"')) + 1]
+            assert 'loading="lazy"' in tag, url
 
     def test_every_surface_says_a_photograph_is_gone_rather_than_nothing(
         self, app, client, profile
@@ -490,12 +508,9 @@ class TestRendering:
         assert "properties found" in body, "the cards did not render"
         assert "listing-card-photo" in body
         assert f'src="{html_escape(FOTOCASA_FIRST)}"' in body
-        # Not lazily, for the strip's reason: a lazy image that never starts
-        # its request never fires `onerror` either, and a dead URL then sits
-        # as a grey 390x160 block for good. The table's 64x48 thumbnail keeps
-        # `lazy` -- 25 of them, and its worst case is a grey square.
+        # Lazily: see `test_the_list_and_the_cards_never_load_a_photograph_eagerly`.
         card = body[body.index("listing-card-photo-link") :]
-        assert 'loading="lazy"' not in card[: card.index("</a>")]
+        assert 'loading="lazy"' in card[: card.index("</a>")]
 
     def test_a_row_with_no_photograph_renders_no_placeholder(
         self, app, client, profile
