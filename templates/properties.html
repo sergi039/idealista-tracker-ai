@@ -1498,8 +1498,10 @@
                                                        title="{{ tn('photos_captured', _row_photos.count) }}">
                                                         <img src="{{ _row_photos.photos[0].url }}" class="listing-thumb" alt=""
                                                              loading="lazy" decoding="async" referrerpolicy="no-referrer"
-                                                             onerror="this.hidden=true;">
-                                                    </a>
+                                                             onerror="this.hidden=true;if(this.parentElement.nextElementSibling){this.parentElement.nextElementSibling.hidden=false;}">
+                                                    </a><span class="listing-photo-missing" title="{{ t('photo_gone') }}" hidden>
+                                                        <i class="fas fa-triangle-exclamation text-body-secondary"></i>
+                                                    </span>
                                                 {% endif %}
                                             </td>
                                             <td class="lands-title-col col-title">
@@ -1670,6 +1672,10 @@
                             {% set _card_photos = photos_for(p) %}
                             {% if _card_photos.state == 'captured' %}
                                 <a href="{{ url_for('main.property_detail', property_id=p.id) }}" class="listing-card-photo-link">
+                                    {# A URL that has rotted does not just disappear: an empty
+                                       card is indistinguishable from one whose portal published
+                                       nothing, which is the pair this module exists to keep
+                                       apart. The image hides and says so in its place. #}
                                     {# Not lazily: a card's photograph IS the card, six fit a
                                        screen, and a lazy image that never starts its request
                                        also never fires `onerror` -- measured in a real browser,
@@ -1678,8 +1684,10 @@
                                        25 of them, and its worst case is a grey square. #}
                                     <img src="{{ _card_photos.photos[0].url }}" class="listing-card-photo" alt=""
                                          decoding="async" referrerpolicy="no-referrer"
-                                         onerror="this.parentElement.hidden=true;">
-                                </a>
+                                         onerror="this.hidden=true;if(this.parentElement.nextElementSibling){this.parentElement.nextElementSibling.hidden=false;}">
+                                </a><span class="listing-card-photo-missing small text-body-secondary" hidden>
+                                    <i class="fas fa-triangle-exclamation me-1"></i>{{ t('photo_gone') }}
+                                </span>
                             {% endif %}
                             <!-- Card Header with Score and Type -->
                             <div class="card-header bg-body-tertiary" style="padding: 0.5rem 1rem;">

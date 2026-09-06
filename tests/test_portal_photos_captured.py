@@ -429,6 +429,36 @@ class TestRendering:
         strip = body[body.index('class="listing-photos') :]
         assert 'loading="lazy"' not in strip[: strip.index("</div>")]
 
+    def test_every_surface_says_a_photograph_is_gone_rather_than_nothing(
+        self, app, client, profile
+    ):
+        """An adversarial review's finding: the strip said "photo gone" and the
+        list and the cards said nothing, so a rotted URL was indistinguishable
+        from a listing whose portal published none — the pair this module
+        exists to keep apart, thrown away by the templates."""
+        self._with_photos(profile, "rot-everywhere", [FOTOCASA_FIRST])
+
+        for url, marker in (
+            ("/properties?view_type=list", "listing-photo-missing"),
+            ("/properties?view_type=cards", "listing-card-photo-missing"),
+        ):
+            body = client.get(url).get_data(as_text=True)
+            assert "properties found" in body, url
+            assert marker in body, url
+            assert "photo gone" in body.lower(), url
+
+    def test_the_tooltip_does_not_contradict_the_photographs_under_it(
+        self, app, client, profile
+    ):
+        """It read "They are not shown here" — directly above the strip showing
+        them. The badge's meaning changed and its tooltip did not."""
+        row = self._with_photos(profile, "tooltip", [FOTOCASA_FIRST])
+
+        body = client.get(f"/properties/{row.id}").get_data(as_text=True)
+
+        assert "Casa en Malpica" in body, "the page did not render"
+        assert "not shown here" not in body
+
     def test_a_rotted_url_reads_as_a_gone_photograph_not_as_none(
         self, app, client, profile
     ):

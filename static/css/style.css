@@ -464,6 +464,27 @@
     background-color: var(--bs-tertiary-bg);
 }
 
+/* A rotted URL is not the same fact as a listing with no photographs, so it
+   leaves a mark rather than an empty cell (found by an adversarial review of
+   the rendering: the strip said "photo gone" and these two said nothing). */
+.listing-photo-missing {
+    display: inline-flex;
+    width: 64px;
+    height: 48px;
+    align-items: center;
+    justify-content: center;
+    border: 1px dashed var(--bs-border-color);
+    border-radius: 0.25rem;
+}
+
+.listing-card-photo-missing {
+    display: flex;
+    height: 160px;
+    align-items: center;
+    justify-content: center;
+    border-bottom: 1px solid var(--bs-border-color);
+}
+
 /* The card view puts it where a card wants one: full width, above the header. */
 .listing-card-photo-link {
     display: block;
