@@ -53,6 +53,7 @@ from urllib.parse import urljoin, urlsplit
 
 import requests
 
+from services import portal_photos
 from utils.http import HTTP_USER_AGENT, RateGate, request_with_retries
 
 logger = logging.getLogger(__name__)
@@ -366,6 +367,10 @@ def parse_listing(body: str, url: str) -> Dict[str, Any]:
         "published_at": _text(ad.get("publicationDate")),
         "attributes": {},
         "portal_accuracy": {},
+        # `ad.images` is the ad's own list of photographs -- 8 plain strings in
+        # the committed fixture. Captured verbatim; costs no request, because
+        # this page is already fetched (services/portal_photos.py).
+        "photos": portal_photos.from_milanuncios_ad(ad),
         # The locality as the portal spelled it, kept beside the municipality
         # the parenthesis rule extracted, so the rule's basis is on the row.
         "locality": _text(city.get("name")),

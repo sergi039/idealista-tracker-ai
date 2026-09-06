@@ -31,6 +31,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import defer
 from models import Land, Property, SearchProfile
 from app import db, limiter
+from services import portal_photos
 from services import sea_view_service
 from services import subscription_criteria
 from services.listing_attribute_filters import (
@@ -2403,6 +2404,10 @@ def property_detail(property_id):
         return render_template(
             "property_detail.html",
             property=prop,
+            # What the portal published as photographs, and -- the half the
+            # page could not say before -- whether anybody ever looked. Pure,
+            # no query (services/portal_photos.py).
+            photo_reading=portal_photos.read_photos(prop),
             # None when the row's subscription carries no criteria: there is
             # no verdict to draw, and an empty card would invent one.
             criteria_reading=criteria_reading,

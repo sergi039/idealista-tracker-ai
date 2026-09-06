@@ -45,6 +45,7 @@ import requests
 from sqlalchemy import null
 from sqlalchemy.exc import IntegrityError
 
+from services import portal_photos
 from services.coordinate_quality import record_portal_coordinate
 
 from services import advertiser
@@ -163,6 +164,10 @@ def preview_row(listing) -> Dict[str, Any]:
         "published_at": listing.published_at,
         "attributes": dict(listing.attributes or {}),
         "portal_accuracy": dict(listing.portal_accuracy or {}),
+        # A field added to the dataclass and not here is dropped again at this
+        # layer -- this dict, not the dataclass, is what a background job
+        # persists and a later request reads back.
+        "photos": dict(listing.photos or {}),
     }
     if not listing.ok:
         row["status"] = STATUS_REFUSED
@@ -376,6 +381,19 @@ def build_property(
             "portal_accuracy": row.get("portal_accuracy") or {},
         },
     }
+    # The portal's own photographs, beside its own accuracy claim and for the
+    # same reason. The key is written ONLY when the row really carries a list,
+    # because a missing key means "nobody captured any" and an empty list means
+    # "the payload was read and named none" -- two different facts, and the
+    # page says which (services/portal_photos.py).
+    photos = row.get("photos")
+    if isinstance(photos, dict) and isinstance(photos.get("items"), list):
+        prop.enrichment["import"][portal_photos.ENRICHMENT_KEY] = {
+            "items": [
+                dict(photo) for photo in photos["items"] if isinstance(photo, dict)
+            ],
+            "published": photos.get("published"),
+        }
     if record_advertiser:
         # Who is selling, recorded on the way past. The page has been
         # fetched already, so this costs nothing and spares the row the one

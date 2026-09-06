@@ -450,7 +450,11 @@ TRANSLATIONS = {
         "measured_full": "Measured: fully",
         "show_original_email": "Show original email text",
         "no_photos": "No photos",
-        "no_photos_tooltip": "The email alerts carry no images; photo sourcing is a separate decision",
+        "no_photos_tooltip": "The portal's own listing was read and published no photographs",
+        "photos_captured": "%d photos",
+        "photos_captured_tooltip": "Photographs the portal published, captured at ingest. They are not shown here: whether the portal's CDN serves them to this application is unmeasured.",
+        "photos_unknown": "Photos not captured",
+        "photos_unknown_tooltip": "Nobody has captured photographs for this listing. Idealista rows have none: the site refuses this machine, and its alert email is the only source.",
         "route_from_property": "Route from this property",
         # Hazardous neighbours (#437). The card names what OSM cannot answer
         # rather than letting a list of four facilities read as a survey.
@@ -1252,7 +1256,11 @@ TRANSLATIONS = {
         "measured_full": "Medidos: todos",
         "show_original_email": "Mostrar el texto original del correo",
         "no_photos": "Sin fotos",
-        "no_photos_tooltip": "Las alertas de correo no llevan imágenes; obtener fotos es una decisión aparte",
+        "no_photos_tooltip": "Se leyó el anuncio del portal y no publicó ninguna fotografía",
+        "photos_captured": "%d fotos",
+        "photos_captured_tooltip": "Fotografías publicadas por el portal, capturadas al importar. No se muestran aquí: no se ha comprobado si el CDN del portal las sirve a esta aplicación.",
+        "photos_unknown": "Fotos no capturadas",
+        "photos_unknown_tooltip": "Nadie ha capturado fotografías de este anuncio. Las filas de Idealista no tienen: el sitio rechaza esta máquina y su correo de alerta es la única fuente.",
         "route_from_property": "Ruta desde esta propiedad",
         # Vecindad industrial (#437).
         "hazards_title": "Vecindad industrial",
