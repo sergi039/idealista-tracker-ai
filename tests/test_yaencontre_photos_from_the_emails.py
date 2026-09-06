@@ -156,6 +156,47 @@ class TestTheThreeWaysItCouldDoHarm:
 
         assert portal_photos.read_photos(row)["photos"][0]["url"] == kept
 
+    def test_the_write_takes_the_row_under_a_lock(self, app, profile, cards):
+        """Asserted as a CALL, with its arguments, because SQLite has no row
+        lock to observe -- the shape `owner_review`'s own test records. So this
+        proves the writer asks for `FOR UPDATE` and commits its own
+        transaction; it does not prove PostgreSQL then serialises anything. A
+        mutation flipping `locked=True` to `False` left every other test in
+        this file green."""
+        _row(profile, cards[0], enrichment={"import": {"source": "yaencontre"}})
+
+        with patch.object(tool, "locked_write", wraps=tool.locked_write) as locker:
+            _run([_fixture()], apply=True)
+
+        assert locker.call_count == 1
+        assert locker.call_args.kwargs == {"locked": True, "commit": True}
+
+    def test_a_row_that_already_answers_is_never_even_locked(self, app, profile, cards):
+        """The outer check exists to keep the run off rows it has nothing to do
+        for -- 82 of the 737 on production carry a photograph already. Taking
+        `FOR UPDATE` on each of them costs contention for nothing, and the
+        inner re-read under the lock (which is what actually prevents the
+        overwrite) cannot express that."""
+        _row(
+            profile,
+            cards[0],
+            enrichment={
+                "import": {
+                    "source": "yaencontre",
+                    "photos": {
+                        "items": [{"url": "https://x.test/a.jpg"}],
+                        "published": 1,
+                    },
+                }
+            },
+        )
+
+        with patch.object(tool, "locked_write") as locker:
+            counts = _run([_fixture()], apply=True)
+
+        locker.assert_not_called()
+        assert counts["already"] == 1
+
     def test_the_mailbox_is_opened_read_only_and_the_cursor_is_untouched(self, app):
         """Asserted against `_bodies`, the only function that opens a mailbox.
 
