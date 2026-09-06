@@ -801,9 +801,36 @@ def _unhealthy(port: int, proc: subprocess.Popen, output: _BridgeOutput) -> str:
         )
     return (
         f"bridge never became healthy on port {port} within the deadline; it "
-        f"is still running (pid {proc.pid}). Its own output so far:\n"
+        f"is still running (pid {proc.pid}, ps stat/etime/%cpu: "
+        f"{_process_state(proc.pid)}). Its own output so far:\n"
         f"{output.text()}"
     )
+
+
+def _process_state(pid: int) -> str:
+    """The scheduler's own word on a process: `ps` STAT, elapsed time, CPU.
+
+    BRIDGE-TEST-001 (#537): every failure that ticket records left a bridge
+    that was alive and silent, and "alive" was the whole of what the message
+    could say. Alive is not running -- a process the OS has stopped (STAT
+    beginning `T`: a SIGSTOP, or the suspension macOS applies to the
+    children of an app it has put to sleep) passes `poll()` and answers
+    nothing, and it is the one candidate the 2026-09-01 window left standing:
+    the failures sit inside the sixty-six minutes the display was off, and
+    the first pass came two minutes after it was turned back on. So the
+    report carries the state, and the next occurrence settles that question
+    instead of reopening it.
+    """
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "stat=,etime=,%cpu=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"ps failed: {exc!r}"
+    return result.stdout.strip() or "ps reported no such process"
 
 
 def _fake_claude_script(pid_file: Path) -> str:
@@ -895,6 +922,31 @@ class TestTheHarnessKeepsTheEvidence:
         assert "exited with code 7" in message
         assert "still running" not in message
         assert "late crash" in message
+
+    def test_a_stopped_bridge_is_reported_as_stopped(self):
+        """Alive is not running (#537).
+
+        A process the OS has suspended passes `poll()` and answers nothing,
+        which is exactly the shape of every failure BRIDGE-TEST-001 records.
+        Reproduced with SIGSTOP, the state such a suspension shares: the
+        message must carry the scheduler's `T`, not only "still running".
+        """
+        proc = self._spawn("import time; time.sleep(60)")
+        output = _BridgeOutput(proc)
+        try:
+            os.kill(proc.pid, signal.SIGSTOP)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and not _process_state(
+                proc.pid
+            ).startswith("T"):
+                time.sleep(0.05)
+            message = _unhealthy(_free_port(), proc, output)
+        finally:
+            if proc.poll() is None:
+                os.kill(proc.pid, signal.SIGCONT)
+                proc.kill()
+        assert "still running" in message
+        assert "ps stat/etime/%cpu: T" in message, message
 
     def test_answering_once_and_dying_is_not_healthy(self, monkeypatch):
         """Round 2 of the review: the success path returned on HTTP 200 without
