@@ -275,3 +275,34 @@ Bytes are never stored: the images stay on the portal's CDN (measured 2026-09-06
 Referer or not; `referrerpolicy="no-referrer"` is set anyway). idealista, 1141
 rows, is not covered at all: DataDome.
 
+**And the rows that arrived before all that are filled from the emails**
+(`utils/backfill_yaencontre_photos.py`). yaencontre is the only portal where a
+backfill is both possible and worth doing: fotocasa's and milanuncios' rows all
+carry a description already, idealista cannot be reached at all, and yaencontre's
+737 rows carry 26 descriptions between them. The alert emails that carried those
+photographs are still in the mailbox, so the backfill is one **read-only** IMAP
+pass -- no portal request, no Google, nothing created.
+
+Five rules, each a way a read-only tool could do harm rather than good. It does
+**not touch the UID cursor**: that cursor is the ingester's, and moving it would
+make the ingester skip mail nobody has read -- the one way a read-only tool
+loses listings. It **never creates a row**; a card naming a listing this
+database does not hold is counted and skipped, because creating one is
+ingestion and the profile resolution, the dedup key and the advertiser rules all
+live in `fotocasa_import.build_property`. It **never overwrites** a photograph a
+row already carries, nor an empty `{"items": [], "published": 0}`, which is a
+measurement and not an absence. The write is **locked** and re-reads under the
+lock (#339). And an **empty sender list is a refusal**, not a fall-through to
+`ALL`: a machine configured not to read that portal's mail must not read the
+whole mailbox instead.
+
+The work is `fill_from_bodies`, deliberately separate from `main`, because the
+first version put it inside a function that built its own application -- so the
+rules above could only be tested through a mailbox. Two mutations then survived
+the first test round and both were instructive: removing `locked=True` changed
+nothing observable, since SQLite has no row lock (the lock is asserted as a
+*call* now, the `owner_review` shape, with the docstring saying what that does
+not prove), and removing the outer "already answered" check was **equivalent** --
+the re-read under the lock caught it -- so what went untested was that check's
+real purpose, which is not taking `FOR UPDATE` on the 82 rows that need nothing.
+
