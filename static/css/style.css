@@ -447,6 +447,67 @@
     text-align: center;
 }
 
+/* The listing's own first photograph, in its own column so the width lives in
+   a class the tablet media queries can relax -- an inline width would outrank
+   every one of them (tests/test_tablet_list_layout.py). Fixed height, cropped,
+   so a portrait shot and a landscape one do not give two row heights. */
+.properties-list-table .col-photo {
+    width: 76px;
+    padding-right: 0.25rem;
+}
+
+.listing-thumb {
+    width: 64px;
+    height: 48px;
+    object-fit: cover;
+    border-radius: 0.25rem;
+    background-color: var(--bs-tertiary-bg);
+}
+
+/* The card view puts it where a card wants one: full width, above the header. */
+.listing-card-photo-link {
+    display: block;
+    line-height: 0;
+}
+
+.listing-card-photo {
+    width: 100%;
+    height: 160px;
+    object-fit: cover;
+    background-color: var(--bs-tertiary-bg);
+}
+
+/* The property page's strip. It scrolls inside its own box: a listing with
+   nine photographs must not make the page scroll sideways. */
+.listing-photos {
+    display: flex;
+    gap: 0.5rem;
+    overflow-x: auto;
+    padding-bottom: 0.25rem;
+}
+
+.listing-photo-frame {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+}
+
+/* A DEFINITE width, not `auto`. Measured in a real browser on 2026-09-06:
+   with `width: auto` an unloaded image is 0px wide, a zero-width box never
+   counts as near the viewport, so `loading="lazy"` never starts the request --
+   and without the request the width never arrives. The strip stayed blank
+   while the same URL fetched instantly through `new Image()`. The list
+   thumbnails, which have always been a fixed 64x48, loaded fine throughout;
+   that contrast is what identified it. A fixed box also stops the strip
+   reflowing as each photograph lands. */
+.listing-photo {
+    width: 200px;
+    height: 140px;
+    object-fit: cover;
+    border-radius: 0.35rem;
+    background-color: var(--bs-tertiary-bg);
+}
+
 .properties-list-table .col-price,
 .properties-list-table .col-added {
     min-width: 120px;
@@ -706,6 +767,7 @@ footer {
     .properties-list-table .col-added,
     .properties-list-table .col-inv,
     .properties-list-table .col-coords,
+    .properties-list-table .col-photo,
     .properties-list-table .col-travel,
     .properties-list-table .col-actions {
         min-width: 0;
@@ -770,6 +832,10 @@ footer {
    moves under the title. The map button in Actions still opens the exact
    position, and the column returns in landscape. */
 @media (min-width: 768px) and (max-width: 991.98px) {
+    .properties-list-table .col-photo {
+        display: none;
+    }
+
     .properties-list-table .col-coords {
         display: none;
     }

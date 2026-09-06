@@ -1406,6 +1406,9 @@
                                         <th class="col-fav" title="Favorites">
                                             <i class="fas fa-star text-warning"></i>
                                         </th>
+                                        <th class="col-photo" title="{{ t('photos_column_title') }}">
+                                            <i class="far fa-image"></i>
+                                        </th>
                                         <th class="lands-title-col col-title">{{ sort_header('title', t('title'), base_args, current_filters) }}</th>
                                         <th class="col-price">
                                             {{ sort_header('price', t('price'), base_args, current_filters) }}
@@ -1480,6 +1483,24 @@
                                                     <i class="fas fa-star {{ 'text-warning' if p.is_favorite else 'text-muted' }}"
                                                        style="font-size: 1.1rem; cursor: pointer;"></i>
                                                 </button>
+                                            </td>
+                                            {# The listing's own first photograph. For the 711 rows
+                                               that carry no description this is the only thing on the
+                                               line that can be judged, which is the whole reason the
+                                               URLs are captured (services/portal_photos.py). A row with
+                                               none renders an empty cell rather than a placeholder
+                                               asserting there are no pictures -- most of the table has
+                                               simply never been looked at. #}
+                                            {% set _row_photos = photos_for(p) %}
+                                            <td class="col-photo">
+                                                {% if _row_photos.state == 'captured' %}
+                                                    <a href="{{ url_for('main.property_detail', property_id=p.id) }}"
+                                                       title="{{ tn('photos_captured', _row_photos.count) }}">
+                                                        <img src="{{ _row_photos.photos[0].url }}" class="listing-thumb" alt=""
+                                                             loading="lazy" decoding="async" referrerpolicy="no-referrer"
+                                                             onerror="this.hidden=true;">
+                                                    </a>
+                                                {% endif %}
                                             </td>
                                             <td class="lands-title-col col-title">
                                                 <div class="fw-bold">
@@ -1646,6 +1667,20 @@
                     <div class="col-md-6 col-xl-4 mb-4" data-listing-status="{{ listing_verdict_for(p).state }}">
                         <div class="card h-100 property-card {% if p.listing_status in ('removed', 'sold') %}listing-inactive-card{% endif %}"
                              data-property-id="{{ p.id }}" style="overflow: hidden;">
+                            {% set _card_photos = photos_for(p) %}
+                            {% if _card_photos.state == 'captured' %}
+                                <a href="{{ url_for('main.property_detail', property_id=p.id) }}" class="listing-card-photo-link">
+                                    {# Not lazily: a card's photograph IS the card, six fit a
+                                       screen, and a lazy image that never starts its request
+                                       also never fires `onerror` -- measured in a real browser,
+                                       a dead URL then sat as a grey 390x160 block for good.
+                                       The 64x48 thumbnail in the table keeps `lazy`: there are
+                                       25 of them, and its worst case is a grey square. #}
+                                    <img src="{{ _card_photos.photos[0].url }}" class="listing-card-photo" alt=""
+                                         decoding="async" referrerpolicy="no-referrer"
+                                         onerror="this.parentElement.hidden=true;">
+                                </a>
+                            {% endif %}
                             <!-- Card Header with Score and Type -->
                             <div class="card-header bg-body-tertiary" style="padding: 0.5rem 1rem;">
                                 <div class="d-flex justify-content-between align-items-center">
