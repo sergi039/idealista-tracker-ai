@@ -75,9 +75,18 @@ MATRIX = [
     (200, "built", None, "unknown"),  # plot never measured
     (None, "built", 800, "unknown"),  # house never measured
     (200, None, 800, "pass"),  # NULL area_type reads as built
-    (800, "plot", None, "unknown"),  # bare land: area IS the plot, house unknown
+    # Bare land clearing the plot bound. `unknown` until 2026-09-07, `fail`
+    # since: `area` IS the plot here and it passes, but the row states it has
+    # no house at all, and a subscription asking for one is not satisfied by
+    # a listing that says it has none. The owner had 31 such rows offered to
+    # them in the one subscription that carries criteria.
+    (800, "plot", None, "fail"),
     (650, "plot", None, "fail"),  # bare land, plot short
-    (650, "plot", 900, "pass_or_unknown_house"),  # plot_area wins over area
+    # Bare land against a house requirement is a MEASURED fail since
+    # 2026-09-07, not `unknown`: the row does not omit its house size, it
+    # states that it has no house. `plot_area` still wins over `area` for the
+    # parcel here -- what changed is the house half, not this one.
+    (650, "plot", 900, "fail"),
     # Zero plot_area on bare land is a BLANK, so `area` answers — both
     # languages (the implementation review's 650/plot/0 reproduction).
     (650, "plot", 0, "fail"),
@@ -97,7 +106,10 @@ MATRIX = [
     # carry `area = 150` and 3 bare-land rows carry `area = 700`.
     (150, "built", 800, "pass"),  # house exactly at the bound passes
     (200, "built", 700, "pass"),  # plot exactly at the bound passes
-    (700, "plot", None, "pass_or_unknown_house"),  # bare land at the bound
+    # Bare land AT the plot bound: the plot half passes and the house half is
+    # a measured fail, so the row fails. Before 2026-09-07 this was the
+    # ambiguity `pass_or_unknown_house` existed to name.
+    (700, "plot", None, "fail"),
     # One under the bound on each, so the pair pins the boundary from both
     # sides — an off-by-one that moved the comparison would break one of the
     # two whichever direction it moved.
@@ -110,6 +122,10 @@ MATRIX = [
     # 4211 passed — 43 production rows are `area_type='built' AND area >=
     # 700`, and migration 025 gave every existing row a NULL plot_area.
     (800, "built", None, "unknown"),
+    # THE case the bare-land branch must not swallow: a HOUSING row whose
+    # area nobody stated is still `unknown`, because that is an absence of
+    # measurement rather than a measured absence. Mutating the new branch to
+    # fire on `house_m2 is None` alone turns this red.
     (0, "built", 800, "unknown"),  # zero is a blank, never a tiny house
     (200, "built", 0, "unknown"),  # zero plot is a blank too
 ]
@@ -123,10 +139,6 @@ class TestTheTwoReadingsAgree:
         prop = _mk(profile_row.id, area=area, area_type=area_type, plot_area=plot)
         verdict = subscription_criteria.read_verdict(prop, CRITERIA)
 
-        if expected == "pass_or_unknown_house":
-            # A bare-land row with a stated plot passes the plot bound but
-            # can never answer the house bound — unknown, both languages.
-            expected = "unknown"
         assert verdict["state"] == expected, (
             f"python said {verdict['state']} for area={area}/{area_type}, plot={plot}"
         )
