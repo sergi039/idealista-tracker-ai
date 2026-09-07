@@ -11,14 +11,12 @@ same thing: the query is deterministic, and so is Google's answer to it.
     python -m utils.audit_precise_accuracy --restore data/precise_535.json
     python -m utils.audit_precise_accuracy --ids 1379,1680,1445      # a named set
 
-**Scope** is a row whose column says `precise` AND whose geocoding record says
-the geocoder wrote it and nothing has overruled it since. A row a person
-located is skipped and named, whichever shape the finding took -- a hand-set
-block (`enrichment["location"]`), one of the ad-hoc provenance blocks that
-predate it, or a coordinate standing on the parcel's own cadastre reference
-point (row 774). For those the record describes a point the row no longer
-carries, and relabelling the row from that record would be the STATUS-002
-mistake pointed the other way.
+**Scope**: the column says `precise`, the geocoding record says the geocoder
+wrote it, and nothing has overruled it since. A row a person located is
+skipped and named, whatever shape the finding took -- a hand-set block, an
+ad-hoc provenance block, or a coordinate standing on the cadastre reference
+point (row 774): there the record describes a point the row no longer
+carries.
 
 **What it writes**, per refuted row: `location_accuracy = approximate`; the
 record's `accuracy` likewise, with `answered_accuracy: precise` kept beside it
@@ -37,10 +35,8 @@ without `--snapshot` is refused: the snapshot is the way back, and
 which already refuses to overwrite a location a person set after the snapshot
 was taken.
 
-It does not announce itself through `utils.inflight`: it makes no network
-call and finishes in well under a second over the whole table, so a deploy
-cannot kill it half-way in any way that matters -- every row commits on its
-own, and a re-run finds nothing left to do.
+No `utils.inflight` marker: no network, well under a second over the whole
+table, every row commits on its own, and a re-run finds nothing left to do.
 """
 
 import argparse

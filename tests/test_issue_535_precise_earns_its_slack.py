@@ -8,9 +8,8 @@ check against, and the one ROOFTOP a person checked (row 360) was 2868 m out.
 What the stored record can say for free is whether the ROOFTOP answers the
 address the query named, and for 23 of the 152 it did not.
 
-Pinned here is the house-number comparison `services/address_agreement` makes,
-at the two places it is applied: the geocoder's write from now on, and
-`utils/audit_precise_accuracy.py` over the records written before it. Every
+Pinned here: the house-number comparison of `services/address_agreement`,
+at the geocoder's write and in `utils/audit_precise_accuracy.py`. Every
 query and answer below is a production row's own, named by id.
 
 Two blind spots are pinned as *passes*, on purpose, so nobody reads a green

@@ -42,16 +42,8 @@ Two blind spots, stated so nobody reads a passing check as verification:
 * **a different street with the same number**, for the reason above. Row 25:
   "calle Tarancon, 6" -> "Av. de Salamanca, 6".
 
-Re-run over the same rows on 2026-09-07 (168 `precise` by then) through the
-stored `query` and `formatted_address`: 21 refuted -- 20 of the hand review's
-23, plus row 1759, ingested after the review -- and none of the 129 rows the
-review passed. The three of the 23 it does not catch are the blind spots
-above (25) and two rows whose answer names no number at all (438, 765). The 15
-a naive form flagged beyond that were the same number twice: a letter suffix
-Google added or dropped ("24" against "24b", "3 a" against "3, a") and a
-number the query wrote without a comma ("Barrio Otero 15"). Both are
-refinements, not contradictions -- the distinction the issue itself draws
-between moving a pin 28 m and 2868 m.
+The re-run over the stored records on 2026-09-07 -- 21 refuted, none of the
+129 the review passed -- is in docs/rules/coordinates.md.
 """
 
 import itertools
