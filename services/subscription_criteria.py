@@ -143,8 +143,18 @@ def effective_figures(prop: Any) -> Dict[str, Optional[float]]:
     # here as not-plot, exactly as lower(trim(...)) reads it.
     area_type = (getattr(prop, "area_type", None) or "").strip(" ").lower()
     if area_type == "plot":
-        return {"house_m2": None, "plot_m2": plot if plot is not None else area}
-    return {"house_m2": area, "plot_m2": plot}
+        # `bare_land` is the whole point of this flag: for such a row
+        # `house_m2` is None because the listing SAYS there is no house, not
+        # because nobody stated its size. Those are the two things this module
+        # exists to keep apart, and collapsing them into one None made a house
+        # search read bare land as `unknown` and offer it (owner, 2026-09-07:
+        # 31 plots in the one subscription that carries criteria).
+        return {
+            "house_m2": None,
+            "plot_m2": plot if plot is not None else area,
+            "bare_land": True,
+        }
+    return {"house_m2": area, "plot_m2": plot, "bare_land": False}
 
 
 def read_verdict(prop: Any, criteria: Optional[Dict[str, float]]) -> Dict[str, Any]:
@@ -155,7 +165,17 @@ def read_verdict(prop: Any, criteria: Optional[Dict[str, float]]) -> Dict[str, A
     checks: Dict[str, Optional[bool]] = {}
     if "min_house_m2" in criteria:
         value = figures["house_m2"]
-        checks["house"] = None if value is None else value >= criteria["min_house_m2"]
+        if value is None and figures.get("bare_land"):
+            # A MEASURED shortfall, not an absence of measurement: a
+            # subscription that requires a house of N m2 is not satisfied by a
+            # listing whose own category says it is bare land, and the listing
+            # said so. A housing row whose area nobody stated stays `unknown`,
+            # which is the case this branch must not swallow.
+            checks["house"] = False
+        else:
+            checks["house"] = (
+                None if value is None else value >= criteria["min_house_m2"]
+            )
     if "min_plot_m2" in criteria:
         value = figures["plot_m2"]
         checks["plot"] = None if value is None else value >= criteria["min_plot_m2"]
@@ -225,10 +245,17 @@ def failing_expression(model, criteria: Dict[str, float]):
     clauses = []
     if "min_house_m2" in criteria:
         clauses.append(
-            and_(
-                not_plot,
-                _credible(model.area),
-                model.area < criteria["min_house_m2"],
+            or_(
+                and_(
+                    not_plot,
+                    _credible(model.area),
+                    model.area < criteria["min_house_m2"],
+                ),
+                # Bare land against a house requirement: the row states it has
+                # no house, so this is measured, not unknown. `is_plot` is
+                # definite by construction (`_definite_shapes`), so the clause
+                # stays definite and `unknown = ~fail AND ~pass` holds.
+                is_plot,
             )
         )
     if "min_plot_m2" in criteria:
