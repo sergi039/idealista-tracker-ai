@@ -67,3 +67,57 @@ plots on a centroid, so it is shown next to the coordinate and counted by
 `utils/report_coordinate_quality.py` (free, read-only) — repairing the rows is
 `utils/refresh_property_accuracy.py`, which is billed and therefore the owner's
 call.
+
+## `precise` earns its zero only by answering the address asked (#535, 2026-09-07)
+
+**`precise` is earned only by an answer to the address that was asked** (#535).
+`coordinate_slack_m()` gives a `precise` row 0 m of slack, and until #535
+nobody had asked whether the label earned it: #493 measured what `approximate`
+is worth and stopped there. Measured on production 2026-09-02, 152 of the 166
+`precise` rows were the geocoder's — every one a Google ROOFTOP by
+construction — and **not one carries a second coordinate** to check against;
+the one ROOFTOP a person checked, row 360 ("Barrio de Prendonés, 1"), sat
+2868 m from the parcel, on a travesía named after the village. The stored
+record could not even say what the label rested on: 0 of 1727 records kept
+`location_type`. What it *can* say for free is whether the ROOFTOP answers the
+address the query named, and for 23 of the 152 it did not — 17 answered a
+house number to a query that named none (1379: "calle Fiobre, Bergondo" →
+"Rua Fiobre, 100"; the 100 is Google's), 6 answered a different street or
+number (355: 83 asked, 10 answered).
+
+The rule has one home, `services/address_agreement.py`, and it compares the
+one thing the record supports: the **house number**. A ROOFTOP is Google's
+claim to have matched one building; a query that named no building cannot have
+earned it, a query that named a different one refutes it, and the label is
+then `approximate` — what any other answer to that query is worth — with the
+slack that label already carries. `_geocode_outcome` decides it *before* the
+even-trade comparison, so a withdrawn `precise` cannot displace a portal pin
+either, and the record keeps `location_type`, `address_check` and, when the
+label was withdrawn, `answered_accuracy: precise` beside the one stored. What
+the fix deliberately does not do is what the issue names: it does not widen
+`precise` globally (a cannot-tell — a caserío matched by name — keeps the
+label), and it does not relabel from a displacement.
+
+The street name is not compared, and that is measured: Google answers in the
+local language and its own abbreviations, and the hand review discarded 13 of
+36 token mismatches as spelling. So two blind spots are pinned as passes in
+`tests/test_issue_535_precise_earns_its_slack.py`: a same-number answer
+somewhere else (360) and a different street with the same number (25:
+"calle Tarancon, 6" → "Av. de Salamanca, 6"). Only a person's pin catches
+those.
+
+The rows geocoded before the rule existed are read by
+`utils/audit_precise_accuracy.py` from their stored `query` and
+`formatted_address` — re-geocoding is billed and deterministic, so it would
+answer the same thing. Re-run over the 168 `precise` rows on 2026-09-07 it
+refutes 21: 20 of the hand review's 23 plus row 1759, ingested after the
+review, and none of the 129 the review passed. The 15 a naive form flagged
+beyond that were the same number twice — a letter suffix Google added or
+dropped ("24" against "24b"), a number the query wrote without a comma
+("Barrio Otero 15") — refinements, not contradictions. A person-established
+row is skipped whatever shape the finding took (a hand-set block, an ad-hoc
+provenance block, a coordinate standing on the cadastre reference point), the
+tool is dry-run by default, `--apply` is refused without `--snapshot`, and
+`--restore` is `utils/refresh_property_accuracy.py`'s own, which refuses to
+overwrite a location a person set after the snapshot.
+

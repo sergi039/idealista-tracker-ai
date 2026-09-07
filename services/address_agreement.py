@@ -1,0 +1,199 @@
+"""Did the geocoder answer the address that was asked? (#535)
+
+`location_accuracy = precise` is Google's ROOFTOP, and
+`services/coordinate_quality.py` grants it zero slack: sea distance, drive
+times and the hazard band are all scored as if the coordinate were the parcel.
+#493 spent its whole argument on what `approximate` is worth and never asked
+whether `precise` earns its zero. #535 did.
+
+Measured on production, 2026-09-02 (the comment on #535): 152 of the 166
+`precise` rows were the geocoder's, every one a ROOFTOP, none with a second
+coordinate to check against; the one a person checked (row 360) was 2868 m
+out. What the record *can* say for free is whether the ROOFTOP is the
+address that was asked, and for 23 of the 152 it was not.
+
+This module is that comparison, at the one granularity the record supports:
+the **house number**. A ROOFTOP is Google's claim to have matched one
+building. A query that named no building cannot have earned that claim, and a
+query that named a different one refutes it. Withdrawn, the label becomes
+`approximate` -- what any other answer to the same query is worth, the street
+or the village -- and the row takes the slack that label already carries.
+Nothing here widens `precise` globally, and nothing relabels from a distance:
+the issue names both as the fix that must not happen.
+
+The street name is deliberately NOT compared: Google answers in the local
+language and its own abbreviations ("Rbla. de la Llibertat"), and the hand
+review behind #535 discarded 13 of 36 token mismatches as spelling -- a rule
+with that false-positive rate would take `precise` off rows that earned it.
+
+Two blind spots, stated so nobody reads a passing check as verification: a
+same-number answer somewhere else (row 360, "Prendonés, 1" answered on a
+travesía 2868 m away -- only the owner's pin fixed it), and a different street
+with the same number (row 25, "calle Tarancon, 6" -> "Av. de Salamanca, 6").
+
+The re-run over the stored records on 2026-09-07 -- 21 refuted, none of the
+129 the review passed -- is in docs/rules/coordinates.md.
+"""
+
+import itertools
+import re
+from typing import Any, Optional, Set, Tuple
+
+# The four states the check can answer. Every way of *not* being able to
+# compare stays its own answer rather than borrowing one of the two real ones
+# (#98) -- the same reason the province and municipality checks in
+# `services/property_location_service.py` have four and five.
+AGREED = "agreed"
+NUMBER_NOT_ASKED = "number_not_asked"
+DIFFERENT_NUMBER = "different_number"
+NO_NUMBER_ANSWERED = "answer_names_no_number"
+
+# Only a positive finding withdraws `precise`. `answer_names_no_number` is a
+# cannot-tell -- a caserío matched by name has no number to refute -- and a
+# cannot-tell keeps the label, because widening the refusal to everything
+# unverified would take `precise` off 129 rows on the strength of one
+# measured error.
+REFUTING_STATES = frozenset({NUMBER_NOT_ASKED, DIFFERENT_NUMBER})
+
+# The grammar of a Spanish house number and nothing else: one to four digits,
+# then optionally a short suffix ("24b", "3 a", "12 bis") and optionally a
+# second number for a range ("12-14"). Never five digits -- in a Spanish
+# address that is the postal code -- and never a word longer than three
+# letters, which is how "2 Planta" and "1 de Mayo" stay street text. The
+# independent review of #556 supplied both misreadings the grammar now
+# refuses: "12 bis" read as no number at all, and the 8 of "Avenida 8 de
+# Marzo" read as a number the query had asked for.
+_NUMBER_GRAMMAR = (
+    r"(?P<digits>\d{1,4})"
+    r"(?P<suffix>(?:[\s\-]?[A-Za-z]{1,3})?(?:[\s\-]\d{1,4}[A-Za-z]?)?)"
+)
+
+# A component that is a house number and nothing else: Google's
+# `street_number`, or the component its Spanish formatted addresses put
+# between the route and the postal code ("Rúa Xoiña, 8, 27788 Foz, Lugo").
+_NUMBER_COMPONENT_RE = re.compile(rf"^{_NUMBER_GRAMMAR}$")
+
+# A house number a query named: the number that ENDS a comma-separated
+# component, the way a Spanish address is written -- "Lugar Costenla, 31",
+# "Barrio Otero 15" -- standing after a space or a comma. A number inside a
+# street's name ("Avenida 8 de Marzo") or glued to a road code ("SI-6") or a
+# price ("1.500") is not one.
+_QUERY_NUMBER_RE = re.compile(rf"(?:^|\s){_NUMBER_GRAMMAR}\s*$")
+_TRAILING_PARENTHETICAL_RE = re.compile(r"\s*\([^)]*\)\s*$")
+
+
+def _token(match: "re.Match") -> str:
+    """`24 b`, `24B` and `24-b` are one house number: digits, then the suffix
+    lower-cased with its spaces removed. A range keeps its separator --
+    `12-14` is not house 1214 (the third review of #556 supplied that
+    collision), so a hyphen survives only in front of a digit."""
+    suffix = match.group("suffix").lower().replace(" ", "")
+    suffix = re.sub(r"-(?!\d)", "", suffix)
+    return match.group("digits") + suffix
+
+
+def _split(token: str) -> Tuple[str, str]:
+    digits = "".join(itertools.takewhile(str.isdigit, token))
+    return digits, token[len(digits) :]
+
+
+def query_house_numbers(query: Any) -> Set[str]:
+    """The house number the query named, as a token ("31", "24b"), in a set
+    that is empty when it named none.
+
+    Read per comma-separated component, at its end, with a trailing
+    parenthetical dropped first ("Lugar el Pueblo 128 (Gozón)" names 128).
+    """
+    for part in str(query or "").split(","):
+        part = _TRAILING_PARENTHETICAL_RE.sub("", part.strip())
+        match = _QUERY_NUMBER_RE.search(part)
+        if match:
+            # The FIRST such component and no other: a Spanish address puts
+            # the house number right after the street, and what follows is
+            # the floor or the door ("Calle Mayor, 12, piso 4" -- the fourth
+            # review of #556). One house number per query, as a set for the
+            # caller's `in`.
+            return {_token(match)}
+    return set()
+
+
+def _component_token(value: Any) -> Optional[str]:
+    match = _NUMBER_COMPONENT_RE.match(str(value or "").strip())
+    return _token(match) if match else None
+
+
+def answered_house_number(geo: Any) -> Optional[str]:
+    """The house number Google's answer names, as a token, from its components.
+
+    `street_number` is the typed component, so this reads a fact rather than
+    parsing prose; `utils/geocoding.py` passes the components through on both
+    providers, and the province and municipality checks already rest on them.
+    "S/N" -- sin número -- is a component with no digits and reads as none.
+    An answer whose components name no street number names no number to
+    refute: a rooftop matched by name.
+
+    An answer that carries **no components at all** is read from its
+    `formatted_address` instead -- the same reading
+    `utils/audit_precise_accuracy.py` applies to stored records, which kept
+    the string and dropped the components. Without it a bare answer would
+    read as "no number" and keep `precise` on nothing.
+    """
+    if not isinstance(geo, dict):
+        return None
+    components = [
+        c for c in (geo.get("address_components") or ()) if isinstance(c, dict)
+    ]
+    if not components:
+        return house_number_in_formatted(geo.get("formatted_address"))
+    for component in components:
+        if "street_number" not in (component.get("types") or ()):
+            continue
+        return _component_token(
+            component.get("long_name") or component.get("short_name")
+        )
+    return None
+
+
+def house_number_in_formatted(formatted: Any) -> Optional[str]:
+    """The house number a `formatted_address` names, as a token.
+
+    For the records written before this module existed, which kept the
+    string and dropped the components. The first comma-separated component
+    that is a number and nothing else. A postal code never is, because it is
+    five digits and travels with the town ("15165 A Coruña"); a road number
+    never is, because it travels with the road ("Nacional 632").
+    """
+    for part in str(formatted or "").split(","):
+        token = _component_token(part)
+        if token is not None:
+            return token
+    return None
+
+
+def house_number_agreement(query: Any, answered: Optional[str]) -> str:
+    """One of the four states, for a query and the number its answer named.
+
+    The digits must agree. The suffix must agree only where **both** sides
+    carry one: "24A" asked and "24B" answered are two houses, but "24"
+    against "24b" and "3 a" against "3" are one house written twice --
+    measured on eight production rows (45, 46, 91, 216, 246, 713, 791, 926),
+    where Google added or dropped the letter and the point was the same.
+    """
+    if answered is None:
+        return NO_NUMBER_ANSWERED
+    asked = query_house_numbers(query)
+    if not asked:
+        return NUMBER_NOT_ASKED
+    answered_digits, answered_suffix = _split(answered)
+    for token in asked:
+        digits, suffix = _split(token)
+        if digits != answered_digits:
+            continue
+        if not suffix or not answered_suffix or suffix == answered_suffix:
+            return AGREED
+    return DIFFERENT_NUMBER
+
+
+def earns_precise(state: str) -> bool:
+    """Does a ROOFTOP with this address check keep the `precise` label?"""
+    return state not in REFUTING_STATES

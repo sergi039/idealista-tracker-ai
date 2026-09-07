@@ -4,11 +4,17 @@ from typing import Any, List, Optional
 
 from sqlalchemy.orm.attributes import flag_modified
 
+from services.address_agreement import (
+    answered_house_number,
+    earns_precise,
+    house_number_agreement,
+)
 from services.coordinate_quality import (
     KNOWN_ACCURACIES,
     SOURCE_MANUAL,
     clear_manual_coordinate,
     improves_on,
+    is_precise,
     manual_coordinate,
     normalize_accuracy,
     portal_coordinate,
@@ -519,6 +525,7 @@ class PropertyLocationService:
         answered,
         answered_accuracy,
         refused_reason: str = "",
+        address_check: Optional[str] = None,
     ) -> None:
         """Put the portal's pin back, and say on the row that it was tried.
 
@@ -547,6 +554,12 @@ class PropertyLocationService:
         }
         if answered_accuracy:
             record["answered_accuracy"] = answered_accuracy
+        if address_check:
+            # Google's own word is what `answered_accuracy` carries, so a
+            # `precise` kept out by the house-number check (#535) needs the
+            # check beside it, or the record reads as a `precise` that failed
+            # to improve on an `approximate`.
+            record["address_check"] = address_check
         if refused_reason:
             record["refused"] = refused_reason
         enrichment["geocoding"] = record
@@ -639,6 +652,29 @@ class PropertyLocationService:
             if accuracy not in KNOWN_ACCURACIES:
                 accuracy = "unknown"
 
+            # The label Google's `location_type` implied, kept apart from the
+            # one stored so the record can say both.
+            answered_accuracy = accuracy
+            address_check = house_number_agreement(query, answered_house_number(geo))
+            if is_precise(accuracy) and not earns_precise(address_check):
+                # A ROOFTOP is Google's claim to have matched one building. A
+                # query that named no building cannot have earned that claim
+                # (row 1379: "calle Fiobre, Bergondo" answered "Rua Fiobre,
+                # 100" -- the 100 is Google's), and one that named a different
+                # building refutes it (row 355: 83 asked, 10 answered). The
+                # point is then worth what any other answer to that query is
+                # worth -- the street or the village -- which is `approximate`
+                # and the slack that label carries (#535). Decided BEFORE the
+                # even-trade comparison below, so a withdrawn `precise` cannot
+                # displace a portal pin either.
+                logger.info(
+                    "Withdrawing `precise` for %r: Google answered %r (%s)",
+                    query,
+                    geo.get("formatted_address"),
+                    address_check,
+                )
+                accuracy = "approximate"
+
             if portal_pin is not None and not improves_on(accuracy, previous_accuracy):
                 # An even trade is not a trade: see the note on
                 # `ensure_coordinates`. The attempt is recorded on the row so
@@ -649,7 +685,10 @@ class PropertyLocationService:
                     "kind": "keep_pin",
                     "query": query,
                     "answered": geo.get("formatted_address"),
-                    "answered_accuracy": accuracy,
+                    # What Google said, not what it was worth after the check:
+                    # the record is provenance, and the check travels with it.
+                    "answered_accuracy": answered_accuracy,
+                    "address_check": address_check,
                 }
 
             if municipality_state == "contradicted":
@@ -674,6 +713,9 @@ class PropertyLocationService:
                 "municipality_check": municipality_state,
                 "row_municipality": row_municipality,
                 "result_municipalities": result_municipalities,
+                "answered_accuracy": answered_accuracy,
+                "location_type": geo.get("location_type"),
+                "address_check": address_check,
             }
 
         return {"kind": "nothing", "refused": refused}
@@ -720,7 +762,9 @@ class PropertyLocationService:
                     "kind": "keep_pin",
                     "query": outcome["query"],
                     "answered": outcome["formatted_address"],
-                    "answered_accuracy": outcome["accuracy"],
+                    "answered_accuracy": outcome.get("answered_accuracy")
+                    or outcome["accuracy"],
+                    "address_check": outcome.get("address_check"),
                 }
 
         if kind == "found":
@@ -749,7 +793,19 @@ class PropertyLocationService:
                 # `read_geocoding_checks` tells them apart.
                 "province_check": outcome["province_check"],
                 "municipality_check": outcome["municipality_check"],
+                # What Google said the point was derived from, kept from now
+                # on (#535): 0 of 1727 records carried it, so what `precise`
+                # rested on had to be reconstructed from the code that writes
+                # it. And the third check, under the name of what it compares:
+                # the house number the query asked against the one answered.
+                "location_type": outcome.get("location_type"),
+                "address_check": outcome.get("address_check"),
             }
+            if outcome.get("answered_accuracy") not in (None, outcome["accuracy"]):
+                # The label was withdrawn. Google's own word stays legible
+                # beside the one stored, the way `_keep_portal_pin` records
+                # `answered_accuracy` next to the accuracy it kept.
+                record["answered_accuracy"] = outcome["answered_accuracy"]
             if outcome["municipality_check"] == "contradicted":
                 # The codes, so a reader can act on the row without
                 # re-geocoding it. Only on the interesting outcome: the
@@ -773,6 +829,7 @@ class PropertyLocationService:
                 answered=outcome.get("answered"),
                 answered_accuracy=outcome.get("answered_accuracy"),
                 refused_reason=outcome.get("refused_reason", ""),
+                address_check=outcome.get("address_check"),
             )
             return True
 

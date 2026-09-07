@@ -90,6 +90,7 @@ pytest tests/ --cov=app --cov-report=html    # coverage report
 
 - **A coordinate that is not the parcel measures nothing about it, and every consumer asks before it measures** (#358): the policy has one home, `services/coordinate_quality.py`; a distance is scored only if both ends of the 5 km slack score the same, a duration only if both ends land in the same flat region.
 - Travel no longer refuses an approximate origin before the calls (owner, 2026-08-17): the scorer still applies the slack, every surface captions `approximate_origin`, the exemption is asked of the travel average and never target by target; a shared coordinate is evidence, never a gate (`utils/report_coordinate_quality.py` is free, `utils/refresh_property_accuracy.py` is billed and the owner's call).
+- **`precise` is earned only by an answer to the address that was asked** (#535): a ROOFTOP to a query that named no house number, or a different one, is stored `approximate` with `address_check` and `answered_accuracy` beside it, and `location_type` is kept from now on (`services/address_agreement.py` is the one home); the street name is deliberately not compared, so a same-number answer 2.9 km away (row 360) passes and is the disclosed blind spot; `utils/audit_precise_accuracy.py` applies the same reading to the stored records, dry-run first and `--apply` only with a snapshot. → docs/rules/coordinates.md
 
 ### Pool → docs/rules/pool.md
 
