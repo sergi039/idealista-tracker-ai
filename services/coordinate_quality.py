@@ -73,13 +73,22 @@ APPROXIMATE_COORD_SLACK_M = 5_000
 # takes the worse.
 #
 # What the middle tier is worth was measured against the strongest ground
-# truth available here: eight rows carry BOTH a location a person established
-# from the cadastre and a portal or map pin, and the distance between the two
-# is the pin's own error --
+# truth available here: rows carrying BOTH a location a person established
+# from the cadastre and a portal or map pin, where the distance between the
+# two is the pin's own error. Measured 2026-09-01 over eight rows --
 #
 #     68, 102, 107, 122, 124, 174, 195, 1150 metres
 #
-# -- median 123, seven of eight at or under 195, **observed maximum 1150**.
+# -- and re-derived 2026-09-07, after #536, over **seven**:
+#
+#     68, 102, 107, 122, 174, 195, 1150 metres
+#
+# -- median 122, six of seven at or under 195, **observed maximum 1150**. The
+# 124 that left was property 161, and it was never a pin's error: the entry on
+# that row was a cadastre *guess* over four candidate parcels, filed under the
+# portal-pin key by a hand-run script, measured against the parcel the
+# cadastre later established -- so the sample was one row smaller than it
+# said. The maximum, and therefore this constant, did not move.
 # The method is validated on one of those rows by a person rather than by
 # arithmetic: property 421 carries, in its own import block, the note
 # "EXACT per portal, but the pin is a meadow 170 m S of the house", and that
@@ -91,18 +100,19 @@ APPROXIMATE_COORD_SLACK_M = 5_000
 # one declared-exact pin anybody has checked was wrong by 170 m. A portal
 # saying `is_exact` is evidence for this tier and against `precise`.
 #
-# **n is 8.** Eight observations do not bound an error, and an independent
+# **n is 7.** Seven observations do not bound an error, and an independent
 # review said so; 2000 m is the observed maximum with a margin, not a proven
 # ceiling, and it is written here with its sample so the next person can widen
 # it rather than inherit a number with no provenance. Re-derive it as the
 # sample grows -- the query is every row carrying both an
-# `enrichment["location"]` and an `enrichment["import"]["coordinate"]`.
+# `enrichment["location"]` and an `enrichment["import"]["coordinate"]` whose
+# `source` names a portal; the last clause is what #536 was about.
 #
 # What the tier does NOT do is publish a point estimate from a band. Every
 # consumer still refuses unless the answer is the same at both ends of the
 # slack, so an underestimate here narrows a *disclosed band* rather than
 # printing a score nobody measured. That is the whole reason the constant is
-# allowed to rest on eight rows.
+# allowed to rest on seven rows.
 LISTING_PIN_SLACK_M = 2_000
 
 # Metres, not decimal places: a pin is stored as a decimal string with between
@@ -379,7 +389,9 @@ def manual_coordinate(record: Any) -> Optional[HandSetLocation]:
     `precise` over a verified barrio without moving the point) and 774 (a
     `cadastre` block from the Catastro WFS). Two of those three carry a
     `precise` their own `enrichment["geocoding"]` record contradicts, which is
-    the fingerprint of a write made outside the geocoder.
+    the fingerprint of a write made outside the geocoder. 161 and 792 have
+    carried this block since 2026-08-25 and 2026-09-03 respectively, each
+    written by a person through `utils/set_property_location.py` (#536).
 
     Returns None for a block that does not parse, for the reason
     `portal_coordinate` does: this is provenance, and a row with a malformed
