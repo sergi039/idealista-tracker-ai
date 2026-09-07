@@ -202,7 +202,16 @@ def listings(app):
             # The criteria sweep row below needs a subscription that carries
             # criteria, or criteria=fail selects nothing and the matrix
             # rightly calls it toothless.
-            criteria={"min_house_m2": 150},
+            #
+            # A PLOT bound, not a house one. Every row in this world is
+            # `land/plot` by default (the sweep needs `category=land` and
+            # `subtype=plot` to bite), and since 2026-09-07 bare land is a
+            # measured FAIL against a house requirement -- so `min_house_m2`
+            # here hid the entire fixture and every filter in the matrix
+            # reported itself toothless. The plot bound leaves a row with no
+            # stated surface `unknown`, which is what this sweep needs: it is
+            # about the map and the list agreeing, not about criteria.
+            criteria={"min_plot_m2": 700},
         )
         db.session.add(profile)
         db.session.commit()
@@ -226,7 +235,9 @@ def listings(app):
             "rejected": _make(pid, "rejected", owner_verdict="rejected"),
             # The one row criteria=fail keeps — and the one the DEFAULT view
             # hides, which every other filter's baseline then agrees on.
-            "criteria_fail": _make(pid, "criteria_fail", area=100, area_type="built"),
+            # Bare land measurably under the plot bound: the one row
+            # `criteria=fail` keeps, and the one the DEFAULT view hides.
+            "criteria_fail": _make(pid, "criteria_fail", area=100, area_type="plot"),
             "sea_yes": _make(
                 pid,
                 "sea_yes",

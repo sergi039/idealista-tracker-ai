@@ -480,3 +480,100 @@ class TestAnOwnerActionIsNeverHidden:
             assert prop.id in [row[0] for row in hidden], (
                 f"a blank next_action ({blank!r}) bought an exemption"
             )
+
+
+# (area, area_type, category, subtype, expected) — bare land said the OTHER
+# way. Measured on production 2026-09-07: 52 rows carry
+# `property_category='land'` with `area_type='built'`, six of them in the one
+# subscription that carries criteria, all "Finca rústica" — and one of those,
+# 12,240 m² of rough land, was reading as a HOUSE and passing a 150 m² house
+# requirement on that strength.
+KIND_MATRIX = [
+    # The defect itself: land by category, `built` by area_type.
+    (12240, "built", "land", "plot", "fail"),
+    (300, "built", "land", "plot", "fail"),
+    # The legacy subtype `developed` is land too — the rule
+    # `favorite_similarity` already states ("land whatever the legacy
+    # `developed` subtype says"), read from the one shared function.
+    (900, "built", "land", "developed", "fail"),
+    # Subtype alone, with no category: still land.
+    (900, "built", None, "plot", "fail"),
+    # A HOUSE stays a house. This is the pair the new branch is one condition
+    # away from swallowing, and the whole point of reading the kind rather
+    # than "anything that is not obviously a house".
+    (200, "built", "housing", "house", "unknown"),  # plot unstated
+    (200, "built", "housing", "house", "unknown"),
+    (149, "built", "housing", "house", "fail"),  # short house, still measured
+    # No category and no subtype: `area_type` alone decides, as before.
+    (800, "plot", None, None, "fail"),
+    (800, "built", None, None, "unknown"),
+]
+
+
+class TestBareLandIsWhatTheListingIs:
+    """`area_type` is only one of the two places a listing says it is land."""
+
+    @pytest.mark.parametrize(
+        "area, area_type, category, subtype, expected", KIND_MATRIX
+    )
+    def test_python_and_sql_agree_on_the_kind(
+        self, app, profile_row, area, area_type, category, subtype, expected
+    ):
+        prop = _mk(
+            profile_row.id,
+            area=area,
+            area_type=area_type,
+            plot_area=None,
+            property_category=category,
+            property_subtype=subtype,
+        )
+
+        verdict = subscription_criteria.read_verdict(prop, CRITERIA)
+        assert verdict["state"] == expected, (
+            f"python said {verdict['state']} for {area}/{area_type}/"
+            f"{category}/{subtype}"
+        )
+
+        fails = {
+            row.id
+            for row in Property.query.filter(
+                subscription_criteria.failing_expression(Property, CRITERIA)
+            )
+        }
+        passes = {
+            row.id
+            for row in Property.query.filter(
+                subscription_criteria.passing_expression(Property, CRITERIA)
+            )
+        }
+        assert (prop.id in fails) == (expected == "fail"), "SQL fail disagrees"
+        assert (prop.id in passes) == (expected == "pass"), "SQL pass disagrees"
+        # `unknown` is `~fail AND ~pass`, which is only sound while both
+        # expressions stay definite — the reason `_definite_shapes` coalesces
+        # the two new columns before comparing them.
+        unknowns = {
+            row.id
+            for row in Property.query.filter(
+                ~subscription_criteria.failing_expression(Property, CRITERIA),
+                ~subscription_criteria.passing_expression(Property, CRITERIA),
+            )
+        }
+        assert (prop.id in unknowns) == (expected == "unknown"), "SQL unknown disagrees"
+
+    def test_the_figures_report_the_parcel_for_such_a_row(self, app, profile_row):
+        """A finca's stated surface is its PARCEL, so it must answer the plot
+        bound rather than sit unread — the row fails on the house half, not
+        because nothing about it was measured."""
+        prop = _mk(
+            profile_row.id,
+            area=12240,
+            area_type="built",
+            property_category="land",
+            property_subtype="plot",
+        )
+
+        figures = subscription_criteria.effective_figures(prop)
+
+        assert figures["house_m2"] is None
+        assert figures["plot_m2"] == 12240
+        assert figures["bare_land"] is True
