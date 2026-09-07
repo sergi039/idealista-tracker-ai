@@ -290,3 +290,74 @@ class TestTheCountsStayHonest:
         from utils.listing_filters import CLEARED_NOT_ABSENT
 
         assert CLEARED_NOT_ABSENT.get("verdict") == "all"
+
+
+class TestTheTasteSortSaysWhenItCannotRank:
+    """The owner's second report, the same afternoon: "Taste сортировка не
+    работает". It was not broken — it was UNAVAILABLE, and said nothing.
+
+    A score made against an older profile never ranks beside a current one
+    (`taste_service.sortable_score_expression`, and that rule is right), so
+    while a rebuild is in flight the sort has nothing to order by and falls
+    through to its tie-break: the page comes back in id order. Measured on
+    production during the v6 rebuild — "Taste: 0 of 938 scored against profile
+    v6", rows 969, 970, 971, 972 in that order, and the sort control silent.
+    A control that degrades without saying so reads as a defect, which is #98
+    applied to a control rather than to a measurement.
+    """
+
+    def _profile(self, app):
+        from models import TasteProfile
+
+        row = TasteProfile(
+            provider="claude",
+            model="test",
+            signals_fingerprint="f" * 8,
+            source={"signals": []},
+            profile={"likes": [], "dislikes": [], "dealbreakers": []},
+        )
+        db.session.add(row)
+        db.session.commit()
+        return row.id
+
+    def test_it_says_so_when_nothing_is_scored_against_the_current_profile(
+        self, client, world, app
+    ):
+        self._profile(app)
+
+        body = client.get(
+            f"/properties?profile_id={world['pid']}&sort=taste_score"
+        ).get_data(as_text=True)
+
+        assert 'id="taste-sort-dormant"' in body
+        assert "being rebuilt" in body
+
+    def test_it_stays_quiet_when_the_order_really_orders(self, client, world, app):
+        version = self._profile(app)
+        row = world["rows"]["undecided"]
+        row.taste_score = 80
+        row.taste = {
+            "status": "ok",
+            "score": 80,
+            "profile_version": version,
+            "scorer_version": 1,
+            "facts_fingerprint": "x",
+        }
+        db.session.commit()
+
+        body = client.get(
+            f"/properties?profile_id={world['pid']}&sort=taste_score"
+        ).get_data(as_text=True)
+
+        assert 'id="taste-sort-dormant"' not in body
+
+    def test_it_stays_quiet_on_a_sort_that_is_not_taste(self, client, world, app):
+        """The note is about THIS order, not about the coverage: the coverage
+        line beside the count already reports that, on every sort."""
+        self._profile(app)
+
+        body = client.get(
+            f"/properties?profile_id={world['pid']}&sort=created_at"
+        ).get_data(as_text=True)
+
+        assert 'id="taste-sort-dormant"' not in body

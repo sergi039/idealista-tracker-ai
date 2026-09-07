@@ -1276,6 +1276,17 @@
                             <i class="fas fa-ban me-1"></i>{{ t('rejected_hidden_line')|format(rejected_hidden_count) }}
                         </span>
                     {% endif %}
+                    {# The taste ORDER, when it has nothing to order by. A
+                       stale score never ranks beside a current one, so during a
+                       profile rebuild the sort falls through to its tie-break
+                       and the page comes back in id order -- which reads as a
+                       broken control rather than an unavailable one. #}
+                    {% if taste_sort_dormant is defined and taste_sort_dormant %}
+                        <span id="taste-sort-dormant" class="text-warning small"
+                              title="{{ t('taste_sort_dormant_tooltip') }}">
+                            <i class="fas fa-clock-rotate-left me-1"></i>{{ t('taste_sort_dormant') }}
+                        </span>
+                    {% endif %}
                     {% if taste_version is defined and taste_version and taste_scored_count is not none and pagination %}
                         <span id="taste-coverage" class="text-body-secondary small"
                               title="{{ t('taste_coverage_tooltip') }}">

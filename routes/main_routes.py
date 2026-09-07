@@ -1930,6 +1930,21 @@ def properties():
             else None
         )
 
+        # Whether the taste ORDER is actually ordering. A score made against
+        # an older profile never ranks interleaved with current ones, so while
+        # a rebuild is in flight the sort has nothing to rank by and falls
+        # through to its tie-break -- the page comes back in id order and looks
+        # broken. It is not broken, it is unavailable, and the difference is
+        # the whole of #98: a control that degrades in silence reads as a
+        # defect. Reported by the owner on 2026-09-07 during the v6 rebuild,
+        # where the page said "Taste: 0 of 938 scored against profile v6" and
+        # the sort control said nothing at all.
+        taste_sort_dormant = bool(
+            taste_version is not None
+            and sort_by == "taste_score"
+            and not taste_scored_count
+        )
+
         # And for the similarity cut: how many rows of THIS page's set the cut
         # counts as similar, references aside, by the same predicate the
         # filter applied -- so the line beside the count and the rows under
@@ -2196,6 +2211,7 @@ def properties():
             score_full_basis_count=score_full_basis_count,
             taste_version=taste_version,
             taste_scored_count=taste_scored_count,
+            taste_sort_dormant=taste_sort_dormant,
             # The request's one similarity reading, for the chip beside every
             # score; the control, only where a favorite exists to compare
             # against; and the cut's own disclosure numbers.
