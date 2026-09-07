@@ -361,3 +361,37 @@ class TestTheTasteSortSaysWhenItCannotRank:
         ).get_data(as_text=True)
 
         assert 'id="taste-sort-dormant"' not in body
+
+
+def test_the_way_back_survives_a_page_whose_every_row_is_hidden(app, client):
+    """The one case the old `verdicts|length > 1` guard would have broken, and
+    the reason it was touched at all: with every row on the page rejected, the
+    dropdown holds a single `rejected` option — and that lone option IS the way
+    back, so deleting it leaves the page no way to undo its own hide.
+
+    Relaxing the guard to "render whenever there are any options" was the first
+    attempt and put a useless one-option select on every page holding a single
+    verdict state; `tests/test_owner_review_propagation.py` caught that.
+    """
+    profile = SearchProfile(name="All rejected", is_active=True)
+    db.session.add(profile)
+    db.session.commit()
+    for n in range(2):
+        db.session.add(
+            Property(
+                source_email_id=f"allrej:{n}",
+                title=f"Casa {n}",
+                search_profile_id=profile.id,
+                owner_verdict="rejected",
+            )
+        )
+    db.session.commit()
+
+    body = client.get(f"/properties?profile_id={profile.id}").get_data(as_text=True)
+
+    assert _count(body) == 0
+    assert "Rejected: 2 hidden" in body
+    select = body[body.index('id="verdict"') :]
+    select = select[: select.index("</select>")]
+    assert 'value="rejected"' in select, "the page kept no way to undo its own hide"
+    assert 'value="all"' in select

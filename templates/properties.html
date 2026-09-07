@@ -900,13 +900,19 @@
                        judged. Same reading as the badge, so an option's count
                        and the badges it selects cannot disagree
                        (services/owner_review.py). #}
-                    {# `{% if verdicts %}`, not `> 1`: with the rejected hide in
-                       force a lone `rejected (N)` option IS the way back, and
-                       the old guard would delete the one control this design
-                       offers. And the empty value no longer means "all" -- it
-                       is the hide -- so it says so, and `all` is spelled out
-                       beside it (services/owner_review.DECISION_ALL). #}
-                    {% if verdicts %}
+                    {# `> 1` as before, PLUS the one case the old guard would
+                       have broken: when every row on the page is hidden by the
+                       rejected rule, `verdicts` holds only `rejected` and that
+                       lone option IS the way back, so deleting it would leave
+                       the page no way to undo its own hide. Relaxing the guard
+                       to `{% if verdicts %}` outright was the first attempt and
+                       it put a useless one-option select on every page holding
+                       a single verdict state (caught by
+                       tests/test_owner_review_propagation.py). And the empty
+                       value no longer means "all" -- it is the hide -- so it
+                       says so, and `all` is spelled out beside it
+                       (services/owner_review.DECISION_ALL). #}
+                    {% if verdicts|length > 1 or (verdicts and rejected_hidden_count) %}
                     <select class="form-select form-select-sm properties-filter-select" id="verdict" name="verdict"
                             aria-label="{{ t('owner_verdict') }}">
                         <option value="">{{ t('owner_verdict_default') }}</option>
