@@ -1,12 +1,10 @@
 """`precise` is earned only by an answer to the address that was asked (#535).
 
 `location_accuracy = precise` is Google's ROOFTOP and buys zero slack in
-`services/coordinate_quality.py`, so every derived measurement on such a row is
-scored as the parcel's. Measured on production 2026-09-02: 152 of the 166
-`precise` rows were the geocoder's, not one carries a second coordinate to
-check against, and the one ROOFTOP a person checked (row 360) was 2868 m out.
-What the stored record can say for free is whether the ROOFTOP answers the
-address the query named, and for 23 of the 152 it did not.
+`services/coordinate_quality.py`. Measured on production 2026-09-02: 152 of
+166 `precise` rows were the geocoder's, none corroborated, and the one a
+person checked (row 360) was 2868 m out; for 23 of the 152 the ROOFTOP did
+not answer the address the query named.
 
 Pinned here: the house-number comparison of `services/address_agreement`,
 at the geocoder's write and in `utils/audit_precise_accuracy.py`. Every
@@ -151,13 +149,22 @@ class TestWhatTheQueryAsked:
             # street's name is not a number the query asked for.
             ("Avenida 8 de Marzo, 5, Madrid, Spain", {"5"}),
             ("Calle 2 de Mayo, Gijón, Spain", set()),
-            # A floor is not a house number; a range names its first number.
+            # A floor is not a house number, whichever way it is written
+            # (the fourth review of #556: "piso 4" after house 12).
             ("Calle Real, 2 Planta, Gijón, Spain", set()),
+            ("Calle Mayor, 12, piso 4, Madrid, Spain", {"12"}),
+            ("Calle Mayor, 12, 4º, Madrid, Spain", {"12"}),
             ("Calle Mayor, 12-14, Madrid, Spain", {"12-14"}),
         ],
     )
     def test_production_queries(self, query, expected):
         assert query_house_numbers(query) == expected
+
+    def test_a_floor_does_not_vouch_for_the_answer(self):
+        assert (
+            house_number_agreement("Calle Mayor, 12, piso 4, Madrid, Spain", "4")
+            == DIFFERENT_NUMBER
+        )
 
     def test_a_number_in_the_street_name_does_not_vouch_for_the_answer(self):
         """The reviewer's failing input: house 5 was asked on "8 de Marzo",

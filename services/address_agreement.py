@@ -21,20 +21,15 @@ or the village -- and the row takes the slack that label already carries.
 Nothing here widens `precise` globally, and nothing relabels from a distance:
 the issue names both as the fix that must not happen.
 
-The street name is deliberately NOT compared. Google answers in the local
-language and its own abbreviations -- "Rambla de la Libertad" comes back
-"Rbla. de la Llibertat", "SI-6, 24" comes back "SI-6, 24b" -- and the hand
-review behind #535 discarded 13 of the 36 token mismatches as spelling. A rule
-with a measured one-in-three false-positive rate would take `precise` off rows
-that earned it, which is the "guard too wide" mistake the issue names.
+The street name is deliberately NOT compared: Google answers in the local
+language and its own abbreviations ("Rbla. de la Llibertat"), and the hand
+review behind #535 discarded 13 of 36 token mismatches as spelling -- a rule
+with that false-positive rate would take `precise` off rows that earned it.
 
-Two blind spots, stated so nobody reads a passing check as verification:
-
-* **a same-number answer somewhere else.** Row 360 asked for "Prendonés, 1"
-  and Google answered "Tr.ª de Prendonés, 1". The number agrees; this check
-  passes it; only the owner's own pin fixed that row;
-* **a different street with the same number**, for the reason above. Row 25:
-  "calle Tarancon, 6" -> "Av. de Salamanca, 6".
+Two blind spots, stated so nobody reads a passing check as verification: a
+same-number answer somewhere else (row 360, "Prendonés, 1" answered on a
+travesía 2868 m away -- only the owner's pin fixed it), and a different street
+with the same number (row 25, "calle Tarancon, 6" -> "Av. de Salamanca, 6").
 
 The re-run over the stored records on 2026-09-07 -- 21 refuted, none of the
 129 the review passed -- is in docs/rules/coordinates.md.
@@ -103,22 +98,23 @@ def _split(token: str) -> Tuple[str, str]:
 
 
 def query_house_numbers(query: Any) -> Set[str]:
-    """Every house number the query named, as tokens ("31", "24b"). Empty when
-    it named none.
+    """The house number the query named, as a token ("31", "24b"), in a set
+    that is empty when it named none.
 
     Read per comma-separated component, at its end, with a trailing
     parenthetical dropped first ("Lugar el Pueblo 128 (Gozón)" names 128).
-    Still generous where it is safe to be: a "km 3" reads as a number the
-    query named, and that can only make the check *keep* a label, never
-    withdraw one.
     """
-    numbers = set()
     for part in str(query or "").split(","):
         part = _TRAILING_PARENTHETICAL_RE.sub("", part.strip())
         match = _QUERY_NUMBER_RE.search(part)
         if match:
-            numbers.add(_token(match))
-    return numbers
+            # The FIRST such component and no other: a Spanish address puts
+            # the house number right after the street, and what follows is
+            # the floor or the door ("Calle Mayor, 12, piso 4" -- the fourth
+            # review of #556). One house number per query, as a set for the
+            # caller's `in`.
+            return {_token(match)}
+    return set()
 
 
 def _component_token(value: Any) -> Optional[str]:

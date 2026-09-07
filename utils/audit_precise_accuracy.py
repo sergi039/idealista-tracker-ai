@@ -18,14 +18,11 @@ ad-hoc provenance block, or a coordinate standing on the cadastre reference
 point (row 774): there the record describes a point the row no longer
 carries.
 
-**What it writes**, per refuted row: `location_accuracy = approximate`; the
-record's `accuracy` likewise, with `answered_accuracy: precise` kept beside it
-so Google's own word stays legible (the shape `_keep_portal_pin` already uses),
-`address_check` naming the state, and `precise_withdrawn` naming this tool and
-the time. The coordinate does not move -- it is the same street or village it
-was, only worth what that is worth. No score is recomputed: the scorer and the
-templates read the row's *current* accuracy (docs/rules/coordinates.md), so the
-slack applies on the next read.
+**What it writes**, per refuted row: `location_accuracy = approximate`, the
+record's `accuracy` likewise with `answered_accuracy: precise` kept beside it
+(the shape `_keep_portal_pin` uses), `address_check`, and `precise_withdrawn`
+naming this tool and the time. The coordinate does not move and no score is
+recomputed: the scorer reads the row's current accuracy on the next read.
 
 Each row is written under its own `FOR UPDATE` through
 `services/enrichment_write.locked_write`, the rule for every writer of
