@@ -151,7 +151,14 @@ def world(app):
         name="Land at Norte",
         is_active=True,
         is_default=True,
-        criteria={"min_house_m2": 150},
+        # A PLOT bound, not a house one, for the reason
+        # `tests/test_map_and_list_agree_on_the_filters.py` records: every row
+        # here is `land/plot` by default so `category=land` can bite, and
+        # since 2026-09-07 bare land is a measured FAIL against a house
+        # requirement -- `min_house_m2` hid this whole world and every filter
+        # reported itself toothless. This sweep is about one URL naming one
+        # set across two surfaces, not about criteria.
+        criteria={"min_plot_m2": 700},
     )
     db.session.add(profile)
     db.session.commit()
@@ -171,7 +178,7 @@ def world(app):
         # The one row criteria=fail keeps — and the one the DEFAULT view
         # hides, so the two surfaces disagree exactly here if either drops
         # the parameter.
-        "criteria_fail": _make(pid, "criteria_fail", area=100.0, area_type="built"),
+        "criteria_fail": _make(pid, "criteria_fail", area=100.0, area_type="plot"),
         "sea_yes": _make(
             pid, "sea_yes", enrichment={"environment": {"sea_view": "yes"}}
         ),
