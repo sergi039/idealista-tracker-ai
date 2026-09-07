@@ -124,7 +124,7 @@ def world(app):
       3 passing rows (one fotocasa, for the source counts), 1 unknown
       (no plot stated), 3 unjudged fails (one of them in Camariñas, one
       fotocasa), and one fail under each exemption — favorited, reviewed
-      (rejected), carrying an open action. Ares holds ONLY unjudged fails.
+      (interested), carrying an open action. Ares holds ONLY unjudged fails.
     Asturias: one fail-shaped row — no criteria, so nothing may touch it.
 
     Deliberately NO delisted row: Hide removed is #470's business (see the
@@ -175,7 +175,14 @@ def world(app):
         ),
         "fail_reviewed": _fails(
             galicia.id,
-            owner_verdict="rejected",
+            # `interested`, not `rejected`. This row is here to prove the
+            # CRITERIA hide exempts a judged listing, and since 2026-09-07 a
+            # rejected one is withheld by a second, unrelated standing rule
+            # (`owner_review.apply_rejected_hide`) -- which would make every
+            # assertion in this file measure two rules at once, the thing its
+            # own docstring refuses for delisted rows. The new rule has its
+            # own file.
+            owner_verdict="interested",
             location_lat=43.661,
             location_lon=-8.061,
             location_accuracy="precise",
@@ -393,7 +400,13 @@ class TestTheCountedOptionsFollowTheSameRule:
             _options(_page(client, f"{base}&criteria=all"), "verdict")["undecided"]
             == 11
         )
-        assert _options(_page(client, base), "verdict")["rejected"] == 1
+        # The judged row is `interested` since 2026-09-07 (see the fixture),
+        # so that is the option this file's world can assert. The rejected
+        # option's own behaviour under its new hide -- it must survive with a
+        # non-zero count, because it IS the way back -- belongs to
+        # `tests/test_a_rejected_listing_is_not_offered.py`, whose world has a
+        # rejected row and this one deliberately does not.
+        assert _options(_page(client, base), "verdict")["interested"] == 1
 
     def test_the_action_counts_follow_the_mode_like_the_others(self, client, world):
         """The first cut left the action dropdown alone because under the

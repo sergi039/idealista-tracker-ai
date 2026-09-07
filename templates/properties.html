@@ -900,10 +900,17 @@
                        judged. Same reading as the badge, so an option's count
                        and the badges it selects cannot disagree
                        (services/owner_review.py). #}
-                    {% if verdicts|length > 1 %}
+                    {# `{% if verdicts %}`, not `> 1`: with the rejected hide in
+                       force a lone `rejected (N)` option IS the way back, and
+                       the old guard would delete the one control this design
+                       offers. And the empty value no longer means "all" -- it
+                       is the hide -- so it says so, and `all` is spelled out
+                       beside it (services/owner_review.DECISION_ALL). #}
+                    {% if verdicts %}
                     <select class="form-select form-select-sm properties-filter-select" id="verdict" name="verdict"
                             aria-label="{{ t('owner_verdict') }}">
-                        <option value="">{{ t('owner_verdict_all') }}</option>
+                        <option value="">{{ t('owner_verdict_default') }}</option>
+                        <option value="all" {{ 'selected' if current_filters.verdict == 'all' }}>{{ t('owner_verdict_all') }}</option>
                         {% for choice in verdicts %}
                             <option value="{{ choice.value }}"
                                     {{ 'selected' if current_filters.verdict == choice.value }}>
@@ -1256,6 +1263,17 @@
                         <span id="criteria-hidden-coverage" class="text-body-secondary small"
                               title="{{ t('criteria_hidden_tooltip') }}">
                             <i class="fas fa-filter me-1"></i>{{ t('criteria_hidden_line')|format(criteria_hidden_count) }}
+                        </span>
+                    {% endif %}
+                    {# The listings the owner turned down, withheld by the same
+                       standing policy and disclosed the same way -- a filter
+                       that hides silently reads as "these listings do not
+                       exist" (owner report 2026-09-07: property 1405, rejected,
+                       still sitting in the ranked suggestions). #}
+                    {% if rejected_hidden_count is defined and rejected_hidden_count %}
+                        <span id="rejected-hidden-coverage" class="text-body-secondary small"
+                              title="{{ t('rejected_hidden_tooltip') }}">
+                            <i class="fas fa-ban me-1"></i>{{ t('rejected_hidden_line')|format(rejected_hidden_count) }}
                         </span>
                     {% endif %}
                     {% if taste_version is defined and taste_version and taste_scored_count is not none and pagination %}

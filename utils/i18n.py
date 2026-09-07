@@ -229,6 +229,7 @@ TRANSLATIONS = {
         # nobody has judged; it is never rendered as a rejection.
         "owner_verdict": "Verdict",
         "owner_verdict_all": "Verdict: all",
+        "owner_verdict_default": "Verdict: not rejected",
         "owner_verdict_interested": "Interested",
         "owner_verdict_waiting": "Waiting",
         "owner_verdict_rejected": "Rejected",
@@ -479,6 +480,8 @@ TRANSLATIONS = {
         "criteria_pass": "Criteria: matching only",
         "criteria_unknown": "Criteria: unmeasured only",
         "criteria_fail": "Criteria: failing only",
+        "rejected_hidden_line": "Rejected: %s hidden",
+        "rejected_hidden_tooltip": "Listings you turned down are not offered back to you. A favorited one, or one with something still outstanding, is never hidden. Pick 'Verdict: all' to see them.",
         "criteria_hidden_line": "Criteria: %s failing hidden",
         "criteria_hidden_tooltip": "Listings measurably below the subscription's bounds (house or plot too small) are hidden by default. A favorited or reviewed listing is never hidden. Pick 'show everything' to see them.",
         # The same verdict on the row's OWN page, where the reader arrives
@@ -1053,6 +1056,7 @@ TRANSLATIONS = {
         "advertiser_clear": "Borrar — usar la lectura calculada",
         "owner_verdict": "Decisión",
         "owner_verdict_all": "Decisión: todas",
+        "owner_verdict_default": "Decisión: sin rechazados",
         "owner_verdict_interested": "Interesa",
         "owner_verdict_waiting": "En espera",
         "owner_verdict_rejected": "Descartado",
@@ -1287,6 +1291,8 @@ TRANSLATIONS = {
         "criteria_pass": "Criterios: solo los que cumplen",
         "criteria_unknown": "Criterios: solo sin medir",
         "criteria_fail": "Criterios: solo los que no cumplen",
+        "rejected_hidden_line": "Rechazados: %s ocultos",
+        "rejected_hidden_tooltip": "Los anuncios que usted descartó no se le vuelven a ofrecer. Un favorito, o uno con algo pendiente, nunca se oculta. Elija 'Decisión: todas' para verlos.",
         "criteria_hidden_line": "Criterios: %s ocultos por no cumplir",
         "criteria_hidden_tooltip": "Los anuncios medidos por debajo de los límites de la suscripción (casa o parcela demasiado pequeña) se ocultan por defecto. Un favorito o uno ya valorado nunca se oculta. Elija 'mostrar todo' para verlos.",
         "criteria_card_hidden": "Este anuncio no cumple los criterios de su suscripción, por eso el listado lo oculta por defecto.",

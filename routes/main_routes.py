@@ -443,15 +443,24 @@ def _apply_filter_bar(query, bar, review_today, skip=None, similarity_ctx=None):
 
 
 def _shows_rows_the_default_hides(query, ctx):
-    """Whether the rows on screen include any that the DEFAULT criteria
-    reading hides — the reading the "clear filters" link restores.
+    """Whether the rows on screen include any that the DEFAULT reading hides —
+    the reading the "clear filters" link restores.
 
     This is the honest form of the question the "N of M shown" note asks,
     because that sentence claims the N rows are part of the M the link lands
-    on. It reads the rows rather than the `criteria` parameter: the spelling
-    of the mode does not decide whether the two sets nest, the subscription's
-    own criteria do. A scope with no criteria at all nests under every mode.
+    on. It reads the rows rather than the parameters: the spelling of a mode
+    does not decide whether the two sets nest, the rows do.
+
+    TWO hides now, not one. The rejected hide is the second thing a bare page
+    withholds, so `?verdict=rejected` puts on screen exactly the rows the clear
+    link would take away — the same shape as `criteria=fail`, which is the
+    measured "54 of 377 while none of the 54 was among the 377". Asking only
+    the criteria half would make the note state a subset claim over sets that
+    do not nest, one column over.
     """
+    rejected = query.filter(owner_review.rejected_hidden_expression(Property)).first()
+    if rejected is not None:
+        return True
     if ctx is None:
         return False
     return query.filter(ctx["hidden_default"]).first() is not None
@@ -1484,6 +1493,18 @@ def _property_filter_options(
         narrowed, _ = subscription_criteria.apply_filter(
             narrowed, criteria_ctx, criteria_filter
         )
+        # The rejected hide reaches every counted dropdown, or each option
+        # names rows its own page hides -- EXCEPT the verdict dropdown itself,
+        # where the hide is lifted. That exception is the crux of the design:
+        # unlifted, `Rejected (N)` counts 0, `owner_review.decision_options`
+        # drops a state whose count is zero, and the one control this design
+        # offers as the way back disappears from the page it is the way back
+        # from.
+        narrowed, _ = owner_review.apply_rejected_hide(
+            narrowed,
+            Property,
+            owner_review.DECISION_ALL if dimension == "verdict" else bar.get("verdict"),
+        )
         return narrowed
 
     if category_filter == UNCLASSIFIED_FILTER:
@@ -1749,7 +1770,17 @@ def properties():
         # in the subscription dropdown (#104/#112) reads the same number, so
         # the option, the disclosure next to the total and the page the link
         # lands on cannot state three different figures under one filter.
-        unassigned_count = query.filter(Property.search_profile_id.is_(None)).count()
+        # Both of the next two are taken BEFORE the criteria step, and the
+        # rejected hide has to reach them or they promise more than their own
+        # links open (#518, measured: a chip said 543 while its link opened
+        # 478). Criteria is safe there only because every one of its clauses
+        # leads with `search_profile_id IS NOT NULL`; this hide has no such
+        # membership guard, so it needs a narrowed sibling of its own.
+        # `query` itself is untouched -- a SQLAlchemy query is immutable -- so
+        # the counted hide further down still counts rows that are still there.
+        scoped, _ = owner_review.apply_rejected_hide(query, Property, verdict_filter)
+
+        unassigned_count = scoped.filter(Property.search_profile_id.is_(None)).count()
 
         # The chips' numbers, taken over THIS page's own narrowing -- every
         # filter above and the criteria mode -- with only the subscription
@@ -1759,7 +1790,7 @@ def properties():
         # per-subscription counts and the hidden-subscription note.
         criteria_ctx = _criteria_context()
         chip_scope, _ = subscription_criteria.apply_filter(
-            query, criteria_ctx, criteria_filter
+            scoped, criteria_ctx, criteria_filter
         )
         listing_counts = _listing_counts_by_profile(live_query=chip_scope)
         query = apply_profile_filter(
@@ -1777,6 +1808,18 @@ def properties():
         # about a different page (the review's finding 6).
         query, criteria_hidden_count = subscription_criteria.apply_filter(
             query, criteria_ctx, criteria_filter, count_hidden=True
+        )
+
+        # And the listings the owner turned down are not offered back to them
+        # (owner report 2026-09-07: property 1405, `rejected`, sitting in the
+        # ranked suggestions with a taste score of 55). The same standing-policy
+        # shape as the criteria hide directly above, with the same disclosure:
+        # a filter that hides silently reads as "these listings do not exist".
+        # The two hidden sets are disjoint by construction -- the criteria hide
+        # carries `owner_verdict IS NULL` -- so neither count can describe a row
+        # the other already counted.
+        query, rejected_hidden_count = owner_review.apply_rejected_hide(
+            query, Property, verdict_filter, count_hidden=True
         )
 
         # What the same subscription selection holds *without* the filter bar
@@ -1823,6 +1866,10 @@ def properties():
             scope_query, _ = subscription_criteria.apply_filter(
                 scope_query, criteria_ctx, ""
             )
+            # `_clear_filters_url` deliberately does not state
+            # `CLEARED_NOT_ABSENT`, so the page that link lands on hides the
+            # rejected ones too. M has to be counted the way that page counts.
+            scope_query, _ = owner_review.apply_rejected_hide(scope_query, Property, "")
             filter_bar_scope_total = scope_query.count()
 
         # How much of what the page is about to draw was ever verified against
@@ -1920,6 +1967,15 @@ def properties():
         # off, since those rows are by definition not in the narrowed set.
         # The `criteria_hidden_count` shape: a number about what was
         # withheld, which the summary (rows on screen) cannot carry.
+        #
+        # Computed under a cut exactly as before, and the two disclosures do
+        # not overlap: under a cut the SIMILARITY clause removes a rejected row
+        # before the hide is reached, so `rejected_hidden_count` is 0 there and
+        # this sentence is the one that renders; with no cut there is no
+        # similarity clause, this is None, and the hide's own line says it.
+        # Gating this on the hide instead -- the first attempt -- left a page
+        # under a cut saying nothing at all about the row, which
+        # `tests/test_favorite_similarity.py` caught.
         similar_set_aside = None
         if similarity_cut is not None:
             without_cut = _apply_filter_bar(
@@ -1956,6 +2012,16 @@ def properties():
             if similarity_ctx is not None or similarity_cut is not None
             else None
         )
+        # One number for one fact. The summary counts the rows ON the page, so
+        # once the standing rejected hide has withheld them its `rejected`
+        # slot reads 0 while the line beside it says "Rejected: N hidden" --
+        # two numbers for one fact, which is the blocker an earlier review
+        # raised on this very tooltip. So where the hide did the withholding,
+        # the slot reports the hide's own count.
+        if similarity_summary is not None and rejected_hidden_count:
+            similarity_summary = dict(
+                similarity_summary, rejected=rejected_hidden_count
+            )
 
         # Sorting (safe allow-list). An unknown sort -- an old /lands bookmark
         # asking for travel_time_nearest_beach, say -- falls back to the
@@ -2156,6 +2222,7 @@ def properties():
             similar_hidden_by_favorites=similar_hidden_by_favorites,
             criteria_enabled=criteria_ctx is not None,
             criteria_hidden_count=criteria_hidden_count,
+            rejected_hidden_count=rejected_hidden_count,
             # How the search box entry was read, so an empty result can say
             # what it looked for instead of leaving "0 properties found" to
             # mean both "no such listing" and "not understood as you typed it".
@@ -4573,6 +4640,13 @@ def map_view():
         query_without_profile, _ = subscription_criteria.apply_filter(
             query, criteria_ctx, criteria_param
         )
+        # And the same rejected hide as the list, on BOTH branches for the
+        # reason above: a rejected focus row must not read as "merely in
+        # another subscription" when picking that subscription would not plot
+        # it either.
+        query_without_profile, _ = owner_review.apply_rejected_hide(
+            query_without_profile, Property, verdict_filter
+        )
         # The subscription filter goes on last so the query without it stays
         # in hand. That is what separates a focused listing that is merely in
         # another subscription -- the one case the page can offer a way out of
@@ -4583,6 +4657,9 @@ def map_view():
         )
         query, criteria_hidden_count = subscription_criteria.apply_filter(
             query, criteria_ctx, criteria_param, count_hidden=True
+        )
+        query, rejected_hidden_count = owner_review.apply_rejected_hide(
+            query, Property, verdict_filter, count_hidden=True
         )
         props = query.all()
 
@@ -4596,6 +4673,14 @@ def map_view():
             reveal_args = rebuilt_from(request.args, drop=("criteria",))
             reveal_args["criteria"] = "all"
             criteria_reveal_url = url_for("main.map_view", **reveal_args)
+
+        # The same lift for the same reason, one filter over: `verdict` is now
+        # the second one whose absence still filters.
+        rejected_reveal_url = None
+        if rejected_hidden_count:
+            reveal_args = rebuilt_from(request.args, drop=("verdict",))
+            reveal_args["verdict"] = owner_review.DECISION_ALL
+            rejected_reveal_url = url_for("main.map_view", **reveal_args)
 
         focus_notice = _map_focus_notice(
             focus_id, focus_property, props, query_without_profile
@@ -4748,6 +4833,8 @@ def map_view():
             # under every explicit mode and when nothing was hidden.
             criteria_hidden_count=criteria_hidden_count,
             criteria_reveal_url=criteria_reveal_url,
+            rejected_hidden_count=rejected_hidden_count,
+            rejected_reveal_url=rejected_reveal_url,
         )
 
     except Exception:
@@ -4766,6 +4853,8 @@ def map_view():
             hidden_subscription_note=None,
             criteria_hidden_count=None,
             criteria_reveal_url=None,
+            rejected_hidden_count=None,
+            rejected_reveal_url=None,
         )
 
 
@@ -5800,6 +5889,12 @@ def export_properties_csv():
         query, _ = subscription_criteria.apply_filter(
             query, criteria_ctx, criteria_filter
         )
+        # The same rejected hide as the page this file is taken from (#445's
+        # rule). No count line here -- a CSV has no place for one -- but the
+        # drop still has to happen, or the export disagrees with the page it
+        # was exported from. The file already carries `Owner Verdict`, so a
+        # reader who lifts the hide can see why a row is there.
+        query, _ = owner_review.apply_rejected_hide(query, Property, verdict_filter)
 
         if favorites_filter:
             query = query.filter(Property.is_favorite.is_(True))
