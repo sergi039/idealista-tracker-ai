@@ -73,32 +73,49 @@ NO_NUMBER_ANSWERED = "answer_names_no_number"
 # measured error.
 REFUTING_STATES = frozenset({NUMBER_NOT_ASKED, DIFFERENT_NUMBER})
 
-# A house number standing on its own in a query: one to four digits, with an
-# optional letter after them ("24b", "3 a"). Not glued to a hyphen, slash or
-# dot -- "SI-6" is a road, "s/n" is sin número, "1.500" is a price -- and
-# never five digits, which in a Spanish address is the postal code.
-_HOUSE_NUMBER_RE = re.compile(
-    r"(?<![\w\-/.])(?P<digits>\d{1,4})(?:\s?[A-Za-z]\b)?(?![\w\-/.])"
+# The grammar of a Spanish house number and nothing else: one to four digits,
+# then optionally a short suffix ("24b", "3 a", "12 bis") and optionally a
+# second number for a range ("12-14"). Never five digits -- in a Spanish
+# address that is the postal code -- and never a word longer than three
+# letters, which is how "2 Planta" and "1 de Mayo" stay street text. The
+# independent review of #556 supplied both misreadings the grammar now
+# refuses: "12 bis" read as no number at all, and the 8 of "Avenida 8 de
+# Marzo" read as a number the query had asked for.
+_NUMBER_GRAMMAR = (
+    r"(?P<digits>\d{1,4})(?:[\s\-]?[A-Za-z]{1,3})?(?:[\s\-]\d{1,4}[A-Za-z]?)?"
 )
 
-# A component that is a house number and nothing else: "24b", "3 a", "168".
-# Google's Spanish formatted addresses put it between the route and the
-# postal code -- "Rúa Xoiña, 8, 27788 Foz, Lugo" -- and a `street_number`
-# component carries just this.
-_NUMBER_COMPONENT_RE = re.compile(r"^(?P<digits>\d{1,4})\s?[A-Za-z]?$")
+# A component that is a house number and nothing else: Google's
+# `street_number`, or the component its Spanish formatted addresses put
+# between the route and the postal code ("Rúa Xoiña, 8, 27788 Foz, Lugo").
+_NUMBER_COMPONENT_RE = re.compile(rf"^{_NUMBER_GRAMMAR}$")
+
+# A house number a query named: the number that ENDS a comma-separated
+# component, the way a Spanish address is written -- "Lugar Costenla, 31",
+# "Barrio Otero 15" -- standing after a space or a comma. A number inside a
+# street's name ("Avenida 8 de Marzo") or glued to a road code ("SI-6") or a
+# price ("1.500") is not one.
+_QUERY_NUMBER_RE = re.compile(rf"(?:^|\s){_NUMBER_GRAMMAR}\s*$")
+_TRAILING_PARENTHETICAL_RE = re.compile(r"\s*\([^)]*\)\s*$")
 
 
 def query_house_numbers(query: Any) -> Set[str]:
     """Every house number the query named, as digits. Empty when it named none.
 
-    Generous on purpose: a "km 3" or a year reads as a number the query
-    named, and that can only make the check *keep* a label, never withdraw
-    one. The digits alone are kept because the letter is the part Google
-    rewrites ("24" against "24b").
+    Read per comma-separated component, at its end, with a trailing
+    parenthetical dropped first ("Lugar el Pueblo 128 (Gozón)" names 128).
+    Still generous where it is safe to be: a "km 3" reads as a number the
+    query named, and that can only make the check *keep* a label, never
+    withdraw one. The digits alone are kept because the suffix is the part
+    Google rewrites ("24" against "24b").
     """
-    return {
-        match.group("digits") for match in _HOUSE_NUMBER_RE.finditer(str(query or ""))
-    }
+    numbers = set()
+    for part in str(query or "").split(","):
+        part = _TRAILING_PARENTHETICAL_RE.sub("", part.strip())
+        match = _QUERY_NUMBER_RE.search(part)
+        if match:
+            numbers.add(match.group("digits"))
+    return numbers
 
 
 def _digits(value: Any) -> Optional[str]:
@@ -110,9 +127,11 @@ def answered_house_number(geo: Any) -> Optional[str]:
     """The house number Google's answer names, as digits, from its components.
 
     `street_number` is the typed component, so this reads a fact rather than
-    parsing prose. "S/N" -- sin número -- is a component with no digits and
-    reads as none. A missing component is none too: a rooftop matched by name
-    names no number to refute.
+    parsing prose. A compound number reads as its leading digits ("12 bis" is
+    12, "12-14" is 12), so a mismatch behind a suffix is still a mismatch.
+    "S/N" -- sin número -- is a component with no digits and reads as none. A
+    missing component is none too: a rooftop matched by name names no number
+    to refute.
     """
     if not isinstance(geo, dict):
         return None

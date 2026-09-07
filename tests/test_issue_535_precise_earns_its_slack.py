@@ -148,10 +148,26 @@ class TestWhatTheQueryAsked:
             # A price fragment is not a house number either.
             ("Finca 1.500, Navia, Spain", set()),
             (None, set()),
+            # From the independent review of #556: a number inside a
+            # street's name is not a number the query asked for.
+            ("Avenida 8 de Marzo, 5, Madrid, Spain", {"5"}),
+            ("Calle 2 de Mayo, Gijón, Spain", set()),
+            # A floor is not a house number; a range names its first number.
+            ("Calle Real, 2 Planta, Gijón, Spain", set()),
+            ("Calle Mayor, 12-14, Madrid, Spain", {"12"}),
         ],
     )
     def test_production_queries(self, query, expected):
         assert query_house_numbers(query) == expected
+
+    def test_a_number_in_the_street_name_does_not_vouch_for_the_answer(self):
+        """The reviewer's failing input: house 5 was asked on "8 de Marzo",
+        Google answered house 8, and the 8 of the street name must not read
+        as agreement."""
+        assert (
+            house_number_agreement("Avenida 8 de Marzo, 5, Madrid, Spain", "8")
+            == DIFFERENT_NUMBER
+        )
 
 
 class TestWhatTheAnswerNamed:
@@ -166,6 +182,21 @@ class TestWhatTheAnswerNamed:
             "SI-6, 24b, 33199 Fozana, Asturias, Spain", postal="33199", number="24b"
         )
         assert answered_house_number(geo) == "24"
+
+    def test_a_compound_number_is_its_leading_digits(self):
+        """The reviewer's other failing input: "12 bis" answered for house 14
+        used to read as no number at all, and kept `precise`."""
+        geo = _answer(
+            "Calle Mayor, 12 bis, 28013 Madrid", postal="28013", number="12 bis"
+        )
+        assert answered_house_number(geo) == "12"
+        assert house_number_agreement("Calle Mayor, 14, Madrid, Spain", "12") == (
+            DIFFERENT_NUMBER
+        )
+        geo = _answer(
+            "Calle Mayor, 12-14, 28013 Madrid", postal="28013", number="12-14"
+        )
+        assert answered_house_number(geo) == "12"
 
     def test_sin_numero_names_no_number(self):
         geo = _answer(
@@ -197,6 +228,9 @@ class TestWhatTheAnswerNamed:
             ),
             ("Villaviciosa, Asturias, Spain", None),
             (None, None),
+            # Compound numbers, and the words that are not numbers.
+            ("Calle Mayor, 12 bis, 28013 Madrid, Spain", "12"),
+            ("Calle Real, 2 Planta, 33201 Gijón, Spain", None),
         ],
     )
     def test_the_stored_string(self, formatted, expected):
