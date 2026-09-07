@@ -3311,7 +3311,14 @@ def test_028_a_judged_row_that_fails_the_criteria_is_still_shown_on_postgres(
 
         plain = _row("plain fail")
         favorite = _row("favorited fail", is_favorite=True)
-        reviewed = _row("reviewed fail", owner_verdict="rejected")
+        # `interested`, not `rejected`. This row stands for "the owner judged
+        # it", which is what the CRITERIA exemption turns on -- and since
+        # 2026-09-07 a rejected listing is withheld by a second, unrelated
+        # standing rule (`owner_review.apply_rejected_hide`), which would make
+        # every set equality below measure two rules at once. The API half of
+        # this test would then disagree with its own Python half for a reason
+        # that has nothing to do with migration 028.
+        reviewed = _row("reviewed fail", owner_verdict="interested")
         actioned = _row("actioned fail", next_action="call the architect")
         # Whitespace is not an action: the regex must refuse it, exactly as
         # `read_action` does in Python.
