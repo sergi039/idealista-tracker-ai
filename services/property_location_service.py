@@ -4,11 +4,17 @@ from typing import Any, List, Optional
 
 from sqlalchemy.orm.attributes import flag_modified
 
+from services.address_agreement import (
+    answered_house_number,
+    earns_precise,
+    house_number_agreement,
+)
 from services.coordinate_quality import (
     KNOWN_ACCURACIES,
     SOURCE_MANUAL,
     clear_manual_coordinate,
     improves_on,
+    is_precise,
     manual_coordinate,
     normalize_accuracy,
     portal_coordinate,
@@ -639,6 +645,29 @@ class PropertyLocationService:
             if accuracy not in KNOWN_ACCURACIES:
                 accuracy = "unknown"
 
+            # The label Google's `location_type` implied, kept apart from the
+            # one stored so the record can say both.
+            answered_accuracy = accuracy
+            address_check = house_number_agreement(query, answered_house_number(geo))
+            if is_precise(accuracy) and not earns_precise(address_check):
+                # A ROOFTOP is Google's claim to have matched one building. A
+                # query that named no building cannot have earned that claim
+                # (row 1379: "calle Fiobre, Bergondo" answered "Rua Fiobre,
+                # 100" -- the 100 is Google's), and one that named a different
+                # building refutes it (row 355: 83 asked, 10 answered). The
+                # point is then worth what any other answer to that query is
+                # worth -- the street or the village -- which is `approximate`
+                # and the slack that label carries (#535). Decided BEFORE the
+                # even-trade comparison below, so a withdrawn `precise` cannot
+                # displace a portal pin either.
+                logger.info(
+                    "Withdrawing `precise` for %r: Google answered %r (%s)",
+                    query,
+                    geo.get("formatted_address"),
+                    address_check,
+                )
+                accuracy = "approximate"
+
             if portal_pin is not None and not improves_on(accuracy, previous_accuracy):
                 # An even trade is not a trade: see the note on
                 # `ensure_coordinates`. The attempt is recorded on the row so
@@ -674,6 +703,9 @@ class PropertyLocationService:
                 "municipality_check": municipality_state,
                 "row_municipality": row_municipality,
                 "result_municipalities": result_municipalities,
+                "answered_accuracy": answered_accuracy,
+                "location_type": geo.get("location_type"),
+                "address_check": address_check,
             }
 
         return {"kind": "nothing", "refused": refused}
@@ -749,7 +781,19 @@ class PropertyLocationService:
                 # `read_geocoding_checks` tells them apart.
                 "province_check": outcome["province_check"],
                 "municipality_check": outcome["municipality_check"],
+                # What Google said the point was derived from, kept from now
+                # on (#535): 0 of 1727 records carried it, so what `precise`
+                # rested on had to be reconstructed from the code that writes
+                # it. And the third check, under the name of what it compares:
+                # the house number the query asked against the one answered.
+                "location_type": outcome.get("location_type"),
+                "address_check": outcome.get("address_check"),
             }
+            if outcome.get("answered_accuracy") not in (None, outcome["accuracy"]):
+                # The label was withdrawn. Google's own word stays legible
+                # beside the one stored, the way `_keep_portal_pin` records
+                # `answered_accuracy` next to the accuracy it kept.
+                record["answered_accuracy"] = outcome["answered_accuracy"]
             if outcome["municipality_check"] == "contradicted":
                 # The codes, so a reader can act on the row without
                 # re-geocoding it. Only on the interesting outcome: the
