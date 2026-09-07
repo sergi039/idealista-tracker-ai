@@ -89,7 +89,15 @@ answers "the portal placed this pin" to anyone who asks, and no reader can tell
 those two rows from the 57 fotocasa ones. Nobody was being careless -- there was
 nowhere honest to put it, which is the hole this section closes. Moving them is
 one `utils/set_property_location.py --source cadastre` per row, by the person
-who established them, and is deliberately not done here.
+who established them, and was deliberately not done here. It was done by hand
+afterwards (#536): 161 on 2026-08-25, 792 on 2026-09-03, each through the tool
+with the note the row's own provenance held, and the misfiled entries were then
+taken off both rows under a snapshot (`data/issue_536_pre_fix.json` on the
+mini). Two things in the tool changed with it. Its `MISFILED` line fires on a
+row with a hand-set block too, because on 161 the block hid the entry from the
+tool's own window and only SQL could see it for nine days. And it recognises a
+portal's pin by the portal's *name*, since the `source` field had drifted
+across nine spellings and an exact set of four called 83 real pins misfiled.
 
 The reason those blocks were ad-hoc is that there was no hand-set path for a
 coordinate at all -- the only writers of `location_accuracy` are the geocoder,
@@ -107,9 +115,10 @@ person outranks a better label.
 Five things about it are deliberate. It is **not** written where
 `portal_coordinate` looks -- a conclusion drawn from the cadastre stored under
 "the pin the portal published" is the STATUS-002 mistake above, in a new
-column, and that is why the three rows are **not backfilled**: no column
+column, and that is why the three rows were **not backfilled**: no column
 distinguishes a curated `precise` from a Google one, so a person converts them
-with the note their own block already holds, or nobody does. A **malformed
+with the note their own block already holds, or nobody does (two of the three
+were, one row and one note at a time -- #536). A **malformed
 block does not stop a geocode**, since the alternative is a row pinned to a
 coordinate nothing can correct and nothing can explain, and a **note is
 required** for the same reason -- `owner`/`agency` describe themselves, two
