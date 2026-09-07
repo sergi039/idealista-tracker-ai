@@ -91,7 +91,14 @@ NON_FILTERS: frozenset[str] = frozenset(
 # So clearing is "keep the non-filters, AND state the cleared value for any
 # filter whose absence is not its off position". A future filter of the same
 # shape belongs here; one of the ordinary shape needs nothing.
-CLEARED_NOT_ABSENT: dict[str, str] = {"criteria": "all"}
+#
+# `verdict` joined it on 2026-09-07, when a bare page stopped offering back the
+# listings the owner had turned down (`owner_review.apply_rejected_hide`). It
+# is the second filter whose absence narrows, and without the entry every one
+# of those reveal links -- `_listing_reveal_link`, `_map_focus_link`,
+# `_empty_state_scope` -- would promise to show a rejected row and then re-issue
+# the hide: the same loop, one column over.
+CLEARED_NOT_ABSENT: dict[str, str] = {"criteria": "all", "verdict": "all"}
 
 
 class FilterArgs:

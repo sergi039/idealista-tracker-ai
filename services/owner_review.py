@@ -72,6 +72,12 @@ DECIDED_STATES: Tuple[str, ...] = (INTERESTED, WAITING, REJECTED)
 # The order the filter offers them in, and the only values it accepts.
 DECISION_STATES: Tuple[str, ...] = (INTERESTED, WAITING, REJECTED, UNDECIDED)
 
+# The explicit "show everything, the rejected ones included". It has to exist
+# because absence now NARROWS: a bare /properties hides what the owner turned
+# down, so "" is no longer the off position and something has to be. Read the
+# same way `subscription_criteria` reads `criteria=all`.
+DECISION_ALL = "all"
+
 # --- the action -------------------------------------------------------------
 
 ACTION_NONE = "none"
@@ -342,6 +348,97 @@ def decision_filter_clause(model: Any, state: Optional[str]):
             func.lower(func.trim(model.owner_verdict)).notin_(DECIDED_STATES),
         )
     return func.lower(func.trim(func.coalesce(model.owner_verdict, ""))) == wanted
+
+
+def read_decision_filter(raw: Any) -> Tuple[str, bool]:
+    """`(value, recognised)` for the verdict parameter.
+
+    Three readings, and the third is why this exists at all. `""` is the
+    DEFAULT and it hides the rejected ones; `all` lifts that; the four
+    `DECISION_STATES` each select one. `decision_filter_clause` cannot tell
+    those apart on its own — it answers `None` for `all` and for `banana`
+    alike — and once absence narrows, an unrecognised spelling must fall back
+    to the narrowing default rather than to "show everything", or a typo in a
+    URL quietly widens the page.
+    """
+    wanted = (raw or "").strip().lower()
+    if wanted == DECISION_ALL:
+        return DECISION_ALL, True
+    if wanted in DECISION_STATES:
+        return wanted, True
+    return "", not wanted
+
+
+def rejected_hidden_expression(model: Any):
+    """The rows a bare listing page does not offer: the ones the owner turned
+    down, minus the two they did not turn down *by that act*.
+
+    A **favorited** row is never hidden. The star is the owner's own act and
+    outranks the verdict — the rule
+    `services/favorite_similarity.read_against` already applies by answering
+    `reference` for a favorite before it ever looks at `is_rejected`, and
+    `subscription_criteria.owner_has_judged` by exempting one from the criteria
+    hide.
+
+    A row carrying an **outstanding action** is never hidden either, for the
+    reason `open_action_expression`'s own docstring records: a reminder the
+    page hides is the defect that predicate was written for, and the overdue
+    count would go on advertising a row whose link opens nothing.
+    """
+    return and_(
+        func.lower(func.trim(func.coalesce(model.owner_verdict, ""))) == REJECTED,
+        model.is_favorite.isnot(True),
+        ~open_action_expression(model),
+    )
+
+
+def hidden_by_rejection(record: Any) -> bool:
+    """The Python twin of `rejected_hidden_expression`, branch for branch.
+
+    Pure — no session, no query — so a row's own page can say why it is not on
+    the list without asking the database a second question. Paired with the SQL
+    the way `subscription_criteria.owner_has_judged` is paired with
+    `hidden_by_default_expression`: one rule, two languages, and
+    `tests/test_a_rejected_listing_is_not_offered.py` runs one matrix through
+    both, because a count that disagrees with the row beside it is a third
+    wrong number rather than a disclosure.
+    """
+    verdict = (getattr(record, "owner_verdict", None) or "").strip().lower()
+    if verdict != REJECTED:
+        return False
+    if getattr(record, "is_favorite", False) is True:
+        return False
+    return read_action(record)["state"] == ACTION_NONE
+
+
+def apply_rejected_hide(query, model: Any, raw_value: Any, count_hidden: bool = False):
+    """One reading of the verdict parameter's HIDE for every listing surface.
+
+    Returns `(query, hidden_count)`, the `subscription_criteria.apply_filter`
+    shape: the count only when asked, because it costs a COUNT(*) and only a
+    surface that draws the disclosure needs one. `None` whenever the hide is
+    lifted, so a caller cannot render "0 hidden" where the answer is "nothing
+    was hidden from you".
+
+    The hide lifts for `all` and for `rejected` itself. That second one is not
+    a convenience: the Verdict filter IS the way back this design offers, and a
+    filter that names the rejected listings and then opens "0 properties found"
+    would re-render its own link — the `/map?focus=1457` loop `open_action_
+    expression` and `CLEARED_NOT_ABSENT` were both written about.
+
+    The verdict SELECTION is unchanged and still lives in
+    `decision_filter_clause`; only the hide is new, and the two are applied
+    together at every call site.
+    """
+    value, _ = read_decision_filter(raw_value)
+    if value in (DECISION_ALL, REJECTED):
+        return query, None
+    hidden = (
+        query.filter(rejected_hidden_expression(model)).count()
+        if count_hidden
+        else None
+    )
+    return query.filter(~rejected_hidden_expression(model)), hidden
 
 
 def action_filter_clause(

@@ -1831,9 +1831,8 @@ def get_properties():
         review_today = owner_review.today()
         # And one taste-profile version, for the same reason (#498).
         taste_version = taste_service.current_profile_version()
-        verdict_clause = owner_review.decision_filter_clause(
-            Property, filters.get("verdict")
-        )
+        verdict_raw = filters.get("verdict")
+        verdict_clause = owner_review.decision_filter_clause(Property, verdict_raw)
         if verdict_clause is not None:
             query = query.filter(verdict_clause)
         action_clause = owner_review.action_filter_clause(
@@ -1904,6 +1903,18 @@ def get_properties():
             criteria_ctx,
             criteria_raw,
             count_hidden=(criteria_mode == "default"),
+        )
+        # And the listings the owner turned down, on the same terms: a default
+        # narrowing nobody requested is the one that has to be disclosed, so
+        # the count is taken only when the hide is actually in force.
+        verdict_value, verdict_recognised = owner_review.read_decision_filter(
+            verdict_raw
+        )
+        query, rejected_hidden = owner_review.apply_rejected_hide(
+            query,
+            Property,
+            verdict_raw,
+            count_hidden=(verdict_value not in (owner_review.DECISION_ALL, "rejected")),
         )
 
         # Sorting allow-list
@@ -2133,6 +2144,23 @@ def get_properties():
                 "no verdict and is in none of these three modes."
             )
 
+        # The verdict hide's own sentence, on the same terms as the criteria
+        # one and said only when something was actually withheld (#534's
+        # rule). Deliberately its OWN `if` and NOT part of the criteria chain
+        # above: the first version was written as an `elif` in the middle of
+        # it, which rebound `criteria=all` and its `else` to this condition —
+        # so a request that hid a rejected listing silently lost its criteria
+        # note, and one that hid none gained a criteria note the `ctx is None`
+        # branch had already answered.
+        if rejected_hidden:
+            notes.append(
+                f"verdict: {rejected_hidden} listing(s) the owner rejected are "
+                "hidden by the default reading and are not counted in `total`; "
+                "pass verdict=all (or verdict=rejected) to include them. A "
+                "favorited listing, or one carrying an outstanding action, is "
+                "never hidden."
+            )
+
         # The similarity cut, said out loud: what the rows were measured
         # against, or that there was nothing to measure against and the
         # answer is therefore empty -- a `total: 0` with nothing saying why
@@ -2237,6 +2265,15 @@ def get_properties():
                     # criteria -- nothing was hidden by a rule nobody asked
                     # for, and a `0` there would claim a count somebody took.
                     "criteria_hidden_by_default": criteria_hidden,
+                    # The verdict quartet, mirroring the criteria one above:
+                    # what was asked for, what was applied, whether the
+                    # spelling was recognised, and how many rows the default
+                    # withheld. `null` whenever the hide was lifted -- a `0`
+                    # there would claim a count somebody took.
+                    "verdict_requested": verdict_raw,
+                    "verdict_applied": verdict_value or "default",
+                    "verdict_recognized": verdict_recognised,
+                    "rejected_hidden_by_default": rejected_hidden,
                     # `offset` only: the page size is already here as `cap`,
                     # and one fact under two names in one object is what this
                     # block exists to stop happening between objects.
