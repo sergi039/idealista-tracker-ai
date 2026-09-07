@@ -153,7 +153,7 @@ class TestWhatTheQueryAsked:
             ("Calle 2 de Mayo, Gijón, Spain", set()),
             # A floor is not a house number; a range names its first number.
             ("Calle Real, 2 Planta, Gijón, Spain", set()),
-            ("Calle Mayor, 12-14, Madrid, Spain", {"1214"}),
+            ("Calle Mayor, 12-14, Madrid, Spain", {"12-14"}),
         ],
     )
     def test_production_queries(self, query, expected):
@@ -251,7 +251,15 @@ class TestWhatTheAnswerNamed:
         geo = _answer(
             "Calle Mayor, 12-14, 28013 Madrid", postal="28013", number="12-14"
         )
-        assert answered_house_number(geo) == "1214"
+        assert answered_house_number(geo) == "12-14"
+        # The third review's input: a range is not the four-digit house it
+        # spells without its separator, and a range answered is the range asked.
+        assert house_number_agreement("Calle Mayor, 12-14, Madrid, Spain", "1214") == (
+            DIFFERENT_NUMBER
+        )
+        assert house_number_agreement("Calle Mayor, 12-14, Madrid, Spain", "12-14") == (
+            AGREED
+        )
 
     def test_sin_numero_names_no_number(self):
         geo = _answer(

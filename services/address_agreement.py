@@ -7,16 +7,10 @@ times and the hazard band are all scored as if the coordinate were the parcel.
 whether `precise` earns its zero. #535 did.
 
 Measured on production, 2026-09-02 (the comment on #535): 152 of the 166
-`precise` rows were written by the geocoder, every one of them a ROOFTOP by
-construction, and **not one carries a second coordinate** to check against --
-no portal pin, no cadastre block, no hand-set location. The only ROOFTOP a
-person ever checked is row 360, "Barrio de Prendonés, 1": Google matched house
-1 on a *travesía named after* the village, in the municipal capital, 2868 m
-from house 1 in it. What the stored record *can* say for free is whether the
-ROOFTOP is the address that was asked, and for 23 of the 152 it was not: 17
-answered a house number to a query that named none ("calle Fiobre, Bergondo"
--> "Rua Fiobre, 100"), 6 answered a different street or number ("pillarno -
-el calello, 83" -> "Av. Eysines, 10").
+`precise` rows were the geocoder's, every one a ROOFTOP, none with a second
+coordinate to check against; the one a person checked (row 360) was 2868 m
+out. What the record *can* say for free is whether the ROOFTOP is the
+address that was asked, and for 23 of the 152 it was not.
 
 This module is that comparison, at the one granularity the record supports:
 the **house number**. A ROOFTOP is Google's claim to have matched one
@@ -95,8 +89,11 @@ _TRAILING_PARENTHETICAL_RE = re.compile(r"\s*\([^)]*\)\s*$")
 
 def _token(match: "re.Match") -> str:
     """`24 b`, `24B` and `24-b` are one house number: digits, then the suffix
-    lower-cased with its spaces and hyphens removed."""
-    suffix = "".join(ch for ch in match.group("suffix").lower() if ch.isalnum())
+    lower-cased with its spaces removed. A range keeps its separator --
+    `12-14` is not house 1214 (the third review of #556 supplied that
+    collision), so a hyphen survives only in front of a digit."""
+    suffix = match.group("suffix").lower().replace(" ", "")
+    suffix = re.sub(r"-(?!\d)", "", suffix)
     return match.group("digits") + suffix
 
 
