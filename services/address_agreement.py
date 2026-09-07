@@ -54,8 +54,9 @@ refinements, not contradictions -- the distinction the issue itself draws
 between moving a pin 28 m and 2868 m.
 """
 
+import itertools
 import re
-from typing import Any, Optional, Set
+from typing import Any, Optional, Set, Tuple
 
 # The four states the check can answer. Every way of *not* being able to
 # compare stays its own answer rather than borrowing one of the two real ones
@@ -82,7 +83,8 @@ REFUTING_STATES = frozenset({NUMBER_NOT_ASKED, DIFFERENT_NUMBER})
 # refuses: "12 bis" read as no number at all, and the 8 of "Avenida 8 de
 # Marzo" read as a number the query had asked for.
 _NUMBER_GRAMMAR = (
-    r"(?P<digits>\d{1,4})(?:[\s\-]?[A-Za-z]{1,3})?(?:[\s\-]\d{1,4}[A-Za-z]?)?"
+    r"(?P<digits>\d{1,4})"
+    r"(?P<suffix>(?:[\s\-]?[A-Za-z]{1,3})?(?:[\s\-]\d{1,4}[A-Za-z]?)?)"
 )
 
 # A component that is a house number and nothing else: Google's
@@ -99,53 +101,76 @@ _QUERY_NUMBER_RE = re.compile(rf"(?:^|\s){_NUMBER_GRAMMAR}\s*$")
 _TRAILING_PARENTHETICAL_RE = re.compile(r"\s*\([^)]*\)\s*$")
 
 
+def _token(match: "re.Match") -> str:
+    """`24 b`, `24B` and `24-b` are one house number: digits, then the suffix
+    lower-cased with its spaces and hyphens removed."""
+    suffix = "".join(ch for ch in match.group("suffix").lower() if ch.isalnum())
+    return match.group("digits") + suffix
+
+
+def _split(token: str) -> Tuple[str, str]:
+    digits = "".join(itertools.takewhile(str.isdigit, token))
+    return digits, token[len(digits) :]
+
+
 def query_house_numbers(query: Any) -> Set[str]:
-    """Every house number the query named, as digits. Empty when it named none.
+    """Every house number the query named, as tokens ("31", "24b"). Empty when
+    it named none.
 
     Read per comma-separated component, at its end, with a trailing
     parenthetical dropped first ("Lugar el Pueblo 128 (Gozón)" names 128).
     Still generous where it is safe to be: a "km 3" reads as a number the
     query named, and that can only make the check *keep* a label, never
-    withdraw one. The digits alone are kept because the suffix is the part
-    Google rewrites ("24" against "24b").
+    withdraw one.
     """
     numbers = set()
     for part in str(query or "").split(","):
         part = _TRAILING_PARENTHETICAL_RE.sub("", part.strip())
         match = _QUERY_NUMBER_RE.search(part)
         if match:
-            numbers.add(match.group("digits"))
+            numbers.add(_token(match))
     return numbers
 
 
-def _digits(value: Any) -> Optional[str]:
+def _component_token(value: Any) -> Optional[str]:
     match = _NUMBER_COMPONENT_RE.match(str(value or "").strip())
-    return match.group("digits") if match else None
+    return _token(match) if match else None
 
 
 def answered_house_number(geo: Any) -> Optional[str]:
-    """The house number Google's answer names, as digits, from its components.
+    """The house number Google's answer names, as a token, from its components.
 
     `street_number` is the typed component, so this reads a fact rather than
-    parsing prose. A compound number reads as its leading digits ("12 bis" is
-    12, "12-14" is 12), so a mismatch behind a suffix is still a mismatch.
-    "S/N" -- sin número -- is a component with no digits and reads as none. A
-    missing component is none too: a rooftop matched by name names no number
-    to refute.
+    parsing prose; `utils/geocoding.py` passes the components through on both
+    providers, and the province and municipality checks already rest on them.
+    "S/N" -- sin número -- is a component with no digits and reads as none.
+    An answer whose components name no street number names no number to
+    refute: a rooftop matched by name.
+
+    An answer that carries **no components at all** is read from its
+    `formatted_address` instead -- the same reading
+    `utils/audit_precise_accuracy.py` applies to stored records, which kept
+    the string and dropped the components. Without it a bare answer would
+    read as "no number" and keep `precise` on nothing.
     """
     if not isinstance(geo, dict):
         return None
-    for component in geo.get("address_components") or ():
-        if not isinstance(component, dict):
-            continue
+    components = [
+        c for c in (geo.get("address_components") or ()) if isinstance(c, dict)
+    ]
+    if not components:
+        return house_number_in_formatted(geo.get("formatted_address"))
+    for component in components:
         if "street_number" not in (component.get("types") or ()):
             continue
-        return _digits(component.get("long_name") or component.get("short_name"))
+        return _component_token(
+            component.get("long_name") or component.get("short_name")
+        )
     return None
 
 
 def house_number_in_formatted(formatted: Any) -> Optional[str]:
-    """The house number a stored `formatted_address` names, as digits.
+    """The house number a `formatted_address` names, as a token.
 
     For the records written before this module existed, which kept the
     string and dropped the components. The first comma-separated component
@@ -154,21 +179,33 @@ def house_number_in_formatted(formatted: Any) -> Optional[str]:
     never is, because it travels with the road ("Nacional 632").
     """
     for part in str(formatted or "").split(","):
-        digits = _digits(part)
-        if digits is not None:
-            return digits
+        token = _component_token(part)
+        if token is not None:
+            return token
     return None
 
 
 def house_number_agreement(query: Any, answered: Optional[str]) -> str:
-    """One of the four states, for a query and the number its answer named."""
+    """One of the four states, for a query and the number its answer named.
+
+    The digits must agree. The suffix must agree only where **both** sides
+    carry one: "24A" asked and "24B" answered are two houses, but "24"
+    against "24b" and "3 a" against "3" are one house written twice --
+    measured on eight production rows (45, 46, 91, 216, 246, 713, 791, 926),
+    where Google added or dropped the letter and the point was the same.
+    """
     if answered is None:
         return NO_NUMBER_ANSWERED
     asked = query_house_numbers(query)
     if not asked:
         return NUMBER_NOT_ASKED
-    if answered in asked:
-        return AGREED
+    answered_digits, answered_suffix = _split(answered)
+    for token in asked:
+        digits, suffix = _split(token)
+        if digits != answered_digits:
+            continue
+        if not suffix or not answered_suffix or suffix == answered_suffix:
+            return AGREED
     return DIFFERENT_NUMBER
 
 

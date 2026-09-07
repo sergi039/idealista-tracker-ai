@@ -136,7 +136,7 @@ class TestWhatTheQueryAsked:
             # 45: the road code's 6 is not a house number; 24 is.
             ("SI-6, 24, Viella-Granda-Meres, Siero, Spain", {"24"}),
             # 246: a letter after the number is not part of it.
-            ("Lugar Pite, 3 a, Cambre, Spain", {"3"}),
+            ("Lugar Pite, 3 a, Cambre, Spain", {"3a"}),
             # 412: a number written without a comma is still a number.
             ("Barrio Otero 15, Albandi, Carreño, Spain", {"15"}),
             # 894: nor does a slash or a parenthesis hide one.
@@ -154,7 +154,7 @@ class TestWhatTheQueryAsked:
             ("Calle 2 de Mayo, Gijón, Spain", set()),
             # A floor is not a house number; a range names its first number.
             ("Calle Real, 2 Planta, Gijón, Spain", set()),
-            ("Calle Mayor, 12-14, Madrid, Spain", {"12"}),
+            ("Calle Mayor, 12-14, Madrid, Spain", {"1214"}),
         ],
     )
     def test_production_queries(self, query, expected):
@@ -177,11 +177,67 @@ class TestWhatTheAnswerNamed:
         )
         assert answered_house_number(geo) == "100"
 
-    def test_a_letter_suffix_is_dropped(self):
+    def test_a_letter_suffix_travels_with_the_number(self):
         geo = _answer(
             "SI-6, 24b, 33199 Fozana, Asturias, Spain", postal="33199", number="24b"
         )
-        assert answered_house_number(geo) == "24"
+        assert answered_house_number(geo) == "24b"
+
+    def test_an_answer_with_no_components_is_read_from_its_string(self):
+        """The reviewer's input: a ROOFTOP carrying no components at all must
+        not read as "no number" and keep `precise` on nothing."""
+        geo = {
+            "accuracy": "precise",
+            "formatted_address": "Rua Fiobre, 100, 15165 A Coruña, Spain",
+        }
+        assert answered_house_number(geo) == "100"
+        assert house_number_agreement("calle Fiobre, Bergondo, Spain", "100") == (
+            NUMBER_NOT_ASKED
+        )
+
+    def test_the_real_adapter_passes_the_components_through(self):
+        """Not a stub: `GeocodingService.geocode_address` itself, fed Google's
+        payload shape, hands `address_components` and `location_type` to the
+        check. The province and municipality checks rest on the same field;
+        this is the evidence the review asked for."""
+        from unittest.mock import patch
+
+        from utils.geocoding import GeocodingService
+
+        payload = {
+            "status": "OK",
+            "results": [
+                {
+                    "formatted_address": "Rua Fiobre, 100, 15165 A Coruña, Spain",
+                    "geometry": {
+                        "location": {"lat": 43.32, "lng": -8.24},
+                        "location_type": "ROOFTOP",
+                    },
+                    "types": ["street_address"],
+                    "address_components": [
+                        {"long_name": "100", "types": ["street_number"]},
+                        {"long_name": "Rua Fiobre", "types": ["route"]},
+                        {"long_name": "15165", "types": ["postal_code"]},
+                    ],
+                }
+            ],
+        }
+
+        class _Response:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return payload
+
+        service = GeocodingService()
+        service.google_maps_key = "test-key"
+        with patch("utils.geocoding.billed_get", return_value=_Response()):
+            geo = service.geocode_address("calle Fiobre, Bergondo, Spain")
+
+        assert geo["accuracy"] == "precise"
+        assert geo["location_type"] == "ROOFTOP"
+        assert answered_house_number(geo) == "100"
 
     def test_a_compound_number_is_its_leading_digits(self):
         """The reviewer's other failing input: "12 bis" answered for house 14
@@ -189,14 +245,14 @@ class TestWhatTheAnswerNamed:
         geo = _answer(
             "Calle Mayor, 12 bis, 28013 Madrid", postal="28013", number="12 bis"
         )
-        assert answered_house_number(geo) == "12"
-        assert house_number_agreement("Calle Mayor, 14, Madrid, Spain", "12") == (
+        assert answered_house_number(geo) == "12bis"
+        assert house_number_agreement("Calle Mayor, 14, Madrid, Spain", "12bis") == (
             DIFFERENT_NUMBER
         )
         geo = _answer(
             "Calle Mayor, 12-14, 28013 Madrid", postal="28013", number="12-14"
         )
-        assert answered_house_number(geo) == "12"
+        assert answered_house_number(geo) == "1214"
 
     def test_sin_numero_names_no_number(self):
         geo = _answer(
@@ -215,7 +271,7 @@ class TestWhatTheAnswerNamed:
         "formatted,expected",
         [
             ("Rua Fiobre, 100, 15165 A Coruña, Spain", "100"),
-            ("SI-6, 24b, 33199 Fozana, Asturias, Spain", "24"),
+            ("SI-6, 24b, 33199 Fozana, Asturias, Spain", "24b"),
             # 246: Google split the letter into its own component.
             ("Lugar, Pite, 3, a, 15181 Cambre, A Coruña, Spain", "3"),
             # 438: S/N is not a number.
@@ -229,7 +285,7 @@ class TestWhatTheAnswerNamed:
             ("Villaviciosa, Asturias, Spain", None),
             (None, None),
             # Compound numbers, and the words that are not numbers.
-            ("Calle Mayor, 12 bis, 28013 Madrid, Spain", "12"),
+            ("Calle Mayor, 12 bis, 28013 Madrid, Spain", "12bis"),
             ("Calle Real, 2 Planta, 33201 Gijón, Spain", None),
         ],
     )
@@ -250,6 +306,19 @@ class TestTheVerdict:
         )
         assert house_number_agreement("calle Fiobre, Bergondo, Spain", None) == (
             NO_NUMBER_ANSWERED
+        )
+
+    def test_a_suffix_on_both_sides_must_agree(self):
+        """The reviewer's input: 24A asked and 24B answered are two houses.
+        A suffix on one side only is the same house written twice (rows 45,
+        46, 91, 216, 246, 713, 791, 926 on production)."""
+        assert house_number_agreement("Calle Mayor, 24A, Madrid, Spain", "24b") == (
+            DIFFERENT_NUMBER
+        )
+        assert house_number_agreement("SI-6, 24, Siero, Spain", "24b") == AGREED
+        assert house_number_agreement("Lugar Pite, 3 a, Cambre, Spain", "3") == AGREED
+        assert house_number_agreement("Lugar Pazo, 23 C, Abegondo, Spain", "23c") == (
+            AGREED
         )
 
     def test_only_a_positive_finding_withdraws_the_label(self):
@@ -397,7 +466,8 @@ class TestTheGeocoderStoresWhatItEarned:
     def test_a_withdrawn_precise_does_not_displace_a_portal_pin(self, app):
         """The even-trade rule (#393) reads the label AFTER the check: an
         unearned ROOFTOP is `approximate` against the pin's `approximate`,
-        so the pin stays and the attempt is recorded."""
+        so the pin stays -- and the record still says what Google answered,
+        with the check that kept it out."""
         pin_lat, pin_lon = "43.5500000", "-5.9500000"
         with app.app_context():
             row = _row(
@@ -425,7 +495,9 @@ class TestTheGeocoderStoresWhatItEarned:
             assert float(row.location_lon) == pytest.approx(-5.95)
             assert row.location_accuracy == "approximate"
             assert record["kept"] == "fotocasa coordinate"
-            assert record["answered_accuracy"] == "approximate"
+            # Provenance: what Google said, and why it did not count.
+            assert record["answered_accuracy"] == "precise"
+            assert record["address_check"] == NUMBER_NOT_ASKED
 
 
 # ---------------------------------------------------------------- the audit --

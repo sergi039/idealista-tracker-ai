@@ -525,6 +525,7 @@ class PropertyLocationService:
         answered,
         answered_accuracy,
         refused_reason: str = "",
+        address_check: Optional[str] = None,
     ) -> None:
         """Put the portal's pin back, and say on the row that it was tried.
 
@@ -553,6 +554,12 @@ class PropertyLocationService:
         }
         if answered_accuracy:
             record["answered_accuracy"] = answered_accuracy
+        if address_check:
+            # Google's own word is what `answered_accuracy` carries, so a
+            # `precise` kept out by the house-number check (#535) needs the
+            # check beside it, or the record reads as a `precise` that failed
+            # to improve on an `approximate`.
+            record["address_check"] = address_check
         if refused_reason:
             record["refused"] = refused_reason
         enrichment["geocoding"] = record
@@ -678,7 +685,10 @@ class PropertyLocationService:
                     "kind": "keep_pin",
                     "query": query,
                     "answered": geo.get("formatted_address"),
-                    "answered_accuracy": accuracy,
+                    # What Google said, not what it was worth after the check:
+                    # the record is provenance, and the check travels with it.
+                    "answered_accuracy": answered_accuracy,
+                    "address_check": address_check,
                 }
 
             if municipality_state == "contradicted":
@@ -752,7 +762,9 @@ class PropertyLocationService:
                     "kind": "keep_pin",
                     "query": outcome["query"],
                     "answered": outcome["formatted_address"],
-                    "answered_accuracy": outcome["accuracy"],
+                    "answered_accuracy": outcome.get("answered_accuracy")
+                    or outcome["accuracy"],
+                    "address_check": outcome.get("address_check"),
                 }
 
         if kind == "found":
@@ -817,6 +829,7 @@ class PropertyLocationService:
                 answered=outcome.get("answered"),
                 answered_accuracy=outcome.get("answered_accuracy"),
                 refused_reason=outcome.get("refused_reason", ""),
+                address_check=outcome.get("address_check"),
             )
             return True
 
