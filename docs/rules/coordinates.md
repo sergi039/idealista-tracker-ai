@@ -121,3 +121,98 @@ tool is dry-run by default, `--apply` is refused without `--snapshot`, and
 `--restore` is `utils/refresh_property_accuracy.py`'s own, which refuses to
 overwrite a location a person set after the snapshot.
 
+
+## What a ROOFTOP is worth here, asked of the cadastre (#559, 2026-09-08)
+
+#535 could only compare the two strings the record already held. It said so,
+and it named what it could not reach: whether a ROOFTOP that *does* answer the
+address asked earns the 0 m `coordinate_slack_m()` grants it. 0 of the kept
+rows carried a second coordinate, and the one row anybody had ever checked by
+hand (360) was 2868 m out — a sample of one.
+
+**The second coordinate exists and it is free.** Catastro's
+`Consulta_RCCOOR_Distancia` answers, for one point, which parcels lie at or
+near it, each with its cadastral house number and its distance in metres. So
+"is Google's ROOFTOP standing on the parcel whose number the query asked for?"
+costs one keyless request per row. `services/cadastre_locate.py` is that
+reader and `utils/audit_precise_against_cadastre.py` runs it over the cohort;
+neither writes anything, because #559's own list of what must not happen has
+"do not relabel from a displacement alone" on it, and a tool that could write
+could do that by accident.
+
+**Measured over all 130 rows of the cohort on 2026-09-08** (every row carrying
+`precise` whose ROOFTOP agreed with the query, `enrichment["location"]` rows
+excluded and named):
+
+| what the cadastre says | rows |
+|---|---|
+| the coordinate stands on the parcel numbered as asked | 58 |
+| displaced, and the distance measured | 26 |
+| neither confirmed nor placed | 46 |
+
+Of the 26 measured displacements, 17 are within the neighbour list's ~25 m
+reach and **9 are not: 62.6, 62.6, 69.0, 69.0, 103.6, 130.4, 336.6, 448.3 and
+1783.3 m.** Row 938 ("Avenida Viveiro, 25, Foz") is the 1783 m one and carries
+`precise` — 0 m of slack — today. Row 25 is the 336.6 m one, and it is #535's
+second disclosed blind spot arriving as a number: "calle Tarancon, 6" answered
+on "Av. de Salamanca, 6", 337 m from the Tarancón 6 the cadastre holds. The
+two rows #559 named are both answered: 1537 ("Lugar Costenla, 31, Carballo")
+stands on its own parcel, and 1734 ("Calle Xoiña, 8, Foz") is 69.0 m off.
+
+**So a ROOFTOP does not earn its zero on this coast, and the sample still
+cannot say what it does earn.** 46 rows are unplaced — a road code ("N-632")
+or a lugar Google wrote as a street has no entry in the municipality's index
+to measure against — and an unplaced row is not a correct one. Any band drawn
+over the 84 that resolved would be drawn over the half that could be resolved,
+which is not the half where a 2868 m error hides. `_tier_slack_table` is
+therefore **unchanged by this work**: the measurement is the deliverable, the
+band is a decision, and it is the owner's, exactly as #559 wrote it.
+
+**Two blind spots of the measurement itself, both disclosed rather than
+fixed.** The comparison is on the house number, so a parcel carrying the asked
+number on a *different* street would read as agreement — the first run
+reported row 25 that way. `number_matched_other_street` is the answer to that:
+the cadastral street of a matched parcel must share a content word with the
+street asked, which is the weakest test that separates a spelling from a
+different street (13 of #535's 36 token mismatches were spelling, and every
+one of those keeps a word). And the street index is matched exactly, on the
+set of content words, so word order and articles are absorbed
+("RETELA,LA" is "Lugar la Retela", "CASTRELOS" is "avenida de Castrelos") and
+nothing else is. A near-miss is `street_not_matched`, never a guess, and a tie
+is `street_ambiguous` — except among candidates that all carry the same sigla,
+where a tie is a duplicate index entry rather than two places and the exact
+spelling breaks it. Foz holds one street twice, `RU XOIÑA` and `RU XOIÑA, DA`;
+refusing that pair left row 1734 — one of the two #559 named — unplaced. `LG`
+and `CL` of one name stay ambiguous, because those are plausibly a lugar and a
+street named after it.
+
+## The rows a person placed after #535 (#558, 2026-09-08)
+
+All seven rows #535 left behind now carry `enrichment["location"]`, written
+one at a time through `utils/set_property_location.py --apply` behind
+`data/issue_558_pre_20260908.json` on the mini.
+
+| row | what was established | how |
+|---|---|---|
+| 25 | the parcel of the address the advert states, 337 m from the stored ROOFTOP | Catastro `Consulta_DNPLOC`, RC `0139702YH0103N` |
+| 1445 | the lugar the advert names, **3.3 km** from the stored coordinate | `Consulta_DNPLOC` on `LG VILACENDOI - SAN MARTIÑO` |
+| 438, 765 | the coordinate is inside the named hamlet, but the advert names no house number and its plot is not that parcel — so `precise` was never earned | `Consulta_RCCOOR_Distancia`; coordinate unchanged, only the claim |
+| 1379, 1680, 1759 | the portal's own map centre | yaencontre `ld+json` |
+
+**1445 is the one that moved, and it moved because the title was mangled.**
+"calle Lugar Vilacendoisan Martiño" is the lugar Vilacendoi run together with
+its parish, San Martiño; Catastro indexes it as `LG VILACENDOI - SAN MARTIÑO`,
+and three of its parcels span 114 m around a point 3.3 km from where the row
+sat — on `TR COLON 8`, in the middle of Foz. The advert still names no house
+number, so what was recorded is the hamlet and the note says so.
+
+**A portal map centre is not a pin, and the note says so on all three rows.**
+yaencontre states "El anunciante no ha indicado la dirección exacta" and draws
+a ~500 m circle with no marker, so what was recorded is the centre of a
+privacy circle. It is still better provenance than the stored ROOFTOP — 1379's
+stood on `LG FIOBRE 100`, a real cadastral address but an arbitrary house on a
+lugar that runs at least 817 m — and a hand-set block moves the row from the
+5 km locality slack to the 2 km listing-pin one. 1680 is the same house as
+1379 (same subscription, price, area and rooms; two agencies, and its own
+listing now answers 410 Gone), and its note carries that evidence rather than
+implying a second reading.
