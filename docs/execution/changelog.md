@@ -2,6 +2,13 @@
 
 ## 2026-09-08
 
+- Made recommendation rows compact: group repeated evidence labels per outcome,
+  show at most two matching topics and visible conflict/check counts, and keep
+  the full topic list in a keyboard-accessible disclosure. This prevents owner
+  comments from stretching every listing to screen height. Named the mode
+  button Recommendations and shortened its score-column heading for discovery
+  and more title space; ranking and stored evidence are unchanged.
+
 - Added source-typed Taste descriptors, explicit preference clauses and a pure
   recommendation context on `/properties` so plot/sea facts, scope, conflicts,
   coverage and stale profiles are represented without a model call per row.

@@ -234,6 +234,58 @@
     text-align: start;
 }
 
+/* Keep the default row bounded; full evidence opens on demand without JS. */
+.recommendation-reference-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35rem;
+}
+
+.recommendation-reading > .recommendation-evidence,
+.recommendation-conflict-summary,
+.recommendation-details {
+    margin-top: 0.35rem;
+}
+
+.recommendation-details > summary {
+    cursor: pointer;
+    color: var(--bs-primary);
+    font-size: 0.85em;
+    padding-block: 0.15rem;
+}
+
+.recommendation-details > summary:focus-visible {
+    outline: 2px solid var(--bs-primary);
+    outline-offset: 2px;
+}
+
+.recommendation-details-body {
+    display: grid;
+    gap: 0.65rem;
+    margin-top: 0.5rem;
+    padding: 0.65rem;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 0.4rem;
+    background: var(--bs-tertiary-bg);
+}
+
+.recommendation-table .col-score {
+    width: 5.5rem;
+}
+
+.table.recommendation-table td {
+    vertical-align: top;
+    padding-block: 0.85rem;
+}
+
+@media (min-width: 1200px) {
+    .recommendation-table .col-title {
+        min-width: 320px;
+        width: 32%;
+    }
+}
+
 /* Subscription chips: one thin strip that scrolls sideways. Every chip is
    the same fixed size, a long saved-search name truncates inside its chip,
    and the overflow stays inside the strip -- eleven live subscriptions must
