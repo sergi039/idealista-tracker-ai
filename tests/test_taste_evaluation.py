@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from services import taste_evaluation
 
 
@@ -38,3 +40,17 @@ def test_learning_entity_is_reserved_even_when_learning_row_is_skipped(monkeypat
     )
 
     assert [candidate["property_id"] for candidate in manifest["candidates"]] == [3]
+
+
+def test_missing_learning_rows_fail_closed_before_their_entity_can_leak():
+    candidate = SimpleNamespace(
+        id=2,
+        idealista_property_id="ABC",
+        is_favorite=False,
+        owner_verdict=None,
+    )
+
+    with pytest.raises(ValueError, match="include every learning/activity row"):
+        taste_evaluation.build_manifest(
+            [candidate], learning_property_ids={1}, activity_property_ids=set()
+        )

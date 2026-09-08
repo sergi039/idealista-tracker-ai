@@ -596,6 +596,19 @@ def test_recommendation_sort_expression_orders_candidate_ranks_in_sql(app):
     assert [row.id for row in ordered] == [higher.id, lower.id]
 
 
+def test_empty_recommendation_search_renders_without_an_empty_case_expression(app):
+    """The live route may legitimately have no ids to place in its SQL CASE."""
+    _profile()
+
+    response = app.test_client().get(
+        "/properties?profile_id=all&mode=recommendation&sort=recommendation"
+        "&search=definitely-no-such-property"
+    )
+
+    assert response.status_code == 200
+    assert b"An error occurred while loading properties" not in response.data
+
+
 def test_reference_visual_snapshot_preserves_image_evidence_and_invalidates_profile(
     app,
 ):
@@ -1047,6 +1060,145 @@ def test_explicit_global_clause_still_applies_across_reference_profiles(app):
     reading = context.readings[candidate.id]
     assert reading["eligibility"] == "excluded"
     assert reading["nearest_positive_reference"] is None
+
+
+def test_each_clause_compares_only_the_value_named_in_that_clause(app):
+    """Opposite preferences on one source aspect must remain independent."""
+    profile = _profile()
+    source = _property(profile, title="mixed shape source", is_favorite=True)
+    candidate = _property(profile, title="regular candidate")
+    profile_data = _recommendation_profile(
+        [source.id],
+        clauses=[
+            {
+                "mapping_state": "executable",
+                "aspect_id": "plot_outline",
+                "source_property_id": source.id,
+                "source_profile_id": profile.id,
+                "scope": "profile",
+                "polarity": "avoid",
+                "strength": "hard",
+                "values": ["notched"],
+            },
+            {
+                "mapping_state": "executable",
+                "aspect_id": "plot_outline",
+                "source_property_id": source.id,
+                "source_profile_id": profile.id,
+                "scope": "profile",
+                "polarity": "prefer",
+                "strength": "soft",
+                "values": ["regular"],
+            },
+        ],
+        descriptors={
+            str(source.id): {
+                "aspects": {
+                    "plot_outline": [
+                        {"value": "notched", "status": "claimed"},
+                        {"value": "regular", "status": "claimed"},
+                    ]
+                }
+            }
+        },
+    )
+
+    with patch.object(
+        taste_recommendation.taste_descriptors,
+        "build_descriptor",
+        return_value={
+            "aspects": {"plot_outline": [{"value": "regular", "status": "supported"}]}
+        },
+    ):
+        reading = taste_recommendation.build_context(
+            [candidate], profile_data, {"state": "current"}
+        ).readings[candidate.id]
+
+    assert reading["conflicts"] == []
+    assert [facet["aspect_id"] for facet in reading["matches"]] == ["plot_outline"]
+    assert reading["eligibility"] == "eligible"
+
+
+def test_hard_exclusion_uses_the_status_of_the_violating_value(app):
+    """Supported upkeep cannot promote a claimed ruined value into a hard fact."""
+    profile = _profile()
+    source = _property(profile, title="avoid ruined source", is_favorite=True)
+    candidate = _property(profile, title="mixed support candidate")
+    profile_data = _recommendation_profile(
+        [source.id],
+        clauses=[
+            {
+                "mapping_state": "executable",
+                "aspect_id": "house_condition",
+                "source_property_id": source.id,
+                "source_profile_id": profile.id,
+                "scope": "profile",
+                "polarity": "avoid",
+                "strength": "hard",
+                "values": ["ruined"],
+            }
+        ],
+    )
+
+    with patch.object(
+        taste_recommendation.taste_descriptors,
+        "build_descriptor",
+        return_value={
+            "aspects": {
+                "house_condition": [
+                    {"value": "well_maintained", "status": "supported"},
+                    {"value": "ruined", "status": "claimed"},
+                ]
+            }
+        },
+    ):
+        reading = taste_recommendation.build_context(
+            [candidate], profile_data, {"state": "current"}
+        ).readings[candidate.id]
+
+    assert reading["conflicts"][0]["status"] == "claimed"
+    assert reading["conflicts"][0]["hard"] is False
+    assert reading["coverage"] == {"supported": 0, "relevant": 1}
+    assert reading["eligibility"] == "eligible"
+
+
+def test_avoided_value_nonoverlap_is_neutral_not_a_positive_rank_match(app):
+    profile = _profile()
+    source = _property(profile, title="avoid renovation source", is_favorite=True)
+    candidate = _property(profile, title="maintained candidate")
+    profile_data = _recommendation_profile(
+        [source.id],
+        clauses=[
+            {
+                "mapping_state": "executable",
+                "aspect_id": "house_condition",
+                "source_property_id": source.id,
+                "source_profile_id": profile.id,
+                "scope": "profile",
+                "polarity": "avoid",
+                "strength": "soft",
+                "values": ["major_renovation"],
+            }
+        ],
+    )
+
+    with patch.object(
+        taste_recommendation.taste_descriptors,
+        "build_descriptor",
+        return_value={
+            "aspects": {
+                "house_condition": [{"value": "well_maintained", "status": "supported"}]
+            }
+        },
+    ):
+        reading = taste_recommendation.build_context(
+            [candidate], profile_data, {"state": "current"}
+        ).readings[candidate.id]
+
+    assert reading["matches"] == []
+    assert reading["conflicts"] == []
+    assert reading["coverage"] == {"supported": 1, "relevant": 1}
+    assert reading["rank_value"] == 2000.0
 
 
 def test_visual_winner_keeps_the_independent_numeric_rank_channel(app):

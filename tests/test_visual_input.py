@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from services import visual_input
+from services import subscription_transport, visual_input
 
 
 JPEG = b"\xff\xd8\xff\xc0\x00\x11\x08\x00\x01\x00\x01" + b"visual-input"
@@ -39,10 +39,14 @@ class _Session:
     def __init__(self, response):
         self.response = response
         self.calls = []
+        self.closed = False
 
     def get(self, *args, **kwargs):
         self.calls.append((args, kwargs))
         return self.response
+
+    def close(self):
+        self.closed = True
 
 
 def test_dossier_sources_require_the_property_specific_host():
@@ -144,6 +148,50 @@ def test_download_photo_source_streams_with_no_redirect_and_hashes_bytes():
     assert session.calls[0][1]["stream"] is True
     assert session.calls[0][1]["allow_redirects"] is False
     assert response.closed is True
+    assert session.closed is False
+
+
+def test_download_photo_source_closes_only_an_internally_created_session(monkeypatch):
+    response = _Response(headers={"Content-Length": str(len(JPEG))})
+    owned = _Session(response)
+    monkeypatch.setattr(visual_input.requests, "Session", lambda: owned)
+
+    visual_input.download_photo_source(
+        {
+            "source_kind": "portal_photo",
+            "source_id": "property:1375:photo:0",
+            "url": "https://media.yaencontre.com/photo.jpg",
+        }
+    )
+
+    assert owned.closed is True
+
+
+def test_download_photo_source_closes_an_owned_session_after_a_request_error(
+    monkeypatch,
+):
+    class FailingSession:
+        closed = False
+
+        def get(self, *_args, **_kwargs):
+            raise visual_input.requests.RequestException("offline")
+
+        def close(self):
+            self.closed = True
+
+    owned = FailingSession()
+    monkeypatch.setattr(visual_input.requests, "Session", lambda: owned)
+
+    with pytest.raises(visual_input.VisualInputError, match="did not answer"):
+        visual_input.download_photo_source(
+            {
+                "source_kind": "portal_photo",
+                "source_id": "property:1375:photo:0",
+                "url": "https://media.yaencontre.com/photo.jpg",
+            }
+        )
+
+    assert owned.closed is True
 
 
 def test_download_dossier_source_refuses_url_credentials_before_network():
@@ -312,3 +360,16 @@ def test_extract_visual_observations_uses_codex_only(monkeypatch):
     assert result["visual_observations"] == []
     assert captured["provider"] == "codex"
     assert captured["images"] == [image]
+
+
+def test_extract_visual_observations_normalises_transport_failure(monkeypatch):
+    image = _image()
+    monkeypatch.setattr(
+        "services.subscription_transport.complete_with_images",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            subscription_transport.SubscriptionTransportError("bridge unavailable")
+        ),
+    )
+
+    with pytest.raises(visual_input.VisualInputError, match="transport failed"):
+        visual_input.extract_visual_observations("describe visible features", [image])

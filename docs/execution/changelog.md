@@ -17,3 +17,9 @@
   retain negative polarity, a newly rejected favorite stops anchoring stale
   recommendation comparisons immediately, and every feedback/training entity
   is reserved before held-out candidate selection to prevent identity leakage.
+- Bound each compiled preference to the value stated in its own clause, reset
+  heading polarity at sentence boundaries, and made match evidence
+  value-specific so mixed claims cannot create false credit or hard exclusion.
+- Made empty recommendation searches SQL-safe, held-out manifests fail closed
+  when excluded rows are absent, and bounded visual work continue after one
+  row or temporary-file failure so retries do not repeat completed extraction.

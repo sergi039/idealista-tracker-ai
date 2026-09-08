@@ -41,12 +41,21 @@ def build_manifest(
     No verdict, favorite, activity, duplicate entity, or learning-set row can
     enter.  The absence of those signals is called ``no_recorded_activity``;
     it is never described as proof the owner has not seen the listing.
+    ``props`` must include every row named by either exclusion set so its
+    stored entity identity can be reserved; a partial pool fails closed.
     """
     if not isinstance(limit, int) or limit < 1 or limit > 100:
         raise ValueError("limit must be between 1 and 100")
     baseline = baseline or {}
     rows = sorted(props, key=lambda row: row.id)
     excluded_row_ids = learning_property_ids | activity_property_ids
+    missing_excluded_ids = excluded_row_ids - {row.id for row in rows}
+    if missing_excluded_ids:
+        raise ValueError(
+            "props must include every learning/activity row so its entity can be "
+            "reserved: "
+            + ", ".join(str(value) for value in sorted(missing_excluded_ids))
+        )
 
     def excluded(prop: Any) -> bool:
         return (

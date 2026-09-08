@@ -180,6 +180,26 @@ def _text_claims(
     return found
 
 
+def text_claim_values(text: str | None) -> dict[str, list[str]]:
+    """Return lexical descriptor values named in one bounded text fragment.
+
+    Preference clauses use this to bind a stated value to the clause that
+    named it.  Keeping it here makes the compiler and property descriptors
+    share the same conservative vocabulary rather than maintaining a second
+    preference-only matcher.
+    """
+    values: dict[str, set[str]] = defaultdict(set)
+    for aspect_id, row in _text_claims(
+        text, source_kind="owner_research_claim", source_id="owner_clause"
+    ):
+        value = row.get("value")
+        if isinstance(value, str) and value:
+            values[aspect_id].add(value)
+    return {
+        aspect_id: sorted(aspect_values) for aspect_id, aspect_values in values.items()
+    }
+
+
 def _plot_claims(attributes: dict[str, Any]) -> Iterable[tuple[str, str, Any]]:
     """Explicit known homes for dossier/research plot figures.
 
@@ -318,20 +338,70 @@ def _merge_visual(
 
 
 def descriptor_input(prop: Any) -> dict[str, Any]:
-    """Stable basis for descriptor freshness, excluding taste itself."""
+    """Evidence consumed by :func:`build_descriptor`, excluding taste itself.
+
+    This is deliberately a projection, rather than a serialization of every
+    JSON column.  Enrichment and travel carry operational timestamps and
+    unrelated provider results; letting those change the fingerprint would
+    invalidate a photo extraction and reference snapshot without changing an
+    observation this descriptor can emit.
+    """
+    figures = effective_figures(prop)
+    attrs = _dict(getattr(prop, "attributes", None))
+    plot_claims = [
+        {"source": home, "key": key, "value": value}
+        for home, key, value in _plot_claims(attrs)
+    ]
+
+    enrichment = _dict(getattr(prop, "enrichment", None))
+    cadastre = _dict(enrichment.get("cadastre"))
+    geometry = _dict(cadastre.get("geometry"))
+    cadastral_area = _finite_positive(geometry.get("area_m2"))
+
+    sea = sea_view_service.read_verdict(prop)
+    sea_state = sea.get("state") if isinstance(sea, dict) else None
+    sea_detail = _dict(sea.get("detail")) if isinstance(sea, dict) else {}
+    sea_evidence = {"state": sea_state}
+    if (
+        sea_state in sea_view_service.VALID_STATES
+        and sea_state != sea_view_service.UNKNOWN
+    ):
+        sea_evidence.update(
+            {
+                "source": sea_detail.get("source"),
+                "measured_at": _one_line(sea_detail.get("measured_at")),
+            }
+        )
+
+    travel = _dict(getattr(prop, "travel", None))
+    beaches = _dict(travel.get("beaches"))
+    beach_evidence: dict[str, Any] | None = None
+    if (
+        beaches.get("status") == "ok"
+        and isinstance(beaches.get("items"), list)
+        and beaches["items"]
+    ):
+        duration = _finite_positive(_dict(beaches["items"][0]).get("duration_min"))
+        if duration is not None:
+            beach_evidence = {
+                "value": "walkable" if duration <= 15 else "far",
+                "measured_at": _one_line(beaches.get("measured_at")),
+            }
+
     return {
         "id": getattr(prop, "id", None),
-        "area": str(getattr(prop, "area", None)),
-        "plot_area": str(getattr(prop, "plot_area", None)),
-        "area_type": getattr(prop, "area_type", None),
-        "category": getattr(prop, "property_category", None),
-        "subtype": getattr(prop, "property_subtype", None),
-        "title": getattr(prop, "title", None),
-        "description": getattr(prop, "description", None),
-        "attributes": _dict(getattr(prop, "attributes", None)),
-        "environment": _dict(getattr(prop, "environment", None)),
-        "enrichment": _dict(getattr(prop, "enrichment", None)),
-        "travel": _dict(getattr(prop, "travel", None)),
+        "figures": figures,
+        "plot_claims": plot_claims,
+        "cadastre": {
+            "area_m2": cadastral_area,
+            "measured_at": _one_line(cadastre.get("measured_at"))
+            if cadastral_area is not None
+            else None,
+        },
+        "sea_view": sea_evidence,
+        "beach_access": beach_evidence,
+        # `_text_claims` consumes only this normalized, bounded line.
+        "description": _one_line(getattr(prop, "description", None), 1800),
     }
 
 

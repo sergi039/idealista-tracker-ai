@@ -77,13 +77,18 @@ def run(argv: Sequence[str] | None = None) -> int:
         )
         with marker:
             for prop in rows:
-                images = visual_input.download_portal_photo_inputs(
-                    prop, max_images=min(args.max_images, visual_input.MAX_IMAGES)
-                )
-                if not images:
-                    images = visual_input.download_dossier_photo_inputs(
+                try:
+                    images = visual_input.download_portal_photo_inputs(
                         prop, max_images=min(args.max_images, visual_input.MAX_IMAGES)
                     )
+                    if not images:
+                        images = visual_input.download_dossier_photo_inputs(
+                            prop,
+                            max_images=min(args.max_images, visual_input.MAX_IMAGES),
+                        )
+                except visual_input.VisualInputError as exc:
+                    print(f"{prop.id}: skipped (visual input refused: {exc})")
+                    continue
                 if not images:
                     print(
                         f"{prop.id}: skipped (no eligible photo input from captured "
@@ -123,7 +128,11 @@ def run(argv: Sequence[str] | None = None) -> int:
                     print(f"{prop.id}: not called (max calls reached)")
                     continue
                 calls += 1
-                extracted = visual_input.extract_visual_observations(PROMPT, images)
+                try:
+                    extracted = visual_input.extract_visual_observations(PROMPT, images)
+                except visual_input.VisualInputError as exc:
+                    print(f"{prop.id}: failed (visual extraction refused: {exc})")
+                    continue
 
                 # No database lock is held over either the download or model call.
                 # Lock only for the final freshness check and small JSON write.

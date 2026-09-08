@@ -7,7 +7,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from sqlalchemy import case
+from sqlalchemy import case, literal
 
 from services import taste_descriptors, taste_preferences
 
@@ -33,6 +33,15 @@ def _rows(descriptor: Any, aspect_id: str) -> list[dict[str, Any]]:
     return taste_descriptors.aspect_values(descriptor, aspect_id)
 
 
+def _normalised_value(value: Any, aspect_id: str) -> str | None:
+    if value is None or aspect_id in _NUMERIC_ASPECTS:
+        return None
+    normalised = str(value)
+    if aspect_id == "sea_view" and normalised in {"yes", "likely"}:
+        return "present"
+    return normalised
+
+
 def _usable_values(rows: Iterable[dict[str, Any]], aspect_id: str) -> set[str]:
     """Comparable categorical values for a clause or reference facet.
 
@@ -42,17 +51,45 @@ def _usable_values(rows: Iterable[dict[str, Any]], aspect_id: str) -> set[str]:
     and ``likely`` both mean present for preference matching while their raw
     evidence/status remains unchanged for display.
     """
-    if aspect_id in _NUMERIC_ASPECTS:
-        return set()
-    values = {
-        str(row.get("value"))
+    return {
+        normalised
         for row in rows
         if row.get("status") in {"supported", "claimed"}
-        and row.get("value") is not None
+        and (normalised := _normalised_value(row.get("value"), aspect_id)) is not None
     }
-    if aspect_id == "sea_view":
-        return {"present" if value in {"yes", "likely"} else value for value in values}
-    return values
+
+
+def _rows_for_values(
+    rows: Iterable[dict[str, Any]], aspect_id: str, values: set[str]
+) -> list[dict[str, Any]]:
+    """Rows whose own value supports the decision being explained."""
+    return [
+        row
+        for row in rows
+        if row.get("status") in {"supported", "claimed"}
+        and _normalised_value(row.get("value"), aspect_id) in values
+    ]
+
+
+def _clause_values(
+    clause: dict[str, Any], source_rows: list[dict[str, Any]], aspect_id: str
+) -> set[str]:
+    """Read the value stated by a clause, with legacy snapshot fallback.
+
+    New profiles bind each clause to its own lexical values.  Falling back to
+    every value on the source property is safe only for older snapshots that
+    predate the ``values`` field; an explicitly empty list stays unknown.
+    """
+    if "values" not in clause:
+        return _usable_values(source_rows, aspect_id)
+    raw_values = clause.get("values")
+    if not isinstance(raw_values, list):
+        return set()
+    return {
+        normalised
+        for value in raw_values
+        if (normalised := _normalised_value(value, aspect_id)) is not None
+    }
 
 
 def _strongest_status(rows: list[dict[str, Any]]) -> str:
@@ -279,8 +316,7 @@ def _reading(
         candidate_rows = _rows(descriptor, aspect_id)
         source = _dict(descriptors.get(str(clause.get("source_property_id"))))
         source_rows = _rows(source, aspect_id)
-        candidate_status = _strongest_status(candidate_rows)
-        if candidate_status == "conflicting":
+        if _strongest_status(candidate_rows) == "conflicting":
             conflicts.append(
                 _facet(
                     aspect_id,
@@ -290,7 +326,7 @@ def _reading(
             )
             continue
         candidate_values = _usable_values(candidate_rows, aspect_id)
-        source_values = _usable_values(source_rows, aspect_id)
+        source_values = _clause_values(clause, source_rows, aspect_id)
         if not candidate_values or not source_values:
             needs.append(
                 {
@@ -304,14 +340,17 @@ def _reading(
             )
             continue
         overlap = bool(candidate_values & source_values)
-        if candidate_status == "supported":
+        overlap_rows = _rows_for_values(candidate_rows, aspect_id, source_values)
+        decision_rows = overlap_rows if overlap else candidate_rows
+        decision_status = _strongest_status(decision_rows)
+        if decision_status == "supported":
             supported += 1
         polarity = clause.get("polarity")
-        if (polarity == "prefer" and overlap) or (polarity == "avoid" and not overlap):
+        if polarity == "prefer" and overlap:
             matches.append(
                 _facet(
                     aspect_id,
-                    candidate_rows,
+                    decision_rows,
                     source_property_id=clause.get("source_property_id"),
                 )
             )
@@ -320,11 +359,11 @@ def _reading(
         ):
             facet = _facet(
                 aspect_id,
-                candidate_rows,
+                decision_rows,
                 source_property_id=clause.get("source_property_id"),
             )
             facet["hard"] = bool(
-                clause.get("strength") == "hard" and candidate_status == "supported"
+                clause.get("strength") == "hard" and decision_status == "supported"
             )
             conflicts.append(facet)
 
@@ -474,4 +513,6 @@ def sort_expression(model: Any, ctx: RecommendationContext):
         property_id: reading.get("rank_value", 0.0)
         for property_id, reading in ctx.readings.items()
     }
+    if not ranks:
+        return literal(-1.0)
     return case(ranks, value=model.id, else_=-1.0)

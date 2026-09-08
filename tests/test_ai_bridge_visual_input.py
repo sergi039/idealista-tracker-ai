@@ -118,3 +118,29 @@ def test_handler_refuses_claude_image_payload_without_running_it(bridge, monkeyp
         server.server_close()
 
     assert called == []
+
+
+def test_handler_returns_json_500_when_temp_image_creation_fails(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "TOKEN", "test-token")
+    called = []
+    monkeypatch.setitem(
+        bridge.PROVIDERS, "codex", lambda *args, **kwargs: called.append(1)
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_write_image_files",
+        lambda _images: (_ for _ in ()).throw(OSError("full")),
+    )
+    server = _serve(bridge)
+    try:
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            _post(server, {"provider": "codex", "prompt": "hi", "images": [_image()]})
+        assert excinfo.value.code == 500
+        assert json.loads(excinfo.value.read()) == {
+            "error": "could not prepare local visual input"
+        }
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert called == []

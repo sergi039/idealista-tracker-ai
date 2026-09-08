@@ -58,7 +58,7 @@ def test_apply_discards_a_visual_result_after_the_property_changes(
     db.session.commit()
     prop = Property(
         source_email_id="visual-cli:1",
-        title="Before extraction",
+        description="Before extraction",
         search_profile_id=profile.id,
         area=120,
     )
@@ -77,8 +77,8 @@ def test_apply_discards_a_visual_result_after_the_property_changes(
     def extract_then_change(*_args, **_kwargs):
         # This mimics another writer committing while the model call is in flight.
         db.session.execute(
-            db.text("UPDATE properties SET title = :title WHERE id = :id"),
-            {"title": "Changed during extraction", "id": prop.id},
+            db.text("UPDATE properties SET description = :description WHERE id = :id"),
+            {"description": "Changed during extraction", "id": prop.id},
         )
         db.session.commit()
         return {**envelope, "visual_observations": []}
@@ -106,7 +106,7 @@ def test_apply_discards_a_visual_result_after_the_property_changes(
 
     db.session.refresh(prop)
     assert prop.taste is None
-    assert prop.title == "Changed during extraction"
+    assert prop.description == "Changed during extraction"
     assert (
         "discarded (property inputs changed during extraction)"
         in capsys.readouterr().out
@@ -188,3 +188,122 @@ def test_apply_skips_an_unchanged_valid_visual_descriptor_without_another_call(
         )
     ]
     assert "skipped (visual descriptor inputs unchanged)" in capsys.readouterr().out
+
+
+def test_apply_skips_a_refused_row_and_continues_to_the_next_property(
+    app, monkeypatch, capsys
+):
+    _without_real_marker(monkeypatch)
+    profile = SearchProfile(name="Galicia", is_active=True)
+    db.session.add(profile)
+    db.session.commit()
+    refused = Property(
+        source_email_id="visual-cli:refused", search_profile_id=profile.id
+    )
+    accepted = Property(
+        source_email_id="visual-cli:accepted", search_profile_id=profile.id
+    )
+    db.session.add_all([refused, accepted])
+    db.session.commit()
+    image = _image()
+    envelope = visual_input.build_visual_input([image])
+
+    def inputs(prop, **_kwargs):
+        if prop.id == refused.id:
+            raise visual_input.VisualInputError("source returned HTTP 404")
+        return [image]
+
+    monkeypatch.setattr(visual_input, "download_portal_photo_inputs", inputs)
+    monkeypatch.setattr(app_module, "create_app", lambda: app)
+    monkeypatch.setattr(
+        visual_input,
+        "extract_visual_observations",
+        lambda *_args, **_kwargs: {**envelope, "visual_observations": []},
+    )
+
+    assert (
+        extract_visual_descriptors.run(
+            [
+                "--ids",
+                str(refused.id),
+                str(accepted.id),
+                "--apply",
+                "--max-rows",
+                "2",
+                "--max-images",
+                "1",
+                "--max-calls",
+                "2",
+            ]
+        )
+        == 0
+    )
+
+    db.session.refresh(refused)
+    db.session.refresh(accepted)
+    output = capsys.readouterr().out
+    assert (
+        f"{refused.id}: skipped (visual input refused: source returned HTTP 404)"
+        in output
+    )
+    assert (
+        accepted.taste["visual_descriptor"]["input_fingerprint"]
+        == envelope["input_fingerprint"]
+    )
+
+
+def test_apply_records_an_extraction_failure_and_continues(app, monkeypatch, capsys):
+    _without_real_marker(monkeypatch)
+    profile = SearchProfile(name="Galicia", is_active=True)
+    db.session.add(profile)
+    db.session.commit()
+    failed = Property(source_email_id="visual-cli:failed", search_profile_id=profile.id)
+    accepted = Property(
+        source_email_id="visual-cli:after-failure", search_profile_id=profile.id
+    )
+    db.session.add_all([failed, accepted])
+    db.session.commit()
+    image = _image()
+    envelope = visual_input.build_visual_input([image])
+    attempts = []
+
+    monkeypatch.setattr(
+        visual_input, "download_portal_photo_inputs", lambda *_args, **_kwargs: [image]
+    )
+    monkeypatch.setattr(app_module, "create_app", lambda: app)
+
+    def extract(*_args, **_kwargs):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise visual_input.VisualInputError("extractor response was invalid")
+        return {**envelope, "visual_observations": []}
+
+    monkeypatch.setattr(visual_input, "extract_visual_observations", extract)
+
+    assert (
+        extract_visual_descriptors.run(
+            [
+                "--ids",
+                str(failed.id),
+                str(accepted.id),
+                "--apply",
+                "--max-rows",
+                "2",
+                "--max-images",
+                "1",
+                "--max-calls",
+                "2",
+            ]
+        )
+        == 0
+    )
+
+    db.session.refresh(failed)
+    db.session.refresh(accepted)
+    assert attempts == [1, 1]
+    assert failed.taste is None
+    assert accepted.taste["visual_descriptor"]
+    assert (
+        f"{failed.id}: failed (visual extraction refused: extractor response was invalid)"
+        in capsys.readouterr().out
+    )

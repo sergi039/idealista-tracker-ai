@@ -198,3 +198,10 @@ identities, freezes descriptor fingerprints, and keeps the old Taste/Similar
 baseline beside the new ordering. “No recorded activity” is not presented as
 proof the owner never saw a listing. Owner utility remains `not_measured` until
 blind ratings are collected without feeding those labels back into the profile.
+
+The recommendation mode currently builds descriptors for the full filtered
+candidate set before pagination, and the page-state path separately reads the
+current signal basis. The isolated four-row artifact rendered in about 0.17 s;
+production-scale request cost has not been profiled. Reusing that request-local
+basis is a performance follow-up if measurement shows it matters, without
+changing ranking or freshness semantics.

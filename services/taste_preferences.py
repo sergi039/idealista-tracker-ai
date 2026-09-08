@@ -6,6 +6,8 @@ import hashlib
 import re
 from typing import Any
 
+from services import taste_descriptors
+
 SCHEMA_VERSION = 1
 
 _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -59,17 +61,21 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
-def _segments(reason: str) -> list[str]:
+def _segments(reason: str) -> list[tuple[str, bool]]:
     text = re.sub(r"\s+", " ", reason).strip()
     if not text:
         return []
     # Semicolon and sentence boundaries are significant; commas stay because
     # dossier clauses commonly carry one fact plus its qualification.
-    return [
-        part.strip(" -")
-        for part in re.split(r"(?<=[.!?;])\s+|;", text)
-        if part.strip(" -")
-    ]
+    parts: list[tuple[str, bool]] = []
+    for match in re.finditer(r"([^.!?;]+)([.!?;]?)", text):
+        part = match.group(1).strip(" -")
+        if part:
+            # A heading can carry over a list separated with a semicolon, but
+            # it must not turn a later sentence's factual observation into a
+            # preference.
+            parts.append((part, match.group(2) == ";"))
+    return parts
 
 
 def _explicit_global(text: str) -> bool:
@@ -90,7 +96,12 @@ def _polarity(text: str) -> str | None:
     low = text.casefold()
     tolerated = any(token in low for token in ("терпим", "терпимо", "готов мириться"))
     negated_desire = bool(
-        re.search(r"\bне\s+(?:хочу|люблю|предпочита\w*|нравит\w*|подходит\w*)", low)
+        re.search(
+            r"\bне\s+(?:\w+\s+){0,2}"
+            r"(?:хочу|хоч\w*|люблю|предпочита\w*|нравит\w*|нравят\w*|"
+            r"подходит\w*|подходят\w*)",
+            low,
+        )
     )
     negative = (
         any(
@@ -189,7 +200,7 @@ def compile_signal(signal: dict[str, Any]) -> list[dict[str, Any]]:
         return []
     result: list[dict[str, Any]] = []
     active_polarity: str | None = None
-    for segment in _segments(reason):
+    for segment, carries_heading in _segments(reason):
         low = segment.casefold()
         heading_polarity = _section_polarity(segment, signal.get("verdict"))
         if heading_polarity:
@@ -227,10 +238,11 @@ def compile_signal(signal: dict[str, Any]) -> list[dict[str, Any]]:
             else:
                 polarity = (
                     explicit_polarity
-                    or active_polarity
                     or ("avoid" if _intrinsic_avoid(part) else None)
+                    or active_polarity
                 )
             for aspect_id in matched:
+                values = taste_descriptors.text_claim_values(part).get(aspect_id, [])
                 hard = polarity == "avoid" and _explicit_global(part)
                 result.append(
                     {
@@ -242,6 +254,7 @@ def compile_signal(signal: dict[str, Any]) -> list[dict[str, Any]]:
                         "polarity": polarity or "unresolved",
                         "strength": "hard" if hard else "soft",
                         "scope": "global" if hard else "profile",
+                        "values": values,
                         "mapping_state": "executable" if polarity else "unmapped",
                         "reason": None
                         if polarity
@@ -251,8 +264,8 @@ def compile_signal(signal: dict[str, Any]) -> list[dict[str, Any]]:
         if not matched_any and "за 300" not in low and "за300" not in low:
             polarity = (
                 _polarity(segment)
-                or active_polarity
                 or ("avoid" if _intrinsic_avoid(segment) else None)
+                or active_polarity
             )
             result.append(
                 {
@@ -270,6 +283,8 @@ def compile_signal(signal: dict[str, Any]) -> list[dict[str, Any]]:
                     else "preference polarity is not explicit",
                 }
             )
+        if not carries_heading:
+            active_polarity = None
     # The same aspect mentioned twice in one long segment is still one clause.
     unique: dict[tuple[str, str | None], dict[str, Any]] = {}
     for clause in result:

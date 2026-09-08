@@ -50,6 +50,63 @@ def test_negated_desire_is_a_global_hard_avoidance():
     assert clause["mapping_state"] == "executable"
 
 
+def test_adverb_separated_negated_desires_never_compile_as_preferences():
+    cases = (
+        ("не очень нравится каменный дом", "house_character"),
+        ("участок правильной формы не особо подходит", "plot_outline"),
+        ("не совсем нравится вид на море", "sea_view"),
+    )
+
+    for reason, aspect_id in cases:
+        clause = next(
+            item
+            for item in _clauses(reason, "interested")
+            if item["aspect_id"] == aspect_id
+        )
+        assert clause["polarity"] == "avoid"
+        assert clause["mapping_state"] == "executable"
+
+
+def test_clause_values_bind_each_shape_to_its_own_clause():
+    clauses = _clauses(
+        "L-образная форма никогда не подходит; ровный вытянутый прямоугольник подходит",
+        "rejected",
+    )
+    by_text = {clause["text"]: clause for clause in clauses}
+
+    assert by_text["L-образная форма никогда не подходит"]["values"] == ["notched"]
+    assert by_text["ровный вытянутый прямоугольник подходит"]["values"] == ["regular"]
+
+
+def test_heading_polarity_stops_at_sentence_and_factual_observation_stays_unresolved():
+    clauses = _clauses("Нравится: каменный дом. Рядом сельхоз постройки.", "interested")
+    by_aspect = {clause["aspect_id"]: clause for clause in clauses}
+
+    assert by_aspect["house_character"]["polarity"] == "prefer"
+    assert by_aspect["agricultural_context"]["polarity"] == "unresolved"
+    assert by_aspect["agricultural_context"]["mapping_state"] == "unmapped"
+
+
+def test_intrinsic_avoid_outranks_inherited_heading_polarity():
+    clauses = _clauses("Нравится: каменный дом; рядом с дорогой.", "interested")
+    by_aspect = {clause["aspect_id"]: clause for clause in clauses}
+
+    assert by_aspect["road_proximity"]["polarity"] == "avoid"
+
+
+def test_heading_keeps_semicolon_items_but_leaves_following_ambiguous_fact_unresolved():
+    clauses = _clauses(
+        "Нравится: каменный дом; вид на море. Участок правильной формы.",
+        "interested",
+    )
+    by_aspect = {clause["aspect_id"]: clause for clause in clauses}
+
+    assert by_aspect["house_character"]["polarity"] == "prefer"
+    assert by_aspect["sea_view"]["polarity"] == "prefer"
+    assert by_aspect["plot_outline"]["polarity"] == "unresolved"
+    assert by_aspect["plot_outline"]["mapping_state"] == "unmapped"
+
+
 def test_ambiguous_mapped_fact_is_visible_but_not_executable():
     clauses = _clauses("каменный дом", "interested")
 

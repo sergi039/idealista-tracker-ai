@@ -188,6 +188,7 @@ def dossier_photo_sources(
         or parts.fragment
     ):
         return []
+    owns_session = session is None
     http = session or requests.Session()
     response = None
     try:
@@ -212,6 +213,11 @@ def dossier_photo_sources(
                 response.close()
         except Exception:
             pass
+        if owns_session:
+            try:
+                http.close()
+            except Exception:
+                pass
     parser = _ImageRefs()
     parser.feed(bytes(body).decode("utf-8", "replace"))
     result = []
@@ -345,7 +351,9 @@ def download_photo_source(
             )
         url = str(source["url"])
 
+    owns_session = session is None
     http = session or requests.Session()
+    response = None
     try:
         response = http.get(
             url,
@@ -354,10 +362,6 @@ def download_photo_source(
             timeout=(_CONNECT_TIMEOUT_S, _READ_TIMEOUT_S),
             headers={"User-Agent": "IdealistaRank visual descriptor input"},
         )
-    except requests.RequestException as exc:
-        raise VisualInputError("photo source did not answer") from exc
-
-    try:
         if response.status_code != 200:
             raise VisualInputError(f"photo source returned HTTP {response.status_code}")
         declared = _declared_size(response)
@@ -371,12 +375,20 @@ def download_photo_source(
                 raise VisualInputError("photo source exceeded byte limit")
             body.extend(chunk)
     except requests.RequestException as exc:
-        raise VisualInputError("photo source body could not be read") from exc
+        raise VisualInputError(
+            "photo source did not answer or could not be read"
+        ) from exc
     finally:
         try:
-            response.close()
+            if response is not None:
+                response.close()
         except Exception:
             pass
+        if owns_session:
+            try:
+                http.close()
+            except Exception:
+                pass
 
     data = bytes(body)
     content_type = _sniff_content_type(data)
@@ -393,22 +405,40 @@ def download_portal_photo_inputs(
     prop: Any, *, session: Any = None, max_images: int = MAX_IMAGES
 ) -> List[Dict[str, str]]:
     """Fetch the bounded canonical portal-photo sample for an explicit job."""
-    return [
-        download_photo_source(source, session=session)
-        for source in portal_photo_sources(prop, max_images=max_images)
-    ]
+    owns_session = session is None
+    http = session or requests.Session()
+    try:
+        return [
+            download_photo_source(source, session=http)
+            for source in portal_photo_sources(prop, max_images=max_images)
+        ]
+    finally:
+        if owns_session:
+            try:
+                http.close()
+            except Exception:
+                pass
 
 
 def download_dossier_photo_inputs(
     prop: Any, *, session: Any = None, max_images: int = MAX_IMAGES
 ) -> List[Dict[str, str]]:
     """Fetch the bounded explicit dossier-photo sample for an explicit job."""
-    return [
-        download_photo_source(source, session=session)
-        for source in dossier_photo_sources(
-            prop, session=session, max_images=max_images
-        )
-    ]
+    owns_session = session is None
+    http = session or requests.Session()
+    try:
+        return [
+            download_photo_source(source, session=http)
+            for source in dossier_photo_sources(
+                prop, session=http, max_images=max_images
+            )
+        ]
+    finally:
+        if owns_session:
+            try:
+                http.close()
+            except Exception:
+                pass
 
 
 def attachment_photo_input(record: Any) -> Dict[str, str]:
@@ -698,14 +728,17 @@ def extract_visual_observations(
     envelope = build_visual_input(image_inputs)
     from services import subscription_transport
 
-    result = subscription_transport.complete_with_images(
-        prompt,
-        images=list(image_inputs),
-        provider="codex",
-        model=model,
-        timeout=timeout,
-        schema=visual_output_schema(),
-    )
+    try:
+        result = subscription_transport.complete_with_images(
+            prompt,
+            images=list(image_inputs),
+            provider="codex",
+            model=model,
+            timeout=timeout,
+            schema=visual_output_schema(),
+        )
+    except subscription_transport.SubscriptionTransportError as exc:
+        raise VisualInputError("visual extractor transport failed") from exc
     try:
         payload = json.loads(str(result.get("text") or ""))
     except ValueError as exc:
