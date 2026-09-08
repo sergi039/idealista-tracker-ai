@@ -186,11 +186,16 @@ bridge receives bytes rather than paths or URLs, creates private temporary
 files for a Codex image call, and removes them after the call. Claude image
 payloads are refused until its local attachment route is proven. A photo cannot
 support parcel boundaries, exact dimensions, legal status, or absence outside
-the frame. `utils/extract_visual_descriptors.py` is dry-run first, requires
-explicit ids and row/image/call caps, and discards a result whose property or
-image fingerprint moved before the final locked write. Exact property and image
-fingerprints also leave a completed row out of later model calls; per-row commits
-make that bounded scope honestly resumable under the shared in-flight marker.
+the frame. The schema sent to Codex uses its flat supported structured-output
+subset, and the prompt contains only a bounded image index/source/hash manifest,
+without URLs or bytes. The app then enforces the aspect-specific vocabulary,
+unknown/null and parcel-outline rules, and exact image provenance before
+anything can persist. `utils/extract_visual_descriptors.py` is dry-run first,
+requires explicit ids and row/image/call caps, and discards a result whose
+property or image fingerprint moved before the final locked write. Exact
+property and image fingerprints also leave a completed row out of later model
+calls; per-row commits make that bounded scope honestly resumable under the
+shared in-flight marker.
 
 `services/taste_evaluation.py` builds an unlabeled held-out manifest. It removes
 learning rows, favorites, recorded verdict/activity and duplicate stored entity
