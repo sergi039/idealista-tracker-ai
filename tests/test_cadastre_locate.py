@@ -754,6 +754,34 @@ class TestStreetKey:
         assert matched["status"] == cadastre_locate.OK
         assert matched["street"]["name"] == "CASTRELOS"
 
+    def test_an_exact_spelling_wins_over_a_word_set_collision(self):
+        # Foz indexes one street twice, "RU XOIÑA" and "RU XOIÑA, DA". Their
+        # word sets collide, so the relaxed comparison alone called a query
+        # that matches one of them character for character ambiguous, and the
+        # row the issue named (1734) went unplaced.
+        index = [
+            {"code": "418", "sigla": "RU", "name": "XOIÑA", "normalized": "XOINA"},
+            {
+                "code": "311",
+                "sigla": "RU",
+                "name": "XOIÑA, DA",
+                "normalized": "XOINA DA",
+            },
+        ]
+        matched = cadastre_locate.match_street(index, "Calle Xoiña")
+        assert matched["status"] == cadastre_locate.OK
+        assert matched["street"]["code"] == "418"
+
+    def test_two_genuinely_different_streets_are_still_ambiguous(self):
+        index = [
+            {"code": "1", "sigla": "CL", "name": "XOIÑA", "normalized": "XOINA"},
+            {"code": "2", "sigla": "LG", "name": "XOIÑA", "normalized": "XOINA"},
+        ]
+        assert (
+            cadastre_locate.match_street(index, "Calle Xoiña")["status"]
+            == cadastre_locate.STREET_AMBIGUOUS
+        )
+
     def test_a_name_that_is_nothing_but_articles_keeps_them(self):
         # An empty key would match every other empty key.
         assert cadastre_locate.street_key("LA") == ("LA",)

@@ -652,26 +652,58 @@ def _street_keys(wanted: Any) -> List[Tuple[str, ...]]:
 def match_street(index: List[Dict[str, Any]], wanted: Any) -> Dict[str, Any]:
     """The one street in the index that is the one asked for, or why not.
 
-    Exact match on the normalised name, tried with and without a leading
-    street-type word. Two streets sharing it is `street_ambiguous` and never a
-    choice between them.
+    The comparison is on the set of content words, so word order and articles
+    are absorbed and nothing else is. Two candidates left after that are
+    `street_ambiguous` and never a choice between them -- with one exception,
+    and the exception is narrow on purpose.
+
+    **A tie among candidates that all carry the same sigla is a duplicate index
+    entry, and the exact spelling breaks it.** Foz holds one street twice, as
+    `RU XOIÑA` and `RU XOIÑA, DA`; those are not two places, and refusing them
+    left row 1734 -- a row #559 named -- unplaced when a query spelled "Calle
+    Xoiña" matches one of them character for character. A tie across *different*
+    siglas is a different thing: `LG` and `CL` of one name are plausibly a lugar
+    and a street named after it, so that stays ambiguous however the query is
+    spelled.
     """
     keys = _street_keys(wanted)
     if not keys:
         return {"status": STREET_NOT_MATCHED, "detail": "no street name to look for"}
+
     hits = [street for street in index if street_key(street["name"]) in keys]
     if not hits:
         return {
             "status": STREET_NOT_MATCHED,
             "detail": f"no street whose words are {' '.join(keys[0])!r}",
         }
-    if len({(hit["sigla"], hit["code"]) for hit in hits}) > 1:
-        return {
-            "status": STREET_AMBIGUOUS,
-            "detail": f"{len(hits)} streets whose words are {' '.join(keys[0])!r}",
-            "candidates": hits,
-        }
-    return {"status": OK, "street": hits[0]}
+
+    ambiguous = {
+        "status": STREET_AMBIGUOUS,
+        "detail": f"{len(hits)} streets whose words are {' '.join(keys[0])!r}",
+        "candidates": hits,
+    }
+    if len({(hit["sigla"], hit["code"]) for hit in hits}) == 1:
+        return {"status": OK, "street": hits[0]}
+    if len({hit["sigla"] for hit in hits}) > 1:
+        return ambiguous
+
+    exact = {" ".join(name) for name in _exact_names(wanted)}
+    spelled = [hit for hit in hits if normalize_street(hit["name"]) in exact]
+    if len({(hit["sigla"], hit["code"]) for hit in spelled}) == 1:
+        return {"status": OK, "street": spelled[0]}
+    return ambiguous
+
+
+def _exact_names(wanted: Any) -> List[Tuple[str, ...]]:
+    """The asked street verbatim, and without its leading street-type word."""
+    target = normalize_street(wanted)
+    if not target:
+        return []
+    words = target.split()
+    names = [tuple(words)]
+    if len(words) > 1 and words[0] in _STREET_TYPE_WORDS:
+        names.append(tuple(words[1:]))
+    return names
 
 
 def parcel_for_address(

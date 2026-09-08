@@ -178,7 +178,13 @@ different street (13 of #535's 36 token mismatches were spelling, and every
 one of those keeps a word). And the street index is matched exactly, on the
 set of content words, so word order and articles are absorbed
 ("RETELA,LA" is "Lugar la Retela", "CASTRELOS" is "avenida de Castrelos") and
-nothing else is. A near-miss is `street_not_matched`, never a guess.
+nothing else is. A near-miss is `street_not_matched`, never a guess, and a tie
+is `street_ambiguous` — except among candidates that all carry the same sigla,
+where a tie is a duplicate index entry rather than two places and the exact
+spelling breaks it. Foz holds one street twice, `RU XOIÑA` and `RU XOIÑA, DA`;
+refusing that pair left row 1734 — one of the two #559 named — unplaced. `LG`
+and `CL` of one name stay ambiguous, because those are plausibly a lugar and a
+street named after it.
 
 ## The rows a person placed after #535 (#558, 2026-09-08)
 
