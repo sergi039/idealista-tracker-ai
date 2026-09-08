@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -309,6 +310,23 @@ def test_visual_observation_must_name_the_exact_hashed_image():
     assert result[0]["evidence"]["image_sha256"] == image["content_sha256"]
 
 
+def test_transport_schema_uses_flat_codex_subset_and_canonical_value_union():
+    schema = visual_input.visual_output_schema()
+    item = schema["properties"]["visual_observations"]["items"]
+    encoded = str(schema)
+
+    assert all(keyword not in encoded for keyword in ("allOf", "if", "then"))
+    assert set(item["properties"]["value"]["enum"]) == {
+        None,
+        *(
+            value
+            for values in visual_input.VISUAL_VALUE_VOCABULARY.values()
+            for value in values
+        ),
+    }
+    assert item["additionalProperties"] is False
+
+
 def test_visual_observation_cannot_treat_a_photo_as_a_parcel_outline():
     image = _image()
     observation = _observation(image, aspect_id="plot_outline", status="supported")
@@ -320,11 +338,43 @@ def test_visual_observation_cannot_treat_a_photo_as_a_parcel_outline():
         )
 
 
+def test_local_validation_requires_unknown_observations_to_have_null_value():
+    image = _image()
+    observation = _observation(image, status="unknown")
+
+    with pytest.raises(visual_input.VisualInputError, match="must have no value"):
+        visual_input.validate_visual_observations(
+            {"visual_observations": [observation]}, [image]
+        )
+
+
 def test_visual_observation_rejects_a_noncanonical_value_before_persistence():
     image = _image()
     observation = _observation(image)
     observation["value"] = "weathered exterior"
     with pytest.raises(visual_input.VisualInputError, match="canonical vocabulary"):
+        visual_input.validate_visual_observations(
+            {"visual_observations": [observation]}, [image]
+        )
+
+
+def test_local_validation_rejects_cross_aspect_value_allowed_by_flat_schema():
+    image = _image()
+    observation = _observation(image, aspect_id="house_condition")
+    observation["value"] = "stone_house"
+
+    with pytest.raises(visual_input.VisualInputError, match="canonical vocabulary"):
+        visual_input.validate_visual_observations(
+            {"visual_observations": [observation]}, [image]
+        )
+
+
+def test_local_validation_rejects_transport_valid_but_wrong_image_identity():
+    image = _image()
+    observation = _observation(image)
+    observation["evidence"]["source_id"] = "property:other:photo:0"
+
+    with pytest.raises(visual_input.VisualInputError, match="does not match"):
         visual_input.validate_visual_observations(
             {"visual_observations": [observation]}, [image]
         )
@@ -360,6 +410,19 @@ def test_extract_visual_observations_uses_codex_only(monkeypatch):
     assert result["visual_observations"] == []
     assert captured["provider"] == "codex"
     assert captured["images"] == [image]
+    assert captured["schema"] == visual_input.visual_output_schema()
+    manifest_text = captured["prompt"].split("<IMAGE_EVIDENCE_MANIFEST>\n", 1)[1]
+    manifest = json.loads(manifest_text.split("\n</IMAGE_EVIDENCE_MANIFEST>", 1)[0])
+    assert manifest == [
+        {
+            "image_index": 0,
+            "source_kind": "photo",
+            "source_id": image["source_id"],
+            "image_sha256": image["content_sha256"],
+        }
+    ]
+    assert image["content_base64"] not in captured["prompt"]
+    assert "http" not in captured["prompt"]
 
 
 def test_extract_visual_observations_normalises_transport_failure(monkeypatch):

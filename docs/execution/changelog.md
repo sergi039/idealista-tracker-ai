@@ -30,3 +30,7 @@
   values stay visibly unapplied, and only explicit equivalent/opposite values
   affect ranking or hard exclusion. Bumped the compiler snapshot version so
   existing profiles show dirty and use the one-call recommendation refresh.
+- Replaced unsupported conditional keywords in the Codex visual output schema
+  with its flat structured-output subset and added the exact image identity
+  manifest to the extraction prompt. Strict aspect, unknown, parcel-outline
+  and provenance validation still runs before persistence.
