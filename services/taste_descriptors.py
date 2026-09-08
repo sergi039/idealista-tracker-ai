@@ -67,6 +67,80 @@ def _evidence(
     return row
 
 
+def _fiber_absence_claim(low: str) -> bool:
+    """Whether bounded text explicitly says fiber is unavailable."""
+    return bool(
+        re.search(r"\bоптик\w*[^.;!?]{0,20}\b(?:нет|отсутств\w*)\b", low)
+        or re.search(r"\bнет\s+оптик\w*\b", low)
+        or re.search(r"\bбез\s+оптик\w*\b", low)
+        or re.search(r"\bfibra[^.;!?]{0,20}\bno\s+disponible\b", low)
+        or "no fiber" in low
+        or "sin fibra" in low
+    )
+
+
+def _fiber_question(low: str) -> bool:
+    """Questions name a topic but make no factual fiber claim."""
+    return bool(
+        re.search(r"(?:\bоптик\w*\b|\bfiber\b|\bfibra\b)[^.!?]{0,20}\?", low)
+        or re.search(r"\bесть\s+ли\s+(?:оптик\w*|fiber|fibra)\b", low)
+    )
+
+
+_RUSSIAN_WALKING_MINUTES = {
+    "один": 1,
+    "одна": 1,
+    "одну": 1,
+    "два": 2,
+    "две": 2,
+    "три": 3,
+    "четыре": 4,
+    "пять": 5,
+    "шесть": 6,
+    "семь": 7,
+    "восемь": 8,
+    "девять": 9,
+    "десять": 10,
+    "одиннадцать": 11,
+    "двенадцать": 12,
+    "тринадцать": 13,
+    "четырнадцать": 14,
+    "пятнадцать": 15,
+    "шестнадцать": 16,
+    "семнадцать": 17,
+    "восемнадцать": 18,
+    "девятнадцать": 19,
+    "двадцать": 20,
+}
+
+
+def _walkable_beach_claim(low: str) -> bool:
+    """Recognize only explicit, non-negated walking access to a beach."""
+    for sentence in re.findall(r"[^.!?;]+[.!?;]?", low):
+        if "пляж" not in sentence and "beach" not in sentence:
+            continue
+        if "?" in sentence or re.search(
+            r"(?:пешком\s+(?:не|невозможно)|не\s+(?:дойти|дойд\w*|добраться|пройти)|"
+            r"(?:нельзя|невозможно)\s+[^.!?;]{0,20}(?:пешком|дойти|добраться)|"
+            r"not\s+walkable|cannot\s+walk)",
+            sentence,
+        ):
+            continue
+        if re.search(r"(?:в\s+пешей\s+доступности|walkable\s+beach)", sentence):
+            return True
+        if "пешком" not in sentence and "walk" not in sentence:
+            continue
+        for raw in re.findall(
+            r"\b(\d{1,2}|" + "|".join(_RUSSIAN_WALKING_MINUTES) + r")\s*"
+            r"мин(?:ут(?:а|ы)?)?\b",
+            sentence,
+        ):
+            minutes = int(raw) if raw.isdigit() else _RUSSIAN_WALKING_MINUTES[raw]
+            if minutes <= 20:
+                return True
+    return False
+
+
 def _text_claims(
     text: str | None, *, source_kind: str, source_id: str
 ) -> Iterable[tuple[str, dict[str, Any]]]:
@@ -142,7 +216,7 @@ def _text_claims(
         (
             "beach_access",
             "walkable",
-            ("пляж 488", "пляж 1,0", "walkable beach"),
+            ("walkable beach",),
         ),
         (
             "house_character",
@@ -167,12 +241,12 @@ def _text_claims(
     found: list[tuple[str, dict[str, Any]]] = []
     for aspect_id, value, needles in rules:
         matched = any(needle in low for needle in needles)
-        if (
-            aspect_id == "beach_access"
-            and value == "walkable"
-            and re.search(r"(?:пляж[^.!?;]{0,60}пешком|пешком[^.!?;]{0,60}пляж)", low)
-        ):
-            matched = True
+        if aspect_id == "beach_access" and value == "walkable":
+            matched = _walkable_beach_claim(low)
+        if aspect_id == "fiber":
+            matched = not _fiber_question(low) and (
+                _fiber_absence_claim(low) if value == "absent" else matched
+            )
         if matched:
             if source_kind == "owner_research_claim" and aspect_id == "visual_appeal":
                 # "I dislike how it looks" is a preference signal, not an
@@ -249,22 +323,25 @@ def text_claim_values(text: str | None) -> dict[str, list[str]]:
 
     if any(
         phrase in low
+        for phrase in ("сельхоз постройки", "сх постройки", "agricultural structures")
+    ):
+        values["agricultural_context"].discard("present")
+        values["agricultural_context"].add("agricultural_structures_visible")
+    elif any(phrase in low for phrase in ("огороды", "cultivated land")):
+        values["agricultural_context"].discard("present")
+        values["agricultural_context"].add("cultivated_land_visible")
+
+    if any(
+        phrase in low
         for phrase in ("много построек", "плотная застройка", "dense buildings")
     ):
         values["nearby_buildings"].add("dense_visible")
     elif any(phrase in low for phrase in ("несколько построек", "several buildings")):
         values["nearby_buildings"].add("several_visible")
 
-    if any(
-        phrase in low
-        for phrase in (
-            "оптики на парцеле нет",
-            "нет оптики",
-            "без оптики",
-            "no fiber",
-            "sin fibra",
-        )
-    ):
+    if _fiber_question(low):
+        pass
+    elif _fiber_absence_claim(low):
         values["fiber"].add("absent")
     elif any(phrase in low for phrase in ("оптик", "гбит", "fiber", "fibra")):
         values["fiber"].add("present")

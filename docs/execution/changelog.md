@@ -25,3 +25,8 @@
   held-out manifests fail closed when excluded rows are absent, and bounded
   visual work continue after one row or temporary-file failure so retries do
   not repeat completed extraction.
+- Tightened clause semantics after independent review: local negatives now
+  override list headings, ambiguous object negation and compound same-aspect
+  values stay visibly unapplied, and only explicit equivalent/opposite values
+  affect ranking or hard exclusion. Bumped the compiler snapshot version so
+  existing profiles show dirty and use the one-call recommendation refresh.

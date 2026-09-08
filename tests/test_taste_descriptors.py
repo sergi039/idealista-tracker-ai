@@ -117,6 +117,12 @@ def test_owner_clause_values_bind_only_canonical_descriptor_values():
     assert taste_descriptors.text_claim_values("оптики на парцеле нет") == {
         "fiber": ["absent"]
     }
+    for absence in ("оптики нет", "оптика отсутствует", "fibra no disponible"):
+        assert taste_descriptors.text_claim_values(absence) == {"fiber": ["absent"]}
+    assert taste_descriptors.text_claim_values("Есть ли оптика?") == {}
+    assert taste_descriptors.text_claim_values("Не хочу оптику") == {
+        "fiber": ["present"]
+    }
 
 
 def test_text_claims_reject_unrelated_walks_and_russian_word_prefixes():
@@ -137,6 +143,32 @@ def test_text_claims_reject_unrelated_walks_and_russian_word_prefixes():
         )
     )
     assert [(aspect, row["value"]) for aspect, row in beach] == [
+        ("beach_access", "walkable")
+    ]
+
+    for unsupported_access in (
+        "До пляжа пешком 40 минут.",
+        "До пляжа пешком не дойти.",
+        "Пляж 488 м.",
+    ):
+        assert (
+            list(
+                taste_descriptors._text_claims(
+                    unsupported_access,
+                    source_kind="listing_claim",
+                    source_id="test",
+                )
+            )
+            == []
+        )
+    explicit_access = list(
+        taste_descriptors._text_claims(
+            "Пляж в пешей доступности.",
+            source_kind="listing_claim",
+            source_id="test",
+        )
+    )
+    assert [(aspect, row["value"]) for aspect, row in explicit_access] == [
         ("beach_access", "walkable")
     ]
 

@@ -8,7 +8,10 @@ from typing import Any
 
 from services import taste_descriptors
 
-SCHEMA_VERSION = 1
+# Bump when compiled clauses change meaning. Published profiles record this
+# value and become dirty until the one-call recommendation refresh rebuilds
+# their deterministic clause snapshot.
+SCHEMA_VERSION = 2
 
 _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
@@ -17,7 +20,7 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
             "l-shaped",
             "l-образ",
             "изломан",
-            "переше",
+            "перешеек",
             "правильной формы",
             "прямоуголь",
             "форма компактная",
@@ -124,6 +127,14 @@ def _desire_negation(text: str) -> str | None:
         if all(word in _NEGATION_CONNECTORS for word in words):
             return "avoid"
         return "unresolved"
+    for desire in _DESIRE.finditer(low):
+        # ``нравится не каменный дом, а деревянный`` negates the desired
+        # object, not the desire verb.  We cannot safely infer which of the
+        # two objects is preferred, so it must not become a preference for
+        # the first value named.
+        suffix = low[desire.end() :]
+        if re.match(r"[\s,:—-]*\bне\b", suffix):
+            return "unresolved"
     return None
 
 
@@ -208,6 +219,32 @@ def _intrinsic_avoid(text: str) -> bool:
     )
 
 
+def _heading_yields_to_local_signal(
+    part: str, explicit_polarity: str | None, heading_polarity: str
+) -> bool:
+    """Whether a section heading must not supply this part's polarity.
+
+    Headings label a list; they cannot rewrite an owner statement that carries
+    its own sign.  Generic factual negatives remain eligible for a genuine
+    ``Минусы:`` tradeoff heading, while negated desires and intrinsic drawbacks
+    stay local.
+    """
+    if explicit_polarity in {"unresolved", "tradeoff"}:
+        return True
+    # Under a positive heading, a locally negative phrase is still local.  A
+    # negative heading may intentionally frame ordinary drawbacks as tradeoffs,
+    # so that case remains below unless it is one of the stronger signals.
+    if heading_polarity == "prefer" and explicit_polarity == "avoid":
+        return True
+    negation = _desire_negation(part)
+    return (
+        negation in {"avoid", "unresolved"}
+        or _intrinsic_avoid(part)
+        or "не нравится" in part.casefold()
+        or "не подходит" in part.casefold()
+    )
+
+
 def _preference_segments(segment: str) -> list[str]:
     """Split an explicit contrast before mapping aspects to a polarity."""
     low = segment.casefold()
@@ -217,12 +254,17 @@ def _preference_segments(segment: str) -> list[str]:
         # "Damp is a minus, but tolerable" is one local tradeoff.  Splitting
         # it would detach the tolerance from the only fact it qualifies.
         return [segment]
-    parts = [
-        part.strip(" ,—-:")
-        for part in re.split(
-            r"\s*(?:,?\s+но\s+|;\s*но\s+|\bоднако\b)\s*", segment, flags=re.IGNORECASE
-        )
-    ]
+    parts: list[str] = []
+    for contrast_part in re.split(
+        r"\s*(?:,?\s+но\s+|;\s*но\s+|\bоднако\b)\s*",
+        segment,
+        flags=re.IGNORECASE,
+    ):
+        # Commas can join distinct owner clauses.  Keeping them local stops a
+        # heading from assigning one polarity to every aspect in the sentence;
+        # a comma in a decimal number is left intact.
+        parts.extend(re.split(r",\s+(?!(?:что|а\s+не)\b)", contrast_part))
+    parts = [part.strip(" ,—-:") for part in parts]
     return [part for part in parts if part]
 
 
@@ -273,7 +315,9 @@ def compile_signal(signal: dict[str, Any]) -> list[dict[str, Any]]:
             explicit_unresolved = explicit_polarity == "unresolved"
             if explicit_unresolved:
                 polarity = None
-            elif heading_polarity and len(parts) == 1:
+            elif heading_polarity and not _heading_yields_to_local_signal(
+                part, explicit_polarity, heading_polarity
+            ):
                 polarity = heading_polarity
             else:
                 polarity = (
@@ -284,7 +328,13 @@ def compile_signal(signal: dict[str, Any]) -> list[dict[str, Any]]:
             for aspect_id in matched:
                 values = taste_descriptors.text_claim_values(part).get(aspect_id, [])
                 hard = polarity == "avoid" and _explicit_global(part)
-                executable = bool(polarity) and bool(values)
+                # Multiple values of one aspect need an explicit relationship
+                # before they can be executed. Treating "stone farmhouse" as
+                # either stone OR farmhouse made a partial photo observation
+                # satisfy the whole owner phrase; silently treating it as AND
+                # would be another grammatical guess. Keep the clause visible
+                # until that relationship is represented in the clause schema.
+                executable = bool(polarity) and len(values) == 1
                 result.append(
                     {
                         "id": _clause_id(signal["property_id"], aspect_id, part),
@@ -302,6 +352,8 @@ def compile_signal(signal: dict[str, Any]) -> list[dict[str, Any]]:
                         else (
                             "desire negation is ambiguous"
                             if explicit_unresolved
+                            else "multiple canonical values need an explicit relationship"
+                            if len(values) > 1
                             else "no comparable canonical value"
                             if polarity
                             else "preference polarity is not explicit"

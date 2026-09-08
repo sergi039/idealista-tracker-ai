@@ -23,6 +23,27 @@ _VISUAL_RESEMBLANCE_ASPECTS = frozenset(
     }
 )
 _NUMERIC_ASPECTS = frozenset({"house_area_m2", "plot_area_m2"})
+_CONTRADICTORY_VALUE_PAIRS = {
+    "plot_outline": frozenset({frozenset({"notched", "regular"})}),
+    "house_condition": frozenset(
+        {
+            frozenset({"well_maintained", "major_renovation"}),
+            frozenset({"well_maintained", "ruined"}),
+        }
+    ),
+    "room_scale": frozenset(
+        {
+            frozenset({"small", "medium"}),
+            frozenset({"small", "large"}),
+            frozenset({"medium", "large"}),
+        }
+    ),
+    "neighbor_privacy": frozenset({frozenset({"low", "high"})}),
+    "beach_access": frozenset({frozenset({"far", "walkable"})}),
+    "fiber": frozenset({frozenset({"present", "absent"})}),
+    "sea_view": frozenset({frozenset({"present", "no"})}),
+    "property_kind": frozenset({frozenset({"land", "house"})}),
+}
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -59,16 +80,82 @@ def _usable_values(rows: Iterable[dict[str, Any]], aspect_id: str) -> set[str]:
     }
 
 
-def _rows_for_values(
-    rows: Iterable[dict[str, Any]], aspect_id: str, values: set[str]
-) -> list[dict[str, Any]]:
-    """Rows whose own value supports the decision being explained."""
-    return [
-        row
-        for row in rows
-        if row.get("status") in {"supported", "claimed"}
-        and _normalised_value(row.get("value"), aspect_id) in values
-    ]
+def _value_relationship(candidate: str, source: str, aspect_id: str) -> str:
+    """Comparable relationship of one candidate value to one owner predicate.
+
+    Exact values are equivalent.  A general agriculture predicate accepts
+    either visible subtype, while a structures-specific predicate does not
+    treat cultivated land as the same fact.  Only explicit mutually-exclusive
+    pairs are contradictory; every other pair is incomparable and asks for
+    verification instead of manufacturing a conflict.
+    """
+    if candidate == source:
+        return "equivalent"
+    if (
+        aspect_id == "agricultural_context"
+        and source == "present"
+        and candidate
+        in {
+            "agricultural_structures_visible",
+            "cultivated_land_visible",
+        }
+    ):
+        return "equivalent"
+    if frozenset({candidate, source}) in _CONTRADICTORY_VALUE_PAIRS.get(
+        aspect_id, frozenset()
+    ):
+        return "contradictory"
+    return "incomparable"
+
+
+def _relationship_rows(
+    rows: Iterable[dict[str, Any]], aspect_id: str, source_values: set[str]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
+    """Return decision evidence and one conservative clause relationship.
+
+    Multiple values in one clause are conjunctive: ``stone farmhouse`` is
+    not satisfied by a candidate that establishes only stone. Partial or
+    cross-modal evidence stays incomparable and visible for verification.
+    """
+    equivalent: list[dict[str, Any]] = []
+    contradictory: list[dict[str, Any]] = []
+    relationships_by_source: dict[str, set[str]] = {
+        source: set() for source in source_values
+    }
+    for row in rows:
+        if row.get("status") not in {"supported", "claimed"}:
+            continue
+        candidate = _normalised_value(row.get("value"), aspect_id)
+        if candidate is None:
+            continue
+        relationships = set()
+        for source in source_values:
+            relationship = _value_relationship(candidate, source, aspect_id)
+            relationships.add(relationship)
+            relationships_by_source[source].add(relationship)
+        if "equivalent" in relationships:
+            equivalent.append(row)
+        elif "contradictory" in relationships:
+            contradictory.append(row)
+    every_source_matches = all(
+        "equivalent" in relationships
+        for relationships in relationships_by_source.values()
+    )
+    any_source_conflicts = any(
+        "contradictory" in relationships
+        for relationships in relationships_by_source.values()
+    )
+    any_source_is_unresolved = any(
+        "equivalent" not in relationships and "contradictory" not in relationships
+        for relationships in relationships_by_source.values()
+    )
+    if every_source_matches:
+        outcome = "equivalent"
+    elif any_source_conflicts and not equivalent and not any_source_is_unresolved:
+        outcome = "contradictory"
+    else:
+        outcome = "incomparable"
+    return equivalent, contradictory, outcome
 
 
 def _clause_values(
@@ -339,9 +426,29 @@ def _reading(
                 }
             )
             continue
-        overlap = bool(candidate_values & source_values)
-        overlap_rows = _rows_for_values(candidate_rows, aspect_id, source_values)
-        decision_rows = overlap_rows if overlap else candidate_rows
+        equivalent_rows, contradictory_rows, relationship = _relationship_rows(
+            candidate_rows, aspect_id, source_values
+        )
+        # Partial evidence for a multi-value predicate is neither a match nor
+        # a violation. Keep it visible for verification.
+        if relationship == "incomparable":
+            needs.append(
+                {
+                    **_facet(
+                        aspect_id,
+                        equivalent_rows + contradictory_rows or candidate_rows,
+                        source_property_id=clause.get("source_property_id"),
+                    ),
+                    "status": (
+                        "conflicting"
+                        if equivalent_rows and contradictory_rows
+                        else _strongest_status(candidate_rows)
+                    ),
+                }
+            )
+            continue
+        overlap = relationship == "equivalent"
+        decision_rows = equivalent_rows if overlap else contradictory_rows
         decision_status = _strongest_status(decision_rows)
         if decision_status == "supported":
             supported += 1

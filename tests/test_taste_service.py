@@ -17,7 +17,7 @@ import pytest
 
 from app import create_app, db
 from models import Property, SearchProfile, TasteProfile
-from services import subscription_transport, taste_service
+from services import subscription_transport, taste_preferences, taste_service
 from tests import setup_test_environment
 
 
@@ -128,6 +128,14 @@ class TestProfileLedger:
         current = taste_service.load_current_profile()
         assert current["version"] == second["data"]["version"]
         assert current["source"]["signals"][0]["property_id"] == ref.id
+        assert (
+            current["source"]["recommendation_schema_version"]
+            == taste_service.RECOMMENDATION_SCHEMA_VERSION
+        )
+        assert (
+            current["source"]["preference_compiler_schema_version"]
+            == taste_preferences.SCHEMA_VERSION
+        )
         # Two positive examples cannot establish aversions; the profile says
         # it is provisional where every reader will see it.
         assert current["source"]["provisional"] is True

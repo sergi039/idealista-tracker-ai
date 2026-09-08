@@ -69,6 +69,10 @@ logger = logging.getLogger(__name__)
 # 78 from last month is not silently compared with a 78 from a reworded
 # rubric. Read by `read_taste`, which presents a mismatch as stale.
 TASTE_SCORER_VERSION = 1
+# Bumped whenever deterministic recommendation clauses change meaning. It is
+# part of both the source envelope and basis fingerprint, so a snapshot built
+# by an older compiler becomes dirty even when the owner's rows did not move.
+RECOMMENDATION_SCHEMA_VERSION = 2
 
 # Verdicts that carry a taste signal. `waiting` is deliberately absent — see
 # the module docstring.
@@ -492,24 +496,28 @@ def signals_fingerprint(signals: List[Dict[str, Any]]) -> str:
     """sha256 over the exact basis the prompt is built from — ids, verdicts,
     reason texts AND facts, so a changed measurement re-fingerprints too."""
     basis = json.dumps(
-        [
-            {
-                "id": s["property_id"],
-                "profile_id": s.get("profile_id"),
-                "verdict": s["verdict"],
-                "favorite": s.get("favorite", False),
-                "positive_anchor": s.get("positive_anchor", False),
-                "reason": s["reason"],
-                "facts": s["facts"],
-                "descriptor_fingerprint": s.get("descriptor", {}).get(
-                    "input_fingerprint"
-                ),
-                "visual_descriptor_fingerprint": s.get("descriptor", {}).get(
-                    "visual_descriptor_fingerprint"
-                ),
-            }
-            for s in signals
-        ],
+        {
+            "recommendation_schema_version": RECOMMENDATION_SCHEMA_VERSION,
+            "preference_compiler_schema_version": taste_preferences.SCHEMA_VERSION,
+            "signals": [
+                {
+                    "id": s["property_id"],
+                    "profile_id": s.get("profile_id"),
+                    "verdict": s["verdict"],
+                    "favorite": s.get("favorite", False),
+                    "positive_anchor": s.get("positive_anchor", False),
+                    "reason": s["reason"],
+                    "facts": s["facts"],
+                    "descriptor_fingerprint": s.get("descriptor", {}).get(
+                        "input_fingerprint"
+                    ),
+                    "visual_descriptor_fingerprint": s.get("descriptor", {}).get(
+                        "visual_descriptor_fingerprint"
+                    ),
+                }
+                for s in signals
+            ],
+        },
         ensure_ascii=False,
         sort_keys=True,
     )
@@ -686,7 +694,8 @@ def build_profile(provider: str = "claude") -> Dict[str, Any]:
 
     clauses = taste_preferences.compile_signals(signals)
     source = {
-        "recommendation_schema_version": 1,
+        "recommendation_schema_version": RECOMMENDATION_SCHEMA_VERSION,
+        "preference_compiler_schema_version": taste_preferences.SCHEMA_VERSION,
         "signals": [
             {
                 "property_id": s["property_id"],
@@ -829,7 +838,12 @@ def recommendation_profile_state(
             ),
         }
     source = profile_data.get("source") if isinstance(profile_data, dict) else None
-    if not isinstance(source, dict) or source.get("recommendation_schema_version") != 1:
+    if (
+        not isinstance(source, dict)
+        or source.get("recommendation_schema_version") != RECOMMENDATION_SCHEMA_VERSION
+        or source.get("preference_compiler_schema_version")
+        != taste_preferences.SCHEMA_VERSION
+    ):
         usable_signal_count = sum(
             1 for signal in current_signals if signal.get("usable")
         )

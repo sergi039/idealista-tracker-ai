@@ -82,6 +82,18 @@ def test_noun_negation_before_desire_is_visible_but_never_inherits_prefer_headin
     assert clause["reason"] == "desire negation is ambiguous"
 
 
+def test_post_verb_object_negation_is_unresolved_not_a_preference_for_first_value():
+    clause = next(
+        item
+        for item in _clauses("нравится не каменный дом, а деревянный", "interested")
+        if item["aspect_id"] == "house_character"
+    )
+
+    assert clause["polarity"] == "unresolved"
+    assert clause["mapping_state"] == "unmapped"
+    assert clause["reason"] == "desire negation is ambiguous"
+
+
 def test_clause_values_bind_each_shape_to_its_own_clause():
     clauses = _clauses(
         "L-образная форма никогда не подходит; ровный вытянутый прямоугольник подходит",
@@ -121,7 +133,14 @@ def test_comparable_clause_values_remain_executable_for_common_aspects():
     ]
     assert by_aspect["fiber"]["values"] == ["present"]
     assert by_aspect["property_kind"]["values"] == ["land"]
-    assert all(clause["mapping_state"] == "executable" for clause in by_aspect.values())
+    assert by_aspect["house_character"]["mapping_state"] == "unmapped"
+    assert by_aspect["house_character"]["reason"] == (
+        "multiple canonical values need an explicit relationship"
+    )
+    assert all(
+        by_aspect[aspect]["mapping_state"] == "executable"
+        for aspect in ("sea_view", "fiber", "property_kind")
+    )
 
 
 def test_heading_polarity_stops_at_sentence_and_factual_observation_stays_unresolved():
@@ -138,6 +157,67 @@ def test_intrinsic_avoid_outranks_inherited_heading_polarity():
     by_aspect = {clause["aspect_id"]: clause for clause in clauses}
 
     assert by_aspect["road_proximity"]["polarity"] == "avoid"
+
+
+def test_heading_precedence_is_aspect_local_across_separators():
+    cases = (
+        (
+            "Нравится: вид на море, не нравится рядом с дорогой",
+            "sea_view",
+            "road_proximity",
+            "prefer",
+            "avoid",
+        ),
+        (
+            "Нравится: каменный дом; рядом с дорогой",
+            "house_character",
+            "road_proximity",
+            "prefer",
+            "avoid",
+        ),
+        (
+            "Нравится: каменный дом, сырость — минус",
+            "house_character",
+            "house_condition",
+            "prefer",
+            "avoid",
+        ),
+        (
+            "Нравится: каменный дом. Рядом с дорогой.",
+            "house_character",
+            "road_proximity",
+            "prefer",
+            "avoid",
+        ),
+    )
+
+    for reason, positive_aspect, local_aspect, positive, local in cases:
+        by_aspect = {
+            clause["aspect_id"]: clause for clause in _clauses(reason, "interested")
+        }
+        assert by_aspect[positive_aspect]["polarity"] == positive
+        assert by_aspect[local_aspect]["polarity"] == local
+
+
+def test_liked_listing_negative_heading_keeps_tradeoff_across_comma_items():
+    clauses = _clauses("Минусы: сырость, скважина", "interested")
+    by_aspect = {clause["aspect_id"]: clause for clause in clauses}
+
+    assert by_aspect["house_condition"]["polarity"] == "tradeoff"
+    assert by_aspect["utilities"]["polarity"] == "tradeoff"
+
+
+def test_only_exact_isthmus_term_maps_plot_outline_clause():
+    inherited = _clauses("дом перешёл по наследству", "interested")
+    isthmus = _clauses("не нравится перешеек участка", "interested")
+
+    assert not any(clause["aspect_id"] == "plot_outline" for clause in inherited)
+    assert (
+        next(clause for clause in isthmus if clause["aspect_id"] == "plot_outline")[
+            "polarity"
+        ]
+        == "avoid"
+    )
 
 
 def test_heading_keeps_semicolon_items_but_leaves_following_ambiguous_fact_unresolved():

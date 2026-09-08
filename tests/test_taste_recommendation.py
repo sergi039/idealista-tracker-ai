@@ -305,7 +305,8 @@ def test_star_change_marks_a_published_profile_dirty(app):
         "version": 1,
         "signals_fingerprint": taste_service.signals_fingerprint(signals),
         "source": {
-            "recommendation_schema_version": 1,
+            "recommendation_schema_version": taste_service.RECOMMENDATION_SCHEMA_VERSION,
+            "preference_compiler_schema_version": taste_preferences.SCHEMA_VERSION,
             "clauses": [],
             "signals": signals,
             "positive_reference_ids": [reference.id],
@@ -438,7 +439,8 @@ def _compiled_profile_from_current_signals():
     signals = taste_service.collect_signals()
     return {
         "source": {
-            "recommendation_schema_version": 1,
+            "recommendation_schema_version": taste_service.RECOMMENDATION_SCHEMA_VERSION,
+            "preference_compiler_schema_version": taste_preferences.SCHEMA_VERSION,
             "positive_reference_ids": [
                 signal["property_id"]
                 for signal in signals
@@ -671,7 +673,10 @@ def test_reference_visual_snapshot_preserves_image_evidence_and_invalidates_prof
     profile_data = {
         "version": 1,
         "signals_fingerprint": before_fingerprint,
-        "source": {"recommendation_schema_version": 1},
+        "source": {
+            "recommendation_schema_version": taste_service.RECOMMENDATION_SCHEMA_VERSION,
+            "preference_compiler_schema_version": taste_preferences.SCHEMA_VERSION,
+        },
     }
     assert (
         taste_service.recommendation_profile_state(profile_data)["state"] == "current"
@@ -686,6 +691,39 @@ def test_reference_visual_snapshot_preserves_image_evidence_and_invalidates_prof
     reference.taste = updated_taste
     db.session.commit()
     assert taste_service.recommendation_profile_state(profile_data)["state"] == "dirty"
+
+
+def test_older_preference_compiler_snapshot_is_dirty_without_owner_edits(app):
+    profile = _profile()
+    reference = _property(
+        profile,
+        title="old compiler reference",
+        is_favorite=True,
+        owner_verdict="interested",
+        owner_verdict_reason="Нравится: вид на море.",
+    )
+    signals = taste_service.collect_signals()
+    profile_data = {
+        "version": 1,
+        "signals_fingerprint": taste_service.signals_fingerprint(signals),
+        "source": {
+            "recommendation_schema_version": taste_service.RECOMMENDATION_SCHEMA_VERSION,
+            "preference_compiler_schema_version": taste_preferences.SCHEMA_VERSION - 1,
+            "signals": signals,
+            "positive_reference_ids": [reference.id],
+            "clauses": [],
+        },
+    }
+
+    reading = taste_service.recommendation_profile_state(profile_data)
+
+    assert reading["state"] == "dirty"
+    assert reading["reason"] == "legacy_profile"
+
+    expected = {"status": "ok", "data": {"version": 2}}
+    with patch.object(taste_service, "build_profile", return_value=expected) as build:
+        assert taste_service.refresh_recommendations() == expected
+    build.assert_called_once_with(provider="claude")
 
 
 def test_equal_numeric_similarity_uses_photo_texture_as_a_separate_rank_channel(app):
@@ -1531,3 +1569,194 @@ def test_supported_hard_violation_is_excluded_while_unknown_is_retained(app):
     assert context.readings[violating.id]["hard_exclusions"][0]["hard"] is True
     assert context.readings[unknown.id]["eligibility"] == "eligible"
     assert context.readings[unknown.id]["needs_verification"][0]["status"] == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("aspect_id", "candidate", "source", "expected"),
+    (
+        ("sea_view", "present", "present", "equivalent"),
+        ("sea_view", "no", "present", "contradictory"),
+        ("plot_outline", "regular", "notched", "contradictory"),
+        ("house_condition", "ruined", "well_maintained", "contradictory"),
+        ("room_scale", "large", "small", "contradictory"),
+        ("fiber", "absent", "present", "contradictory"),
+        ("property_kind", "land", "house", "contradictory"),
+        ("agricultural_context", "cultivated_land_visible", "present", "equivalent"),
+        (
+            "agricultural_context",
+            "cultivated_land_visible",
+            "agricultural_structures_visible",
+            "incomparable",
+        ),
+        ("neighbor_privacy", "screened_view", "high", "incomparable"),
+        ("neighbor_privacy", "neighbours_visible", "low", "incomparable"),
+        ("house_character", "stone_house", "old_farmhouse", "incomparable"),
+        ("planning_usability", "claimed_usable", "needs_verification", "incomparable"),
+    ),
+)
+def test_cross_modal_value_relationship_matrix_is_fail_closed(
+    aspect_id, candidate, source, expected
+):
+    assert (
+        taste_recommendation._value_relationship(candidate, source, aspect_id)
+        == expected
+    )
+
+
+def test_compiled_structures_avoidance_excludes_only_supported_structures(app):
+    profile = _profile()
+    _property(
+        profile,
+        title="structures rule",
+        owner_verdict="rejected",
+        owner_verdict_reason="Никогда не хочу сельхоз постройки рядом.",
+    )
+    structures = _property(profile, title="structures candidate")
+    cultivated = _property(profile, title="cultivated candidate")
+    structures.taste = {
+        "visual_descriptor": _visual_descriptor(
+            structures,
+            [
+                {
+                    "aspect_id": "agricultural_context",
+                    "value": "agricultural_structures_visible",
+                    "status": "supported",
+                    "evidence": {
+                        "source_kind": "photo",
+                        "source_id": "candidate:structures",
+                        "image_sha256": "1" * 64,
+                        "image_index": 0,
+                    },
+                    "confidence": 0.8,
+                    "limitation": "Only visible structures are described.",
+                }
+            ],
+        )
+    }
+    cultivated.taste = {
+        "visual_descriptor": _visual_descriptor(
+            cultivated,
+            [
+                {
+                    "aspect_id": "agricultural_context",
+                    "value": "cultivated_land_visible",
+                    "status": "supported",
+                    "evidence": {
+                        "source_kind": "photo",
+                        "source_id": "candidate:cultivated",
+                        "image_sha256": "2" * 64,
+                        "image_index": 0,
+                    },
+                    "confidence": 0.8,
+                    "limitation": "Only cultivated land is visible.",
+                }
+            ],
+        )
+    }
+    db.session.commit()
+
+    context = taste_recommendation.build_context(
+        [structures, cultivated],
+        _compiled_profile_from_current_signals(),
+        {"state": "current"},
+    )
+
+    assert context.readings[structures.id]["eligibility"] == "excluded"
+    assert context.readings[structures.id]["hard_exclusions"][0]["aspect_id"] == (
+        "agricultural_context"
+    )
+    assert context.readings[cultivated.id]["eligibility"] == "eligible"
+    assert context.readings[cultivated.id]["conflicts"] == []
+    assert context.readings[cultivated.id]["needs_verification"][0]["aspect_id"] == (
+        "agricultural_context"
+    )
+
+
+def test_compiled_privacy_preference_does_not_treat_screening_as_neighbor_count(app):
+    profile = _profile()
+    _property(
+        profile,
+        title="privacy rule",
+        owner_verdict="interested",
+        owner_verdict_reason="Нравится: мало соседей.",
+    )
+    candidate = _property(profile, title="screened candidate")
+    candidate.taste = {
+        "visual_descriptor": _visual_descriptor(
+            candidate,
+            [
+                {
+                    "aspect_id": "neighbor_privacy",
+                    "value": "screened_view",
+                    "status": "supported",
+                    "evidence": {
+                        "source_kind": "photo",
+                        "source_id": "candidate:screened",
+                        "image_sha256": "3" * 64,
+                        "image_index": 0,
+                    },
+                    "confidence": 0.8,
+                    "limitation": "Screening does not establish neighbor count.",
+                }
+            ],
+        )
+    }
+    db.session.commit()
+
+    reading = taste_recommendation.build_context(
+        [candidate],
+        _compiled_profile_from_current_signals(),
+        {"state": "current"},
+    ).readings[candidate.id]
+
+    assert reading["matches"] == []
+    assert reading["conflicts"] == []
+    assert reading["needs_verification"][0]["aspect_id"] == "neighbor_privacy"
+
+
+def test_compound_same_aspect_clause_stays_visible_and_cannot_hard_exclude(app):
+    profile = _profile()
+    _property(
+        profile,
+        title="compound character rule",
+        owner_verdict="rejected",
+        owner_verdict_reason="Никогда не хочу каменный крестьянский дом.",
+    )
+    candidate = _property(profile, title="farmhouse only candidate")
+    candidate.taste = {
+        "visual_descriptor": _visual_descriptor(
+            candidate,
+            [
+                {
+                    "aspect_id": "house_character",
+                    "value": "old_farmhouse",
+                    "status": "supported",
+                    "evidence": {
+                        "source_kind": "photo",
+                        "source_id": "candidate:farmhouse",
+                        "image_sha256": "4" * 64,
+                        "image_index": 0,
+                    },
+                    "confidence": 0.8,
+                    "limitation": "Building type is visible; material is not established.",
+                }
+            ],
+        )
+    }
+    db.session.commit()
+
+    reading = taste_recommendation.build_context(
+        [candidate],
+        _compiled_profile_from_current_signals(),
+        {"state": "current"},
+    ).readings[candidate.id]
+
+    assert reading["eligibility"] == "eligible"
+    assert reading["matches"] == []
+    assert reading["conflicts"] == []
+    assert reading["needs_verification"] == []
+    assert reading["unapplied_clauses"][0]["aspect_id"] == "house_character"
+    assert (
+        reading["unapplied_clauses"][0]["reason"]
+        == "multiple canonical values need an explicit relationship"
+    )
