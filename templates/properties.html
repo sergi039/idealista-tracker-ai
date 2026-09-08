@@ -108,6 +108,62 @@
     {% endif %}
 {%- endmacro %}
 
+{# The recommendation is an explanation of the evidence currently on hand,
+   not a percentage dressed up as certainty. #}
+{% macro recommendation_reading(reading) -%}
+    {% if reading %}
+        {% set state = reading.get('state') %}
+        <div class="recommendation-reading small mt-2" data-recommendation-state="{{ state }}">
+            {% if state == 'reference' %}
+                <span class="badge text-bg-primary">{{ t('recommendation_reference') }}</span>
+            {% elif state == 'rejected' %}
+                <span class="badge text-bg-danger">{{ t('recommendation_rejected') }}</span>
+            {% elif state == 'candidate' %}
+                <span class="badge text-bg-success">{{ t('recommendation_candidate') }}</span>
+            {% elif state == 'stale' %}
+                <span class="badge text-bg-warning">{{ t('recommendation_stale') }}</span>
+            {% elif state == 'no_profile' %}
+                <span class="text-body-secondary">{{ t('recommendation_no_profile') }}</span>
+            {% endif %}
+
+            {% set nearest = reading.get('nearest_positive_reference') %}
+            {% if nearest and state not in ('reference', 'rejected') %}
+                <span class="text-body-secondary ms-1">{{ t('recommendation_nearest_reference') }}
+                    <a href="{{ url_for('main.property_detail', property_id=nearest.get('id')) }}">#{{ nearest.get('id') }}</a>
+                </span>
+                {% if nearest.get('visual_matched_aspect_ids') %}
+                    <div class="recommendation-evidence mt-1" data-recommendation-visual-resemblance="true">
+                        <span class="text-body-secondary">{{ t('recommendation_reference_resemblance') }}</span>
+                        {% for aspect_id in nearest.get('visual_matched_aspect_ids') %}
+                            {% set label_key = 'recommendation_aspect_' ~ aspect_id %}
+                            <span class="badge text-bg-light text-body border">≈ {{ t(label_key) if t(label_key) != label_key else aspect_id }}</span>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            {% endif %}
+
+            {% if state == 'candidate' %}
+                <div class="recommendation-evidence mt-1">
+                    {% for facet in reading.get('matches', []) %}
+                        <span class="badge text-bg-success-subtle text-success-emphasis border border-success-subtle">✓ {{ t(facet.get('label_key')) if facet.get('label_key') and t(facet.get('label_key')) != facet.get('label_key') else facet.get('aspect_id') }}</span>
+                    {% endfor %}
+                    {% for facet in reading.get('conflicts', []) %}
+                        <span class="badge text-bg-danger-subtle text-danger-emphasis border border-danger-subtle">! {{ t(facet.get('label_key')) if facet.get('label_key') and t(facet.get('label_key')) != facet.get('label_key') else facet.get('aspect_id') }}</span>
+                    {% endfor %}
+                    {% for facet in reading.get('needs_verification', []) %}
+                        <span class="badge text-bg-warning-subtle text-warning-emphasis border border-warning-subtle">? {{ t(facet.get('label_key')) if facet.get('label_key') and t(facet.get('label_key')) != facet.get('label_key') else facet.get('aspect_id') }}</span>
+                    {% endfor %}
+                </div>
+                {% if reading.get('conflicts') %}
+                    <div class="text-danger-emphasis mt-1">{{ t('recommendation_conflicts_present') }}</div>
+                {% elif reading.get('needs_verification') %}
+                    <div class="text-body-secondary mt-1">{{ t('recommendation_verification_needed') }}</div>
+                {% endif %}
+            {% endif %}
+        </div>
+    {% endif %}
+{%- endmacro %}
+
 {% macro subscription_badge(p, profile_names) -%}
     {% set name = profile_names.get(p.search_profile_id) if p.search_profile_id else None %}
     <span class="badge bg-body-tertiary text-body-secondary border fw-normal property-subscription-badge">
@@ -1059,6 +1115,9 @@
                                 <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>&#127969; Lifestyle Score</option>
                                 <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>&#128188; Investment Score</option>
                                 <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>Combined Score</option>
+                            {% elif current_filters.mode == 'recommendation' %}
+                                <option value="recommendation" {{ 'selected' if current_filters.sort_by == 'recommendation' }}>{{ t('recommendation_sort_label') }}</option>
+                                <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>Combined Score</option>
                             {% else %}
                                 <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>Combined Score</option>
                                 <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>&#128188; Investment Score</option>
@@ -1077,6 +1136,9 @@
                                profile; stale and unscored rows sort last in
                                both directions (#498). #}
                             <option value="taste_score" {{ 'selected' if current_filters.sort_by == 'taste_score' }}>{{ t('taste_score_label') }}</option>
+                            {% if current_filters.mode != 'recommendation' %}
+                            <option value="recommendation" {{ 'selected' if current_filters.sort_by == 'recommendation' }}>{{ t('recommendation_sort_label') }}</option>
+                            {% endif %}
                             {# Most alike the subscription's favorites first; the
                                favorites themselves lead the descending order, and
                                a row that cannot be placed, a different kind of
@@ -1118,6 +1180,28 @@
         <div class="mb-3 d-flex flex-wrap justify-content-between align-items-center gap-2">
                 <div class="d-flex flex-wrap align-items-center gap-2">
                     <strong>{{ pagination.total if pagination else properties|length }} {{ t('properties_found') }}</strong>
+                    {% if recommendation_profile is defined and recommendation_profile %}
+                        {% set _rp = recommendation_profile %}
+                        <span id="recommendation-profile-status" class="text-body-secondary small" data-recommendation-profile-state="{{ _rp.get('state', 'none') }}">
+                            {% if _rp.get('state') == 'current' %}
+                                <i class="fas fa-compass me-1"></i>{{ t('recommendation_profile_current')|format(_rp.get('positive_reference_count', 0), _rp.get('mapped_clause_count', 0)) }}
+                                {% if _rp.get('unapplied_clause_count', 0) %} {{ t('recommendation_profile_unapplied')|format(_rp.get('unapplied_clause_count', 0)) }}{% endif %}
+                            {% elif _rp.get('state') == 'dirty' %}
+                                <i class="fas fa-clock-rotate-left me-1"></i>{{ t('recommendation_profile_dirty') }}
+                            {% elif _rp.get('state') == 'pending' %}
+                                <i class="fas fa-hourglass-half me-1"></i>{{ t('recommendation_profile_pending') }}
+                            {% elif _rp.get('state') == 'failed' %}
+                                <i class="fas fa-triangle-exclamation me-1"></i>{{ t('recommendation_profile_failed') }}
+                            {% else %}
+                                <i class="fas fa-compass me-1"></i>{{ t('recommendation_profile_none') }}
+                            {% endif %}
+                        </span>
+                    {% endif %}
+                    {% if recommendation_excluded_count %}
+                        <span id="recommendation-hard-exclusions" class="text-body-secondary small">
+                            {{ t('recommendation_hard_exclusions')|format(recommendation_excluded_count) }}
+                        </span>
+                    {% endif %}
                     {# What an empty result looked for. "0 properties found" is
                        the same sentence for a search that genuinely has no
                        answer and for one the page read differently from how it
@@ -1366,6 +1450,12 @@
                            title="{{ t('taste_mode_title') }}">
                             <i class="fas fa-heart"></i>
                         </a>
+                        <a id="mode-recommendation-btn"
+                           class="btn {{ 'btn-primary' if active_mode == 'recommendation' else 'btn-outline-secondary' }}"
+                           href="{{ url_for('main.properties', **dict(base_args, favorites=None, mode='recommendation', sort='recommendation', order='desc')) }}"
+                           title="{{ t('recommendation_mode_title') }}">
+                            <i class="fas fa-compass"></i>
+                        </a>
                     </div>
                     <div class="btn-group btn-group-sm" role="group" aria-label="View type">
                         <a id="view-list-btn"
@@ -1433,6 +1523,10 @@
                                             <th class="col-score" style="background-color: #d63384; color: #fff;">
                                                 {{ sort_header('taste_score', t('taste_score_label'), base_args, current_filters) }}
                                             </th>
+                                        {% elif active_mode == 'recommendation' %}
+                                            <th class="col-score" style="background-color: #0d6efd; color: #fff;">
+                                                {{ sort_header('recommendation', t('recommendation_sort_label'), base_args, current_filters) }}
+                                            </th>
                                         {% else %}
                                             <th class="col-score">
                                                 {{ sort_header('score_total', t('score'), base_args, current_filters) }}
@@ -1467,7 +1561,7 @@
                                     {% for p in properties %}
                                         <tr class="property-row {% if p.listing_status in ('removed', 'sold') %}listing-inactive{% endif %}"
                                             data-listing-status="{{ listing_verdict_for(p).state }}">
-                                            <td class="col-score" {% if active_mode == 'investment' %}style="background-color: rgba(25, 135, 84, 0.2);"{% elif active_mode == 'lifestyle' %}style="background-color: rgba(255, 193, 7, 0.2);"{% elif active_mode == 'taste' %}style="background-color: rgba(214, 51, 132, 0.15);"{% endif %}>
+                                            <td class="col-score" {% if active_mode == 'investment' %}style="background-color: rgba(25, 135, 84, 0.2);"{% elif active_mode == 'lifestyle' %}style="background-color: rgba(255, 193, 7, 0.2);"{% elif active_mode == 'taste' %}style="background-color: rgba(214, 51, 132, 0.15);"{% elif active_mode == 'recommendation' %}style="background-color: rgba(13, 110, 253, 0.12);"{% endif %}>
                                                 {% if active_mode == 'investment' %}
                                                     {{ score_badge(p.score_investment|float if p.score_investment is not none else none, 'font-weight: bold; font-size: 0.9em;') }}
                                                 {% elif active_mode == 'lifestyle' %}
@@ -1478,6 +1572,8 @@
                                                     {% if _taste.state == 'stale' %}
                                                         <i class="fas fa-clock-rotate-left text-body-secondary" title="{{ t('taste_stale_hint') }}"></i>
                                                     {% endif %}
+                                                {% elif active_mode == 'recommendation' %}
+                                                    <i class="fas fa-compass text-primary" title="{{ t('recommendation_mode_title') }}"></i>
                                                 {% else %}
                                                     {{ score_badge(p.score_total|float if p.score_total is not none else none, '') }}
                                                     {{ coverage_hint(p) }}
@@ -1564,6 +1660,8 @@
                                                     {{ hazard_badge(p) }}
                                                     {{ plot_badges(p) }}
                                                 </div>
+                                                {% set _recommendation = (recommendation_readings or {}).get(p.id) %}
+                                                {{ recommendation_reading(_recommendation) }}
                                             </td>
                                             <td class="col-price">
                                                 {% if p.price %}
@@ -1745,6 +1843,8 @@
                                             {% if _taste.state == 'stale' %}
                                                 <i class="fas fa-clock-rotate-left text-body-secondary" title="{{ t('taste_stale_hint') }}"></i>
                                             {% endif %}
+                                        {% elif active_mode == 'recommendation' %}
+                                            <i class="fas fa-compass text-primary" title="{{ t('recommendation_mode_title') }}"></i>
                                         {% else %}
                                             {{ score_badge(p.score_total|float if p.score_total is not none else none, '') }}
                                             {{ coverage_hint(p) }}
@@ -1794,6 +1894,8 @@
                                     {{ hazard_badge(p) }}
                                                     {{ plot_badges(p) }}
                                 </div>
+                                {% set _recommendation = (recommendation_readings or {}).get(p.id) %}
+                                {{ recommendation_reading(_recommendation) }}
 
                                 <!-- Price and Area -->
                                 <div class="row mb-3">

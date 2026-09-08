@@ -35,6 +35,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import base64
+import hashlib
 import shutil
 import signal
 import subprocess
@@ -50,7 +52,15 @@ HOST = os.environ.get("AI_BRIDGE_HOST", "0.0.0.0")
 PORT = int(os.environ.get("AI_BRIDGE_PORT", "5061"))
 TOKEN = os.environ.get("AI_BRIDGE_TOKEN", "")
 DEFAULT_TIMEOUT = int(os.environ.get("AI_BRIDGE_TIMEOUT", "300"))
+# Text-only calls remain small. Image calls carry at most three 1 MiB payloads
+# base64 encoded, so their authenticated local request gets a separate cap.
 MAX_BODY_BYTES = 512 * 1024
+MAX_IMAGE_REQUEST_BYTES = 5 * 1024 * 1024
+MAX_IMAGES = 3
+MAX_IMAGE_BYTES = 1024 * 1024
+MAX_IMAGE_PIXELS = 40_000_000
+_IMAGE_TYPES = {"image/jpeg": ".jpg", "image/png": ".png"}
+_IMAGE_SOURCE_KINDS = {"portal_photo", "dossier_photo", "attachment_photo"}
 
 # Reasoning effort for both CLIs. These are single-shot valuations against a
 # prompt the app has already assembled, not open-ended engineering: measured on
@@ -408,8 +418,18 @@ def _run(cmd: list[str], stdin_text: str, timeout: int) -> str:
 
 
 def complete_claude(
-    prompt: str, system: str, model: str, timeout: int, schema: dict | None = None
+    prompt: str,
+    system: str,
+    model: str,
+    timeout: int,
+    schema: dict | None = None,
+    image_paths: list[str] | None = None,
 ) -> dict:
+    if image_paths:
+        # `claude --file` names a remote file id, not a local image upload.
+        # Sending a path would silently mean something different, so visual
+        # work remains Codex-only until a real Claude attachment route exists.
+        raise BridgeError("claude does not support local visual inputs")
     if _which("claude") is None:
         raise BridgeError("claude CLI not found on host")
 
@@ -526,8 +546,163 @@ def _write_schema_file(schema: dict) -> str:
     return path
 
 
+def _sniff_image_type(data: bytes) -> str | None:
+    """The two raster formats established by the visual-input pilot."""
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    return None
+
+
+def _image_within_pixel_limit(data: bytes, content_type: str) -> bool:
+    if content_type == "image/png":
+        if len(data) < 24:
+            return False
+        width, height = (
+            int.from_bytes(data[16:20], "big"),
+            int.from_bytes(data[20:24], "big"),
+        )
+    else:
+        index = 2
+        width = height = 0
+        while index + 9 <= len(data):
+            if data[index] != 0xFF:
+                index += 1
+                continue
+            while index < len(data) and data[index] == 0xFF:
+                index += 1
+            if index >= len(data):
+                break
+            marker = data[index]
+            index += 1
+            if marker in {0xD8, 0xD9} or 0xD0 <= marker <= 0xD7:
+                continue
+            if index + 2 > len(data):
+                break
+            length = int.from_bytes(data[index : index + 2], "big")
+            if length < 7 or index + length > len(data):
+                break
+            if marker in {
+                0xC0,
+                0xC1,
+                0xC2,
+                0xC3,
+                0xC5,
+                0xC6,
+                0xC7,
+                0xC9,
+                0xCA,
+                0xCB,
+                0xCD,
+                0xCE,
+                0xCF,
+            }:
+                height = int.from_bytes(data[index + 3 : index + 5], "big")
+                width = int.from_bytes(data[index + 5 : index + 7], "big")
+                break
+            index += length
+    return width > 0 and height > 0 and width * height <= MAX_IMAGE_PIXELS
+
+
+def _decode_image_inputs(images: object) -> list[dict]:
+    """Validate typed byte payloads before any image reaches a CLI.
+
+    The app cannot hand this host a path safely: paths cross the Docker
+    boundary and would turn the bridge into an arbitrary host-file reader.
+    It instead sends a small, hash-bound byte payload from the dedicated
+    visual-input builder.  This second validation keeps the bridge safe even
+    when a caller holding its token is buggy.
+    """
+    if images is None:
+        return []
+    if not isinstance(images, list) or not 1 <= len(images) <= MAX_IMAGES:
+        raise BridgeError(f"images must contain 1 to {MAX_IMAGES} entries")
+    decoded = []
+    for image in images:
+        if not isinstance(image, dict):
+            raise BridgeError("image entry must be an object")
+        source_kind = image.get("source_kind")
+        source_id = image.get("source_id")
+        content_type = image.get("content_type")
+        digest = image.get("content_sha256")
+        encoded = image.get("content_base64")
+        if (
+            source_kind not in _IMAGE_SOURCE_KINDS
+            or not isinstance(source_id, str)
+            or not source_id.strip()
+            or len(source_id) > 200
+            or content_type not in _IMAGE_TYPES
+            or not isinstance(digest, str)
+            or not isinstance(encoded, str)
+        ):
+            raise BridgeError("image entry has an invalid source or type")
+        digest = digest.lower()
+        if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+            raise BridgeError("image entry has an invalid content hash")
+        try:
+            data = base64.b64decode(encoded, validate=True)
+        except (ValueError, TypeError) as exc:
+            raise BridgeError("image entry is not valid base64") from exc
+        if not data or len(data) > MAX_IMAGE_BYTES:
+            raise BridgeError("image entry is empty or exceeds the byte limit")
+        if _sniff_image_type(data) != content_type:
+            raise BridgeError("image entry type does not match its bytes")
+        if not _image_within_pixel_limit(data, content_type):
+            raise BridgeError(
+                "image entry dimensions are unreadable or exceed pixel limit"
+            )
+        if hashlib.sha256(data).hexdigest() != digest:
+            raise BridgeError("image entry hash does not match its bytes")
+        decoded.append({"data": data, "extension": _IMAGE_TYPES[content_type]})
+    return decoded
+
+
+def _write_image_files(images: list[dict]) -> list[str]:
+    """Write bridge-owned 0600 files for one run, never caller pathnames."""
+    paths = []
+    try:
+        for image in images:
+            fd, path = tempfile.mkstemp(
+                prefix="ai-bridge-image-", suffix=image["extension"]
+            )
+            try:
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(image["data"])
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except Exception:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+                raise
+            paths.append(path)
+    except Exception:
+        for path in paths:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        raise
+    return paths
+
+
+def _remove_image_files(paths: list[str]) -> None:
+    for path in paths:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
 def complete_codex(
-    prompt: str, system: str, model: str, timeout: int, schema: dict | None = None
+    prompt: str,
+    system: str,
+    model: str,
+    timeout: int,
+    schema: dict | None = None,
+    image_paths: list[str] | None = None,
 ) -> dict:
     if _which("codex") is None:
         raise BridgeError("codex CLI not found on host")
@@ -571,6 +746,11 @@ def complete_codex(
     if schema:
         schema_path = _write_schema_file(schema)
         cmd += ["--output-schema", schema_path]
+    for image_path in image_paths or []:
+        # The path was just written by `_write_image_files`, never supplied by
+        # the HTTP caller.  Keep these after all normal flags because Codex's
+        # variadic `--image` consumes following non-option argv entries.
+        cmd += ["--image", image_path]
 
     try:
         answer = ""
@@ -701,7 +881,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         length = int(self.headers.get("Content-Length") or 0)
-        if length <= 0 or length > MAX_BODY_BYTES:
+        if length <= 0 or length > MAX_IMAGE_REQUEST_BYTES:
             self._reply(413, {"error": "body missing or too large"})
             return
 
@@ -709,6 +889,11 @@ class Handler(BaseHTTPRequestHandler):
             request = json.loads(self.rfile.read(length))
         except ValueError:
             self._reply(400, {"error": "invalid json"})
+            return
+
+        images = request.get("images")
+        if images is None and length > MAX_BODY_BYTES:
+            self._reply(413, {"error": "text request body too large"})
             return
 
         provider = str(request.get("provider") or "claude").lower()
@@ -732,16 +917,37 @@ class Handler(BaseHTTPRequestHandler):
             self._reply(400, {"error": "schema must be a JSON object or null"})
             return
 
+        if images is not None and provider not in {"codex", "openai"}:
+            self._reply(400, {"error": "provider does not support local visual inputs"})
+            return
+        try:
+            decoded_images = _decode_image_inputs(images)
+        except BridgeError as exc:
+            self._reply(400, {"error": str(exc)})
+            return
+
         timeout = min(int(request.get("timeout") or DEFAULT_TIMEOUT), 900)
         started = time.monotonic()
+        image_paths: list[str] = []
         try:
-            result = handler(
-                prompt,
-                str(request.get("system") or ""),
-                str(request.get("model") or ""),
-                timeout,
-                schema,
-            )
+            image_paths = _write_image_files(decoded_images)
+            if image_paths:
+                result = handler(
+                    prompt,
+                    str(request.get("system") or ""),
+                    str(request.get("model") or ""),
+                    timeout,
+                    schema,
+                    image_paths=image_paths,
+                )
+            else:
+                result = handler(
+                    prompt,
+                    str(request.get("system") or ""),
+                    str(request.get("model") or ""),
+                    timeout,
+                    schema,
+                )
         except BridgeError as exc:
             # A timeout and a busy bridge are not the same failure as a CLI
             # that answered with an error, and the caller should be able to
@@ -759,6 +965,8 @@ class Handler(BaseHTTPRequestHandler):
             )
             self._reply(status, {"error": str(exc)})
             return
+        finally:
+            _remove_image_files(image_paths)
 
         LOG.info("%s call finished in %.1fs", provider, time.monotonic() - started)
 

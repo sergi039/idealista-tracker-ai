@@ -9,12 +9,15 @@ the review reason is a textarea a paragraph fits into.
 
 import csv
 import io
+import re
+from unittest.mock import patch
 
 import pytest
 
 from app import create_app, db
 from models import Property, SearchProfile, TasteProfile
 from services import taste_service
+from services.taste_recommendation import RecommendationContext
 from tests import setup_test_environment
 
 
@@ -242,6 +245,267 @@ class TestTheDetailPage:
         assert (
             '<textarea class="form-control form-control-sm" id="review-reason"' in html
         )
+
+
+class TestRecommendationSurface:
+    def test_list_and_cards_show_evidence_without_a_fit_percentage(
+        self, client, app, profile_row
+    ):
+        """The browser receives the v4 reading as evidence, including the
+        hard distinction between a reference and a bookmarked rejection."""
+        reference = _mk_property(profile_row, title="Reference house", is_favorite=True)
+        candidate = _mk_property(profile_row, title="Evidence candidate")
+        rejected = _mk_property(
+            profile_row,
+            title="Rejected bookmark",
+            is_favorite=True,
+            owner_verdict="rejected",
+        )
+        profile = {
+            "state": "current",
+            "version": 4,
+            "positive_reference_count": 3,
+            "mapped_clause_count": 2,
+            "unapplied_clause_count": 1,
+        }
+        readings = {
+            reference.id: {
+                "state": "reference",
+                "nearest_positive_reference": None,
+                "matches": [],
+                "conflicts": [],
+                "needs_verification": [],
+            },
+            candidate.id: {
+                "state": "candidate",
+                "nearest_positive_reference": {
+                    "id": reference.id,
+                    "visual_matched_aspect_ids": ["visual_appeal"],
+                },
+                "matches": [{"label_key": "recommendation_aspect_sea_view"}],
+                "conflicts": [{"label_key": "recommendation_aspect_house_condition"}],
+                "needs_verification": [
+                    {"label_key": "recommendation_aspect_plot_outline"}
+                ],
+            },
+            rejected.id: {
+                "state": "rejected",
+                "nearest_positive_reference": None,
+                "matches": [],
+                "conflicts": [],
+                "needs_verification": [],
+            },
+        }
+
+        def _context(items, *_args, **_kwargs):
+            return RecommendationContext(
+                profile=profile,
+                readings={item.id: readings[item.id] for item in items},
+            )
+
+        with patch("routes.main_routes.taste_recommendation.build_context", _context):
+            page = client.get("/properties?profile_id=all")
+            cards = client.get("/properties?profile_id=all&view_type=cards")
+
+        assert page.status_code == cards.status_code == 200
+        body = page.get_data(as_text=True)
+        cards_body = cards.get_data(as_text=True)
+        assert 'id="recommendation-profile-status"' in body
+        assert "3 positive references and 2 recorded preferences" in body
+        assert "1 preference(s) are not used yet" in body
+        assert 'data-recommendation-state="reference"' in body
+        assert 'data-recommendation-state="candidate"' in body
+        assert 'data-recommendation-state="rejected"' in body
+        assert "Closest positive reference:" in body
+        assert f"#{reference.id}" in body
+        assert 'data-recommendation-visual-resemblance="true"' in body
+        assert "Also resembles:" in body
+        assert "appearance" in body
+        assert "sea view" in body
+        assert "house condition" in body
+        assert "plot shape" in body
+        assert "Known conflicts need attention." in body
+        assert "Rejected — not recommended" in body
+        profile_status = re.search(
+            r'id="recommendation-profile-status"[^>]*>(.*?)</span>', body, re.DOTALL
+        )
+        assert profile_status and "0 of 3" not in profile_status.group(1)
+        assert (
+            "/100"
+            not in body[
+                body.index("Evidence candidate") : body.index("Rejected bookmark")
+            ]
+        )
+        # Cards are a separate DOM branch and must carry the same explanation.
+        assert cards_body.count('data-recommendation-state="candidate"') == 1
+        assert "Known conflicts need attention." in cards_body
+
+    def test_spanish_recommendation_labels_render_on_the_live_page(
+        self, client, profile_row
+    ):
+        prop = _mk_property(profile_row, title="Spanish recommendation")
+        context = RecommendationContext(
+            profile={"state": "pending", "version": None},
+            readings={
+                prop.id: {
+                    "state": "candidate",
+                    "nearest_positive_reference": None,
+                    "matches": [{"label_key": "recommendation_aspect_sea_view"}],
+                    "conflicts": [],
+                    "needs_verification": [],
+                }
+            },
+        )
+        with client.session_transaction() as session:
+            session["language"] = "es"
+        with patch(
+            "routes.main_routes.taste_recommendation.build_context",
+            return_value=context,
+        ):
+            body = client.get("/properties?profile_id=all").get_data(as_text=True)
+
+        assert "Las recomendaciones se están preparando" in body
+        assert "Candidata" in body
+        assert "vistas al mar" in body
+
+    def test_recommendation_sort_selects_the_candidate_before_pagination(
+        self, client, profile_row
+    ):
+        """The query builds the full recommendation context before it takes
+        a page.  The page-size control has a deliberate floor of ten, so a
+        requested one proves the same boundary by excluding the eleventh row.
+        """
+        candidate = _mk_property(profile_row, title="Top recommendation")
+        _ = [
+            _mk_property(profile_row, title=f"Lower recommendation {index}")
+            for index in range(10)
+        ]
+
+        def _context(items, *_args, **_kwargs):
+            return RecommendationContext(
+                profile={"state": "current", "version": 4},
+                readings={
+                    item.id: {
+                        "state": "candidate",
+                        "nearest_positive_reference": None,
+                        "matches": [],
+                        "conflicts": [],
+                        "needs_verification": [],
+                        "rank_value": 100.0 if item.id == candidate.id else 1.0,
+                    }
+                    for item in items
+                },
+            )
+
+        with patch("routes.main_routes.taste_recommendation.build_context", _context):
+            body = client.get(
+                "/properties?profile_id=all&mode=recommendation&sort=recommendation&per_page=1"
+            ).get_data(as_text=True)
+
+        assert body.index("Top recommendation") < body.index("Lower recommendation 0")
+        assert "Lower recommendation 9" not in body
+        assert 'id="mode-recommendation-btn"' in body
+        assert 'value="recommendation" selected' in body
+
+    def test_recommendation_mode_hides_only_confirmed_hard_exclusions(
+        self, client, profile_row
+    ):
+        excluded = _mk_property(profile_row, title="Confirmed hard conflict")
+        _mk_property(profile_row, title="Unknown remains eligible")
+
+        def _context(items, *_args, **_kwargs):
+            return RecommendationContext(
+                profile={"state": "current", "version": 4},
+                readings={
+                    item.id: {
+                        "state": "candidate",
+                        "eligibility": "excluded"
+                        if item.id == excluded.id
+                        else "eligible",
+                        "hard_exclusions": [{"aspect_id": "plot_outline"}]
+                        if item.id == excluded.id
+                        else [],
+                        "nearest_positive_reference": None,
+                        "matches": [],
+                        "conflicts": [],
+                        "needs_verification": [],
+                        "rank_value": 1.0,
+                    }
+                    for item in items
+                },
+            )
+
+        with patch("routes.main_routes.taste_recommendation.build_context", _context):
+            body = client.get(
+                "/properties?profile_id=all&mode=recommendation&sort=recommendation"
+            ).get_data(as_text=True)
+
+        assert "Confirmed hard conflict" not in body
+        assert "Unknown remains eligible" in body
+        assert 'id="recommendation-hard-exclusions"' in body
+
+    def test_ordinary_sort_builds_recommendations_for_the_page_only(
+        self, client, profile_row
+    ):
+        for index in range(11):
+            _mk_property(profile_row, title=f"Ordinary row {index}")
+        observed_sizes = []
+
+        def _context(items, *_args, **_kwargs):
+            items = list(items)
+            observed_sizes.append(len(items))
+            return RecommendationContext(
+                profile={"state": "current", "version": 4},
+                readings={},
+            )
+
+        with patch("routes.main_routes.taste_recommendation.build_context", _context):
+            response = client.get("/properties?profile_id=all&per_page=10")
+
+        assert response.status_code == 200
+        assert observed_sizes == [10]
+
+    def test_compass_leaves_the_favorites_only_scope_for_candidates(
+        self, client, profile_row
+    ):
+        reference = _mk_property(
+            profile_row, title="Favorite reference", is_favorite=True
+        )
+        candidate = _mk_property(profile_row, title="Non-favorite candidate")
+
+        def _context(items, *_args, **_kwargs):
+            return RecommendationContext(
+                profile={"state": "current", "version": 4},
+                readings={
+                    item.id: {
+                        "state": "reference"
+                        if item.id == reference.id
+                        else "candidate",
+                        "nearest_positive_reference": None,
+                        "matches": [],
+                        "conflicts": [],
+                        "needs_verification": [],
+                        "rank_value": 100.0 if item.id == candidate.id else 1.0,
+                    }
+                    for item in items
+                },
+            )
+
+        with patch("routes.main_routes.taste_recommendation.build_context", _context):
+            favorites_page = client.get("/properties?profile_id=all&favorites=on")
+            favorites_body = favorites_page.get_data(as_text=True)
+            compass = re.search(
+                r'id="mode-recommendation-btn"[^>]*href="([^"]+)"',
+                favorites_body,
+            )
+            assert compass, "Favorites view did not render the recommendation compass"
+            href = compass.group(1).replace("&amp;", "&")
+            recommendation_page = client.get(href)
+
+        assert favorites_page.status_code == recommendation_page.status_code == 200
+        assert "Non-favorite candidate" not in favorites_body
+        assert "favorites=" not in href
+        assert "Non-favorite candidate" in recommendation_page.get_data(as_text=True)
 
 
 class TestTheCompactApi:

@@ -43,6 +43,7 @@ from services.listing_attribute_filters import (
     score_coverage_share_expr,
 )
 from services import taste_service
+from services import taste_recommendation
 from services import favorite_similarity
 from services.coordinate_quality import shared_coordinate_peers
 from services import advertiser
@@ -101,6 +102,9 @@ PROPERTY_MODE_SORT_DEFAULTS = {
     # twelfth table column: the score cell shows the taste score, so the
     # documented tablet layout keeps its width.
     "taste": "taste_score",
+    # Source-typed recommendation ranking. Legacy Taste remains a separate
+    # selectable mode so its historical model scores stay accessible.
+    "recommendation": "recommendation",
 }
 PROPERTY_VIEW_TYPES = ("cards", "list")
 # The table is what a bare /properties opens on (owner decision, 2026-08-09):
@@ -2038,6 +2042,35 @@ def properties():
                 similarity_summary, rejected=rejected_hidden_count
             )
 
+        # Compute the source-typed recommendation over the full filtered set
+        # before pagination. Its CASE expression below determines which NEW
+        # candidates reach page one; computing only after paginate would add
+        # explanations to the legacy order without selecting anything.
+        recommendation_profile_data = taste_service.load_current_profile()
+        recommendation_profile_summary = taste_service.recommendation_profile_state(
+            recommendation_profile_data
+        )
+        recommendation_context = None
+        wants_recommendation_ranking = (
+            mode == "recommendation" or sort_by == "recommendation"
+        )
+        recommendation_excluded_count = 0
+        if wants_recommendation_ranking:
+            recommendation_context = taste_recommendation.build_context(
+                query.all(),
+                recommendation_profile_data,
+                recommendation_profile_summary,
+                similarity_ctx=similarity_ctx,
+            )
+            excluded_ids = [
+                property_id
+                for property_id, reading in recommendation_context.readings.items()
+                if reading.get("eligibility") == "excluded"
+            ]
+            recommendation_excluded_count = len(excluded_ids)
+            if excluded_ids:
+                query = query.filter(Property.id.notin_(excluded_ids))
+
         # Sorting (safe allow-list). An unknown sort -- an old /lands bookmark
         # asking for travel_time_nearest_beach, say -- falls back to the
         # default *and says so*, so the page never claims an order it did not
@@ -2063,6 +2096,10 @@ def properties():
             # against are NULL and sort last in both directions.
             "similarity": favorite_similarity.sort_expression(Property, similarity_ctx),
         }
+        if recommendation_context is not None:
+            sort_columns["recommendation"] = taste_recommendation.sort_expression(
+                Property, recommendation_context
+            )
         if sort_by not in sort_columns and sort_by != "investment_metrics":
             sort_by = default_sort
         if sort_by == "similarity" and similarity_ctx is None:
@@ -2103,6 +2140,8 @@ def properties():
             active_mode = "combined"
         elif sort_by == "taste_score":
             active_mode = "taste"
+        elif sort_by == "recommendation":
+            active_mode = "recommendation"
         else:
             active_mode = mode
 
@@ -2114,6 +2153,17 @@ def properties():
         if pagination.pages and page > pagination.pages:
             page = pagination.pages
             pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+        # Ordinary price/score pages only annotate the rows they display. The
+        # full candidate scan is reserved for recommendation selection above,
+        # where it is required to decide which rows reach this page.
+        if recommendation_context is None:
+            recommendation_context = taste_recommendation.build_context(
+                pagination.items,
+                recommendation_profile_data,
+                recommendation_profile_summary,
+                similarity_ctx=similarity_ctx,
+            )
 
         # Nothing on screen: the two things the page used to get wrong about
         # its own emptiness. Both ask the table rather than the parameters,
@@ -2212,6 +2262,9 @@ def properties():
             taste_version=taste_version,
             taste_scored_count=taste_scored_count,
             taste_sort_dormant=taste_sort_dormant,
+            recommendation_profile=recommendation_context.profile,
+            recommendation_readings=recommendation_context.readings,
+            recommendation_excluded_count=recommendation_excluded_count,
             # The request's one similarity reading, for the chip beside every
             # score; the control, only where a favorite exists to compare
             # against; and the cut's own disclosure numbers.
@@ -2313,6 +2366,9 @@ def properties():
             municipalities=[],
             has_unclassified_category=False,
             has_unclassified_subtype=False,
+            recommendation_profile={"state": "none", "version": None},
+            recommendation_readings={},
+            recommendation_excluded_count=0,
             current_filters={
                 "mode": "combined",
                 "active_mode": "combined",

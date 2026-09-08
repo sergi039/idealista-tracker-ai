@@ -51,12 +51,16 @@ def main() -> None:
         signals = taste_service.collect_signals()
         usable = [s for s in signals if s["usable"]]
         skipped = [s for s in signals if not s["usable"]]
+        anchors = [s for s in signals if s.get("positive_anchor")]
         current = taste_service.load_current_profile()
 
         print(f"signals: {len(usable)} usable ({[s['property_id'] for s in usable]})")
+        print(
+            f"positive references: {len(anchors)} ({[s['property_id'] for s in anchors]})"
+        )
         if skipped:
             print(
-                f"skipped (verdict without a reason): "
+                f"no reason-derived clauses (anchors remain references): "
                 f"{[s['property_id'] for s in skipped]}"
             )
         if current:

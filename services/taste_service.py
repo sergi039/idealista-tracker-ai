@@ -55,11 +55,12 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import case, false
+from sqlalchemy import case, false, or_
 
 from config import Config
 from models import Property, TasteProfile, db
 from services import subscription_transport
+from services import taste_descriptors, taste_preferences
 from services.enrichment_write import check_writable, locked_write
 
 logger = logging.getLogger(__name__)
@@ -264,11 +265,25 @@ def gather_facts(prop: Property) -> List[str]:
 
     enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
 
-    sea_view = (enrichment.get("environment") or {}).get("sea_view")
-    if isinstance(sea_view, dict) and sea_view.get("state"):
-        facts.append(f"SEA VIEW: {sea_view.get('state')}")
-    else:
-        facts.append("SEA VIEW: not measured")
+    descriptor = taste_descriptors.build_descriptor(prop)
+    sea_rows = taste_descriptors.aspect_values(descriptor, "sea_view")
+    sea_supported = next(
+        (row for row in sea_rows if row.get("status") == "supported"), None
+    )
+    facts.append(
+        f"SEA VIEW: {sea_supported.get('value')}"
+        if sea_supported
+        else "SEA VIEW: not measured"
+    )
+
+    plot_rows = taste_descriptors.aspect_values(descriptor, "plot_area_m2")
+    for row in plot_rows:
+        area_value = _fmt_number(row.get("value"), " m2")
+        if area_value:
+            facts.append(
+                f"PLOT AREA ({row.get('source_kind')}, {row.get('status')}): "
+                f"{area_value} [{row.get('source_id')}]"
+            )
 
     sea = enrichment.get("sea")
     if isinstance(sea, dict) and sea.get("status") == "ok":
@@ -422,41 +437,55 @@ def facts_fingerprint(facts: List[str]) -> str:
 # --------------------------------------------------------------------------
 
 
-def collect_signals() -> List[Dict[str, Any]]:
-    """Every listing carrying an owner verdict with a reason, plus its facts."""
-    rows = (
-        Property.query.filter(Property.owner_verdict.in_(SIGNAL_VERDICTS))
-        .order_by(Property.id)
-        .all()
-    )
+def _signals_from_rows(rows: List[Property]) -> List[Dict[str, Any]]:
     signals = []
     for prop in rows:
         reason = (prop.owner_verdict_reason or "").strip()
-        if not reason:
-            # A verdict with no reason says WHAT the owner decided but not
-            # WHY; the profile learns from the why, so there is nothing here
-            # to learn from. Named in the build report rather than silently
-            # skipped.
-            signals.append(
-                {
-                    "property_id": prop.id,
-                    "verdict": prop.owner_verdict,
-                    "reason": "",
-                    "facts": [],
-                    "usable": False,
-                }
-            )
+        is_signal = prop.owner_verdict in SIGNAL_VERDICTS
+        is_anchor = bool(prop.is_favorite) and prop.owner_verdict != "rejected"
+        if not is_signal and not is_anchor:
             continue
+        taste = prop.taste if isinstance(prop.taste, dict) else {}
+        descriptor = taste_descriptors.build_descriptor(
+            prop,
+            owner_reason=reason,
+            visual_input=taste.get("visual_descriptor"),
+        )
         signals.append(
             {
                 "property_id": prop.id,
+                "profile_id": prop.search_profile_id,
                 "verdict": prop.owner_verdict,
+                "favorite": bool(prop.is_favorite),
+                "positive_anchor": is_anchor,
                 "reason": reason,
-                "facts": gather_facts(prop),
-                "usable": True,
+                "facts": gather_facts(prop) if reason else [],
+                "descriptor": descriptor,
+                "usable": bool(reason) and is_signal,
             }
         )
     return signals
+
+
+def collect_signals() -> List[Dict[str, Any]]:
+    """Every explicit reason plus every positive favorite anchor.
+
+    A reasonless favorite participates in reference matching and freshness but
+    contributes no invented trait to the model prompt.  A current rejection
+    overrides the star for anchor selection while the historical star remains
+    visible in the source snapshot.
+    """
+    rows = (
+        Property.query.filter(
+            or_(
+                Property.owner_verdict.in_(SIGNAL_VERDICTS),
+                Property.is_favorite.is_(True),
+            )
+        )
+        .order_by(Property.id)
+        .all()
+    )
+    return _signals_from_rows(rows)
 
 
 def signals_fingerprint(signals: List[Dict[str, Any]]) -> str:
@@ -466,12 +495,20 @@ def signals_fingerprint(signals: List[Dict[str, Any]]) -> str:
         [
             {
                 "id": s["property_id"],
+                "profile_id": s.get("profile_id"),
                 "verdict": s["verdict"],
+                "favorite": s.get("favorite", False),
+                "positive_anchor": s.get("positive_anchor", False),
                 "reason": s["reason"],
                 "facts": s["facts"],
+                "descriptor_fingerprint": s.get("descriptor", {}).get(
+                    "input_fingerprint"
+                ),
+                "visual_descriptor_fingerprint": s.get("descriptor", {}).get(
+                    "visual_descriptor_fingerprint"
+                ),
             }
             for s in signals
-            if s["usable"]
         ],
         ensure_ascii=False,
         sort_keys=True,
@@ -647,15 +684,25 @@ def build_profile(provider: str = "claude") -> Dict[str, Any]:
     if problem:
         return {"status": "failed", "error": f"profile rejected: {problem}"}
 
+    clauses = taste_preferences.compile_signals(signals)
     source = {
+        "recommendation_schema_version": 1,
         "signals": [
             {
                 "property_id": s["property_id"],
+                "profile_id": s.get("profile_id"),
                 "verdict": s["verdict"],
+                "favorite": s.get("favorite", False),
+                "positive_anchor": s.get("positive_anchor", False),
                 "reason": s["reason"],
                 "facts": s["facts"],
             }
-            for s in usable
+            for s in signals
+        ],
+        "descriptors": {str(s["property_id"]): s["descriptor"] for s in signals},
+        "clauses": clauses,
+        "positive_reference_ids": [
+            s["property_id"] for s in signals if s.get("positive_anchor")
         ],
         "skipped_reasonless": [s["property_id"] for s in signals if not s["usable"]],
         "n_interested": sum(1 for s in usable if s["verdict"] == "interested"),
@@ -670,12 +717,20 @@ def build_profile(provider: str = "claude") -> Dict[str, Any]:
     # answer to yesterday's question (the codex-review reproduction: change
     # OLD REASON to NEW REASON mid-build, get a "current" profile carrying
     # the old one).
-    db.session.expire_all()
-    if signals_fingerprint(collect_signals()) != basis_fingerprint:
+    db.session.rollback()
+    # Publication closes the post-check/pre-insert race with one short
+    # transaction. Every existing Property row is locked in id order before
+    # the complete basis is rebuilt; controlled favorite/review/fact writers
+    # therefore either precede this snapshot or wait until after its commit.
+    # No lock spans the model call above.
+    locked_rows = Property.query.order_by(Property.id).with_for_update().all()
+    locked_signals = _signals_from_rows(locked_rows)
+    if signals_fingerprint(locked_signals) != basis_fingerprint:
+        db.session.rollback()
         return {
             "status": "failed",
-            "error": "the owner's comments changed while the profile was being "
-            "built; rebuild against the new comments",
+            "error": "the owner's signals or reference facts changed while the "
+            "profile was being built; rebuild against the new basis",
             "failure_kind": "superseded",
         }
 
@@ -683,7 +738,7 @@ def build_profile(provider: str = "claude") -> Dict[str, Any]:
         built_at=datetime.now(timezone.utc).replace(tzinfo=None),
         provider=provider,
         model=result.get("model"),
-        signals_fingerprint=signals_fingerprint(signals),
+        signals_fingerprint=basis_fingerprint,
         source=source,
         profile=profile,
     )
@@ -696,6 +751,39 @@ def build_profile(provider: str = "claude") -> Dict[str, Any]:
         ", ".join(str(s["property_id"]) for s in usable),
     )
     return {"status": "ok", "data": load_current_profile()}
+
+
+def recommendation_profile_state(
+    profile_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Current/dirty/none reading for the deterministic recommender."""
+    if profile_data is None:
+        profile_data = load_current_profile()
+    if profile_data is None:
+        return {"state": "none", "version": None}
+    source = profile_data.get("source") if isinstance(profile_data, dict) else None
+    if not isinstance(source, dict) or source.get("recommendation_schema_version") != 1:
+        return {
+            "state": "dirty",
+            "version": profile_data.get("version"),
+            "reason": "legacy_profile",
+        }
+    current = signals_fingerprint(collect_signals())
+    state = "current" if current == profile_data.get("signals_fingerprint") else "dirty"
+    clauses = source.get("clauses") if isinstance(source.get("clauses"), list) else []
+    return {
+        "state": state,
+        "version": profile_data.get("version"),
+        "built_at": profile_data.get("built_at"),
+        "signal_count": len(source.get("signals") or []),
+        "positive_reference_count": len(source.get("positive_reference_ids") or []),
+        "mapped_clause_count": sum(
+            1 for clause in clauses if clause.get("mapping_state") == "executable"
+        ),
+        "unapplied_clause_count": sum(
+            1 for clause in clauses if clause.get("mapping_state") != "executable"
+        ),
+    }
 
 
 # --------------------------------------------------------------------------
@@ -970,6 +1058,11 @@ def score_batch(
                 # row stays in scope and the next run scores the new facts.
                 rows[prop.id] = "superseded"
                 continue
+            if current and isinstance(current.get("visual_descriptor"), dict):
+                # Visual facts are a separate, hash-bound extraction. Legacy
+                # Taste scoring must not erase them when it replaces its own
+                # result block.
+                block["visual_descriptor"] = current["visual_descriptor"]
             prop.taste_score = block["score"]
             prop.taste = block
             rows[prop.id] = "scored"
