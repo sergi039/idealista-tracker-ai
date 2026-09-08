@@ -2,10 +2,12 @@
 
 Flask application for saved-search email ingestion, property scoring and
 enrichment. GitHub issues in `sergi039/idealista-tracker-ai` define the work.
-This is a compact routing guide; [CLAUDE.md](CLAUDE.md) holds the detailed
-contracts and incident evidence. Search its headings and task terms, then read
-the relevant passages before changing that area. Do not load the entire history
-as a substitute for inspecting the code.
+This is a compact routing guide; [CLAUDE.md](CLAUDE.md) holds every rule as one
+line, and [docs/rules/](docs/rules/README.md) holds the reasoning, the incidents
+and the measurements behind each of them. Search CLAUDE.md's headings and task
+terms, then read the `docs/rules/` file the matching line points to before
+changing that area. Do not load the entire history as a substitute for
+inspecting the code.
 
 ## Two-machine topology
 
