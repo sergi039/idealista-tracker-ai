@@ -433,6 +433,26 @@ def _recommendation_profile(
     }
 
 
+def _compiled_profile_from_current_signals():
+    """The production source snapshot shape, without a model call."""
+    signals = taste_service.collect_signals()
+    return {
+        "source": {
+            "recommendation_schema_version": 1,
+            "positive_reference_ids": [
+                signal["property_id"]
+                for signal in signals
+                if signal.get("positive_anchor")
+            ],
+            "signals": signals,
+            "clauses": taste_preferences.compile_signals(signals),
+            "descriptors": {
+                str(signal["property_id"]): signal["descriptor"] for signal in signals
+            },
+        }
+    }
+
+
 def _photo_aspect(value, *, status="claimed"):
     return {
         "value": value,
@@ -1199,6 +1219,132 @@ def test_avoided_value_nonoverlap_is_neutral_not_a_positive_rank_match(app):
     assert reading["conflicts"] == []
     assert reading["coverage"] == {"supported": 1, "relevant": 1}
     assert reading["rank_value"] == 2000.0
+
+
+def test_compiled_sea_preference_matches_supported_candidate_evidence(app):
+    profile = _profile()
+    _property(
+        profile,
+        title="sea preference",
+        is_favorite=True,
+        owner_verdict="interested",
+        owner_verdict_reason="Нравится: вид на море.",
+    )
+    candidate = _property(
+        profile,
+        title="measured sea candidate",
+        enrichment={"environment": {"sea_view": "yes"}},
+    )
+
+    reading = taste_recommendation.build_context(
+        [candidate],
+        _compiled_profile_from_current_signals(),
+        {"state": "current"},
+    ).readings[candidate.id]
+
+    assert [(facet["aspect_id"], facet["status"]) for facet in reading["matches"]] == [
+        ("sea_view", "supported")
+    ]
+    assert reading["group"] == "confident"
+    assert reading["coverage"] == {"supported": 1, "relevant": 1}
+
+
+def test_compiled_stone_preference_matches_photo_descriptor(app):
+    profile = _profile()
+    _property(
+        profile,
+        title="stone preference",
+        is_favorite=True,
+        owner_verdict="interested",
+        owner_verdict_reason="Нравится: каменный дом.",
+    )
+    candidate = _property(profile, title="stone candidate")
+    candidate.taste = {
+        "visual_descriptor": _visual_descriptor(
+            candidate,
+            [
+                {
+                    "aspect_id": "house_character",
+                    "value": "stone_house",
+                    "status": "supported",
+                    "evidence": {
+                        "source_kind": "photo",
+                        "source_id": "candidate:stone",
+                        "image_sha256": "d" * 64,
+                        "image_index": 0,
+                    },
+                    "confidence": 0.8,
+                    "limitation": "Only the visible facade is in frame.",
+                }
+            ],
+        )
+    }
+    db.session.commit()
+
+    reading = taste_recommendation.build_context(
+        [candidate],
+        _compiled_profile_from_current_signals(),
+        {"state": "current"},
+    ).readings[candidate.id]
+
+    assert [(facet["aspect_id"], facet["status"]) for facet in reading["matches"]] == [
+        ("house_character", "supported")
+    ]
+    assert reading["group"] == "confident"
+
+
+def test_compiled_global_land_avoidance_excludes_supported_land(app):
+    profile = _profile()
+    _property(
+        profile,
+        title="land avoidance",
+        owner_verdict="rejected",
+        owner_verdict_reason="Никогда не хочу участок, а не дом.",
+    )
+    candidate = _property(
+        profile,
+        title="bare land candidate",
+        property_category="land",
+        area_type="built",
+    )
+
+    reading = taste_recommendation.build_context(
+        [candidate],
+        _compiled_profile_from_current_signals(),
+        {"state": "current"},
+    ).readings[candidate.id]
+
+    assert reading["eligibility"] == "excluded"
+    assert reading["hard_exclusions"][0]["aspect_id"] == "property_kind"
+    assert reading["hard_exclusions"][0]["status"] == "supported"
+
+
+def test_compiled_mixed_shape_reason_does_not_conflict_with_regular_candidate(app):
+    profile = _profile()
+    _property(
+        profile,
+        title="mixed shape reason",
+        owner_verdict="rejected",
+        owner_verdict_reason=(
+            "ИСКЛЮЧЕНО: L-образная форма никогда не подходит; "
+            "ровный вытянутый прямоугольник подходит."
+        ),
+    )
+    candidate = _property(
+        profile,
+        title="regular plot candidate",
+        description="Участок правильной формы.",
+    )
+
+    reading = taste_recommendation.build_context(
+        [candidate],
+        _compiled_profile_from_current_signals(),
+        {"state": "current"},
+    ).readings[candidate.id]
+
+    assert reading["conflicts"] == []
+    assert [facet["aspect_id"] for facet in reading["matches"]] == ["plot_outline"]
+    assert reading["eligibility"] == "eligible"
 
 
 def test_visual_winner_keeps_the_independent_numeric_rank_channel(app):

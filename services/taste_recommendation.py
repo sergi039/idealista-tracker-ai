@@ -7,7 +7,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from sqlalchemy import case, literal
+from sqlalchemy import case, false
 
 from services import taste_descriptors, taste_preferences
 
@@ -514,5 +514,9 @@ def sort_expression(model: Any, ctx: RecommendationContext):
         for property_id, reading in ctx.readings.items()
     }
     if not ranks:
-        return literal(-1.0)
+        # Keep a column-bearing CASE even when this request has no candidates.
+        # PostgreSQL reads a bare numeric ORDER BY constant as an ordinal and
+        # rejects a non-integer one; the false branch is never selected but
+        # leaves the expression valid on both production and SQLite.
+        return case((false(), model.id), else_=-1.0)
     return case(ranks, value=model.id, else_=-1.0)

@@ -144,3 +144,23 @@ def test_handler_returns_json_500_when_temp_image_creation_fails(bridge, monkeyp
         server.server_close()
 
     assert called == []
+
+
+def test_handler_labels_provider_oserror_as_a_provider_failure(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "TOKEN", "test-token")
+
+    def fail_provider(*_args, **_kwargs):
+        raise OSError("resource temporarily unavailable")
+
+    monkeypatch.setitem(bridge.PROVIDERS, "codex", fail_provider)
+    server = _serve(bridge)
+    try:
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            _post(server, {"provider": "codex", "prompt": "hi"})
+        assert excinfo.value.code == 502
+        assert json.loads(excinfo.value.read()) == {
+            "error": "provider execution failed"
+        }
+    finally:
+        server.shutdown()
+        server.server_close()

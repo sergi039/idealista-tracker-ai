@@ -85,6 +85,48 @@ def _explicit_global(text: str) -> bool:
     )
 
 
+_DESIRE = re.compile(
+    r"\b(?:хочу|хоч\w*|люблю|предпочита\w*|нравит\w*|нравят\w*|"
+    r"подходит\w*|подходят\w*)"
+)
+_NEGATION_CONNECTORS = frozenset(
+    {
+        "то",
+        "что",
+        "так",
+        "уж",
+        "и",
+        "очень",
+        "особо",
+        "совсем",
+        "вовсе",
+        "совершенно",
+    }
+)
+
+
+def _desire_negation(text: str) -> str | None:
+    """Classify a negation that appears before a desire in one clause.
+
+    A bare modifier/connector chain expresses a negated desire even when it
+    crosses commas or hyphens (``не так уж и нравится``).  When a noun or
+    another substantive word sits between ``не`` and the desire, assigning a
+    preference would guess at its grammatical target; leave that unresolved.
+    """
+    low = text.casefold()
+    for desire in _DESIRE.finditer(low):
+        prefix = low[: desire.start()]
+        negation = list(re.finditer(r"\bне\b", prefix))
+        if not negation:
+            continue
+        between = prefix[negation[-1].end() :]
+        words = re.findall(r"\w+", between)
+        if all(word in _NEGATION_CONNECTORS for word in words):
+            return "avoid"
+        return "unresolved"
+    return None
+
+
 def _polarity(text: str) -> str | None:
     """Read only an explicit local preference from an owner phrase.
 
@@ -95,14 +137,9 @@ def _polarity(text: str) -> str | None:
     """
     low = text.casefold()
     tolerated = any(token in low for token in ("терпим", "терпимо", "готов мириться"))
-    negated_desire = bool(
-        re.search(
-            r"\bне\s+(?:\w+\s+){0,2}"
-            r"(?:хочу|хоч\w*|люблю|предпочита\w*|нравит\w*|нравят\w*|"
-            r"подходит\w*|подходят\w*)",
-            low,
-        )
-    )
+    negated_desire = _desire_negation(text)
+    if negated_desire == "unresolved":
+        return "unresolved"
     negative = (
         any(
             token in low
@@ -118,7 +155,7 @@ def _polarity(text: str) -> str | None:
                 "реконструк",
             )
         )
-        or negated_desire
+        or negated_desire == "avoid"
     )
     positive = (
         any(
@@ -127,7 +164,7 @@ def _polarity(text: str) -> str | None:
         )
         and "не нравится" not in low
         and "не подходит" not in low
-        and not negated_desire
+        and negated_desire is None
     )
     if tolerated and negative:
         return "tradeoff"
@@ -233,7 +270,10 @@ def compile_signal(signal: dict[str, Any]) -> list[dict[str, Any]]:
             ]
             matched_any = matched_any or bool(matched)
             explicit_polarity = _polarity(part)
-            if heading_polarity and len(parts) == 1:
+            explicit_unresolved = explicit_polarity == "unresolved"
+            if explicit_unresolved:
+                polarity = None
+            elif heading_polarity and len(parts) == 1:
                 polarity = heading_polarity
             else:
                 polarity = (
@@ -244,6 +284,7 @@ def compile_signal(signal: dict[str, Any]) -> list[dict[str, Any]]:
             for aspect_id in matched:
                 values = taste_descriptors.text_claim_values(part).get(aspect_id, [])
                 hard = polarity == "avoid" and _explicit_global(part)
+                executable = bool(polarity) and bool(values)
                 result.append(
                     {
                         "id": _clause_id(signal["property_id"], aspect_id, part),
@@ -255,10 +296,16 @@ def compile_signal(signal: dict[str, Any]) -> list[dict[str, Any]]:
                         "strength": "hard" if hard else "soft",
                         "scope": "global" if hard else "profile",
                         "values": values,
-                        "mapping_state": "executable" if polarity else "unmapped",
+                        "mapping_state": "executable" if executable else "unmapped",
                         "reason": None
-                        if polarity
-                        else "preference polarity is not explicit",
+                        if executable
+                        else (
+                            "desire negation is ambiguous"
+                            if explicit_unresolved
+                            else "no comparable canonical value"
+                            if polarity
+                            else "preference polarity is not explicit"
+                        ),
                     }
                 )
         if not matched_any and "за 300" not in low and "за300" not in low:

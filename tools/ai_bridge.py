@@ -931,6 +931,18 @@ class Handler(BaseHTTPRequestHandler):
         image_paths: list[str] = []
         try:
             image_paths = _write_image_files(decoded_images)
+        except OSError:
+            # `_write_image_files` removes any partial files itself. This is a
+            # local input-preparation failure, not a CLI/provider failure.
+            LOG.error(
+                "%s image input preparation failed after %.1fs",
+                provider,
+                time.monotonic() - started,
+                exc_info=True,
+            )
+            self._reply(500, {"error": "could not prepare local visual input"})
+            return
+        try:
             if image_paths:
                 result = handler(
                     prompt,
@@ -966,16 +978,15 @@ class Handler(BaseHTTPRequestHandler):
             self._reply(status, {"error": str(exc)})
             return
         except OSError:
-            # `_write_image_files` already removes any files it created before
-            # the failed write.  Return a bounded JSON failure rather than
-            # dropping the HTTP connection when storage is unavailable.
+            # The provider process itself can also fail to start. It must not
+            # be mislabeled as an image-temp-file failure or drop the request.
             LOG.error(
-                "%s image input preparation failed after %.1fs",
+                "%s provider execution failed after %.1fs",
                 provider,
                 time.monotonic() - started,
                 exc_info=True,
             )
-            self._reply(500, {"error": "could not prepare local visual input"})
+            self._reply(502, {"error": "provider execution failed"})
             return
         finally:
             _remove_image_files(image_paths)

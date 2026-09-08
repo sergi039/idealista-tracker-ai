@@ -83,7 +83,15 @@ def _text_claims(
         (
             "plot_outline",
             "notched",
-            ("l-shaped", "l shaped", "l-образ", "переше", "шеей", "вырез", "изломан"),
+            (
+                "l-shaped",
+                "l shaped",
+                "l-образ",
+                "перешеек",
+                "шеей",
+                "вырез",
+                "изломан",
+            ),
         ),
         (
             "plot_outline",
@@ -134,7 +142,7 @@ def _text_claims(
         (
             "beach_access",
             "walkable",
-            ("пляж 488", "пляж 1,0", "пешком", "walkable beach"),
+            ("пляж 488", "пляж 1,0", "walkable beach"),
         ),
         (
             "house_character",
@@ -158,7 +166,14 @@ def _text_claims(
     )
     found: list[tuple[str, dict[str, Any]]] = []
     for aspect_id, value, needles in rules:
-        if any(needle in low for needle in needles):
+        matched = any(needle in low for needle in needles)
+        if (
+            aspect_id == "beach_access"
+            and value == "walkable"
+            and re.search(r"(?:пляж[^.!?;]{0,60}пешком|пешком[^.!?;]{0,60}пляж)", low)
+        ):
+            matched = True
+        if matched:
             if source_kind == "owner_research_claim" and aspect_id == "visual_appeal":
                 # "I dislike how it looks" is a preference signal, not an
                 # observable visual facet. The photo extractor must name the
@@ -188,13 +203,72 @@ def text_claim_values(text: str | None) -> dict[str, list[str]]:
     share the same conservative vocabulary rather than maintaining a second
     preference-only matcher.
     """
+    line = _one_line(text, 1800)
+    if not line:
+        return {}
+    low = line.casefold()
     values: dict[str, set[str]] = defaultdict(set)
     for aspect_id, row in _text_claims(
-        text, source_kind="owner_research_claim", source_id="owner_clause"
+        line, source_kind="owner_research_claim", source_id="owner_clause"
     ):
         value = row.get("value")
         if isinstance(value, str) and value:
             values[aspect_id].add(value)
+
+    # These mappings bind owner language to values that a descriptor already
+    # emits.  They are preference clauses only: they do not create evidence or
+    # promote the owner's wording into a candidate measurement.
+    if any(
+        phrase in low
+        for phrase in (
+            "моря не видно",
+            "нет вида на море",
+            "без вида на море",
+            "no sea view",
+        )
+    ):
+        values["sea_view"].add("no")
+    elif "вид на море" in low or "sea view" in low:
+        values["sea_view"].add("present")
+
+    if any(
+        phrase in low
+        for phrase in (
+            "это участок, а не дом",
+            "участок, а не дом",
+            "участок не дом",
+            "land not house",
+        )
+    ):
+        values["property_kind"].add("land")
+
+    if "каменн" in low or "stone house" in low:
+        values["house_character"].add("stone_house")
+    if any(phrase in low for phrase in ("крестьянск", "old farmhouse")):
+        values["house_character"].add("old_farmhouse")
+
+    if any(
+        phrase in low
+        for phrase in ("много построек", "плотная застройка", "dense buildings")
+    ):
+        values["nearby_buildings"].add("dense_visible")
+    elif any(phrase in low for phrase in ("несколько построек", "several buildings")):
+        values["nearby_buildings"].add("several_visible")
+
+    if any(
+        phrase in low
+        for phrase in (
+            "оптики на парцеле нет",
+            "нет оптики",
+            "без оптики",
+            "no fiber",
+            "sin fibra",
+        )
+    ):
+        values["fiber"].add("absent")
+    elif any(phrase in low for phrase in ("оптик", "гбит", "fiber", "fibra")):
+        values["fiber"].add("present")
+
     return {
         aspect_id: sorted(aspect_values) for aspect_id, aspect_values in values.items()
     }

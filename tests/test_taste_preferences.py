@@ -9,14 +9,15 @@ def _clauses(reason, verdict):
     )
 
 
-def test_rejected_mixed_sentence_keeps_its_positive_house_and_negative_plot():
+def test_rejected_mixed_sentence_keeps_positive_house_and_visible_unmeasured_plot():
     clauses = _clauses("Нравится каменный дом, но участок маленький", "rejected")
     by_aspect = {clause["aspect_id"]: clause for clause in clauses}
 
     assert by_aspect["house_character"]["polarity"] == "prefer"
     assert by_aspect["house_character"]["mapping_state"] == "executable"
     assert by_aspect["plot_area_m2"]["polarity"] == "avoid"
-    assert by_aspect["plot_area_m2"]["mapping_state"] == "executable"
+    assert by_aspect["plot_area_m2"]["mapping_state"] == "unmapped"
+    assert by_aspect["plot_area_m2"]["reason"] == "no comparable canonical value"
     assert all(clause["scope"] == "profile" for clause in clauses)
 
 
@@ -50,11 +51,14 @@ def test_negated_desire_is_a_global_hard_avoidance():
     assert clause["mapping_state"] == "executable"
 
 
-def test_adverb_separated_negated_desires_never_compile_as_preferences():
+def test_negated_desires_with_modifier_chains_compile_as_avoidance():
     cases = (
         ("не очень нравится каменный дом", "house_character"),
         ("участок правильной формы не особо подходит", "plot_outline"),
         ("не совсем нравится вид на море", "sea_view"),
+        ("каменный дом — не то, что хочу", "house_character"),
+        ("участок правильной формы не так уж и нравится", "plot_outline"),
+        ("не очень-то нравится вид на море", "sea_view"),
     )
 
     for reason, aspect_id in cases:
@@ -67,6 +71,17 @@ def test_adverb_separated_negated_desires_never_compile_as_preferences():
         assert clause["mapping_state"] == "executable"
 
 
+def test_noun_negation_before_desire_is_visible_but_never_inherits_prefer_heading():
+    clauses = _clauses("Нравится: не каменный дом, который хочу", "interested")
+
+    assert len(clauses) == 1
+    clause = clauses[0]
+    assert clause["aspect_id"] == "house_character"
+    assert clause["polarity"] == "unresolved"
+    assert clause["mapping_state"] == "unmapped"
+    assert clause["reason"] == "desire negation is ambiguous"
+
+
 def test_clause_values_bind_each_shape_to_its_own_clause():
     clauses = _clauses(
         "L-образная форма никогда не подходит; ровный вытянутый прямоугольник подходит",
@@ -76,6 +91,37 @@ def test_clause_values_bind_each_shape_to_its_own_clause():
 
     assert by_text["L-образная форма никогда не подходит"]["values"] == ["notched"]
     assert by_text["ровный вытянутый прямоугольник подходит"]["values"] == ["regular"]
+
+
+def test_explicit_preferences_without_a_canonical_value_remain_unapplied():
+    clause = next(
+        item
+        for item in _clauses("Нравится: скважина", "interested")
+        if item["aspect_id"] == "utilities"
+    )
+
+    assert clause["polarity"] == "prefer"
+    assert clause["values"] == []
+    assert clause["mapping_state"] == "unmapped"
+    assert clause["reason"] == "no comparable canonical value"
+
+
+def test_comparable_clause_values_remain_executable_for_common_aspects():
+    clauses = _clauses(
+        "Нравится: вид на море; каменный крестьянский дом; оптика 1 Гбит. "
+        "Никогда не хочу участок, а не дом.",
+        "interested",
+    )
+    by_aspect = {clause["aspect_id"]: clause for clause in clauses}
+
+    assert by_aspect["sea_view"]["values"] == ["present"]
+    assert by_aspect["house_character"]["values"] == [
+        "old_farmhouse",
+        "stone_house",
+    ]
+    assert by_aspect["fiber"]["values"] == ["present"]
+    assert by_aspect["property_kind"]["values"] == ["land"]
+    assert all(clause["mapping_state"] == "executable" for clause in by_aspect.values())
 
 
 def test_heading_polarity_stops_at_sentence_and_factual_observation_stays_unresolved():
@@ -117,12 +163,13 @@ def test_ambiguous_mapped_fact_is_visible_but_not_executable():
     assert "not explicit" in clauses[0]["reason"]
 
 
-def test_explicit_visual_negative_does_not_inherit_the_listing_verdict():
+def test_explicit_visual_negative_stays_visible_without_inventing_a_comparable_value():
     clauses = _clauses("сельхоз постройки рядом, не красиво", "rejected")
     by_aspect = {clause["aspect_id"]: clause for clause in clauses}
 
     assert by_aspect["visual_appeal"]["polarity"] == "avoid"
-    assert by_aspect["visual_appeal"]["mapping_state"] == "executable"
+    assert by_aspect["visual_appeal"]["mapping_state"] == "unmapped"
+    assert by_aspect["visual_appeal"]["reason"] == "no comparable canonical value"
 
 
 def test_observed_comment_sections_keep_decisive_clauses_executable():
@@ -186,7 +233,7 @@ def test_observed_comment_sections_keep_decisive_clauses_executable():
     assert clause(969, "plot_outline")["polarity"] == "prefer"
     assert clause(969, "sea_view")["polarity"] == "tradeoff"
     assert clause(1282, "sea_view")["polarity"] == "prefer"
-    assert clause(1282, "utilities")["polarity"] == "tradeoff"
+    assert clause(1282, "utilities")["mapping_state"] == "unmapped"
     assert clause(970, "neighbor_privacy")["polarity"] == "avoid"
     kind = clause(1742, "property_kind")
     assert (kind["polarity"], kind["scope"]) == ("avoid", "profile")

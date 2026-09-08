@@ -97,3 +97,56 @@ def test_visual_descriptor_fingerprint_tracks_validated_observation_content():
         first["visual_descriptor_fingerprint"]
         != second["visual_descriptor_fingerprint"]
     )
+
+
+def test_owner_clause_values_bind_only_canonical_descriptor_values():
+    assert taste_descriptors.text_claim_values("Нравится вид на море") == {
+        "sea_view": ["present"]
+    }
+    assert taste_descriptors.text_claim_values("Моря не видно") == {"sea_view": ["no"]}
+    assert taste_descriptors.text_claim_values("это участок, а не дом") == {
+        "property_kind": ["land"]
+    }
+    assert taste_descriptors.text_claim_values(
+        "каменный крестьянский дом, рядом много построек"
+    ) == {
+        "house_character": ["old_farmhouse", "stone_house"],
+        "nearby_buildings": ["dense_visible"],
+        "neighbor_privacy": ["low"],
+    }
+    assert taste_descriptors.text_claim_values("оптики на парцеле нет") == {
+        "fiber": ["absent"]
+    }
+
+
+def test_text_claims_reject_unrelated_walks_and_russian_word_prefixes():
+    inherited = list(
+        taste_descriptors._text_claims(
+            "Дом перешел по наследству; пешком до магазина пять минут.",
+            source_kind="listing_claim",
+            source_id="test",
+        )
+    )
+    assert inherited == []
+
+    beach = list(
+        taste_descriptors._text_claims(
+            "До пляжа пешком десять минут.",
+            source_kind="listing_claim",
+            source_id="test",
+        )
+    )
+    assert [(aspect, row["value"]) for aspect, row in beach] == [
+        ("beach_access", "walkable")
+    ]
+
+    mixed_sentences = list(
+        taste_descriptors._text_claims(
+            "Пешком до магазина. Далеко от пляжа.",
+            source_kind="listing_claim",
+            source_id="test",
+        )
+    )
+    assert [(aspect, row["value"]) for aspect, row in mixed_sentences] == [
+        ("beach_access", "far")
+    ]
