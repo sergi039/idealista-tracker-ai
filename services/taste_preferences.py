@@ -89,19 +89,25 @@ def _polarity(text: str) -> str | None:
     """
     low = text.casefold()
     tolerated = any(token in low for token in ("терпим", "терпимо", "готов мириться"))
-    negative = any(
-        token in low
-        for token in (
-            "не нравится",
-            "не подходит",
-            "минус",
-            "слишком",
-            "маленьк",
-            "сырост",
-            "заброш",
-            "разруш",
-            "реконструк",
+    negated_desire = bool(
+        re.search(r"\bне\s+(?:хочу|люблю|предпочита\w*|нравит\w*|подходит\w*)", low)
+    )
+    negative = (
+        any(
+            token in low
+            for token in (
+                "не нравится",
+                "не подходит",
+                "минус",
+                "слишком",
+                "маленьк",
+                "сырост",
+                "заброш",
+                "разруш",
+                "реконструк",
+            )
         )
+        or negated_desire
     )
     positive = (
         any(
@@ -110,6 +116,7 @@ def _polarity(text: str) -> str | None:
         )
         and "не нравится" not in low
         and "не подходит" not in low
+        and not negated_desire
     )
     if tolerated and negative:
         return "tradeoff"

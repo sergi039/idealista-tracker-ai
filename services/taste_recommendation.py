@@ -419,6 +419,18 @@ def build_context(
         for value in source.get("positive_reference_ids", [])
         if isinstance(value, int)
     ]
+    current_reference_ids = profile_summary.get("current_positive_reference_ids")
+    if isinstance(current_reference_ids, list):
+        current_reference_set = {
+            value for value in current_reference_ids if isinstance(value, int)
+        }
+        # A favorite removed or rejected after this immutable snapshot must
+        # stop anchoring immediately. A newly starred row still waits for the
+        # refresh that captures its descriptor, so only the intersection is
+        # safe to compare against.
+        state_reference_ids = [
+            value for value in state_reference_ids if value in current_reference_set
+        ]
     references_by_profile: dict[int | None, list[int]] = {}
     for signal in source.get("signals") or []:
         if not isinstance(signal, dict):

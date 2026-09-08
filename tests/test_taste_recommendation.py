@@ -869,6 +869,72 @@ def test_similarity_score_from_a_nonpositive_reference_is_ignored(app):
     assert reading["rank_value"] == 2000.0
 
 
+def test_reference_rejected_after_snapshot_stops_anchoring_before_refresh(app):
+    profile = _profile()
+    reference = _property(
+        profile, title="later rejected", is_favorite=True, owner_verdict="interested"
+    )
+    candidate = _property(profile, title="matching candidate")
+    for prop, source_id in (
+        (reference, "photo:reference"),
+        (candidate, "photo:candidate"),
+    ):
+        prop.taste = {
+            "visual_descriptor": _visual_descriptor(
+                prop,
+                [
+                    {
+                        "aspect_id": "house_character",
+                        "value": "stone_house",
+                        "status": "claimed",
+                        "evidence": {
+                            "source_kind": "photo",
+                            "source_id": source_id,
+                            "image_sha256": ("a" if prop is reference else "b") * 64,
+                            "image_index": 0,
+                        },
+                        "confidence": 0.7,
+                        "limitation": "Facade only.",
+                    }
+                ],
+            )
+        }
+    db.session.commit()
+    snapshot_signals = taste_service.collect_signals()
+    profile_data = {
+        "version": 1,
+        "signals_fingerprint": taste_service.signals_fingerprint(snapshot_signals),
+        "source": {
+            "recommendation_schema_version": 1,
+            "positive_reference_ids": [reference.id],
+            "signals": snapshot_signals,
+            "clauses": [],
+            "descriptors": {
+                str(signal["property_id"]): signal["descriptor"]
+                for signal in snapshot_signals
+            },
+        },
+    }
+
+    reference.owner_verdict = "rejected"
+    db.session.commit()
+    summary = taste_service.recommendation_profile_state(profile_data)
+    context = taste_recommendation.build_context(
+        [reference, candidate],
+        profile_data,
+        summary,
+        similarity_ctx=_SimilarityReadings(
+            {candidate.id: {"reference_id": reference.id, "score": 99.9}}
+        ),
+    )
+
+    assert summary["state"] == "dirty"
+    assert summary["current_positive_reference_ids"] == []
+    assert context.readings[reference.id]["state"] == "rejected"
+    assert context.readings[candidate.id]["nearest_positive_reference"] is None
+    assert context.readings[candidate.id]["rank_value"] == 500.0
+
+
 def test_candidate_cannot_borrow_a_foreign_profile_visual_or_numeric_reference(app):
     local_profile = _profile("Local")
     foreign_profile = _profile("Foreign")

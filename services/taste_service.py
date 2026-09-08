@@ -760,6 +760,11 @@ def recommendation_profile_state(
     if profile_data is None:
         profile_data = load_current_profile()
     current_signals = collect_signals()
+    current_positive_reference_ids = [
+        signal["property_id"]
+        for signal in current_signals
+        if signal.get("positive_anchor")
+    ]
     latest_refresh = (
         BackgroundJob.query.filter_by(dedupe_key="taste_recommendation_refresh")
         .order_by(BackgroundJob.created_at.desc(), BackgroundJob.id.desc())
@@ -815,6 +820,7 @@ def recommendation_profile_state(
             "positive_reference_count": sum(
                 1 for signal in current_signals if signal.get("positive_anchor")
             ),
+            "current_positive_reference_ids": current_positive_reference_ids,
             "mapped_clause_count": sum(
                 1 for clause in clauses if clause.get("mapping_state") == "executable"
             ),
@@ -832,6 +838,7 @@ def recommendation_profile_state(
             "version": profile_data.get("version"),
             "reason": "legacy_profile",
             "usable_signal_count": usable_signal_count,
+            "current_positive_reference_ids": current_positive_reference_ids,
         }
     current = signals_fingerprint(current_signals)
     state = "current" if current == profile_data.get("signals_fingerprint") else "dirty"
@@ -846,6 +853,7 @@ def recommendation_profile_state(
             1 for signal in current_signals if signal.get("usable")
         ),
         "positive_reference_count": len(source.get("positive_reference_ids") or []),
+        "current_positive_reference_ids": current_positive_reference_ids,
         "mapped_clause_count": sum(
             1 for clause in clauses if clause.get("mapping_state") == "executable"
         ),

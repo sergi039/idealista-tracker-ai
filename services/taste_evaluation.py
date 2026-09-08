@@ -45,15 +45,23 @@ def build_manifest(
     if not isinstance(limit, int) or limit < 1 or limit > 100:
         raise ValueError("limit must be between 1 and 100")
     baseline = baseline or {}
-    seen_entities: set[str] = set()
-    candidates: list[dict[str, Any]] = []
-    for prop in sorted(props, key=lambda row: row.id):
-        if (
-            prop.id in learning_property_ids
-            or prop.id in activity_property_ids
+    rows = sorted(props, key=lambda row: row.id)
+    excluded_row_ids = learning_property_ids | activity_property_ids
+
+    def excluded(prop: Any) -> bool:
+        return (
+            prop.id in excluded_row_ids
             or bool(getattr(prop, "is_favorite", False))
             or getattr(prop, "owner_verdict", None) is not None
-        ):
+        )
+
+    # Every known-label/activity row reserves its entity before candidate
+    # eligibility is considered. A row skipped for feedback does not make a
+    # second representation of that already-seen listing safe for evaluation.
+    seen_entities = {entity_key(prop) for prop in rows if excluded(prop)}
+    candidates: list[dict[str, Any]] = []
+    for prop in rows:
+        if excluded(prop):
             continue
         key = entity_key(prop)
         if key in seen_entities:

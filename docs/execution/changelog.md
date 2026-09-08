@@ -13,3 +13,7 @@
 - Added a CSRF-protected Recommendations refresh action that rebuilds the
   owner-evidence profile once and reranks prepared listings in code, with
   distinct dirty, queued/running and failed status messages.
+- Corrected three independent-review counterexamples: explicit negated desires
+  retain negative polarity, a newly rejected favorite stops anchoring stale
+  recommendation comparisons immediately, and every feedback/training entity
+  is reserved before held-out candidate selection to prevent identity leakage.

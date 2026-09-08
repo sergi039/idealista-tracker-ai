@@ -31,6 +31,25 @@ def test_tolerated_negative_on_a_positive_listing_is_a_local_tradeoff():
     assert clause["scope"] == "profile"
 
 
+def test_negated_desire_is_a_global_hard_avoidance():
+    clauses = _clauses("Никогда не хочу оптика 1 Гбит", "rejected")
+
+    assert len(clauses) == 1
+    clause = clauses[0]
+    assert (
+        clause["aspect_id"],
+        clause["polarity"],
+        clause["strength"],
+        clause["scope"],
+    ) == (
+        "fiber",
+        "avoid",
+        "hard",
+        "global",
+    )
+    assert clause["mapping_state"] == "executable"
+
+
 def test_ambiguous_mapped_fact_is_visible_but_not_executable():
     clauses = _clauses("каменный дом", "interested")
 
