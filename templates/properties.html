@@ -110,55 +110,77 @@
 
 {# The recommendation is an explanation of the evidence currently on hand,
    not a percentage dressed up as certainty. #}
+{% macro recommendation_facets(facets, tone, symbol) -%}
+    <div class="recommendation-evidence">
+        {% for facet in facets %}
+            <span class="badge text-bg-{{ tone }}-subtle text-{{ tone }}-emphasis border">{{ symbol }} {{ t(facet.get('label_key')) if facet.get('label_key') and t(facet.get('label_key')) != facet.get('label_key') else facet.get('aspect_id') }}</span>
+        {% endfor %}
+    </div>
+{%- endmacro %}
+
 {% macro recommendation_reading(reading) -%}
     {% if reading %}
         {% set state = reading.get('state') %}
+        {# Group repeated clauses only for display, separately by outcome.
+           A matching aspect can still also need verification or conflict. #}
+        {% set matches = reading.get('matches', []) | unique(attribute='label_key') | list %}
+        {% set conflicts = reading.get('conflicts', []) | unique(attribute='label_key') | list %}
+        {% set checks = reading.get('needs_verification', []) | unique(attribute='label_key') | list %}
+        {% set nearest = reading.get('nearest_positive_reference') %}
+        {% set visual = nearest.get('visual_matched_aspect_ids', []) | unique | list if nearest else [] %}
         <div class="recommendation-reading small mt-2" data-recommendation-state="{{ state }}">
-            {% if state == 'reference' %}
-                <span class="badge text-bg-primary">{{ t('recommendation_reference') }}</span>
-            {% elif state == 'rejected' %}
-                <span class="badge text-bg-danger">{{ t('recommendation_rejected') }}</span>
-            {% elif state == 'candidate' %}
-                <span class="badge text-bg-success">{{ t('recommendation_candidate') }}</span>
-            {% elif state == 'stale' %}
-                <span class="badge text-bg-warning">{{ t('recommendation_stale') }}</span>
-            {% elif state == 'no_profile' %}
-                <span class="text-body-secondary">{{ t('recommendation_no_profile') }}</span>
-            {% endif %}
-
-            {% set nearest = reading.get('nearest_positive_reference') %}
-            {% if nearest and state not in ('reference', 'rejected') %}
-                <span class="text-body-secondary ms-1">{{ t('recommendation_nearest_reference') }}
-                    <a href="{{ url_for('main.property_detail', property_id=nearest.get('id')) }}">#{{ nearest.get('id') }}</a>
-                </span>
-                {% if nearest.get('visual_matched_aspect_ids') %}
-                    <div class="recommendation-evidence mt-1" data-recommendation-visual-resemblance="true">
-                        <span class="text-body-secondary">{{ t('recommendation_reference_resemblance') }}</span>
-                        {% for aspect_id in nearest.get('visual_matched_aspect_ids') %}
-                            {% set label_key = 'recommendation_aspect_' ~ aspect_id %}
-                            <span class="badge text-bg-light text-body border">≈ {{ t(label_key) if t(label_key) != label_key else aspect_id }}</span>
-                        {% endfor %}
-                    </div>
+            <div class="recommendation-reference-line">
+                {% if state == 'reference' %}
+                    <span class="badge text-bg-primary">{{ t('recommendation_reference') }}</span>
+                {% elif state == 'rejected' %}
+                    <span class="badge text-bg-danger">{{ t('recommendation_rejected') }}</span>
+                {% elif state == 'candidate' %}
+                    <span class="badge text-bg-success">{{ t('recommendation_candidate') }}</span>
+                {% elif state == 'stale' %}
+                    <span class="badge text-bg-warning">{{ t('recommendation_stale') }}</span>
+                {% elif state == 'no_profile' %}
+                    <span class="text-body-secondary">{{ t('recommendation_no_profile') }}</span>
                 {% endif %}
-            {% endif %}
-
+                {% if nearest and state not in ('reference', 'rejected') %}
+                    <span class="text-body-secondary" title="{{ t('recommendation_nearest_reference') }}">{{ t('recommendation_similar_to') }}
+                        <a href="{{ url_for('main.property_detail', property_id=nearest.get('id')) }}">#{{ nearest.get('id') }}</a>
+                    </span>
+                {% endif %}
+            </div>
             {% if state == 'candidate' %}
-                <div class="recommendation-evidence mt-1">
-                    {% for facet in reading.get('matches', []) %}
-                        <span class="badge text-bg-success-subtle text-success-emphasis border border-success-subtle">✓ {{ t(facet.get('label_key')) if facet.get('label_key') and t(facet.get('label_key')) != facet.get('label_key') else facet.get('aspect_id') }}</span>
-                    {% endfor %}
-                    {% for facet in reading.get('conflicts', []) %}
-                        <span class="badge text-bg-danger-subtle text-danger-emphasis border border-danger-subtle">! {{ t(facet.get('label_key')) if facet.get('label_key') and t(facet.get('label_key')) != facet.get('label_key') else facet.get('aspect_id') }}</span>
-                    {% endfor %}
-                    {% for facet in reading.get('needs_verification', []) %}
-                        <span class="badge text-bg-warning-subtle text-warning-emphasis border border-warning-subtle">? {{ t(facet.get('label_key')) if facet.get('label_key') and t(facet.get('label_key')) != facet.get('label_key') else facet.get('aspect_id') }}</span>
-                    {% endfor %}
-                </div>
-                {% if reading.get('conflicts') %}
-                    <div class="text-danger-emphasis mt-1">{{ t('recommendation_conflicts_present') }}</div>
-                {% elif reading.get('needs_verification') %}
-                    <div class="text-body-secondary mt-1">{{ t('recommendation_verification_needed') }}</div>
+                {{ recommendation_facets(matches[:2], 'success', '✓') if matches }}
+                {% if conflicts %}
+                    <div class="recommendation-conflict-summary text-danger-emphasis">{{ t('recommendation_conflict_count')|format(conflicts|length) }}</div>
                 {% endif %}
+            {% endif %}
+            {% if (state == 'candidate' and (matches or conflicts or checks)) or (visual and state not in ('reference', 'rejected')) %}
+                <details class="recommendation-details">
+                    <summary>{{ t('recommendation_details') }}{% if checks and state == 'candidate' %}<span class="text-warning-emphasis"> · {{ t('recommendation_check_count')|format(checks|length) }}</span>{% endif %}{% if visual %}<span class="text-body-secondary"> · {{ t('recommendation_photo_count')|format(visual|length) }}</span>{% endif %}</summary>
+                    <div class="recommendation-details-body">
+                        {% if visual %}
+                            <div data-recommendation-visual-resemblance="true">
+                                <div class="text-body-secondary mb-1">{{ t('recommendation_reference_resemblance') }}</div>
+                                <div class="recommendation-evidence">
+                                    {% for aspect_id in visual %}
+                                        {% set label_key = 'recommendation_aspect_' ~ aspect_id %}
+                                        <span class="badge text-bg-light text-body border">≈ {{ t(label_key) if t(label_key) != label_key else aspect_id }}</span>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        {% endif %}
+                        {% if state == 'candidate' %}
+                            {% if matches %}
+                                <div><div class="text-body-secondary mb-1">{{ t('recommendation_matches') }}</div>{{ recommendation_facets(matches, 'success', '✓') }}</div>
+                            {% endif %}
+                            {% if conflicts %}
+                                <div><div class="text-danger-emphasis mb-1">{{ t('recommendation_conflicts_present') }}</div>{{ recommendation_facets(conflicts, 'danger', '!') }}</div>
+                            {% endif %}
+                            {% if checks %}
+                                <div><div class="text-body-secondary mb-1">{{ t('recommendation_verification_needed') }}</div>{{ recommendation_facets(checks, 'warning', '?') }}</div>
+                            {% endif %}
+                        {% endif %}
+                    </div>
+                </details>
             {% endif %}
         </div>
     {% endif %}
@@ -1464,7 +1486,7 @@
                            class="btn {{ 'btn-primary' if active_mode == 'recommendation' else 'btn-outline-secondary' }}"
                            href="{{ url_for('main.properties', **dict(base_args, favorites=None, mode='recommendation', sort='recommendation', order='desc')) }}"
                            title="{{ t('recommendation_mode_title') }}">
-                            <i class="fas fa-compass"></i>
+                            <i class="fas fa-compass me-1"></i>{{ t('recommendation_sort_label') }}
                         </a>
                     </div>
                     <div class="btn-group btn-group-sm" role="group" aria-label="View type">
@@ -1514,7 +1536,7 @@
                 <div class="card mb-4">
                     <div class="card-body p-0">
                         <div class="table-responsive">
-                            <table class="table table-hover mb-0 lands-table properties-list-table">
+                            <table class="table table-hover mb-0 lands-table properties-list-table{{ ' recommendation-table' if active_mode == 'recommendation' else '' }}">
                                 <thead class="lands-table-head">
                                     {# Column widths live in style.css (`.col-*`), not in inline
                                        styles: an inline `min-width: 120px !important` cannot be
@@ -1535,7 +1557,7 @@
                                             </th>
                                         {% elif active_mode == 'recommendation' %}
                                             <th class="col-score" style="background-color: #0d6efd; color: #fff;">
-                                                {{ sort_header('recommendation', t('recommendation_sort_label'), base_args, current_filters) }}
+                                                {{ sort_header('recommendation', t('recommendation_column_label'), base_args, current_filters) }}
                                             </th>
                                         {% else %}
                                             <th class="col-score">

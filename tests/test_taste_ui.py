@@ -518,3 +518,56 @@ class TestTheCompactApi:
         assert rows["Stale ninetynine"]["taste_state"] == "stale"
         assert rows["Unscored"]["taste_score"] is None
         assert rows["Unscored"]["taste_state"] == "none"
+
+
+@pytest.mark.parametrize("view_type", ["list", "cards"])
+def test_recommendation_disclosure_bounds_long_repeated_evidence(
+    client, app, profile_row, view_type
+):
+    candidate = _mk_property(profile_row, title="Compact recommendation")
+
+    def facet(name):
+        return {"aspect_id": name, "label_key": f"recommendation_aspect_{name}"}
+
+    reading = {
+        "state": "candidate",
+        "nearest_positive_reference": {
+            "id": candidate.id,
+            "visual_matched_aspect_ids": ["house_character", "visual_appeal"],
+        },
+        "matches": [facet("sea_view"), facet("plot_area_m2"), facet("house_character")],
+        "conflicts": [facet("house_condition")] * 3,
+        "needs_verification": [facet("house_condition")] * 25
+        + [facet("plot_outline")] * 4,
+    }
+    context = RecommendationContext(
+        profile={"state": "current", "positive_reference_count": 1},
+        readings={candidate.id: reading},
+    )
+    with patch(
+        "routes.main_routes.taste_recommendation.build_context", return_value=context
+    ):
+        response = client.get(f"/properties?profile_id=all&view_type={view_type}")
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    block = re.search(
+        r'<div class="recommendation-reading[^>]+data-recommendation-state="candidate".*?</details>',
+        body,
+        re.DOTALL,
+    ).group(0)
+    preview, details = block.split("<details", 1)
+    assert details.startswith(' class="recommendation-details">')  # closed by default
+    assert "Topics to check: 2" in details
+    assert "Conflicts: 1" in preview
+    assert preview.count("text-bg-success-subtle") == 2
+    # Preserve every unique topic, and keep conflicting and unknown copies
+    # separate: only same-outcome duplication is collapsed.
+    assert details.count("text-bg-success-subtle") == 3
+    assert details.count("text-bg-warning-subtle") == 2
+    assert details.count("text-bg-danger-subtle") == 1
+    assert details.count("house condition") == 2
+    assert "≈ house character" in details and "≈ appearance" in details
+    button = re.search(
+        r'<a id="mode-recommendation-btn".*?</a>', body, re.DOTALL
+    ).group(0)
+    assert re.sub(r"<[^>]*>", "", button).strip() == "Recommendations"
