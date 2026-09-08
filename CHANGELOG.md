@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🔍 Changed: BRIDGE-TEST-001's failure message carries the bridge's scheduler state (2026-09-06, #537)
+- **What**: the "still running" branch of `_unhealthy` in
+  `tests/test_ai_bridge_isolation.py` now records `ps stat/etime/%cpu` of
+  the spawned bridge beside its pid, so a process the OS has stopped (`T`)
+  is told apart from one that runs and does not answer. No production code
+  changes; no retry, no widened deadline.
+- **Why**: the 2026-09-01 failures were re-timed from the session
+  transcripts and the machine's own logs: all five sit inside the sixty-six
+  minutes the display was off (16:13:44–17:19:34 CEST, `pmset -g log`), the
+  first pass came 2.5 minutes after it was turned back on, forward DNS,
+  ssh, gh and loopback `curl` all worked inside that window, and the same
+  suite's in-process loopback servers passed. What remains untested is the
+  spawned child being suspended by the OS while the parent runs, and only
+  the child's scheduler state can confirm or refute that next time.
+
 ### 🔒 Fixed: the trigger retries a stale route read instead of deadlocking (2026-09-01, #513)
 - **What**: migration 027 re-declares `canonicalize_search_profile()` as a
   bounded retry — the route is read unlocked, the pair is locked ascending

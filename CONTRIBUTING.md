@@ -182,7 +182,8 @@ is the mini's running `idealista-db`, and `127.0.0.1:5432` on a Mac here is
 Postgres.app — the inbox-zero project's database server, which holds its live
 `inboxzero` database. `tests/postgres_server_guard.py` checks `pg_database`
 before the first CREATE DATABASE and fails, naming what it found; see the
-"Writing a migration?" rule in CLAUDE.md for the incident behind it.
+"Writing a migration?" rule in CLAUDE.md and `docs/rules/testing.md` for the
+incident behind it.
 
 CI runs the same tests against a service container with
 `REQUIRE_POSTGRES_TESTS=1`, so a missing server fails the job rather than

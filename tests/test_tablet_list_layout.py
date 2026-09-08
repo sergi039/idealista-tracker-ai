@@ -35,6 +35,7 @@ STYLESHEET = Path(__file__).resolve().parents[1] / "static" / "css" / "style.css
 COLUMN_CLASSES = (
     "col-score",
     "col-fav",
+    "col-photo",
     "col-title",
     "col-price",
     "col-area",

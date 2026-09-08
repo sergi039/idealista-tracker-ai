@@ -12,8 +12,10 @@ The fixture numbers are measurements, not inventions. On production,
   to 21 listings on one point.
 * Eight rows carry both a location a person established from the cadastre and
   a portal or map pin. The distance between the two -- the pin's own error --
-  is 68, 102, 107, 122, 124, 174, 195 and 1150 m.
-* Property 421 is one of those eight, and a person wrote the answer down
+  is 68, 102, 107, 122, 124, 174, 195 and 1150 m. (Re-derived 2026-09-07
+  after #536: seven rows, because the 124 was row 161's cadastre guess filed
+  under the pin key and not a pin's error; the maximum is unchanged.)
+* Property 421 is one of those rows, and a person wrote the answer down
   independently: its import block records *"EXACT per portal, but the pin is a
   meadow 170 m S of the house"* against a computed 174 m.
 

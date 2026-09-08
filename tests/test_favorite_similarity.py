@@ -1178,8 +1178,12 @@ class TestTheList:
         tooltip = re.search(r'id="similarity-coverage"[^>]*title="([^"]*)"', body)
         # The tooltip reads the SAME number as the visible line: under a cut
         # that is the withheld count, never the zero the survivors give
-        # (the rx blocker on this branch -- two numbers for one fact).
+        # (the rx blocker on this branch -- two numbers for one fact). Since
+        # 2026-09-07 the bare page withholds the row by the standing rejected
+        # rule instead, and the tooltip reports THAT count rather than the zero
+        # its own rows would give -- the same blocker, one rule over.
         assert tooltip and "1 you rejected" in unescape(tooltip.group(1))
+        assert "Rejected: 1 hidden" in body
         # And its own page still shows what it would have scored.
         text = _card(
             client.get(f"/properties/{ids['neighbour']}").get_data(as_text=True)
@@ -1213,9 +1217,28 @@ class TestTheList:
         assert shown == {ids["favorite"], ids["unlocated"]}
         # The result count, and the line beside it, describe those rows.
         assert _count(body) == len(shown)
+        # Under a CUT the similarity clause removes the rejected row before
+        # the standing rejected hide is reached, so this sentence is the one
+        # that renders and the hide's own line stays silent -- the two never
+        # describe the same row twice. (Gating this sentence on the hide was
+        # the first attempt and left the page saying nothing at all here.)
         assert _coverage_line(body) == (
             "Similar: 1 at ≥ 70 to 1 favorite — 1 you rejected set aside"
         )
+        # With NO cut the other half speaks: the row is withheld by the
+        # standing rule, and the page says so rather than dropping it in
+        # silence (`owner_review.apply_rejected_hide`, owner report
+        # 2026-09-07). Asserted here so the pair cannot both fall quiet.
+        bare = client.get("/properties?profile_id=all&per_page=100").get_data(
+            as_text=True
+        )
+        assert ids["neighbour"] not in set(_shown(bare))
+        assert "Rejected: 1 hidden" in bare
+        # And the way back is on that page: naming the verdict lifts the hide.
+        lifted = client.get(
+            "/properties?profile_id=all&per_page=100&verdict=all"
+        ).get_data(as_text=True)
+        assert ids["neighbour"] in set(_shown(lifted))
         # The subscription chip: its number is the page its own href opens.
         chip = re.search(
             r'href="([^"]*profile_id=' + str(world["pid"]) + r'[^"]*)"[^>]*>\s*'

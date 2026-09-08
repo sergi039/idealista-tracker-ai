@@ -45,6 +45,12 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy import and_, func, or_
 
+from services.property_classification_service import (
+    KIND_LAND,
+    LAND_SUBTYPES,
+    listing_kind,
+)
+
 logger = logging.getLogger(__name__)
 
 CRITERIA_KEYS = ("min_house_m2", "min_plot_m2")
@@ -142,9 +148,34 @@ def effective_figures(prop: Any) -> Dict[str, Optional[float]]:
     # and a tab-polluted "PLOT\t" must read the same in both languages —
     # here as not-plot, exactly as lower(trim(...)) reads it.
     area_type = (getattr(prop, "area_type", None) or "").strip(" ").lower()
-    if area_type == "plot":
-        return {"house_m2": None, "plot_m2": plot if plot is not None else area}
-    return {"house_m2": area, "plot_m2": plot}
+    # Bare land is what the LISTING IS, and `area_type` is only one of the two
+    # places that says so. Measured 2026-09-07: 52 rows carry
+    # `property_category='land'` with `area_type='built'` -- six of them in the
+    # one subscription with criteria, all "Finca rústica", and one was reading
+    # as a 12,240 m2 HOUSE and passing a 150 m2 house requirement on that
+    # strength. `listing_kind` is the reading `favorite_similarity` already
+    # shares for exactly this question ("land whatever the legacy `developed`
+    # subtype says"); it is imported rather than re-tested here.
+    is_bare_land = area_type == "plot" or (
+        listing_kind(
+            getattr(prop, "property_category", None),
+            getattr(prop, "property_subtype", None),
+        )
+        == KIND_LAND
+    )
+    if is_bare_land:
+        # `bare_land` is the whole point of this flag: for such a row
+        # `house_m2` is None because the listing SAYS there is no house, not
+        # because nobody stated its size. Those are the two things this module
+        # exists to keep apart, and collapsing them into one None made a house
+        # search read bare land as `unknown` and offer it (owner, 2026-09-07:
+        # 31 plots in the one subscription that carries criteria).
+        return {
+            "house_m2": None,
+            "plot_m2": plot if plot is not None else area,
+            "bare_land": True,
+        }
+    return {"house_m2": area, "plot_m2": plot, "bare_land": False}
 
 
 def read_verdict(prop: Any, criteria: Optional[Dict[str, float]]) -> Dict[str, Any]:
@@ -155,7 +186,17 @@ def read_verdict(prop: Any, criteria: Optional[Dict[str, float]]) -> Dict[str, A
     checks: Dict[str, Optional[bool]] = {}
     if "min_house_m2" in criteria:
         value = figures["house_m2"]
-        checks["house"] = None if value is None else value >= criteria["min_house_m2"]
+        if value is None and figures.get("bare_land"):
+            # A MEASURED shortfall, not an absence of measurement: a
+            # subscription that requires a house of N m2 is not satisfied by a
+            # listing whose own category says it is bare land, and the listing
+            # said so. A housing row whose area nobody stated stays `unknown`,
+            # which is the case this branch must not swallow.
+            checks["house"] = False
+        else:
+            checks["house"] = (
+                None if value is None else value >= criteria["min_house_m2"]
+            )
     if "min_plot_m2" in criteria:
         value = figures["plot_m2"]
         checks["plot"] = None if value is None else value >= criteria["min_plot_m2"]
@@ -207,8 +248,21 @@ def _definite_shapes(model):
     # and built in the other (the gate review's case reproduction). The NULL
     # guard comes first, so every clause stays definite.
     normalized = func.lower(func.trim(model.area_type))
-    is_plot = and_(model.area_type.isnot(None), normalized == "plot")
-    not_plot = or_(model.area_type.is_(None), normalized != "plot")
+    by_area_type = and_(model.area_type.isnot(None), normalized == "plot")
+    # The second place a listing says it is bare land, and the reason the
+    # Python twin reads `listing_kind`: `category='land'`, or a subtype in
+    # `LAND_SUBTYPES`. `coalesce` before `trim` keeps every clause definite --
+    # a NULL comparison here would be the third value these two exist to
+    # avoid, and `filter(~expr)` would then drop rows outright.
+    category = func.lower(func.trim(func.coalesce(model.property_category, "")))
+    subtype = func.lower(func.trim(func.coalesce(model.property_subtype, "")))
+    by_kind = or_(category == KIND_LAND, subtype.in_(LAND_SUBTYPES))
+    is_plot = or_(by_area_type, by_kind)
+    not_plot = and_(
+        or_(model.area_type.is_(None), normalized != "plot"),
+        category != KIND_LAND,
+        subtype.notin_(LAND_SUBTYPES),
+    )
     return is_plot, not_plot
 
 
@@ -225,10 +279,17 @@ def failing_expression(model, criteria: Dict[str, float]):
     clauses = []
     if "min_house_m2" in criteria:
         clauses.append(
-            and_(
-                not_plot,
-                _credible(model.area),
-                model.area < criteria["min_house_m2"],
+            or_(
+                and_(
+                    not_plot,
+                    _credible(model.area),
+                    model.area < criteria["min_house_m2"],
+                ),
+                # Bare land against a house requirement: the row states it has
+                # no house, so this is measured, not unknown. `is_plot` is
+                # definite by construction (`_definite_shapes`), so the clause
+                # stays definite and `unknown = ~fail AND ~pass` holds.
+                is_plot,
             )
         )
     if "min_plot_m2" in criteria:

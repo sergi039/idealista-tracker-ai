@@ -29,6 +29,8 @@ the whole defect was a payload key nobody read:
 
 import json
 import re
+from html import escape as html_escape
+from pathlib import Path
 
 import pytest
 
@@ -57,6 +59,7 @@ MILANUNCIOS_FIRST = (
     "https://images.milanuncios.com/api/v1/ma-ad-media-pro/images/"
     "b22fc08c-e4cf-4f81-af36-54b9a0a3c764"
 )
+TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
 YAENCONTRE_FIRST = (
     "https://media.yaencontre.com/img/photo/w630/75866/75866-57436479-1515006322.jpg"
 )
@@ -382,6 +385,158 @@ class TestTheWriter:
         assert "photos" not in prop.enrichment["import"]
 
 
+class TestRendering:
+    """The photographs on screen. The model never sees them — the subscription
+    bridge is text-only — so this IS the feature: 711 rows carry no description
+    at all, and for those a picture is the only judgeable thing the page has."""
+
+    def _with_photos(self, profile, slug, urls):
+        return _prop(
+            profile,
+            slug,
+            enrichment={
+                "import": {
+                    "photos": {
+                        "items": [{"url": url} for url in urls],
+                        "published": len(urls),
+                    }
+                }
+            },
+        )
+
+    def test_the_property_page_renders_every_captured_photograph(
+        self, app, client, profile
+    ):
+        row = self._with_photos(
+            profile, "strip", [FOTOCASA_FIRST, YAENCONTRE_FIRST, MILANUNCIOS_FIRST]
+        )
+
+        body = client.get(f"/properties/{row.id}").get_data(as_text=True)
+
+        assert "Casa en Malpica" in body, "the page did not render"
+        for url in (FOTOCASA_FIRST, YAENCONTRE_FIRST, MILANUNCIOS_FIRST):
+            assert f'src="{html_escape(url)}"' in body, url
+        # Served from a third-party CDN: the portal is not told which listing
+        # is being looked at.
+        assert body.count('referrerpolicy="no-referrer"') >= 3
+        # The FIRST is eager and the rest are lazy -- the whole of this
+        # application's eager loading. A lazy image that never starts its
+        # request never fires `onerror` either, so an all-lazy strip can read
+        # as a blank; an all-eager one costs up to 40 originals a page, and
+        # the list and cards, where `per_page` reaches 100, are entirely lazy.
+        strip = body[body.index('class="listing-photos') :]
+        strip = strip[: strip.index("</div>")]
+        assert strip.count('loading="lazy"') == 2, "one eager photograph, the rest lazy"
+
+    def test_the_list_and_the_cards_never_load_a_photograph_eagerly(
+        self, app, client, profile
+    ):
+        """`per_page` reaches 100 (routes/main_routes.py), so one eager image
+        per row is up to a hundred full-resolution portal originals on a single
+        page load. Raised by an adversarial review of the first version, which
+        had made the card image eager."""
+        self._with_photos(profile, "eagerness", [FOTOCASA_FIRST])
+
+        for url, cls in (
+            ("/properties?view_type=list", "listing-thumb"),
+            ("/properties?view_type=cards", "listing-card-photo"),
+        ):
+            body = client.get(url).get_data(as_text=True)
+            assert "properties found" in body, url
+            tag = body[body.index(f'class="{cls}"') - 400 :]
+            tag = tag[: tag.index(">", tag.index(f'class="{cls}"')) + 1]
+            assert 'loading="lazy"' in tag, url
+
+    def test_every_surface_says_a_photograph_is_gone_rather_than_nothing(
+        self, app, client, profile
+    ):
+        """An adversarial review's finding: the strip said "photo gone" and the
+        list and the cards said nothing, so a rotted URL was indistinguishable
+        from a listing whose portal published none — the pair this module
+        exists to keep apart, thrown away by the templates."""
+        self._with_photos(profile, "rot-everywhere", [FOTOCASA_FIRST])
+
+        for url, marker in (
+            ("/properties?view_type=list", "listing-photo-missing"),
+            ("/properties?view_type=cards", "listing-card-photo-missing"),
+        ):
+            body = client.get(url).get_data(as_text=True)
+            assert "properties found" in body, url
+            assert marker in body, url
+            assert "photo gone" in body.lower(), url
+
+    def test_the_tooltip_does_not_contradict_the_photographs_under_it(
+        self, app, client, profile
+    ):
+        """It read "They are not shown here" — directly above the strip showing
+        them. The badge's meaning changed and its tooltip did not."""
+        row = self._with_photos(profile, "tooltip", [FOTOCASA_FIRST])
+
+        body = client.get(f"/properties/{row.id}").get_data(as_text=True)
+
+        assert "Casa en Malpica" in body, "the page did not render"
+        assert "not shown here" not in body
+
+    def test_a_rotted_url_reads_as_a_gone_photograph_not_as_none(
+        self, app, client, profile
+    ):
+        row = self._with_photos(profile, "rotted", [FOTOCASA_FIRST])
+
+        body = client.get(f"/properties/{row.id}").get_data(as_text=True)
+
+        assert "onerror=" in body, "a dead URL would leave a broken image"
+        assert "photo gone" in body.lower()
+
+    def test_the_list_shows_the_first_photograph_and_links_to_the_row(
+        self, app, client, profile
+    ):
+        row = self._with_photos(profile, "listed", [FOTOCASA_FIRST, YAENCONTRE_FIRST])
+
+        body = client.get("/properties?view_type=list").get_data(as_text=True)
+
+        assert "properties found" in body, "the list did not render"
+        assert f'src="{html_escape(FOTOCASA_FIRST)}"' in body
+        # The FIRST one only: a table row is one line, not a gallery.
+        assert html_escape(YAENCONTRE_FIRST) not in body
+        assert f'/properties/{row.id}"' in body
+
+    def test_the_cards_view_shows_it_too(self, app, client, profile):
+        self._with_photos(profile, "carded", [FOTOCASA_FIRST])
+
+        body = client.get("/properties?view_type=cards").get_data(as_text=True)
+
+        assert "properties found" in body, "the cards did not render"
+        assert "listing-card-photo" in body
+        assert f'src="{html_escape(FOTOCASA_FIRST)}"' in body
+        # Lazily: see `test_the_list_and_the_cards_never_load_a_photograph_eagerly`.
+        card = body[body.index("listing-card-photo-link") :]
+        assert 'loading="lazy"' in card[: card.index("</a>")]
+
+    def test_a_row_with_no_photograph_renders_no_placeholder(
+        self, app, client, profile
+    ):
+        """Most of the table has simply never been looked at, so an empty cell
+        is the honest rendering — a placeholder would assert there are none."""
+        _prop(profile, "bare", enrichment={"import": {"source": "idealista"}})
+
+        body = client.get("/properties?view_type=list").get_data(as_text=True)
+
+        assert "properties found" in body
+        assert "listing-thumb" not in body
+
+    def test_the_page_still_has_exactly_one_inline_script_element(self):
+        """`tests/test_issue_23_xss_and_prompt_injection.py` finds it by
+        searching for the literal opening tag, so neither a second element nor
+        that tag spelled out in a comment may appear above it — which is why
+        the photo strip uses an inline `onerror` and its comment does not
+        write the tag out."""
+        markup = (TEMPLATES / "property_detail.html").read_text(encoding="utf-8")
+
+        first = markup.index("<script>")
+        # Everything before the real element must be free of the literal tag.
+        assert "<script" not in markup[:first]
+
+
 class TestThePage:
     @pytest.mark.parametrize(
         "enrichment, expect, forbid",
@@ -395,7 +550,7 @@ class TestThePage:
                         }
                     }
                 },
-                "1 photos",
+                "1 photo",
                 "No photos",
             ),
             (

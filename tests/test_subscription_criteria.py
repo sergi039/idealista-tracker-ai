@@ -75,9 +75,18 @@ MATRIX = [
     (200, "built", None, "unknown"),  # plot never measured
     (None, "built", 800, "unknown"),  # house never measured
     (200, None, 800, "pass"),  # NULL area_type reads as built
-    (800, "plot", None, "unknown"),  # bare land: area IS the plot, house unknown
+    # Bare land clearing the plot bound. `unknown` until 2026-09-07, `fail`
+    # since: `area` IS the plot here and it passes, but the row states it has
+    # no house at all, and a subscription asking for one is not satisfied by
+    # a listing that says it has none. The owner had 31 such rows offered to
+    # them in the one subscription that carries criteria.
+    (800, "plot", None, "fail"),
     (650, "plot", None, "fail"),  # bare land, plot short
-    (650, "plot", 900, "pass_or_unknown_house"),  # plot_area wins over area
+    # Bare land against a house requirement is a MEASURED fail since
+    # 2026-09-07, not `unknown`: the row does not omit its house size, it
+    # states that it has no house. `plot_area` still wins over `area` for the
+    # parcel here -- what changed is the house half, not this one.
+    (650, "plot", 900, "fail"),
     # Zero plot_area on bare land is a BLANK, so `area` answers — both
     # languages (the implementation review's 650/plot/0 reproduction).
     (650, "plot", 0, "fail"),
@@ -97,7 +106,10 @@ MATRIX = [
     # carry `area = 150` and 3 bare-land rows carry `area = 700`.
     (150, "built", 800, "pass"),  # house exactly at the bound passes
     (200, "built", 700, "pass"),  # plot exactly at the bound passes
-    (700, "plot", None, "pass_or_unknown_house"),  # bare land at the bound
+    # Bare land AT the plot bound: the plot half passes and the house half is
+    # a measured fail, so the row fails. Before 2026-09-07 this was the
+    # ambiguity `pass_or_unknown_house` existed to name.
+    (700, "plot", None, "fail"),
     # One under the bound on each, so the pair pins the boundary from both
     # sides — an off-by-one that moved the comparison would break one of the
     # two whichever direction it moved.
@@ -110,6 +122,10 @@ MATRIX = [
     # 4211 passed — 43 production rows are `area_type='built' AND area >=
     # 700`, and migration 025 gave every existing row a NULL plot_area.
     (800, "built", None, "unknown"),
+    # THE case the bare-land branch must not swallow: a HOUSING row whose
+    # area nobody stated is still `unknown`, because that is an absence of
+    # measurement rather than a measured absence. Mutating the new branch to
+    # fire on `house_m2 is None` alone turns this red.
     (0, "built", 800, "unknown"),  # zero is a blank, never a tiny house
     (200, "built", 0, "unknown"),  # zero plot is a blank too
 ]
@@ -123,10 +139,6 @@ class TestTheTwoReadingsAgree:
         prop = _mk(profile_row.id, area=area, area_type=area_type, plot_area=plot)
         verdict = subscription_criteria.read_verdict(prop, CRITERIA)
 
-        if expected == "pass_or_unknown_house":
-            # A bare-land row with a stated plot passes the plot bound but
-            # can never answer the house bound — unknown, both languages.
-            expected = "unknown"
         assert verdict["state"] == expected, (
             f"python said {verdict['state']} for area={area}/{area_type}, plot={plot}"
         )
@@ -468,3 +480,100 @@ class TestAnOwnerActionIsNeverHidden:
             assert prop.id in [row[0] for row in hidden], (
                 f"a blank next_action ({blank!r}) bought an exemption"
             )
+
+
+# (area, area_type, category, subtype, expected) — bare land said the OTHER
+# way. Measured on production 2026-09-07: 52 rows carry
+# `property_category='land'` with `area_type='built'`, six of them in the one
+# subscription that carries criteria, all "Finca rústica" — and one of those,
+# 12,240 m² of rough land, was reading as a HOUSE and passing a 150 m² house
+# requirement on that strength.
+KIND_MATRIX = [
+    # The defect itself: land by category, `built` by area_type.
+    (12240, "built", "land", "plot", "fail"),
+    (300, "built", "land", "plot", "fail"),
+    # The legacy subtype `developed` is land too — the rule
+    # `favorite_similarity` already states ("land whatever the legacy
+    # `developed` subtype says"), read from the one shared function.
+    (900, "built", "land", "developed", "fail"),
+    # Subtype alone, with no category: still land.
+    (900, "built", None, "plot", "fail"),
+    # A HOUSE stays a house. This is the pair the new branch is one condition
+    # away from swallowing, and the whole point of reading the kind rather
+    # than "anything that is not obviously a house".
+    (200, "built", "housing", "house", "unknown"),  # plot unstated
+    (200, "built", "housing", "house", "unknown"),
+    (149, "built", "housing", "house", "fail"),  # short house, still measured
+    # No category and no subtype: `area_type` alone decides, as before.
+    (800, "plot", None, None, "fail"),
+    (800, "built", None, None, "unknown"),
+]
+
+
+class TestBareLandIsWhatTheListingIs:
+    """`area_type` is only one of the two places a listing says it is land."""
+
+    @pytest.mark.parametrize(
+        "area, area_type, category, subtype, expected", KIND_MATRIX
+    )
+    def test_python_and_sql_agree_on_the_kind(
+        self, app, profile_row, area, area_type, category, subtype, expected
+    ):
+        prop = _mk(
+            profile_row.id,
+            area=area,
+            area_type=area_type,
+            plot_area=None,
+            property_category=category,
+            property_subtype=subtype,
+        )
+
+        verdict = subscription_criteria.read_verdict(prop, CRITERIA)
+        assert verdict["state"] == expected, (
+            f"python said {verdict['state']} for {area}/{area_type}/"
+            f"{category}/{subtype}"
+        )
+
+        fails = {
+            row.id
+            for row in Property.query.filter(
+                subscription_criteria.failing_expression(Property, CRITERIA)
+            )
+        }
+        passes = {
+            row.id
+            for row in Property.query.filter(
+                subscription_criteria.passing_expression(Property, CRITERIA)
+            )
+        }
+        assert (prop.id in fails) == (expected == "fail"), "SQL fail disagrees"
+        assert (prop.id in passes) == (expected == "pass"), "SQL pass disagrees"
+        # `unknown` is `~fail AND ~pass`, which is only sound while both
+        # expressions stay definite — the reason `_definite_shapes` coalesces
+        # the two new columns before comparing them.
+        unknowns = {
+            row.id
+            for row in Property.query.filter(
+                ~subscription_criteria.failing_expression(Property, CRITERIA),
+                ~subscription_criteria.passing_expression(Property, CRITERIA),
+            )
+        }
+        assert (prop.id in unknowns) == (expected == "unknown"), "SQL unknown disagrees"
+
+    def test_the_figures_report_the_parcel_for_such_a_row(self, app, profile_row):
+        """A finca's stated surface is its PARCEL, so it must answer the plot
+        bound rather than sit unread — the row fails on the house half, not
+        because nothing about it was measured."""
+        prop = _mk(
+            profile_row.id,
+            area=12240,
+            area_type="built",
+            property_category="land",
+            property_subtype="plot",
+        )
+
+        figures = subscription_criteria.effective_figures(prop)
+
+        assert figures["house_m2"] is None
+        assert figures["plot_m2"] == 12240
+        assert figures["bare_land"] is True

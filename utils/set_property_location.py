@@ -36,14 +36,26 @@ cadastral parcel centroid is not a portal's pin. It works, because
 `_apply_geocode_outcome` defends that field, and it is exactly the STATUS-002
 mistake the paragraph above refuses: an inference stored under a name that means
 something else, where the next reader has no way to tell the two apart. Those
-rows want moving to `enrichment["location"]` with `--source cadastre`, by the
-person who established them. They are converted by a person running this tool with the note their
-own block already contains, or not at all.
+rows wanted moving to `enrichment["location"]` with `--source cadastre`, by the
+person who established them, with the note their own block already held -- and
+that is how they went (#536): 161 on 2026-08-25 and 792 on 2026-09-03, one run
+of this tool each, after which the misfiled entries were taken off both rows
+under a snapshot (`data/issue_536_pre_fix.json` on the mini). This tool does
+not remove such an entry; it names it (`MISFILED`, in `_describe`), and it does
+so on a row that already carries a hand-set block as much as on one that does
+not, because on 161 the block hid the entry from this window for nine days and
+only a SQL query could see it.
 
     python -m utils.set_property_location --id 792 \\
-        --lat 43.539637 --lon -5.547554 --accuracy precise \\
-        --note "cadastre_barrio_verified: Barrio del Medio, Quintes; 13 parcels,
-                spread 341 m, row 24 m from centre"
+        --lat 43.537720 --lon -5.552047 --accuracy precise --source cadastre \\
+        --note "cadastre_by_area_match: RC 52076A00400209 (Pol. 4 Parc. 209
+                EL MILAN, Villaviciosa), 1344 m2 against 1345 m2 listed;
+                the point is the parcel"
+
+That is the point 792 carries. An earlier version of this example quoted the
+barrio-centre pin the row's own provenance had already superseded, 420 m from
+the parcel -- an example is a command somebody will paste, so it quotes the
+current point or none.
 
 `--id` on its own prints the row -- what it is located at, what the geocode
 last said, whether a person set it, and whether that block still agrees with
@@ -65,12 +77,32 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-# Sources that really are a portal publishing a pin for its own advert. Written
-# by `services/fotocasa_import.py` and `utils/backfill_portal_coordinate.py`;
-# anything else in that field came from somewhere that is not the source site.
-PORTAL_PIN_SOURCES = frozenset(
-    {"fotocasa", "fotocasa payload", "idealista map pin", "portal"}
+# The portals whose own pin ends up in `enrichment["import"]["coordinate"]`:
+# `services/fotocasa_import.py` writes the site's name, `portal_coordinate`
+# answers "portal" for an entry with no source, and the hand-run map-pin
+# scripts wrote the portal's name with a suffix. The field is free text and
+# has drifted across nine spellings on production (measured 2026-09-07:
+# `fotocasa` 145, `idealista_map` 44, `milanuncios` 26, `fotocasa_pin` 8,
+# `idealista map pin` 3, `idealista_pin` 3, and one each of `pisos_pin`,
+# `fotocasa payload` and `idealista`), every one of them naming the portal
+# first. So a pin is the portal's own when its source *starts with* a portal's
+# name. An exact set of spellings was tried first and held four of the nine,
+# which called the other 83 real pins MISFILED -- a false alarm in the one line
+# meant to catch the real one, `cadastre_parcel` (#536).
+PORTAL_NAMES = (
+    "fotocasa",
+    "idealista",
+    "milanuncios",
+    "yaencontre",
+    "pisos",
+    "portal",
 )
+
+
+def is_portal_pin_source(source) -> bool:
+    """Whether a pin's `source` names a portal, whatever its spelling."""
+    token = str(source or "").strip().lower()
+    return any(token.startswith(name) for name in PORTAL_NAMES)
 
 
 def _describe(prop) -> str:
@@ -82,6 +114,7 @@ def _describe(prop) -> str:
     )
 
     hand = manual_coordinate(prop)
+    pin = portal_coordinate(prop)
     lines = [
         f"  id            {prop.id}",
         f"  title         {(prop.title or '')[:70]}",
@@ -99,11 +132,10 @@ def _describe(prop) -> str:
         # this row", and printing the second on the strength of the first is a
         # claim about a guard nothing here consulted. Measured on production
         # 2026-08-20, it was false for exactly the two rows this tool exists
-        # for: 161 and 792 carry a portal pin, and `_apply_geocode_outcome`
-        # refuses to trade a `precise` for anything a geocode can answer, so a
-        # refresh leaves them alone. So say which guard applies, or that none
-        # does.
-        pin = portal_coordinate(prop)
+        # for: 161 and 792 carried a portal pin (they no longer do, #536), and
+        # `_apply_geocode_outcome` refuses to trade a `precise` for anything a
+        # geocode can answer, so a refresh left them alone. So say which guard
+        # applies, or that none does.
         if pin is None:
             lines.append("  hand-set      no -- nothing defends this row")
             lines.append(
@@ -125,19 +157,6 @@ def _describe(prop) -> str:
                 lines.append(
                     "  EXPOSED       the pin is kept only against a geocode that "
                     "is no better; a `precise` answer would replace it"
-                )
-            if pin_source not in PORTAL_PIN_SOURCES:
-                # The field means "the coordinate the source portal published".
-                # A value from anywhere else works -- which is exactly why it
-                # is worth saying out loud rather than leaving to be discovered
-                # by whoever next reads the row as a portal's own claim.
-                lines.append(
-                    f"  MISFILED      {pin_source!r} is not a portal. That field "
-                    "means what the source site published; a conclusion stored "
-                    "there is indistinguishable from one. Move it here with "
-                    f"--lat {prop.location_lat} --lon {prop.location_lon} "
-                    f"--accuracy {normalize_accuracy(prop.location_accuracy)} "
-                    "--source <where it came from> --note '<what was checked>'"
                 )
     else:
         lines.append(
@@ -166,6 +185,34 @@ def _describe(prop) -> str:
                 f"  DISAGREES     the block says accuracy {hand.accuracy!r}, "
                 f"the column says {normalize_accuracy(prop.location_accuracy)!r}"
             )
+    if pin is not None and not is_portal_pin_source(pin[2]):
+        # The field means "the coordinate the source portal published". A value
+        # from anywhere else works -- which is exactly why it is worth saying
+        # out loud rather than leaving to be discovered by whoever next reads
+        # the row as a portal's own claim. Said whether or not a hand-set block
+        # is on the row: this check used to live under `hand is None`, and on
+        # production the entry on row 161 disappeared from this window the day
+        # its block landed and stayed visible to nothing but a SQL query for
+        # nine days (#536).
+        if hand is None:
+            remedy = (
+                "Move it here with "
+                f"--lat {prop.location_lat} --lon {prop.location_lon} "
+                f"--accuracy {normalize_accuracy(prop.location_accuracy)} "
+                "--source <where it came from> --note '<what was checked>'"
+            )
+        else:
+            remedy = (
+                "The hand-set block above already carries this row's "
+                "provenance, so the entry adds nothing and keeps a claim the "
+                "portal never made; this tool leaves it -- null it under a "
+                "snapshot, the way #536 did."
+            )
+        lines.append(
+            f"  MISFILED      {pin[2]!r} is not a portal. That field means what "
+            "the source site published; a conclusion stored there is "
+            f"indistinguishable from one. {remedy}"
+        )
     return "\n".join(lines)
 
 

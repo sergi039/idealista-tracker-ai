@@ -41,6 +41,7 @@ from services.coordinate_quality import (
     manual_coordinate,
     portal_coordinate,
     record_manual_coordinate,
+    record_portal_coordinate,
 )
 from services.property_location_service import (
     PropertyLocationService,
@@ -587,6 +588,85 @@ class TestTheToolNamesADisagreement:
 
             assert "hand-set      no" in said
             assert "DISAGREES" not in said
+
+
+def _pinned(source):
+    """A row whose `import.coordinate` carries `source`, at its own columns."""
+    return _row(
+        enrichment=record_portal_coordinate(
+            None, source=source, lat=HAND_LAT, lon=HAND_LON
+        )
+    )
+
+
+class TestTheToolNamesAMisfiledPin:
+    """`enrichment["import"]["coordinate"]` means the pin the portal published,
+    and a conclusion stored there is indistinguishable from one (#536). The
+    tool's `MISFILED` line is the only window this repository has onto such an
+    entry -- and on production it went dark on row 161 the day a hand-set
+    block landed, because the check lived under `hand is None`. From then on
+    only a SQL query could see the entry, and it sat there for nine days.
+
+    The other half is the opposite mistake: the field is free text, spelled
+    nine ways on production, and an exact set of four spellings called the
+    other 83 real pins misfiled. A portal's pin is recognised by the portal's
+    name, whatever follows it.
+    """
+
+    def test_a_conclusion_filed_as_a_pin_is_named(self, app):
+        from utils.set_property_location import _describe
+
+        with app.app_context():
+            said = _describe(_pinned("cadastre_parcel"))
+
+            assert "MISFILED" in said and "'cadastre_parcel'" in said
+            assert "--lat" in said, "without a block, the remedy is this tool"
+
+    def test_it_is_still_named_once_a_hand_set_block_is_on_the_row(self, app):
+        from utils.set_property_location import _describe
+
+        with app.app_context():
+            row = _pinned("cadastre_parcel")
+            set_location_by_hand(
+                row,
+                lat=HAND_LAT,
+                lon=HAND_LON,
+                accuracy="precise",
+                note=NOTE,
+                source="cadastre",
+            )
+            said = _describe(row)
+
+            assert "hand-set      cadastre" in said
+            assert "MISFILED" in said and "'cadastre_parcel'" in said
+            assert "--lat" not in said, "the block exists; the remedy is not it"
+            assert "snapshot" in said
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "fotocasa",
+            "fotocasa payload",
+            "fotocasa_pin",
+            "idealista_map",
+            "idealista map pin",
+            "idealista_pin",
+            "milanuncios",
+            "pisos_pin",
+            "portal",
+        ],
+    )
+    def test_a_portals_own_pin_is_not_named_whatever_its_spelling(self, app, source):
+        from utils.set_property_location import _describe
+
+        with app.app_context():
+            row = _pinned(source)
+            assert "MISFILED" not in _describe(row)
+
+            set_location_by_hand(
+                row, lat=HAND_LAT, lon=HAND_LON, accuracy="precise", note=NOTE
+            )
+            assert "MISFILED" not in _describe(row)
 
 
 class TestTheGuardIsRecheckedUnderTheLock:

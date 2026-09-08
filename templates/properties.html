@@ -900,10 +900,23 @@
                        judged. Same reading as the badge, so an option's count
                        and the badges it selects cannot disagree
                        (services/owner_review.py). #}
-                    {% if verdicts|length > 1 %}
+                    {# `> 1` as before, PLUS the one case the old guard would
+                       have broken: when every row on the page is hidden by the
+                       rejected rule, `verdicts` holds only `rejected` and that
+                       lone option IS the way back, so deleting it would leave
+                       the page no way to undo its own hide. Relaxing the guard
+                       to `{% if verdicts %}` outright was the first attempt and
+                       it put a useless one-option select on every page holding
+                       a single verdict state (caught by
+                       tests/test_owner_review_propagation.py). And the empty
+                       value no longer means "all" -- it is the hide -- so it
+                       says so, and `all` is spelled out beside it
+                       (services/owner_review.DECISION_ALL). #}
+                    {% if verdicts|length > 1 or (verdicts and rejected_hidden_count) %}
                     <select class="form-select form-select-sm properties-filter-select" id="verdict" name="verdict"
                             aria-label="{{ t('owner_verdict') }}">
-                        <option value="">{{ t('owner_verdict_all') }}</option>
+                        <option value="">{{ t('owner_verdict_default') }}</option>
+                        <option value="all" {{ 'selected' if current_filters.verdict == 'all' }}>{{ t('owner_verdict_all') }}</option>
                         {% for choice in verdicts %}
                             <option value="{{ choice.value }}"
                                     {{ 'selected' if current_filters.verdict == choice.value }}>
@@ -1258,6 +1271,28 @@
                             <i class="fas fa-filter me-1"></i>{{ t('criteria_hidden_line')|format(criteria_hidden_count) }}
                         </span>
                     {% endif %}
+                    {# The listings the owner turned down, withheld by the same
+                       standing policy and disclosed the same way -- a filter
+                       that hides silently reads as "these listings do not
+                       exist" (owner report 2026-09-07: property 1405, rejected,
+                       still sitting in the ranked suggestions). #}
+                    {% if rejected_hidden_count is defined and rejected_hidden_count %}
+                        <span id="rejected-hidden-coverage" class="text-body-secondary small"
+                              title="{{ t('rejected_hidden_tooltip') }}">
+                            <i class="fas fa-ban me-1"></i>{{ t('rejected_hidden_line')|format(rejected_hidden_count) }}
+                        </span>
+                    {% endif %}
+                    {# The taste ORDER, when it has nothing to order by. A
+                       stale score never ranks beside a current one, so during a
+                       profile rebuild the sort falls through to its tie-break
+                       and the page comes back in id order -- which reads as a
+                       broken control rather than an unavailable one. #}
+                    {% if taste_sort_dormant is defined and taste_sort_dormant %}
+                        <span id="taste-sort-dormant" class="text-warning small"
+                              title="{{ t('taste_sort_dormant_tooltip') }}">
+                            <i class="fas fa-clock-rotate-left me-1"></i>{{ t('taste_sort_dormant') }}
+                        </span>
+                    {% endif %}
                     {% if taste_version is defined and taste_version and taste_scored_count is not none and pagination %}
                         <span id="taste-coverage" class="text-body-secondary small"
                               title="{{ t('taste_coverage_tooltip') }}">
@@ -1406,6 +1441,9 @@
                                         <th class="col-fav" title="Favorites">
                                             <i class="fas fa-star text-warning"></i>
                                         </th>
+                                        <th class="col-photo" title="{{ t('photos_column_title') }}">
+                                            <i class="far fa-image"></i>
+                                        </th>
                                         <th class="lands-title-col col-title">{{ sort_header('title', t('title'), base_args, current_filters) }}</th>
                                         <th class="col-price">
                                             {{ sort_header('price', t('price'), base_args, current_filters) }}
@@ -1480,6 +1518,26 @@
                                                     <i class="fas fa-star {{ 'text-warning' if p.is_favorite else 'text-muted' }}"
                                                        style="font-size: 1.1rem; cursor: pointer;"></i>
                                                 </button>
+                                            </td>
+                                            {# The listing's own first photograph. For the 711 rows
+                                               that carry no description this is the only thing on the
+                                               line that can be judged, which is the whole reason the
+                                               URLs are captured (services/portal_photos.py). A row with
+                                               none renders an empty cell rather than a placeholder
+                                               asserting there are no pictures -- most of the table has
+                                               simply never been looked at. #}
+                                            {% set _row_photos = photos_for(p) %}
+                                            <td class="col-photo">
+                                                {% if _row_photos.state == 'captured' %}
+                                                    <a href="{{ url_for('main.property_detail', property_id=p.id) }}"
+                                                       title="{{ tn('photos_captured', _row_photos.count) }}">
+                                                        <img src="{{ _row_photos.photos[0].url }}" class="listing-thumb" alt=""
+                                                             loading="lazy" decoding="async" referrerpolicy="no-referrer"
+                                                             onerror="this.hidden=true;if(this.parentElement.nextElementSibling){this.parentElement.nextElementSibling.hidden=false;}">
+                                                    </a><span class="listing-photo-missing" title="{{ t('photo_gone') }}" hidden>
+                                                        <i class="fas fa-triangle-exclamation text-body-secondary"></i>
+                                                    </span>
+                                                {% endif %}
                                             </td>
                                             <td class="lands-title-col col-title">
                                                 <div class="fw-bold">
@@ -1646,6 +1704,33 @@
                     <div class="col-md-6 col-xl-4 mb-4" data-listing-status="{{ listing_verdict_for(p).state }}">
                         <div class="card h-100 property-card {% if p.listing_status in ('removed', 'sold') %}listing-inactive-card{% endif %}"
                              data-property-id="{{ p.id }}" style="overflow: hidden;">
+                            {% set _card_photos = photos_for(p) %}
+                            {% if _card_photos.state == 'captured' %}
+                                <a href="{{ url_for('main.property_detail', property_id=p.id) }}" class="listing-card-photo-link">
+                                    {# A URL that has rotted does not just disappear: an empty
+                                       card is indistinguishable from one whose portal published
+                                       nothing, which is the pair this module exists to keep
+                                       apart. The image hides and says so in its place. #}
+                                    {# Lazily, like the table's thumbnail. An earlier version
+                                       was eager, because a lazy image that never starts its
+                                       request never fires `onerror` either and a dead URL then
+                                       sat as a grey block -- but `per_page` reaches 100
+                                       (routes/main_routes.py), so eager here means up to a
+                                       hundred full-resolution portal originals on one page
+                                       load. That cost is certain; the observation it was
+                                       bought with came from a browser pane that may not paint
+                                       offscreen content, so it is not a safe basis for paying
+                                       it. Eager loading is kept for exactly one image on the
+                                       whole application: the FIRST one in the property page's
+                                       strip, where there is a single listing and the reader
+                                       opened the page to look at it. #}
+                                    <img src="{{ _card_photos.photos[0].url }}" class="listing-card-photo" alt=""
+                                         loading="lazy" decoding="async" referrerpolicy="no-referrer"
+                                         onerror="this.hidden=true;if(this.parentElement.nextElementSibling){this.parentElement.nextElementSibling.hidden=false;}">
+                                </a><span class="listing-card-photo-missing small text-body-secondary" hidden>
+                                    <i class="fas fa-triangle-exclamation me-1"></i>{{ t('photo_gone') }}
+                                </span>
+                            {% endif %}
                             <!-- Card Header with Score and Type -->
                             <div class="card-header bg-body-tertiary" style="padding: 0.5rem 1rem;">
                                 <div class="d-flex justify-content-between align-items-center">
