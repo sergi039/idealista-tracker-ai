@@ -1196,6 +1196,16 @@
                                 <i class="fas fa-compass me-1"></i>{{ t('recommendation_profile_none') }}
                             {% endif %}
                         </span>
+                        {% if active_mode == 'recommendation' and _rp.get('usable_signal_count', 0) and _rp.get('state') in ('none', 'dirty', 'failed') %}
+                            <form method="POST" action="{{ url_for('main.refresh_taste_recommendations') }}" class="d-inline"
+                                  onsubmit="return confirm({{ t('recommendation_refresh_confirm')|tojson }});">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                <button id="recommendation-refresh-button" class="btn btn-outline-primary btn-sm" type="submit"
+                                        title="{{ t('recommendation_refresh_title') }}">
+                                    <i class="fas fa-rotate me-1"></i>{{ t('recommendation_refresh_button') }}
+                                </button>
+                            </form>
+                        {% endif %}
                     {% endif %}
                     {% if recommendation_excluded_count %}
                         <span id="recommendation-hard-exclusions" class="text-body-secondary small">

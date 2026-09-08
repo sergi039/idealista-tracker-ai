@@ -3832,6 +3832,45 @@ def retrain_taste():
     return redirect(url_for("main.properties"))
 
 
+@main_bp.route("/properties/taste/recommendations/refresh", methods=["POST"])
+def refresh_taste_recommendations():
+    """Refresh the evidence profile, then let the code reranker read it.
+
+    This is the economical feedback loop for Recommendations: one bounded
+    profile build, no legacy per-listing score calls.  It is separate from
+    ``retrain_taste`` because that established action intentionally rebuilds
+    every legacy Taste score as well.
+    """
+    from services.background_jobs import enqueue_job
+
+    app_obj = current_app._get_current_object()
+
+    def _run():
+        refreshed = taste_service.refresh_recommendations()
+        return {"success": refreshed.get("status") == "ok", **refreshed}
+
+    try:
+        job_id = enqueue_job(
+            _run,
+            job_type="taste_recommendation_refresh",
+            meta={},
+            app=app_obj,
+            dedupe_key="taste_recommendation_refresh",
+        )
+        flash(
+            "Refreshing recommendation evidence in the background "
+            f"(job {job_id[:8]}). Candidate reranking uses no per-listing "
+            "model calls.",
+            "info",
+        )
+    except Exception:
+        logger.error("Failed to queue the recommendation refresh", exc_info=True)
+        flash("Could not start the recommendation refresh. Check server logs.", "error")
+    return redirect(
+        url_for("main.properties", mode="recommendation", sort="recommendation")
+    )
+
+
 @main_bp.route("/properties/<int:property_id>/review", methods=["POST"])
 def set_review(property_id):
     """Record what the owner decided, and what is still outstanding.

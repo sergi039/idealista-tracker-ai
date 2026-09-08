@@ -10,3 +10,6 @@
   sample without giving the bridge arbitrary URL or host-file access.
 - Added an unlabeled held-out evaluation manifest so future owner usefulness is
   measured against the old Taste/Similar baseline without decision leakage.
+- Added a CSRF-protected Recommendations refresh action that rebuilds the
+  owner-evidence profile once and reranks prepared listings in code, with
+  distinct dirty, queued/running and failed status messages.

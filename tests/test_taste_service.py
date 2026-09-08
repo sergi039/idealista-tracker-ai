@@ -187,6 +187,38 @@ class TestProfileLedger:
         db.session.commit()
         assert taste_service.load_current_profile() is None
 
+    def test_recommendation_refresh_builds_one_profile_and_no_listing_scores(self, app):
+        expected = {"status": "ok", "data": {"version": 8}}
+        with (
+            patch.object(
+                taste_service, "build_profile", return_value=expected
+            ) as build_profile,
+            patch.object(
+                taste_service,
+                "_rescore_pending_locked",
+                side_effect=AssertionError("refresh bought a listing score"),
+            ),
+            patch.object(
+                taste_service,
+                "score_batch",
+                side_effect=AssertionError("refresh bought a listing score"),
+            ),
+        ):
+            assert taste_service.refresh_recommendations() == expected
+
+        build_profile.assert_called_once_with(provider="claude")
+
+    def test_recommendation_refresh_shares_the_taste_single_flight(self, app):
+        assert taste_service._RESCORE_LOCK.acquire(blocking=False)
+        try:
+            with patch.object(taste_service, "build_profile") as build_profile:
+                outcome = taste_service.refresh_recommendations()
+        finally:
+            taste_service._RESCORE_LOCK.release()
+
+        assert outcome["status"] == "busy"
+        build_profile.assert_not_called()
+
 
 class TestScoringABatch:
     def _built_profile(self, profile_row):

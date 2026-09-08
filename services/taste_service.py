@@ -58,7 +58,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import case, false, or_
 
 from config import Config
-from models import Property, TasteProfile, db
+from models import BackgroundJob, Property, TasteProfile, db
 from services import subscription_transport
 from services import taste_descriptors, taste_preferences
 from services.enrichment_write import check_writable, locked_write
@@ -759,23 +759,92 @@ def recommendation_profile_state(
     """Current/dirty/none reading for the deterministic recommender."""
     if profile_data is None:
         profile_data = load_current_profile()
+    current_signals = collect_signals()
+    latest_refresh = (
+        BackgroundJob.query.filter_by(dedupe_key="taste_recommendation_refresh")
+        .order_by(BackgroundJob.created_at.desc(), BackgroundJob.id.desc())
+        .first()
+    )
+
+    def refresh_state(state: str, built_at: Any = None) -> str:
+        if state == "current" or latest_refresh is None:
+            return state
+        if latest_refresh.status in {"queued", "running"}:
+            return "pending"
+        result = (
+            latest_refresh.result if isinstance(latest_refresh.result, dict) else {}
+        )
+        failed = latest_refresh.status in {"error", "interrupted"} or (
+            latest_refresh.status == "success" and result.get("success") is False
+        )
+        if not failed:
+            return state
+        try:
+            built_at_value = (
+                built_at
+                if isinstance(built_at, datetime)
+                else datetime.fromisoformat(built_at)
+                if built_at
+                else None
+            )
+        except (TypeError, ValueError):
+            built_at_value = None
+        refresh_finished_at = latest_refresh.finished_at or latest_refresh.created_at
+        if refresh_finished_at is not None and built_at_value is not None:
+            # PostgreSQL may return an aware value while the insert-only
+            # profile ledger stores a naive UTC datetime. They still describe
+            # the same clock, so compare their UTC wall values rather than
+            # letting a status badge raise TypeError.
+            refresh_finished_at = refresh_finished_at.replace(tzinfo=None)
+            built_at_value = built_at_value.replace(tzinfo=None)
+        if built_at_value is None or (
+            refresh_finished_at is not None and refresh_finished_at >= built_at_value
+        ):
+            return "failed"
+        return state
+
     if profile_data is None:
-        return {"state": "none", "version": None}
+        clauses = taste_preferences.compile_signals(current_signals)
+        return {
+            "state": refresh_state("none"),
+            "version": None,
+            "signal_count": len(current_signals),
+            "usable_signal_count": sum(
+                1 for signal in current_signals if signal["usable"]
+            ),
+            "positive_reference_count": sum(
+                1 for signal in current_signals if signal.get("positive_anchor")
+            ),
+            "mapped_clause_count": sum(
+                1 for clause in clauses if clause.get("mapping_state") == "executable"
+            ),
+            "unapplied_clause_count": sum(
+                1 for clause in clauses if clause.get("mapping_state") != "executable"
+            ),
+        }
     source = profile_data.get("source") if isinstance(profile_data, dict) else None
     if not isinstance(source, dict) or source.get("recommendation_schema_version") != 1:
+        usable_signal_count = sum(
+            1 for signal in current_signals if signal.get("usable")
+        )
         return {
-            "state": "dirty",
+            "state": refresh_state("dirty", profile_data.get("built_at")),
             "version": profile_data.get("version"),
             "reason": "legacy_profile",
+            "usable_signal_count": usable_signal_count,
         }
-    current = signals_fingerprint(collect_signals())
+    current = signals_fingerprint(current_signals)
     state = "current" if current == profile_data.get("signals_fingerprint") else "dirty"
+    state = refresh_state(state, profile_data.get("built_at"))
     clauses = source.get("clauses") if isinstance(source.get("clauses"), list) else []
     return {
         "state": state,
         "version": profile_data.get("version"),
         "built_at": profile_data.get("built_at"),
         "signal_count": len(source.get("signals") or []),
+        "usable_signal_count": sum(
+            1 for signal in current_signals if signal.get("usable")
+        ),
         "positive_reference_count": len(source.get("positive_reference_ids") or []),
         "mapped_clause_count": sum(
             1 for clause in clauses if clause.get("mapping_state") == "executable"
@@ -1099,6 +1168,25 @@ def score_property(
 # (the implementation review's two-thread reproduction). Non-blocking: the
 # loser reports `busy` instead of queueing a second spend.
 _RESCORE_LOCK = threading.Lock()
+
+
+def refresh_recommendations(provider: str = "claude") -> Dict[str, Any]:
+    """Rebuild recommendation evidence without legacy per-listing rescoring.
+
+    Prepared descriptors are reranked in code on the next request.  Sharing
+    the legacy pipeline lock prevents this one profile call from racing either
+    the attended full retrain or the scheduled legacy rescore into duplicate
+    subscription spend.
+    """
+    if not _RESCORE_LOCK.acquire(blocking=False):
+        return {
+            "status": "busy",
+            "error": "another taste refresh is already running in this process",
+        }
+    try:
+        return build_profile(provider=provider)
+    finally:
+        _RESCORE_LOCK.release()
 
 
 def retrain_and_rescore(provider: str = "claude") -> Dict[str, Any]:

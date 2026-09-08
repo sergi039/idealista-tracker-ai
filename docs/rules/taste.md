@@ -170,6 +170,14 @@ the basis, and inserts only if it still matches; a late star, reason or
 reference-fact change discards the answer. Legacy profiles and stale snapshots
 remain readable but are labeled dirty.
 
+After a favorite or review reason changes, the Recommendations page exposes a
+separate refresh action. It runs one bounded profile build under the existing
+taste single-flight lock; prepared candidate descriptors are reranked in code
+on the next read, without legacy per-listing score calls. The established
+Retrain taste action remains the explicit path that also rebuilds legacy Taste
+scores. Queued/running, failed and dirty states are named separately so a dirty
+profile is never presented as if a refresh had already started.
+
 Visual extraction is explicit and bounded. `services/visual_input.py` accepts
 only hash-verified local raster attachments, exact approved portal image hosts,
 or the exact property dossier host; redirects, credentials, query strings,
