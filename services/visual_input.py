@@ -182,6 +182,8 @@ def dossier_photo_sources(
         parts.scheme != "https"
         or parts.hostname != expected_host
         or not _default_https_port(parts)
+        or parts.username is not None
+        or parts.password is not None
         or parts.query
         or parts.fragment
     ):
@@ -220,6 +222,8 @@ def dossier_photo_sources(
             image.scheme == "https"
             and image.hostname == expected_host
             and _default_https_port(image)
+            and image.username is None
+            and image.password is None
             and not image.query
             and not image.fragment
         ):
@@ -331,6 +335,8 @@ def download_photo_source(
             or parts.scheme != "https"
             or parts.hostname != f"{matched.group(1)}.cervantes50.com"
             or not _default_https_port(parts)
+            or parts.username is not None
+            or parts.password is not None
             or parts.query
             or parts.fragment
         ):

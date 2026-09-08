@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import sys
 from typing import Sequence
+
+from utils.inflight import inflight
 
 
 PROMPT = """Describe only visible real-estate appearance evidence in the attached photos.
@@ -63,64 +66,102 @@ def run(argv: Sequence[str] | None = None) -> int:
         missing = sorted(set(args.ids) - found)
         if missing:
             raise SystemExit(f"property ids not found: {missing}")
-        for prop in rows:
-            images = visual_input.download_portal_photo_inputs(
-                prop, max_images=min(args.max_images, visual_input.MAX_IMAGES)
+        marker = (
+            inflight(
+                "extract_visual_descriptors",
+                resumable=True,
+                argv=list(argv) if argv is not None else None,
             )
-            if not images:
-                images = visual_input.download_dossier_photo_inputs(
+            if args.apply
+            else nullcontext()
+        )
+        with marker:
+            for prop in rows:
+                images = visual_input.download_portal_photo_inputs(
                     prop, max_images=min(args.max_images, visual_input.MAX_IMAGES)
                 )
-            if not images:
+                if not images:
+                    images = visual_input.download_dossier_photo_inputs(
+                        prop, max_images=min(args.max_images, visual_input.MAX_IMAGES)
+                    )
+                if not images:
+                    print(
+                        f"{prop.id}: skipped (no eligible photo input from captured "
+                        "portal metadata or the stored dossier)"
+                    )
+                    continue
+                envelope = visual_input.build_visual_input(images)
+                property_fingerprint = taste_descriptors.input_fingerprint(prop)
                 print(
-                    f"{prop.id}: skipped (no eligible photo input from captured "
-                    "portal metadata or the stored dossier)"
+                    f"{prop.id}: {len(images)} image(s), "
+                    f"input={envelope['input_fingerprint'][:12]}, "
+                    f"property={property_fingerprint[:12]}"
                 )
-                continue
-            envelope = visual_input.build_visual_input(images)
-            property_fingerprint = taste_descriptors.input_fingerprint(prop)
-            print(
-                f"{prop.id}: {len(images)} image(s), input={envelope['input_fingerprint'][:12]}, "
-                f"property={property_fingerprint[:12]}"
-            )
-            if not args.apply:
-                continue
-            if calls >= args.max_calls:
-                print(f"{prop.id}: not called (max calls reached)")
-                continue
-            calls += 1
-            extracted = visual_input.extract_visual_observations(PROMPT, images)
+                existing = (
+                    prop.taste.get("visual_descriptor")
+                    if isinstance(prop.taste, dict)
+                    else None
+                )
+                current = (
+                    isinstance(existing, dict)
+                    and existing.get("schema_version") == 1
+                    and existing.get("property_fingerprint") == property_fingerprint
+                    and existing.get("input_fingerprint")
+                    == envelope["input_fingerprint"]
+                )
+                if current:
+                    try:
+                        visual_input.validate_visual_observations(existing, images)
+                    except visual_input.VisualInputError:
+                        current = False
+                if current:
+                    print(f"{prop.id}: skipped (visual descriptor inputs unchanged)")
+                    continue
+                if not args.apply:
+                    continue
+                if calls >= args.max_calls:
+                    print(f"{prop.id}: not called (max calls reached)")
+                    continue
+                calls += 1
+                extracted = visual_input.extract_visual_observations(PROMPT, images)
 
-            # No database lock is held over either the download or model call.
-            # Lock only for the final freshness check and small JSON write.
-            current = (
-                Property.query.filter_by(id=prop.id)
-                .populate_existing()
-                .with_for_update()
-                .one()
-            )
-            if taste_descriptors.input_fingerprint(current) != property_fingerprint:
-                db.session.rollback()
+                # No database lock is held over either the download or model call.
+                # Lock only for the final freshness check and small JSON write.
+                current_prop = (
+                    Property.query.filter_by(id=prop.id)
+                    .populate_existing()
+                    .with_for_update()
+                    .one()
+                )
+                if (
+                    taste_descriptors.input_fingerprint(current_prop)
+                    != property_fingerprint
+                ):
+                    db.session.rollback()
+                    print(
+                        f"{prop.id}: discarded (property inputs changed during "
+                        "extraction)"
+                    )
+                    continue
+                if extracted["input_fingerprint"] != envelope["input_fingerprint"]:
+                    db.session.rollback()
+                    print(
+                        f"{prop.id}: discarded (image inputs changed during extraction)"
+                    )
+                    continue
+                taste = dict(current_prop.taste or {})
+                persisted = dict(extracted)
+                persisted["property_fingerprint"] = property_fingerprint
+                taste["visual_descriptor"] = persisted
+                current_prop.taste = taste
+                from sqlalchemy.orm.attributes import flag_modified
+
+                flag_modified(current_prop, "taste")
+                db.session.commit()
                 print(
-                    f"{prop.id}: discarded (property inputs changed during extraction)"
+                    f"{prop.id}: stored "
+                    f"{len(extracted['visual_observations'])} observation(s)"
                 )
-                continue
-            if extracted["input_fingerprint"] != envelope["input_fingerprint"]:
-                db.session.rollback()
-                print(f"{prop.id}: discarded (image inputs changed during extraction)")
-                continue
-            taste = dict(current.taste or {})
-            persisted = dict(extracted)
-            persisted["property_fingerprint"] = property_fingerprint
-            taste["visual_descriptor"] = persisted
-            current.taste = taste
-            from sqlalchemy.orm.attributes import flag_modified
-
-            flag_modified(current, "taste")
-            db.session.commit()
-            print(
-                f"{prop.id}: stored {len(extracted['visual_observations'])} observation(s)"
-            )
     return 0
 
 

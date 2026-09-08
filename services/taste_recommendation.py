@@ -236,13 +236,14 @@ def _reading(
     descriptor: dict[str, Any],
     clauses: list[dict[str, Any]],
     descriptors: dict[str, Any],
+    state_reference_ids: list[int],
     reference_ids: list[int],
     profile_state: str,
     similarity_reading: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     property_id = prop.id
     if (
-        property_id in reference_ids
+        property_id in state_reference_ids
         and getattr(prop, "owner_verdict", None) != "rejected"
     ):
         state = "reference"
@@ -413,11 +414,22 @@ def build_context(
     source = _dict(profile_data.get("source"))
     clauses = source.get("clauses") if isinstance(source.get("clauses"), list) else []
     descriptors = _dict(source.get("descriptors"))
-    reference_ids = [
+    state_reference_ids = [
         value
         for value in source.get("positive_reference_ids", [])
         if isinstance(value, int)
     ]
+    references_by_profile: dict[int | None, list[int]] = {}
+    for signal in source.get("signals") or []:
+        if not isinstance(signal, dict):
+            continue
+        reference_id = signal.get("property_id")
+        if not isinstance(reference_id, int) or reference_id not in state_reference_ids:
+            continue
+        profile_id = signal.get("profile_id")
+        if profile_id is not None and not isinstance(profile_id, int):
+            continue
+        references_by_profile.setdefault(profile_id, []).append(reference_id)
     readings = {}
     for prop in rows:
         taste = _dict(getattr(prop, "taste", None))
@@ -432,7 +444,10 @@ def build_context(
             descriptor=descriptor,
             clauses=clauses,
             descriptors=descriptors,
-            reference_ids=reference_ids,
+            state_reference_ids=state_reference_ids,
+            reference_ids=references_by_profile.get(
+                getattr(prop, "search_profile_id", None), []
+            ),
             profile_state=profile_summary.get("state", "none"),
             similarity_reading=(
                 similarity_ctx.read(prop.id) if similarity_ctx is not None else None

@@ -114,6 +114,19 @@ def test_dossier_sources_require_default_https_port():
     assert visual_input.dossier_photo_sources(prop, session=_Session(_Response())) == []
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://user@969.cervantes50.com/",
+        "https://user:password@969.cervantes50.com/",
+    ],
+)
+def test_dossier_sources_refuse_url_credentials(url):
+    prop = SimpleNamespace(id=969, enrichment={"dossier": {"url": url}})
+
+    assert visual_input.dossier_photo_sources(prop, session=_Session(_Response())) == []
+
+
 def test_download_photo_source_streams_with_no_redirect_and_hashes_bytes():
     response = _Response(headers={"Content-Length": str(len(JPEG))})
     session = _Session(response)
@@ -131,6 +144,22 @@ def test_download_photo_source_streams_with_no_redirect_and_hashes_bytes():
     assert session.calls[0][1]["stream"] is True
     assert session.calls[0][1]["allow_redirects"] is False
     assert response.closed is True
+
+
+def test_download_dossier_source_refuses_url_credentials_before_network():
+    session = _Session(_Response())
+
+    with pytest.raises(visual_input.VisualInputError, match="exact-host"):
+        visual_input.download_photo_source(
+            {
+                "source_kind": "dossier_photo",
+                "source_id": "property:969:dossier:0",
+                "url": "https://user:password@969.cervantes50.com/front.jpg",
+            },
+            session=session,
+        )
+
+    assert session.calls == []
 
 
 def test_download_photo_source_refuses_an_oversized_stream_before_it_grows():

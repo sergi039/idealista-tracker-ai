@@ -409,11 +409,24 @@ class _SimilarityReadings:
         return self._readings.get(property_id, {"score": None})
 
 
-def _recommendation_profile(reference_ids, *, clauses=None, descriptors=None):
+def _recommendation_profile(
+    reference_ids, *, clauses=None, descriptors=None, reference_profile_ids=None
+):
+    reference_profile_ids = reference_profile_ids or {
+        reference_id: 1 for reference_id in reference_ids
+    }
     return {
         "source": {
             "recommendation_schema_version": 1,
             "positive_reference_ids": reference_ids,
+            "signals": [
+                {
+                    "property_id": reference_id,
+                    "profile_id": reference_profile_ids[reference_id],
+                    "positive_anchor": True,
+                }
+                for reference_id in reference_ids
+            ],
             "clauses": clauses or [],
             "descriptors": descriptors or {},
         }
@@ -854,6 +867,120 @@ def test_similarity_score_from_a_nonpositive_reference_is_ignored(app):
     reading = context.readings[candidate.id]
     assert reading["nearest_positive_reference"] is None
     assert reading["rank_value"] == 2000.0
+
+
+def test_candidate_cannot_borrow_a_foreign_profile_visual_or_numeric_reference(app):
+    local_profile = _profile("Local")
+    foreign_profile = _profile("Foreign")
+    local_reference = _property(
+        local_profile,
+        title="local reference",
+        is_favorite=True,
+        owner_verdict="interested",
+    )
+    foreign_reference = _property(
+        foreign_profile,
+        title="foreign reference",
+        is_favorite=True,
+        owner_verdict="interested",
+    )
+    candidate = _property(local_profile, title="local candidate")
+    candidate.taste = {
+        "visual_descriptor": _visual_descriptor(
+            candidate,
+            [
+                {
+                    "aspect_id": "house_character",
+                    "value": "old_farmhouse",
+                    "status": "claimed",
+                    "evidence": {
+                        "source_kind": "photo",
+                        "source_id": "candidate:foreign-match",
+                        "image_sha256": "a" * 64,
+                        "image_index": 0,
+                    },
+                    "confidence": 0.7,
+                    "limitation": "Exterior facade only.",
+                }
+            ],
+        )
+    }
+    db.session.commit()
+
+    context = taste_recommendation.build_context(
+        [local_reference, foreign_reference, candidate],
+        _recommendation_profile(
+            [local_reference.id, foreign_reference.id],
+            reference_profile_ids={
+                local_reference.id: local_profile.id,
+                foreign_reference.id: foreign_profile.id,
+            },
+            descriptors={
+                str(local_reference.id): {
+                    "aspects": {"house_character": [_photo_aspect("rural_house")]}
+                },
+                str(foreign_reference.id): {
+                    "aspects": {"house_character": [_photo_aspect("old_farmhouse")]}
+                },
+            },
+        ),
+        {"state": "current"},
+        similarity_ctx=_SimilarityReadings(
+            {candidate.id: {"reference_id": foreign_reference.id, "score": 99.9}}
+        ),
+    )
+
+    reading = context.readings[candidate.id]
+    assert context.readings[foreign_reference.id]["state"] == "reference"
+    assert reading["nearest_positive_reference"] is None
+    assert reading["rank_value"] == 2000.0
+
+
+def test_explicit_global_clause_still_applies_across_reference_profiles(app):
+    foreign_profile = _profile("Foreign")
+    local_profile = _profile("Local")
+    source = _property(
+        foreign_profile,
+        title="global rule source",
+        is_favorite=True,
+        owner_verdict="interested",
+    )
+    candidate = _property(local_profile, title="known global violation")
+    profile_data = _recommendation_profile(
+        [source.id],
+        reference_profile_ids={source.id: foreign_profile.id},
+        clauses=[
+            {
+                "mapping_state": "executable",
+                "aspect_id": "plot_outline",
+                "source_property_id": source.id,
+                "source_profile_id": foreign_profile.id,
+                "scope": "global",
+                "polarity": "avoid",
+                "strength": "hard",
+            }
+        ],
+        descriptors={
+            str(source.id): {
+                "aspects": {"plot_outline": [{"value": "notched", "status": "claimed"}]}
+            }
+        },
+    )
+
+    with patch.object(
+        taste_recommendation.taste_descriptors,
+        "build_descriptor",
+        return_value={
+            "aspects": {"plot_outline": [{"value": "notched", "status": "supported"}]}
+        },
+    ):
+        context = taste_recommendation.build_context(
+            [candidate], profile_data, {"state": "current"}
+        )
+
+    reading = context.readings[candidate.id]
+    assert reading["eligibility"] == "excluded"
+    assert reading["nearest_positive_reference"] is None
 
 
 def test_visual_winner_keeps_the_independent_numeric_rank_channel(app):

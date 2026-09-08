@@ -180,7 +180,9 @@ payloads are refused until its local attachment route is proven. A photo cannot
 support parcel boundaries, exact dimensions, legal status, or absence outside
 the frame. `utils/extract_visual_descriptors.py` is dry-run first, requires
 explicit ids and row/image/call caps, and discards a result whose property or
-image fingerprint moved before the final locked write.
+image fingerprint moved before the final locked write. Exact property and image
+fingerprints also leave a completed row out of later model calls; per-row commits
+make that bounded scope honestly resumable under the shared in-flight marker.
 
 `services/taste_evaluation.py` builds an unlabeled held-out manifest. It removes
 learning rows, favorites, recorded verdict/activity and duplicate stored entity

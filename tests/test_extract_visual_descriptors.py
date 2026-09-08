@@ -1,6 +1,7 @@
 """The explicit visual CLI discards an extraction superseded by a row update."""
 
 import base64
+from contextlib import contextmanager
 import hashlib
 
 import pytest
@@ -8,7 +9,7 @@ import pytest
 import app as app_module
 from app import create_app, db
 from models import Property, SearchProfile
-from services import visual_input
+from services import taste_descriptors, visual_input
 from tests import setup_test_environment
 from utils import extract_visual_descriptors
 
@@ -38,9 +39,20 @@ def _image():
     }
 
 
+def _without_real_marker(monkeypatch, seen=None):
+    @contextmanager
+    def marker(name, **kwargs):
+        if seen is not None:
+            seen.append((name, kwargs))
+        yield
+
+    monkeypatch.setattr(extract_visual_descriptors, "inflight", marker)
+
+
 def test_apply_discards_a_visual_result_after_the_property_changes(
     app, monkeypatch, capsys
 ):
+    _without_real_marker(monkeypatch)
     profile = SearchProfile(name="Galicia", is_active=True)
     db.session.add(profile)
     db.session.commit()
@@ -99,3 +111,80 @@ def test_apply_discards_a_visual_result_after_the_property_changes(
         "discarded (property inputs changed during extraction)"
         in capsys.readouterr().out
     )
+
+
+def test_apply_skips_an_unchanged_valid_visual_descriptor_without_another_call(
+    app, monkeypatch, capsys
+):
+    markers = []
+    _without_real_marker(monkeypatch, markers)
+    profile = SearchProfile(name="Galicia", is_active=True)
+    db.session.add(profile)
+    db.session.commit()
+    prop = Property(
+        source_email_id="visual-cli:unchanged",
+        title="Already extracted",
+        search_profile_id=profile.id,
+        area=120,
+    )
+    db.session.add(prop)
+    db.session.commit()
+    image = _image()
+    envelope = visual_input.build_visual_input([image])
+    prop.taste = {
+        "visual_descriptor": {
+            **envelope,
+            "property_fingerprint": taste_descriptors.input_fingerprint(prop),
+        }
+    }
+    db.session.commit()
+
+    monkeypatch.setattr(
+        visual_input,
+        "download_portal_photo_inputs",
+        lambda *_args, **_kwargs: [image],
+    )
+    monkeypatch.setattr(app_module, "create_app", lambda: app)
+    monkeypatch.setattr(
+        visual_input,
+        "extract_visual_observations",
+        lambda *_args, **_kwargs: pytest.fail("unchanged input repaid the model call"),
+    )
+
+    assert (
+        extract_visual_descriptors.run(
+            [
+                "--ids",
+                str(prop.id),
+                "--apply",
+                "--max-rows",
+                "1",
+                "--max-images",
+                "1",
+                "--max-calls",
+                "1",
+            ]
+        )
+        == 0
+    )
+
+    assert markers == [
+        (
+            "extract_visual_descriptors",
+            {
+                "resumable": True,
+                "argv": [
+                    "--ids",
+                    str(prop.id),
+                    "--apply",
+                    "--max-rows",
+                    "1",
+                    "--max-images",
+                    "1",
+                    "--max-calls",
+                    "1",
+                ],
+            },
+        )
+    ]
+    assert "skipped (visual descriptor inputs unchanged)" in capsys.readouterr().out
