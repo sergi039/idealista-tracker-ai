@@ -146,6 +146,46 @@ def complete(
     return result
 
 
+def complete_with_images(
+    prompt: str,
+    *,
+    images: List[Dict[str, Any]],
+    provider: str = "codex",
+    system: str = "",
+    model: str = "",
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    schema: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Run an explicitly opt-in visual completion through the cold bridge.
+
+    ``complete`` remains text-only.  The only accepted visual values are the
+    typed, hash-bound byte payloads made by ``services.visual_input``; the
+    bridge independently validates them before it creates private temporary
+    image files for Codex.  Claude has no proven local-image route and is
+    deliberately refused at the bridge rather than receiving a path-shaped
+    ``--file`` argument with different semantics.
+    """
+    if not isinstance(images, list) or not images:
+        raise SubscriptionTransportError("visual completion requires image inputs")
+    result = _post(
+        "/v1/complete",
+        {
+            "provider": provider,
+            "prompt": prompt,
+            "system": system,
+            "model": model,
+            "timeout": timeout,
+            "schema": schema,
+            "images": images,
+        },
+        timeout,
+    )
+    text = str(result.get("text") or "")
+    if not text.strip():
+        raise SubscriptionTransportError(f"{provider} returned an empty completion")
+    return result
+
+
 def health() -> Dict[str, Any]:
     """Report whether the bridge is up and which CLIs it can see."""
     base = (Config.AI_BRIDGE_URL or "").rstrip("/")

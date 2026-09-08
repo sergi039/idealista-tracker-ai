@@ -2537,6 +2537,40 @@ def test_025_route_profile_actually_runs_on_postgres(postgres_url, monkeypatch):
         _db.session.remove()
 
 
+def test_empty_recommendation_sort_actually_runs_on_postgres(postgres_url, monkeypatch):
+    """A zero-result recommendation route must keep a valid ORDER BY on PG."""
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+    finally:
+        engine.dispose()
+
+    from tests import setup_test_environment
+
+    setup_test_environment()
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    from config import Config as _Config
+
+    monkeypatch.setattr(_Config, "DATABASE_URL", postgres_url)
+    monkeypatch.setattr(_Config, "SQLALCHEMY_DATABASE_URI", postgres_url, raising=False)
+
+    from app import create_app, db as _db
+
+    application = create_app()
+    application.config["TESTING"] = True
+    with application.app_context():
+        assert _db.session.get_bind().dialect.name == "postgresql"
+        response = application.test_client().get(
+            "/properties?profile_id=all&mode=recommendation&sort=recommendation"
+            "&search=definitely-no-such-property"
+        )
+        assert response.status_code == 200
+        assert b"An error occurred while loading properties" not in response.data
+        _db.session.remove()
+
+
 def test_025_nan_is_refused_and_never_reads_as_a_measurement(postgres_url, monkeypatch):
     """PostgreSQL's `NUMERIC 'NaN'` sorts ABOVE every number.
 

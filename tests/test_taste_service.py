@@ -17,7 +17,7 @@ import pytest
 
 from app import create_app, db
 from models import Property, SearchProfile, TasteProfile
-from services import subscription_transport, taste_service
+from services import subscription_transport, taste_preferences, taste_service
 from tests import setup_test_environment
 
 
@@ -128,6 +128,14 @@ class TestProfileLedger:
         current = taste_service.load_current_profile()
         assert current["version"] == second["data"]["version"]
         assert current["source"]["signals"][0]["property_id"] == ref.id
+        assert (
+            current["source"]["recommendation_schema_version"]
+            == taste_service.RECOMMENDATION_SCHEMA_VERSION
+        )
+        assert (
+            current["source"]["preference_compiler_schema_version"]
+            == taste_preferences.SCHEMA_VERSION
+        )
         # Two positive examples cannot establish aversions; the profile says
         # it is provisional where every reader will see it.
         assert current["source"]["provisional"] is True
@@ -186,6 +194,38 @@ class TestProfileLedger:
         )
         db.session.commit()
         assert taste_service.load_current_profile() is None
+
+    def test_recommendation_refresh_builds_one_profile_and_no_listing_scores(self, app):
+        expected = {"status": "ok", "data": {"version": 8}}
+        with (
+            patch.object(
+                taste_service, "build_profile", return_value=expected
+            ) as build_profile,
+            patch.object(
+                taste_service,
+                "_rescore_pending_locked",
+                side_effect=AssertionError("refresh bought a listing score"),
+            ),
+            patch.object(
+                taste_service,
+                "score_batch",
+                side_effect=AssertionError("refresh bought a listing score"),
+            ),
+        ):
+            assert taste_service.refresh_recommendations() == expected
+
+        build_profile.assert_called_once_with(provider="claude")
+
+    def test_recommendation_refresh_shares_the_taste_single_flight(self, app):
+        assert taste_service._RESCORE_LOCK.acquire(blocking=False)
+        try:
+            with patch.object(taste_service, "build_profile") as build_profile:
+                outcome = taste_service.refresh_recommendations()
+        finally:
+            taste_service._RESCORE_LOCK.release()
+
+        assert outcome["status"] == "busy"
+        build_profile.assert_not_called()
 
 
 class TestScoringABatch:

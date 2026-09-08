@@ -127,3 +127,81 @@ re-fingerprint all 1764 rows and re-spend the owner's bridge credit over the
 whole table to disclose a fact 6 of them carry — the one place in this module
 where #98's rule is deliberately not applied, written down so it reads as a
 decision rather than an oversight.
+
+## Source-typed recommendations (2026-09-08)
+
+The recommendation shown on `/properties` now uses one descriptor for a
+starred reference and a candidate. `services/taste_descriptors.py` is the
+canonical reader: a value records its aspect, value, source, input fingerprint
+and one of `supported`, `claimed`, `unknown` or `conflicting`. The ordinary
+plot column, dossier/research plot claims and cadastral geometry remain separate
+observations. A material disagreement stays a conflict. `sea_view_service` is
+the only sea-view reading, including the scalar string form stored under
+`environment`; missing or unknown never becomes `no`.
+
+Stars name positive references in the current search objective. A reasonless
+star contributes no invented traits, and a current rejection overrides a star
+as an anchor while leaving the historical signals intact. Review reasons are
+compiled by `services/taste_preferences.py` into source-attributed clauses.
+Every clause is executable, explicitly unmapped, or carries an unresolved
+condition. Profile-local rules do not cross search objectives. Cross-profile
+scope requires explicit universal language; the notched/L-shaped parcel rule
+qualifies by its words, not by a property id. A tolerated defect on one positive
+reference is a local tradeoff, and the ambiguous “за 300” phrase supplies no
+numeric budget predicate or penalty.
+
+`services/taste_recommendation.py` reranks prepared descriptors in code and
+never calls the subscription bridge. Fit and coverage are separate. Only an
+applicable supported measurement can enforce an explicit hard conflict; a
+claim is potential evidence, an unknown asks for verification, and an unmapped
+clause stays visible. A confirmed hard violation is omitted only from the
+recommendation mode, with a disclosed count; the row remains available in the
+other modes. Numeric Similar and canonical photo-facet overlap are independent
+ranking channels. The composite nearest positive reference names the photo
+facets it shares without presenting exemplar resemblance as an explicit owner
+preference or as supported coverage. Current rejections are kept as history and
+are not offered as candidates.
+
+The insert-only `taste_profile` ledger remains the storage boundary. Its source
+snapshot now also carries favorites, descriptors, clauses and their complete
+basis fingerprint. Model work happens without database locks. Publication then
+locks existing property rows in id order for one short transaction, recomputes
+the basis, and inserts only if it still matches; a late star, reason or
+reference-fact change discards the answer. Legacy profiles and stale snapshots
+remain readable but are labeled dirty.
+
+After a favorite or review reason changes, the Recommendations page exposes a
+separate refresh action. It runs one bounded profile build under the existing
+taste single-flight lock; prepared candidate descriptors are reranked in code
+on the next read, without legacy per-listing score calls. The established
+Retrain taste action remains the explicit path that also rebuilds legacy Taste
+scores. Queued/running, failed and dirty states are named separately so a dirty
+profile is never presented as if a refresh had already started.
+
+Visual extraction is explicit and bounded. `services/visual_input.py` accepts
+only hash-verified local raster attachments, exact approved portal image hosts,
+or the exact property dossier host; redirects, credentials, query strings,
+oversized bytes and oversized pixel dimensions are refused. The authenticated
+bridge receives bytes rather than paths or URLs, creates private temporary
+files for a Codex image call, and removes them after the call. Claude image
+payloads are refused until its local attachment route is proven. A photo cannot
+support parcel boundaries, exact dimensions, legal status, or absence outside
+the frame. `utils/extract_visual_descriptors.py` is dry-run first, requires
+explicit ids and row/image/call caps, and discards a result whose property or
+image fingerprint moved before the final locked write. Exact property and image
+fingerprints also leave a completed row out of later model calls; per-row commits
+make that bounded scope honestly resumable under the shared in-flight marker.
+
+`services/taste_evaluation.py` builds an unlabeled held-out manifest. It removes
+learning rows, favorites, recorded verdict/activity and duplicate stored entity
+identities, freezes descriptor fingerprints, and keeps the old Taste/Similar
+baseline beside the new ordering. “No recorded activity” is not presented as
+proof the owner never saw a listing. Owner utility remains `not_measured` until
+blind ratings are collected without feeding those labels back into the profile.
+
+The recommendation mode currently builds descriptors for the full filtered
+candidate set before pagination, and the page-state path separately reads the
+current signal basis. The isolated four-row artifact rendered in about 0.17 s;
+production-scale request cost has not been profiled. Reusing that request-local
+basis is a performance follow-up if measurement shows it matters, without
+changing ranking or freshness semantics.

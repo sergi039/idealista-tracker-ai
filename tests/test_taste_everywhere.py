@@ -10,12 +10,13 @@ that retrains AND re-scores; and the daily auto-score is capped, visible-
 scope only, and dormant without a profile.
 """
 
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
 
 from app import create_app, db
-from models import Property, SearchProfile, TasteProfile
+from models import BackgroundJob, Property, SearchProfile, TasteProfile
 from services import taste_service
 from tests import setup_test_environment
 
@@ -197,6 +198,100 @@ class TestRetrain:
         _ledger()
         html = client.get("/properties").data.decode()
         assert "Retrain taste" in html
+
+    def test_recommendation_refresh_is_one_singleton_profile_job_without_rescore(
+        self, client, app
+    ):
+        captured = {}
+
+        def _fake_enqueue(fn, *, job_type, meta=None, app=None, dedupe_key=None):
+            captured["job_type"] = job_type
+            captured["dedupe_key"] = dedupe_key
+            captured["result"] = fn()
+            return "job-recommendation-123"
+
+        with (
+            patch("services.background_jobs.enqueue_job", side_effect=_fake_enqueue),
+            patch.object(
+                taste_service,
+                "refresh_recommendations",
+                return_value={"status": "ok", "data": {"version": 2}},
+            ) as refresh,
+            patch.object(
+                taste_service,
+                "retrain_and_rescore",
+                side_effect=AssertionError("recommendation refresh ran legacy rescore"),
+            ),
+        ):
+            response = client.post("/properties/taste/recommendations/refresh")
+
+        assert response.status_code == 302
+        assert response.location.endswith(
+            "/properties?mode=recommendation&sort=recommendation"
+        )
+        assert captured == {
+            "job_type": "taste_recommendation_refresh",
+            "dedupe_key": "taste_recommendation_refresh",
+            "result": {"success": True, "status": "ok", "data": {"version": 2}},
+        }
+        refresh.assert_called_once_with()
+
+    def test_recommendation_refresh_rejects_a_post_without_csrf(self, client, app):
+        app.config["WTF_CSRF_ENABLED"] = True
+
+        with patch("services.background_jobs.enqueue_job") as enqueue:
+            response = client.post("/properties/taste/recommendations/refresh")
+
+        assert response.status_code == 400
+        enqueue.assert_not_called()
+
+    def test_recommendation_page_distinguishes_dirty_from_queued_refresh(
+        self, client, app
+    ):
+        profile = _profile()
+        _mk(
+            profile.id,
+            owner_verdict="interested",
+            owner_verdict_reason="Нравится участок у моря.",
+        )
+        _ledger()
+
+        dirty_html = client.get(
+            "/properties?mode=recommendation&sort=recommendation"
+        ).data.decode()
+        assert "Recommendations need a refresh" in dirty_html
+        assert 'id="recommendation-refresh-button"' in dirty_html
+        refresh_form = dirty_html[dirty_html.index("taste/recommendations/refresh") :]
+        assert 'name="csrf_token"' in refresh_form
+
+        db.session.add(
+            BackgroundJob(
+                id="recommendation-refresh-job",
+                job_type="taste_recommendation_refresh",
+                dedupe_key="taste_recommendation_refresh",
+                status="queued",
+                meta={},
+            )
+        )
+        db.session.commit()
+
+        pending_html = client.get(
+            "/properties?mode=recommendation&sort=recommendation"
+        ).data.decode()
+        assert "Recommendations are being prepared" in pending_html
+        assert 'id="recommendation-refresh-button"' not in pending_html
+
+        job = db.session.get(BackgroundJob, "recommendation-refresh-job")
+        job.status = "error"
+        job.error = "dummy bridge refused the request"
+        job.finished_at = datetime.now(timezone.utc)
+        db.session.commit()
+
+        failed_html = client.get(
+            "/properties?mode=recommendation&sort=recommendation"
+        ).data.decode()
+        assert "Recommendations could not be refreshed" in failed_html
+        assert 'id="recommendation-refresh-button"' in failed_html
 
 
 class TestRescorePending:
