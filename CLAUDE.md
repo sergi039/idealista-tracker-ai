@@ -73,6 +73,7 @@ pytest tests/ --cov=app --cov-report=html    # coverage report
 - **The "to beach" sort is live** (#271): one `_nearest_beach_minutes` expression shared by list and CSV, NULL without a measurement, so unmeasured rows sort last in either direction.
 - **The page uses the width it has**: above 768px `.container` has no cap, do not reintroduce a ceiling; column widths live in `.col-*` classes, never inline `!important` (`tests/test_tablet_list_layout.py`).
 - **Every control on `/properties` exists exactly once** (owner, 2026-08-09): toolbar (`#subscription-switcher`), filter bar (`#filters-card`, what rows are shown), result row (how the same rows are drawn); a new control goes into one of the three, never a second copy.
+- **The filters are remembered, not reset on every navigation** (owner, 2026-09-11; `utils/listing_filter_memory.py`): the page's own form and links (they carry `mode` and `view_type`) refresh a memory in the session cookie, minus `page`; a bare `/properties` redirects to it, cookie-less it still renders (the deploy check); the Clear button says `remember=forget`, the reveal link says `remember=off`; a cross-page link or hand-typed URL is a visit and changes nothing.
 - **The beaches block is informational, and it must never move a score** (owner, 2026-08-11): `travel["beaches"]` within `BEACH_MAX_DRIVE_MIN`, four statuses, only a measured absence hides the block; the beaches come from `natural=beach` in the presets' Overpass query and contribute nothing to the target tally.
 
 ### Listing status → docs/rules/listing-status.md

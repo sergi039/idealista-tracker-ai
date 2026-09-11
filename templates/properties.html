@@ -1184,7 +1184,10 @@
                         <button type="submit" class="btn btn-primary btn-sm">
                             <i class="fas fa-search me-1"></i>{{ t('apply') }}
                         </button>
-                        <a href="{{ url_for('main.properties') }}" class="btn btn-outline-secondary btn-sm"
+                        {# `remember=forget`: the bare page returns to the last
+                           state chosen here (utils/listing_filter_memory.py),
+                           so clearing has to drop that memory first. #}
+                        <a href="{{ url_for('main.properties', remember='forget') }}" class="btn btn-outline-secondary btn-sm"
                            title="Clear every filter">
                             <i class="fas fa-times me-1"></i>{{ t('clear') }}
                         </a>
