@@ -82,6 +82,7 @@ from utils.listing_filters import (
 from utils.listing_search import interpret_search, listing_search_clause
 from utils.listing_source import source_filter_clause
 from utils.listing_status_scope import resolve_hide_removed
+from utils import listing_filter_memory
 from utils.municipality_grouping import (
     group_key,
     group_municipalities,
@@ -825,6 +826,9 @@ def _listing_reveal_link(prop, search_query):
     args["hide_removed"] = "on" if survives_hide_removed else "off"
     args["search"] = search_query
     args["page"] = 1
+    # One row, not a standing state: shown, and not kept as the filters the
+    # bare page returns to (utils/listing_filter_memory.py).
+    args[listing_filter_memory.REMEMBER_PARAM] = listing_filter_memory.REMEMBER_OFF
     profile_id = (
         prop.search_profile_id
         if prop.search_profile_id is not None
@@ -1581,6 +1585,16 @@ def index():
 def properties():
     """Properties listing -- the working page since issue #105."""
     try:
+        # The last state chosen on this page is remembered in the session
+        # (utils/listing_filter_memory.py): a bare /properties redirects to it,
+        # the Clear button forgets it, and the page's own form and links refresh
+        # it. Decided before anything is loaded, because a redirect renders
+        # nothing.
+        recalled = listing_filter_memory.redirect_query(request.args, session)
+        if recalled is not None:
+            target = url_for("main.properties")
+            return redirect(f"{target}?{recalled}" if recalled else target)
+
         from services.search_profile_service import SearchProfileService
 
         # Default first, so a fresh install's auto-created profile is in the

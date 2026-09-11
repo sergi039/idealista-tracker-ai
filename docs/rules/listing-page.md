@@ -93,3 +93,38 @@ beaches in Asturias *and* in Galicia (where they are named "Praia"), while the
 legacy `tourist_attraction` + `playa` pair returned a fountain, a swimming pool
 and the town itself. Google lists the same beach under several place ids, so
 identical names are collapsed to the nearest one.
+
+## The filters are remembered, not reset on every navigation
+
+Owner, 2026-09-11, verbatim in intent: *"the filters -- housing, house,
+recommendations, and any other -- must be remembered, not reset every time on
+a navigation."* Every filter on `/properties` lives in its query string and
+nowhere else, so every road back onto the page that carries no query string --
+the navbar entry, the "back to properties" button on a listing, the redirect
+after a POST such as the taste retrain -- opened the page on its defaults.
+
+The memory has one home, `utils/listing_filter_memory.py`, and its docstring
+is the long form. The short form:
+
+- **The session cookie is the memory** -- signed, per browser, thirty days.
+  Nothing is stored on the server, there is one memory per browser, and it is
+  the last thing the owner did on the page. It is not a "saved views" feature.
+- **Provenance decides what is remembered**, by the same marker
+  `utils/listing_status_scope.py` reads: the page's own form and every link it
+  draws carry `mode` and `view_type`, so such a request is a choice and is
+  remembered verbatim minus `page`. A cross-page link, a `/municipalities`
+  drill-down or a hand-typed URL carries neither, is a visit, and changes
+  nothing. The reveal link a listing page draws is one of the page's own but
+  names one row, so it says `remember=off`.
+- **A bare `/properties` redirects to the memory**, so the address bar says
+  what the page shows. Without a session it renders as before: the deploy's
+  render check curls it cookie-less and still gets its 200.
+- **The Clear button says `remember=forget`**: it drops the memory and lands
+  on the bare page. It used to lead to the bare page directly, which now leads
+  back to the memory -- a Clear that clears nothing is the first thing to
+  check if this ever regresses.
+- **Bounded and re-parsed**: a state over 2 KB is forgotten rather than
+  truncated, and what comes out of the cookie is re-encoded and checked for the
+  markers before it becomes a redirect, so there is no redirect loop.
+
+Tests: `tests/test_filters_are_remembered.py`.
