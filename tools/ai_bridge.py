@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import base64
 import hashlib
 import shutil
@@ -139,6 +140,79 @@ AUTH_ENV_KEEP = frozenset(
         "CODEX_ACCESS_TOKEN",
     }
 )
+
+# The owner holds two Claude Max accounts, each a Claude Code profile of its
+# own (`~/.claude` and `~/.claude-b`; see the Skills repo's
+# docs/claude-multiprofile.md). The launcher picks the PRIMARY by exporting
+# CLAUDE_CONFIG_DIR (the `claude-b` wrapper resolves it from Desktop B's
+# account at every start), and this list names the profiles to try, in
+# order, when the primary refuses for a reason that is about the ACCOUNT and
+# not about the request: a weekly or usage limit (429), an expired OAuth
+# session, a profile that is not logged in. A refusal about the request
+# itself -- a schema the CLI rejects, a prompt too long, a model the client
+# cannot serve -- is answered from the primary and never re-spent elsewhere.
+# Measured 2026-09-16: profile B on the mini answered "You've hit your weekly
+# limit · resets Sep 18" while profile A on the same machine answered OK, and
+# the only way to use A was a hand-started second bridge. The literal
+# `default` names the CLI's own default profile (CLAUDE_CONFIG_DIR unset).
+CLAUDE_FALLBACK_CONFIG_DIRS_VAR = "AI_BRIDGE_CLAUDE_FALLBACK_CONFIG_DIRS"
+CLAUDE_DEFAULT_PROFILE = "default"
+# The keychain namespace follows CLAUDE_CONFIG_DIR, and the `claude-b` wrapper
+# also pins it explicitly; both must move together or a profile's config
+# would be read against another profile's stored session.
+_CLAUDE_PROFILE_ENV = ("CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+_CLAUDE_ACCOUNT_REFUSAL = re.compile(
+    r"weekly limit|usage limit|rate limit|not logged in|oauth session expired"
+    r"|please run /login",
+    re.IGNORECASE,
+)
+
+
+def _claude_profile_label(config_dir: str | None) -> str:
+    """A name for a profile that is safe to log: its directory, never its token."""
+    return CLAUDE_DEFAULT_PROFILE if config_dir is None else config_dir
+
+
+def _claude_profiles() -> list[str | None]:
+    """The profiles to try, primary first; `None` is the CLI's default profile.
+
+    Read at call time, not import time, so the launcher's environment is what
+    counts and a test can set it after loading the module.
+    """
+    primary = os.environ.get("CLAUDE_CONFIG_DIR") or None
+    profiles: list[str | None] = [primary]
+    for raw in (os.environ.get(CLAUDE_FALLBACK_CONFIG_DIRS_VAR) or "").split(
+        os.pathsep
+    ):
+        entry = raw.strip()
+        if not entry:
+            continue
+        profile = None if entry == CLAUDE_DEFAULT_PROFILE else os.path.expanduser(entry)
+        if profile not in profiles:
+            profiles.append(profile)
+    return profiles
+
+
+def _claude_profile_env(config_dir: str | None) -> dict[str, str | None]:
+    """Environment overrides that select one Claude Code profile."""
+    return {name: config_dir for name in _CLAUDE_PROFILE_ENV}
+
+
+def _claude_account_refusal(payload: dict | None, detail: str = "") -> str | None:
+    """Why the CLI's answer is the account's refusal, or None when it is not.
+
+    `payload` is the CLI's own JSON result when it produced one (it exits 1
+    with `is_error` on a limit and on a missing login alike); `detail` is what
+    reached stderr/stdout when it did not.
+    """
+    text = detail or ""
+    if isinstance(payload, dict):
+        if payload.get("api_error_status") == 429:
+            return f"429: {str(payload.get('result') or '')[:120]}"
+        text = str(payload.get("result") or "") or text
+    match = _CLAUDE_ACCOUNT_REFUSAL.search(text)
+    return text[:120] if match else None
+
 
 # The CLIs live outside the login shell's PATH when launched from a LaunchAgent.
 EXTRA_PATH = os.pathsep.join(
@@ -352,15 +426,39 @@ def _queue_floor(timeout: float) -> float:
     return max(0.0, min(MIN_RUN_SECONDS, timeout - QUEUE_FLOOR_GRACE_SECONDS))
 
 
-def _run(cmd: list[str], stdin_text: str, timeout: int) -> str:
+class BridgeCliExit(BridgeError):
+    """A CLI that ran to completion and exited non-zero; keeps what it said."""
+
+    def __init__(self, message: str, *, stdout: str, stderr: str) -> None:
+        super().__init__(message)
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _run(
+    cmd: list[str],
+    stdin_text: str,
+    timeout: int,
+    env_overrides: dict[str, str | None] | None = None,
+) -> str:
     """Run one CLI to completion, or kill its whole process tree trying.
 
     `timeout` is the budget for the whole call, queueing included. Spending it
     twice — once waiting for a slot, once running — would let a request live for
     two budgets while the HTTP client gave up after one, leaving an expensive
     CLI running with nobody left to receive its answer.
+
+    `env_overrides` is applied on top of `_cli_env()`: a value sets the
+    variable, `None` removes it. It is how one call selects a Claude profile
+    other than the one the launcher exported.
     """
     deadline = time.monotonic() + timeout
+    env = _cli_env()
+    for name, value in (env_overrides or {}).items():
+        if value is None:
+            env.pop(name, None)
+        else:
+            env[name] = value
     if not _RUN_SLOTS.acquire(timeout=timeout):
         raise BridgeBusy(
             f"all {MAX_CONCURRENT_RUNS} run slots were busy for {timeout}s"
@@ -378,7 +476,7 @@ def _run(cmd: list[str], stdin_text: str, timeout: int) -> str:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=_cli_env(),
+            env=env,
             cwd=workdir(),
             start_new_session=True,
         )
@@ -413,7 +511,11 @@ def _run(cmd: list[str], stdin_text: str, timeout: int) -> str:
 
     if proc.returncode != 0:
         detail = (stderr or stdout or "").strip()[:2000]
-        raise BridgeError(f"{cmd[0]} exited {proc.returncode}: {detail}")
+        raise BridgeCliExit(
+            f"{cmd[0]} exited {proc.returncode}: {detail}",
+            stdout=stdout or "",
+            stderr=stderr or "",
+        )
     return stdout
 
 
@@ -466,12 +568,11 @@ def complete_claude(
         # invocation -- see complete_codex for the file-based codex side.
         cmd += ["--json-schema", json.dumps(schema)]
 
-    payload = json.loads(_run(cmd, prompt, timeout) or "{}")
-    if payload.get("is_error"):
-        raise BridgeError(f"claude returned an error: {str(payload)[:500]}")
+    payload, profile = _run_claude_profiles(cmd, prompt, timeout)
 
     usage = payload.get("usage") or {}
     _log_usage("claude", usage)
+    LOG.info("claude profile: %s", _claude_profile_label(profile))
     # `result` is normally a string; under --json-schema it may already be
     # decoded to an object. str() on a dict would emit Python repr (single
     # quotes) instead of JSON, breaking the caller's json.loads, so a
@@ -493,7 +594,61 @@ def complete_claude(
         # Same contract as codex: the id this run was given, or null for the
         # CLI's own default.
         "model": model_used,
+        # Which Claude Code profile signed the request -- its directory, so
+        # the app's log can say which subscription a weekly limit belongs to.
+        "claude_profile": _claude_profile_label(profile),
     }
+
+
+def _run_claude_profiles(
+    cmd: list[str], prompt: str, timeout: int
+) -> tuple[dict, str | None]:
+    """Run `cmd` under the primary profile, then each fallback, until one answers.
+
+    Only an ACCOUNT refusal moves on to the next profile (see
+    `_claude_account_refusal`); anything else is raised from the profile that
+    produced it, so a broken request is never re-spent on the second
+    subscription. The primary runs under the launcher's own environment, the
+    fallbacks under an explicit override, and every refusal is logged with the
+    profile's directory and the CLI's own words -- never a token.
+    """
+    profiles = _claude_profiles()
+    refusals: list[str] = []
+    for index, profile in enumerate(profiles):
+        overrides = None if index == 0 else _claude_profile_env(profile)
+        try:
+            stdout = (
+                _run(cmd, prompt, timeout)
+                if overrides is None
+                else _run(cmd, prompt, timeout, overrides)
+            )
+        except BridgeCliExit as exc:
+            try:
+                payload = json.loads(exc.stdout or "{}")
+            except ValueError:
+                payload = None
+            reason = _claude_account_refusal(
+                payload if isinstance(payload, dict) else None, str(exc)
+            )
+            if reason is None:
+                raise
+        else:
+            payload = json.loads(stdout or "{}")
+            if not payload.get("is_error"):
+                return payload, profile
+            reason = _claude_account_refusal(payload)
+            if reason is None:
+                raise BridgeError(f"claude returned an error: {str(payload)[:500]}")
+        label = _claude_profile_label(profile)
+        refusals.append(f"{label}: {reason}")
+        if index + 1 < len(profiles):
+            LOG.warning(
+                "claude profile %s refused (%s); trying %s",
+                label,
+                reason,
+                _claude_profile_label(profiles[index + 1]),
+            )
+    raise BridgeError("claude refused on every profile: " + "; ".join(refusals)[:500])
 
 
 def _strip_json_fence(text: str) -> str:
