@@ -307,3 +307,53 @@ def test_apply_records_an_extraction_failure_and_continues(app, monkeypatch, cap
         f"{failed.id}: failed (visual extraction refused: extractor response was invalid)"
         in capsys.readouterr().out
     )
+
+
+def test_the_model_flag_reaches_the_extractor_and_the_dry_run_names_it(
+    app, monkeypatch, capsys
+):
+    """A pilot over hundreds of photographs names the model it can afford.
+
+    Without the flag the bridge runs the CLI's default, which is whatever the
+    newest and dearest model is that week (measured 2026-09-16: gpt-6-astra).
+    """
+    _without_real_marker(monkeypatch)
+    profile = SearchProfile(name="Galicia", is_active=True)
+    db.session.add(profile)
+    db.session.commit()
+    row = Property(source_email_id="visual-cli:model", search_profile_id=profile.id)
+    db.session.add(row)
+    db.session.commit()
+    image = _image()
+    envelope = visual_input.build_visual_input([image])
+    monkeypatch.setattr(
+        visual_input, "download_portal_photo_inputs", lambda *_args, **_kwargs: [image]
+    )
+    monkeypatch.setattr(app_module, "create_app", lambda: app)
+    seen = {}
+
+    def extract(_prompt, _images, *, model="", **_kwargs):
+        seen["model"] = model
+        return {**envelope, "visual_observations": []}
+
+    monkeypatch.setattr(visual_input, "extract_visual_observations", extract)
+
+    argv = ["--ids", str(row.id), "--max-rows", "1", "--max-images", "1"]
+    assert extract_visual_descriptors.run([*argv, "--model", "gpt-5.6-luna"]) == 0
+    assert "model=gpt-5.6-luna" in capsys.readouterr().out
+    assert seen == {}, "a dry run must not call the extractor"
+
+    assert (
+        extract_visual_descriptors.run(
+            [*argv, "--apply", "--max-calls", "1", "--model", "gpt-5.6-luna"]
+        )
+        == 0
+    )
+    assert seen == {"model": "gpt-5.6-luna"}
+
+    db.session.refresh(row)
+    row.taste = None
+    db.session.commit()
+    seen.clear()
+    assert extract_visual_descriptors.run([*argv, "--apply", "--max-calls", "1"]) == 0
+    assert seen == {"model": ""}, "no flag keeps the CLI's own default"

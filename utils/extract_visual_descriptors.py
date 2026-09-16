@@ -37,6 +37,16 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-rows", type=int, default=3)
     parser.add_argument("--max-images", type=int, default=3)
     parser.add_argument("--max-calls", type=int, default=3)
+    parser.add_argument(
+        "--model",
+        default="",
+        help=(
+            "Codex model id for the extraction (e.g. gpt-5.6-luna). Empty means "
+            "the CLI's own default, which is whatever the newest and dearest "
+            "model is that week; a pilot over hundreds of photographs names the "
+            "one it can afford."
+        ),
+    )
     return parser
 
 
@@ -100,7 +110,8 @@ def run(argv: Sequence[str] | None = None) -> int:
                 print(
                     f"{prop.id}: {len(images)} image(s), "
                     f"input={envelope['input_fingerprint'][:12]}, "
-                    f"property={property_fingerprint[:12]}"
+                    f"property={property_fingerprint[:12]}, "
+                    f"model={args.model or 'cli default'}"
                 )
                 existing = (
                     prop.taste.get("visual_descriptor")
@@ -129,7 +140,9 @@ def run(argv: Sequence[str] | None = None) -> int:
                     continue
                 calls += 1
                 try:
-                    extracted = visual_input.extract_visual_observations(PROMPT, images)
+                    extracted = visual_input.extract_visual_observations(
+                        PROMPT, images, model=args.model
+                    )
                 except visual_input.VisualInputError as exc:
                     print(f"{prop.id}: failed (visual extraction refused: {exc})")
                     continue
