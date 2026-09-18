@@ -190,7 +190,8 @@ pytest tests/ --cov=app --cov-report=html    # coverage report
 - `templates/`, `static/` — Jinja2, Bootstrap, minimal vanilla JS/HTMX
 - `tests/` — pytest suite; external APIs are mocked
 - `docs/` — DEV_RULES.md, STATE.md, UNIVERSAL_PROPERTIES.md,
-  PROPERTY_TYPES.md, and `rules/` (the long form of this file)
+  PROPERTY_TYPES.md, `rules/` (the long form of this file), and `adr/`
+  (sequential MADR-lite decisions; start at `docs/adr/README.md`)
 
 ## Hard rules
 

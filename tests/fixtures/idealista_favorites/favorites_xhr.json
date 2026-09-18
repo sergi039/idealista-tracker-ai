@@ -1,0 +1,50 @@
+{
+  "jsonResponse": {
+    "ads": [
+      {
+        "adId": 90002001,
+        "title": "T2 flat in Cedofeita, Porto",
+        "url": "/en/imovel/90002001/",
+        "price": 175000,
+        "priceText": "175.000 €",
+        "detail": {
+          "constructedArea": 58,
+          "roomNumber": 2,
+          "typology": "T2"
+        },
+        "operation": "sale",
+        "thumbnail": "https://img4.idealista.pt/blur/WEB_LISTING-M/0/id.pro.pt.image.master/11/22/33/90002001.jpg"
+      },
+      {
+        "adId": "90002002",
+        "address": "House in Sintra",
+        "detailUrl": "https://www.idealista.pt/imovel/90002002/",
+        "priceText": "890.000 €",
+        "features": {
+          "size": 210,
+          "bedrooms": 4
+        },
+        "operationType": "sale",
+        "multimedia": [
+          {"url": "https://img3.idealista.pt/blur/WEB_DETAIL-L/0/id.pro.pt.image.master/44/55/66/90002002a.jpg", "tag": "photo"},
+          {"src": "https://img3.idealista.pt/blur/WEB_DETAIL-L/0/id.pro.pt.image.master/44/55/66/90002002b.jpg", "tag": "photo"}
+        ]
+      },
+      {
+        "id": 90002003,
+        "title": "Studio for rent near Universidade, Coimbra",
+        "link": "/imovel/90002003/",
+        "price": 650,
+        "priceText": "650 €/mês",
+        "detail": {
+          "constructedArea": 28,
+          "roomNumber": 0
+        },
+        "operation": "rent"
+      }
+    ]
+  },
+  "meta": {
+    "note": "Synthetic Idealista-like XHR envelope for unit tests. No personal data."
+  }
+}

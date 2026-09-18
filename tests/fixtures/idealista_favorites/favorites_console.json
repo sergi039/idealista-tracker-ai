@@ -1,0 +1,22 @@
+{
+  "captured_at": "2026-09-18T12:00:00.000Z",
+  "source": "https://www.idealista.pt/en/utilizador/favoritos/",
+  "count": 2,
+  "listings": [
+    {
+      "listing_id": 90003001,
+      "url": "https://www.idealista.pt/imovel/90003001/",
+      "title": "T2 flat in Rua Exemplo, Porto 165000 € 55 m²",
+      "price_hint": "165000",
+      "photo_urls": [
+        "https://img4.idealista.pt/blur/WEB_LISTING-M/0/id.pro.pt.image.master/77/88/99/90003001.jpg"
+      ]
+    },
+    {
+      "listing_id": 90003002,
+      "url": "https://www.idealista.pt/imovel/90003002/",
+      "title": "Moradia T4 em Cascais 750000 €",
+      "price_hint": "750000"
+    }
+  ]
+}
