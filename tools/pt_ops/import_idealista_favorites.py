@@ -81,6 +81,13 @@ _LAZY_IMG = re.compile(
     r"\s*=\s*[\"']([^\"']+)[\"']",
     re.IGNORECASE | re.DOTALL,
 )
+_IMG_SRC = re.compile(r"<img\b[^>]*?\bsrc\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
+_PHOTO_HOST = re.compile(r"(^|\.)img\d*\.idealista\.(?:pt|com)$", re.IGNORECASE)
+_PT_LISTING_RE = re.compile(
+    r"https?://(?:www\.)?idealista\.pt/(?:[a-z]{2}/)?imovel/(\d+)",
+    re.IGNORECASE,
+)
+_PT_PATH_RE = re.compile(r"/(?:[a-z]{2}/)?imovel/(\d+)/?", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -208,9 +215,7 @@ def _coerce_listing_id(value: Any) -> Optional[int]:
         return None
     if text.isdigit():
         return int(text)
-    from utils.idealista_extractors import extract_idealista_property_id
-
-    return extract_idealista_property_id(text)
+    return _pt_listing_id(text)
 
 
 def _coerce_price(value: Any) -> Optional[float]:
@@ -245,20 +250,68 @@ def _empty_photos() -> dict:
     return {"items": [], "published": 0}
 
 
+def _pt_listing_id(url: str) -> Optional[int]:
+    text = url or ""
+    match = _PT_LISTING_RE.search(text) or _PT_PATH_RE.search(text)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _imovel_urls(html: str) -> List[str]:
+    found: List[str] = []
+    seen = set()
+    for match in re.finditer(
+        r"""(?:href|src)\s*=\s*["']([^"']*imovel/\d+[^"']*)["']""",
+        html or "",
+        re.IGNORECASE,
+    ):
+        raw = match.group(1)
+        if raw in seen:
+            continue
+        seen.add(raw)
+        found.append(raw)
+    return found
+
+
+def _is_listing_photo(url: str) -> bool:
+    try:
+        host = (urlsplit(url).hostname or "").lower()
+        path = (urlsplit(url).path or "").lower()
+    except ValueError:
+        return False
+    if not _PHOTO_HOST.search(host):
+        return False
+    if "pixel" in host or "logo" in path or "static" in path:
+        return False
+    if path.endswith(".gif") and "open" in path:
+        return False
+    return True
+
+
 def _photos_from_urls(urls: Iterable[Any]) -> dict:
-    """Filter candidate URLs through the mail listing-photo guard."""
+    """Keep public Idealista CDN photographs; drop credentials and chrome."""
     import html as html_lib
 
-    from services.pt_mail_parser import photos_from_card
+    from services.portal_photos import normalise_photo_url
 
-    parts: List[str] = []
+    items: List[Dict[str, str]] = []
+    seen = set()
+    published = 0
     for raw in urls:
         if not isinstance(raw, str) or not raw.strip():
             continue
-        parts.append(f'<img src="{html_lib.escape(raw.strip(), quote=True)}">')
-    if not parts:
-        return _empty_photos()
-    return photos_from_card("".join(parts))
+        published += 1
+        cleaned = html_lib.unescape(raw.strip()).replace("&amp;", "&")
+        url = normalise_photo_url(cleaned)
+        if url is None or not _is_listing_photo(url) or url in seen:
+            continue
+        seen.add(url)
+        items.append({"url": url})
+    return {"items": items, "published": published}
 
 
 def _merge_photos(*blocks: Any) -> dict:
@@ -286,14 +339,12 @@ def _merge_photos(*blocks: Any) -> dict:
 def _photos_from_card_html(card_html: str) -> dict:
     import html as html_lib
 
-    from services.pt_mail_parser import photos_from_card
-
-    primary = photos_from_card(card_html or "")
+    srcs = _IMG_SRC.findall(card_html or "")
     lazy = [
         html_lib.unescape(src).replace("&amp;", "&")
         for src in _LAZY_IMG.findall(card_html or "")
     ]
-    return _merge_photos(primary, _photos_from_urls(lazy))
+    return _photos_from_urls([*srcs, *lazy])
 
 
 def _looks_like_photo_url(value: str) -> bool:
@@ -386,9 +437,7 @@ def _absolute_pt_url(href: str) -> Optional[str]:
     host = (parts.hostname or "").lower()
     if host not in {"idealista.pt", "www.idealista.pt"}:
         return None
-    from utils.idealista_extractors import extract_idealista_property_id
-
-    listing_id = extract_idealista_property_id(absolute)
+    listing_id = _pt_listing_id(absolute)
     if listing_id is None:
         return None
     return canonical_listing_url(listing_id)
@@ -397,7 +446,6 @@ def _absolute_pt_url(href: str) -> Optional[str]:
 def _listing_from_card_html(card_html: str) -> Optional[FavoriteListing]:
     from utils.idealista_extractors import (
         extract_area_m2,
-        extract_idealista_property_id,
         extract_price,
         extract_property_attributes,
         extract_listing_title,
@@ -410,17 +458,14 @@ def _listing_from_card_html(card_html: str) -> Optional[FavoriteListing]:
         href = link.group("href") or link.group("href2")
         title = _strip_tags(link.group("title") or link.group("title2") or "")
     if not href:
-        # Fallback: first /imovel/<id>/ in the card.
-        from utils.idealista_extractors import listing_urls
-
-        urls = listing_urls(card_html)
+        urls = _imovel_urls(card_html)
         href = urls[0] if urls else None
     if not href:
         return None
     absolute = _absolute_pt_url(href)
     if absolute is None:
         return None
-    listing_id = extract_idealista_property_id(absolute)
+    listing_id = _pt_listing_id(absolute)
     if listing_id is None:
         return None
     if not title:
@@ -438,6 +483,11 @@ def _listing_from_card_html(card_html: str) -> Optional[FavoriteListing]:
     details = " · ".join(p for p in details_parts if p) or None
     attrs_text = " ".join(p for p in (details, card_html) if p)
     attrs = extract_property_attributes(attrs_text) or {}
+    tipo_match = re.search(r"\bT(\d{1,2})\b", attrs_text or "", re.IGNORECASE)
+    if tipo_match and not attrs.get("typology"):
+        attrs["typology"] = f"T{int(tipo_match.group(1))}"
+        if attrs.get("bedrooms") is None:
+            attrs["bedrooms"] = int(tipo_match.group(1))
     area = extract_area_m2(details or "") or extract_area_m2(card_html)
     rental_text = f"{title or ''}\n{details or ''}\n{price_body or ''}"
     return FavoriteListing(
@@ -478,26 +528,25 @@ def parse_favorites_html(html: str) -> List[FavoriteListing]:
 
     # Fallback: any idealista.pt /imovel/<id>/ anchors on the page.
     from utils.idealista_extractors import (
-        extract_idealista_property_id,
         extract_listing_title,
         extract_price,
         extract_area_m2,
         extract_property_attributes,
-        listing_urls,
     )
 
-    for url in listing_urls(html):
+    page_urls = _imovel_urls(html)
+    for url in page_urls:
         absolute = _absolute_pt_url(url)
         if absolute is None:
             continue
-        listing_id = extract_idealista_property_id(absolute)
+        listing_id = _pt_listing_id(absolute)
         if listing_id is None or listing_id in found:
             continue
         title = extract_listing_title(html, idealista_property_id=listing_id)
         # Price/area from whole page is ambiguous for multi-card pages; leave
         # None unless a single listing is present.
-        price = extract_price(html) if len(listing_urls(html)) == 1 else None
-        area = extract_area_m2(html) if len(listing_urls(html)) == 1 else None
+        price = extract_price(html) if len(page_urls) == 1 else None
+        area = extract_area_m2(html) if len(page_urls) == 1 else None
         attrs = extract_property_attributes(title or "") if title else {}
         found[listing_id] = FavoriteListing(
             listing_id=listing_id,
@@ -509,7 +558,7 @@ def parse_favorites_html(html: str) -> List[FavoriteListing]:
             bedrooms=attrs.get("bedrooms"),
             is_rental=bool(_RENTAL_RE.search(title or "")),
             photos=_photos_from_card_html(html)
-            if len(listing_urls(html)) == 1
+            if len(page_urls) == 1
             else _empty_photos(),
         )
     return [found[k] for k in sorted(found)]
@@ -946,7 +995,11 @@ def apply_plans(
 ) -> List[Dict[str, Any]]:
     from app import db
     from models import Property
-    from services.pt_mail_service import import_lock
+
+    try:
+        from services.pt_mail_service import import_lock
+    except ImportError:
+        from contextlib import nullcontext as import_lock
 
     by_id = {listing.listing_id: listing for listing in listings}
     results: List[Dict[str, Any]] = []
