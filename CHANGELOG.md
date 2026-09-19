@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🌊 Added: the sea-view text claim asks TypeSafe's Jev first, the bridge decides what Jev declines (2026-09-19, #574)
+- **What**: `classify_text_with_ai` now asks Jev one typed Choice question
+  (`view` / `proximity` / `none`) through the new
+  `services/typesafe_transport.py` and takes the answer at confidence
+  ≥ `SEA_VIEW_TEXT_MIN_CONFIDENCE` (0.7); below it, without
+  `TYPESAFE_API_KEY`, or on any transport failure the subscription bridge
+  answers exactly as before. The stored detail records `provider`,
+  `confidence` and `jev_confidence`. `config.py` states the exception to
+  "no API key anywhere" where it states the prohibition; ingestion
+  (`use_ai=False`) reaches neither model; `enrich_budget` is unchanged
+  because the bridge stays the worst case.
+- **Why**: the one subscription call an Enrich press makes is this
+  three-way question, and it costs a cold CLI run and up to 300 s. Jev
+  answers it in ~0.1 s for ~500 input tokens (~$0.00002, output free).
+  Measured before the switch on the 42 bridge-labelled production rows:
+  92.9 % agreement, 100 % at or above 0.7 with 90.5 % coverage, and every
+  disagreement a "research notes, not the advert" text at 0.49–0.63.
+
 ### 🔍 Changed: BRIDGE-TEST-001's failure message carries the bridge's scheduler state (2026-09-06, #537)
 - **What**: the "still running" branch of `_unhealthy` in
   `tests/test_ai_bridge_isolation.py` now records `ps stat/etime/%cpu` of
