@@ -250,3 +250,10 @@ headers open for days — so the transport now speaks `http.client` directly
 under a watchdog (`threading.Timer`) that closes the connection when
 `TYPESAFE_TIMEOUT_SECONDS` runs out, in whatever phase the exchange is; a 3xx
 is a status like any other and is never followed.
+
+Sixth reviewer pass: the allowance is re-checked at every phase boundary —
+after connect, after the request, after the response headers and after each
+chunk — because a phase that holds no socket yet (name resolution) outlives
+the watchdog's close, and the request must not go out, or bill, once the
+allowance is gone; and the model pin is a constant, not an environment
+setting, since the threshold was measured against one release.

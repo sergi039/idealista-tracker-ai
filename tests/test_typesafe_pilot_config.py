@@ -28,6 +28,15 @@ class TestBoundedFloat:
         assert 0.5 <= Config.TYPESAFE_TIMEOUT_SECONDS <= 120.0
         assert Config.TYPESAFE_MODEL == "jev-1.13.0"
 
+    def test_the_model_pin_is_a_constant_not_a_setting(self):
+        """The threshold was measured against one release; an environment
+        variable must not be able to point it at another."""
+        from pathlib import Path
+
+        source = Path(config.__file__).read_text(encoding="utf-8")
+        assert 'os.environ.get("TYPESAFE_MODEL")' not in source
+        assert "TYPESAFE_MODEL" not in Path(".env.example").read_text(encoding="utf-8")
+
 
 class TestEnrichBudgetCountsJev:
     def test_the_ai_allowance_counts_jev_twice_before_the_bridge(self):

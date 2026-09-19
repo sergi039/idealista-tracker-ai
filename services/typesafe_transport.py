@@ -106,12 +106,23 @@ def _discard(response: Any) -> None:
         pass
 
 
-def _read_bounded(response: Any) -> bytes:
-    """The body through `read1`, refused past the size bound.
+def _check_allowance(expired: threading.Event) -> None:
+    """Stop at a phase boundary once the watchdog has fired.
+
+    The watchdog closes the socket, but a phase that holds no socket yet --
+    name resolution, say -- cannot be interrupted that way; it is caught
+    here instead, before the next phase can send or bill anything.
+    """
+    if expired.is_set():
+        raise TypeSafeTransportError("typesafe exchange exceeded the time allowance")
+
+
+def _read_bounded(response: Any, expired: threading.Event) -> bytes:
+    """The body through `read1`, refused past the size bound or the allowance.
 
     `read1` returns whatever one socket read produced -- `read(n)` would
-    block until `n` bytes had arrived -- so the size bound is checked after
-    every piece the peer sends; the watchdog in `system_one` bounds the time.
+    block until `n` bytes had arrived -- so both bounds are checked after
+    every piece the peer sends.
     """
     read1 = getattr(response, "read1", None)
     if read1 is None:
@@ -121,6 +132,7 @@ def _read_bounded(response: Any) -> bytes:
     size = 0
     while True:
         chunk = read1(_CHUNK_BYTES)
+        _check_allowance(expired)
         if not chunk:
             return b"".join(chunks)
         size += len(chunk)
@@ -143,8 +155,9 @@ def system_one(
     Every failure is a `TypeSafeTransportError`, so a caller has one thing to
     catch and never sees `http.client` internals. `timeout` bounds each
     socket operation and, through a watchdog that closes the connection when
-    it runs out, the whole exchange -- connect, headers and body alike -- so
-    one call takes at most about `timeout` seconds.
+    it runs out, the whole exchange -- name resolution, connect, headers and
+    body alike -- so one call takes at most about `timeout` seconds and never
+    proceeds to the next phase once the allowance is gone.
     """
     key = Config.TYPESAFE_API_KEY
     if not key:
@@ -177,6 +190,11 @@ def system_one(
     watchdog.daemon = True
     watchdog.start()
     try:
+        # Each phase under the watchdog, and the allowance re-checked at every
+        # boundary: a phase without a socket (name resolution) outlives a
+        # close, and the request must not go out -- or bill -- after that.
+        connection.connect()
+        _check_allowance(expired)
         connection.request(
             "POST",
             f"{prefix}{SYSTEM_ONE_PATH}",
@@ -186,14 +204,16 @@ def system_one(
                 "Authorization": f"Bearer {key}",
             },
         )
+        _check_allowance(expired)
         response = connection.getresponse()
+        _check_allowance(expired)
         status = response.status
         if status != 200:
             # The status is the whole diagnosis; the body stays unread, and
             # a 3xx is not followed: http.client never does.
             _discard(response)
             raise TypeSafeTransportError(f"typesafe returned {status}", status=status)
-        body = _read_bounded(response)
+        body = _read_bounded(response, expired)
     except TypeSafeTransportError:
         raise
     except (http.client.HTTPException, OSError) as exc:

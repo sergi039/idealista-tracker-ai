@@ -10,6 +10,7 @@ import http.client
 import io
 import json
 import threading
+import time
 from unittest.mock import patch
 
 import pytest
@@ -52,6 +53,12 @@ class _Connection:
         self.host, self.port, self.timeout = host, port, timeout
         self.closed = threading.Event()
         _Connection.made.append(self)
+
+    def connect(self):
+        delay = self.script.get("connect_delay")
+        if delay:
+            time.sleep(delay)  # name resolution that outlives the allowance
+        self.connected = True
 
     def request(self, method, path, body=None, headers=None):
         self.method, self.path, self.body, self.headers = method, path, body, headers
@@ -206,6 +213,19 @@ class TestFailures:
         assert "time allowance" in str(info.value)
         assert info.value.__cause__ is None
         assert connection.made[0].closed.is_set()
+
+    def test_an_allowance_spent_before_a_socket_exists_sends_nothing(self, connection):
+        """The watchdog cannot close a socket that does not exist yet; the
+        boundary check after connect must stop the request from going out."""
+        connection.script = {
+            "connect_delay": 0.8,
+            "response": _Response(200, GOOD_BODY),
+        }
+        with _with_key(TYPESAFE_TIMEOUT_SECONDS=0.3):
+            with pytest.raises(ts.TypeSafeTransportError) as info:
+                ts.system_one("text", QUESTIONS)
+        assert "time allowance" in str(info.value)
+        assert not hasattr(connection.made[0], "method"), "no request was sent"
 
     def test_a_header_refusal_at_send_time_drops_the_chain(self, connection):
         secret = "apikey_" + "s" * 40

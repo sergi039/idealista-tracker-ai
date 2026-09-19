@@ -68,9 +68,10 @@ class Config:
     # as before (services/sea_view_service.classify_text_with_ai).
     TYPESAFE_API_KEY = os.environ.get("TYPESAFE_API_KEY")
     TYPESAFE_API_URL = os.environ.get("TYPESAFE_API_URL") or "https://api.typesafe.ai"
-    # Pinned, not `jev-latest`: the threshold below was tuned against this
-    # release, and the vendor's own guidance is to pin when a threshold is.
-    TYPESAFE_MODEL = os.environ.get("TYPESAFE_MODEL") or "jev-1.13.0"
+    # Pinned, not `jev-latest`, and not a setting: the threshold below was
+    # tuned against this release, so moving to another one is a code change
+    # that re-measures the threshold, never an environment variable.
+    TYPESAFE_MODEL = "jev-1.13.0"
     # Per blocking socket operation (`urlopen`'s meaning) and, in the transport,
     # a wall-clock deadline on the body read, so one exchange takes at most
     # about twice this. The SDK's own default, ~100x a measured answer; the
