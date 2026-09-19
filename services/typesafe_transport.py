@@ -14,15 +14,18 @@ run and up to 300 s of an Enrich press on the same three-way call. Without
 bridge, so a missing key degrades to yesterday's behaviour and never fails a
 request.
 
-Raw `urllib`, mirroring `subscription_transport._post`, rather than the
-official SDK: `typesafe-sdk` 0.7 would add httpx2 and tenacity to the
-production image for one POST. No retries here on purpose -- the caller's
-fallback to the bridge is the retry. Three things the bridge transport does
-not need and this one does, because the peer is a third party reached with a
-bearer key: the URL must be https, a redirect is refused rather than followed
-(urllib's default re-sends the request headers, key included, to wherever a
-3xx points), and the model is pinned so a threshold tuned against one release
-is not silently applied to the next.
+`http.client` directly, rather than `urllib` or the official SDK. The SDK
+(`typesafe-sdk` 0.7) would add httpx2 and tenacity to the production image
+for one POST. `urllib` was tried first and rejected in review: its timeout
+bounds each socket operation, never the exchange, so a peer dripping one byte
+per operation could hold the connect, the headers or the body open for as
+long as it liked; and its redirect handler re-sends the request headers --
+the bearer key among them -- to wherever a 3xx points. Here a watchdog closes
+the connection when the allowance runs out, whatever phase the exchange is
+in, and a 3xx is a status like any other, never followed. No retries on
+purpose: the caller's fallback to the bridge is the retry. Nothing the peer
+sends -- a body, a status line, a header -- is ever copied into a message,
+because the message reaches the log and the stored detail.
 """
 
 from __future__ import annotations
@@ -31,10 +34,8 @@ import http.client
 import json
 import logging
 import re
-import time
-import urllib.error
-import urllib.request
-from typing import Any, Dict, Optional
+import threading
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlsplit
 
 from config import Config
@@ -47,8 +48,8 @@ SYSTEM_ONE_PATH = "/v1/systemone"
 # body that reaches the bound is refused, not truncated into a parse error.
 MAX_RESPONSE_BYTES = 1024 * 1024
 _CHUNK_BYTES = 64 * 1024
-# A bearer token is printable ASCII without whitespace. Anything else --
-# a trailing newline from a hand-edited .env, say -- would make http.client
+# A bearer token is printable ASCII without whitespace. Anything else -- a
+# trailing newline from a hand-edited .env, say -- would make http.client
 # refuse the header with a message that quotes it, credential included.
 _KEY_SHAPE = re.compile(r"[\x21-\x7e]+")
 
@@ -57,9 +58,9 @@ class TypeSafeTransportError(RuntimeError):
     """TypeSafe could not serve the request.
 
     `status` is the HTTP status when there was a response (401 bad key, 422
-    invalid body, 429 rate limit, 529 overloaded, 3xx refused redirect) and
-    `None` when the request never got that far -- unreachable host, timeout,
-    missing or invalid configuration.
+    invalid body, 429 rate limit, 529 overloaded, 3xx never followed) and
+    `None` when the request never got that far -- unreachable host, the
+    allowance running out, missing or invalid configuration.
     """
 
     def __init__(self, message: str, *, status: Optional[int] = None) -> None:
@@ -71,35 +72,21 @@ class TypeSafeNotConfigured(TypeSafeTransportError):
     """No `TYPESAFE_API_KEY`: the route is absent, not broken."""
 
 
-class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
-    """A redirect is a failure here, never followed.
-
-    The API lives at one https origin; whatever answers with a 3xx is not it,
-    and following it would hand the bearer key to the new location.
-    """
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise urllib.error.HTTPError(
-            req.full_url, code, f"redirect to {newurl!r} refused", headers, fp
-        )
-
-
-_OPENER = urllib.request.build_opener(_RefuseRedirects)
-
-
 def is_configured() -> bool:
     return bool(Config.TYPESAFE_API_KEY)
 
 
-def _base_url() -> str:
+def _origin() -> Tuple[str, int, str]:
+    """(host, port, path prefix) of `TYPESAFE_API_URL`, an https origin."""
     base = (Config.TYPESAFE_API_URL or "").strip().rstrip("/")
     try:
         parts = urlsplit(base)
-    except ValueError as exc:  # an unbalanced IPv6 bracket, for one
+        host, port = parts.hostname, parts.port  # `.port` refuses a bad one
+    except ValueError as exc:  # an unbalanced IPv6 bracket, a port past 65535
         raise TypeSafeTransportError("TYPESAFE_API_URL is not a valid URL") from exc
-    if parts.scheme != "https" or not parts.netloc:
+    if parts.scheme != "https" or not host:
         raise TypeSafeTransportError("TYPESAFE_API_URL must be an https:// origin")
-    return base
+    return host, port or 443, parts.path.rstrip("/")
 
 
 def _failure_name(exc: BaseException) -> str:
@@ -119,15 +106,12 @@ def _discard(response: Any) -> None:
         pass
 
 
-def _read_within(response: Any, deadline: float) -> bytes:
-    """The body, as long as it arrives within the deadline and the size bound.
+def _read_bounded(response: Any) -> bytes:
+    """The body through `read1`, refused past the size bound.
 
-    The opener's `timeout` bounds each blocking socket operation, so a peer
-    sending one byte every few seconds could keep a single read alive for as
-    long as it liked. `read1` returns whatever has arrived after at most one
-    socket read -- `read(n)` would block until `n` bytes had -- so checking
-    a wall-clock deadline after each call turns the allowance into a bound:
-    at most one socket operation's blocking time past it.
+    `read1` returns whatever one socket read produced -- `read(n)` would
+    block until `n` bytes had arrived -- so the size bound is checked after
+    every piece the peer sends; the watchdog in `system_one` bounds the time.
     """
     read1 = getattr(response, "read1", None)
     if read1 is None:
@@ -144,10 +128,6 @@ def _read_within(response: Any, deadline: float) -> bytes:
             raise TypeSafeTransportError(
                 f"typesafe returned a body over {MAX_RESPONSE_BYTES} bytes"
             )
-        if time.monotonic() > deadline:
-            raise TypeSafeTransportError(
-                "typesafe response exceeded the time allowance"
-            )
         chunks.append(chunk)
 
 
@@ -161,54 +141,70 @@ def system_one(
     """POST one evaluation; return the decoded body (`model`, `answers`, `usage`).
 
     Every failure is a `TypeSafeTransportError`, so a caller has one thing to
-    catch and never sees `urllib` internals. `timeout` bounds each blocking
-    socket operation, as `urlopen` defines it, and the body read runs against
-    a wall-clock deadline of the same length, so one exchange takes at most
-    about twice `timeout`. No response body is ever copied into a message: a
-    vendor's error text may echo the request, bearer key included, and the
-    message reaches the log and the stored detail.
+    catch and never sees `http.client` internals. `timeout` bounds each
+    socket operation and, through a watchdog that closes the connection when
+    it runs out, the whole exchange -- connect, headers and body alike -- so
+    one call takes at most about `timeout` seconds.
     """
-    if not Config.TYPESAFE_API_KEY:
+    key = Config.TYPESAFE_API_KEY
+    if not key:
         raise TypeSafeNotConfigured("TYPESAFE_API_KEY is not configured")
-    if not _KEY_SHAPE.fullmatch(Config.TYPESAFE_API_KEY):
+    if not _KEY_SHAPE.fullmatch(key):
         raise TypeSafeTransportError(
             "TYPESAFE_API_KEY is malformed (whitespace or control characters)"
         )
-    base = _base_url()
+    host, port, prefix = _origin()
     if not questions:
         raise TypeSafeTransportError("system_one needs at least one question")
 
-    payload = {
-        "state": state,
-        "model": model or Config.TYPESAFE_MODEL,
-        "questions": questions,
-    }
-    request = urllib.request.Request(
-        f"{base}{SYSTEM_ONE_PATH}",
-        data=json.dumps(payload).encode(),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {Config.TYPESAFE_API_KEY}",
-        },
-        method="POST",
-    )
     seconds = Config.TYPESAFE_TIMEOUT_SECONDS if timeout is None else timeout
-    deadline = time.monotonic() + seconds
+    payload = json.dumps(
+        {
+            "state": state,
+            "model": model or Config.TYPESAFE_MODEL,
+            "questions": questions,
+        }
+    ).encode()
+
+    connection = http.client.HTTPSConnection(host, port, timeout=seconds)
+    expired = threading.Event()
+
+    def _cut() -> None:
+        expired.set()
+        connection.close()  # whatever the exchange is blocked on now fails
+
+    watchdog = threading.Timer(seconds, _cut)
+    watchdog.daemon = True
+    watchdog.start()
     try:
-        with _OPENER.open(request, timeout=seconds) as response:
-            body = _read_within(response, deadline)
-    except urllib.error.HTTPError as exc:
-        # The status is the whole diagnosis; the body stays unread.
-        _discard(exc)
-        raise TypeSafeTransportError(
-            f"typesafe returned {exc.code}", status=exc.code
-        ) from exc
-    except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
+        connection.request(
+            "POST",
+            f"{prefix}{SYSTEM_ONE_PATH}",
+            body=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {key}",
+            },
+        )
+        response = connection.getresponse()
+        status = response.status
+        if status != 200:
+            # The status is the whole diagnosis; the body stays unread, and
+            # a 3xx is not followed: http.client never does.
+            _discard(response)
+            raise TypeSafeTransportError(f"typesafe returned {status}", status=status)
+        body = _read_bounded(response)
+    except TypeSafeTransportError:
+        raise
+    except (http.client.HTTPException, OSError) as exc:
+        if expired.is_set():
+            raise TypeSafeTransportError(
+                "typesafe exchange exceeded the time allowance"
+            ) from None
         # The class and errno are the whole diagnosis. The exception's text
-        # can carry what the peer sent (a malformed status line, say), and
-        # this message reaches the log and the stored detail.
+        # can carry what the peer sent (a malformed status line, say).
         raise TypeSafeTransportError(
-            f"typesafe unreachable at {base}: {_failure_name(exc)}"
+            f"typesafe unreachable at https://{host}: {_failure_name(exc)}"
         ) from exc
     except ValueError:
         # http.client refuses a malformed header with a message that quotes
@@ -217,6 +213,9 @@ def system_one(
         raise TypeSafeTransportError(
             "typesafe request was refused before it was sent"
         ) from None
+    finally:
+        watchdog.cancel()
+        connection.close()
 
     try:
         decoded = json.loads(body)

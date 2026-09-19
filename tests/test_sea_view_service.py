@@ -1298,7 +1298,9 @@ class TestJevFirst:
         def _no_network(*args, **kwargs):
             raise AssertionError("no request may leave without a key")
 
-        monkeypatch.setattr(typesafe_transport.urllib.request, "urlopen", _no_network)
+        monkeypatch.setattr(
+            typesafe_transport.http.client, "HTTPSConnection", _no_network
+        )
         monkeypatch.setattr(
             svc,
             "classify_text_with_bridge",

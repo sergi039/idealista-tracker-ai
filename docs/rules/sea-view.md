@@ -243,3 +243,10 @@ arrived after one socket read, so a peer dripping bytes cannot hold a chunked
 read open past the deadline; and the `model` field of an answer is checked
 against the pinned model and only the configured constant is stored, because
 that field is peer-controlled text like everything else in the body.
+
+Fifth reviewer pass: a per-operation timeout never bounded the exchange —
+a peer sending one header byte per operation could hold the connect or the
+headers open for days — so the transport now speaks `http.client` directly
+under a watchdog (`threading.Timer`) that closes the connection when
+`TYPESAFE_TIMEOUT_SECONDS` runs out, in whatever phase the exchange is; a 3xx
+is a status like any other and is never followed.

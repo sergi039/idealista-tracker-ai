@@ -1,14 +1,15 @@
 """services/typesafe_transport.py: one POST, every failure as one error type.
 
-No network: the module's opener is replaced per test. `Config` is only touched
-through `patch.object`, which restores it -- tests/conftest.py fails the session
-on a Config attribute that changed or appeared.
+No network: `http.client.HTTPSConnection` is replaced by a scripted stand-in
+per test. `Config` is only touched through `patch.object`, which restores it
+-- tests/conftest.py fails the session on a Config attribute that changed or
+appeared.
 """
 
+import http.client
 import io
 import json
-import urllib.error
-import urllib.request
+import threading
 from unittest.mock import patch
 
 import pytest
@@ -26,183 +27,228 @@ GOOD_BODY = json.dumps(
 ).encode()
 
 
-class _Response(io.BytesIO):
-    def __enter__(self):
-        return self
+class _Response:
+    def __init__(self, status=200, body=b"", incremental=True):
+        self.status = status
+        self._buf = io.BytesIO(body)
+        self.closed = False
+        if incremental:
+            self.read1 = self._buf.read1
 
-    def __exit__(self, *exc):
-        self.close()
-        return False
+    def read(self, n=-1):
+        return self._buf.read(n)
 
-
-def _opener_returning(body: bytes, captured: dict):
-    def _open(request, timeout=None):
-        captured["url"] = request.full_url
-        captured["timeout"] = timeout
-        captured["authorization"] = request.get_header("Authorization")
-        captured["body"] = json.loads(request.data)
-        return _Response(body)
-
-    return _open
+    def close(self):
+        self.closed = True
 
 
-def _opener_raising(exc):
-    def _open(request, timeout=None):
-        raise exc
+class _Connection:
+    """Scripted stand-in for `http.client.HTTPSConnection`."""
 
-    return _open
+    script: dict = {}
+    made: list = []
+
+    def __init__(self, host, port=None, timeout=None):
+        self.host, self.port, self.timeout = host, port, timeout
+        self.closed = threading.Event()
+        _Connection.made.append(self)
+
+    def request(self, method, path, body=None, headers=None):
+        self.method, self.path, self.body, self.headers = method, path, body, headers
+        exc = self.script.get("raise_on_request")
+        if exc is not None:
+            raise exc
+
+    def getresponse(self):
+        if self.script.get("hang"):
+            # Blocked until the watchdog closes the connection, like a peer
+            # that never finishes its headers.
+            self.closed.wait(5.0)
+            raise OSError(9, "Bad file descriptor")
+        exc = self.script.get("raise_on_response")
+        if exc is not None:
+            raise exc
+        return self.script["response"]
+
+    def close(self):
+        self.closed.set()
 
 
-def _explode(*args, **kwargs):
-    raise AssertionError("no request may leave in this case")
+@pytest.fixture
+def connection(monkeypatch):
+    _Connection.script = {}
+    _Connection.made = []
+    monkeypatch.setattr(ts.http.client, "HTTPSConnection", _Connection)
+    return _Connection
 
 
-class TestSystemOne:
-    def test_without_a_key_the_route_is_absent_and_nothing_is_sent(self, monkeypatch):
-        monkeypatch.setattr(ts._OPENER, "open", _explode)
+def _with_key(**overrides):
+    values = {"TYPESAFE_API_KEY": "test-key", **overrides}
+    patches = [patch.object(Config, name, value) for name, value in values.items()]
+
+    class _All:
+        def __enter__(self):
+            for p in patches:
+                p.__enter__()
+
+        def __exit__(self, *exc):
+            for p in reversed(patches):
+                p.__exit__(*exc)
+
+    return _All()
+
+
+class TestRequestShape:
+    def test_without_a_key_the_route_is_absent_and_no_connection_is_made(
+        self, connection
+    ):
         with patch.object(Config, "TYPESAFE_API_KEY", None):
             with pytest.raises(ts.TypeSafeNotConfigured):
                 ts.system_one("text", QUESTIONS)
             assert ts.is_configured() is False
+        assert connection.made == []
 
     def test_the_request_carries_key_pinned_model_questions_and_timeout(
-        self, monkeypatch
+        self, connection
     ):
-        captured = {}
-        monkeypatch.setattr(ts._OPENER, "open", _opener_returning(GOOD_BODY, captured))
-        with (
-            patch.object(Config, "TYPESAFE_API_KEY", "test-key"),
-            patch.object(Config, "TYPESAFE_TIMEOUT_SECONDS", 7.5),
-        ):
+        connection.script = {"response": _Response(200, GOOD_BODY)}
+        with _with_key(TYPESAFE_TIMEOUT_SECONDS=7.5):
             payload = ts.system_one({"listing_text": "vistas al mar"}, QUESTIONS)
-
+        made = connection.made[0]
         assert payload["answers"]["q"]["noul"] == 0.9
-        assert captured["url"] == "https://api.typesafe.ai/v1/systemone"
-        assert captured["timeout"] == 7.5
-        assert captured["authorization"] == "Bearer test-key"
-        assert captured["body"] == {
+        assert (made.host, made.port, made.timeout) == ("api.typesafe.ai", 443, 7.5)
+        assert (made.method, made.path) == ("POST", "/v1/systemone")
+        assert made.headers["Authorization"] == "Bearer test-key"
+        assert json.loads(made.body) == {
             "state": {"listing_text": "vistas al mar"},
             "model": Config.TYPESAFE_MODEL,
             "questions": QUESTIONS,
         }
         assert Config.TYPESAFE_MODEL == "jev-1.13.0", "the threshold was tuned on 1.13"
+        assert made.closed.is_set(), "the connection is closed after the exchange"
 
-    def test_a_plain_http_origin_is_refused_before_anything_is_sent(self, monkeypatch):
-        monkeypatch.setattr(ts._OPENER, "open", _explode)
-        with (
-            patch.object(Config, "TYPESAFE_API_KEY", "test-key"),
-            patch.object(Config, "TYPESAFE_API_URL", "http://api.typesafe.ai"),
-        ):
-            with pytest.raises(ts.TypeSafeTransportError) as info:
-                ts.system_one("text", QUESTIONS)
-        assert "https" in str(info.value)
+    def test_a_path_prefix_in_the_origin_is_kept(self, connection):
+        connection.script = {"response": _Response(200, GOOD_BODY)}
+        with _with_key(TYPESAFE_API_URL="https://proxy.example:8443/typesafe/"):
+            ts.system_one("text", QUESTIONS)
+        made = connection.made[0]
+        assert (made.host, made.port, made.path) == (
+            "proxy.example",
+            8443,
+            "/typesafe/v1/systemone",
+        )
 
-    def test_a_redirect_is_refused_and_the_opener_carries_that_handler(self):
-        assert any(isinstance(h, ts._RefuseRedirects) for h in ts._OPENER.handlers)
-        request = urllib.request.Request("https://api.typesafe.ai/v1/systemone")
-        with pytest.raises(urllib.error.HTTPError) as info:
-            ts._RefuseRedirects().redirect_request(
-                request, None, 302, "Found", {}, "https://elsewhere.example/steal"
-            )
-        assert info.value.code == 302
-        assert "refused" in str(info.value.reason)
-
-    def test_an_http_error_keeps_its_status_and_is_never_a_urllib_error(
-        self, monkeypatch
+    @pytest.mark.parametrize(
+        "url, fragment",
+        [
+            ("http://api.typesafe.ai", "https"),
+            ("https://[bad", "valid URL"),
+            ("https://api.typesafe.ai:99999", "valid URL"),
+            ("", "https"),
+        ],
+    )
+    def test_a_bad_origin_is_refused_before_a_connection_is_made(
+        self, connection, url, fragment
     ):
-        error = urllib.error.HTTPError(
-            "https://api.typesafe.ai/v1/systemone",
-            401,
-            "Unauthorized",
-            None,
-            io.BytesIO(b'{"error": "Missing or invalid API key"}'),
-        )
-        monkeypatch.setattr(ts._OPENER, "open", _opener_raising(error))
-        with patch.object(Config, "TYPESAFE_API_KEY", "bad-key"):
+        with _with_key(TYPESAFE_API_URL=url):
             with pytest.raises(ts.TypeSafeTransportError) as info:
                 ts.system_one("text", QUESTIONS)
-        assert info.value.status == 401
-        assert "401" in str(info.value)
+        assert fragment in str(info.value)
+        assert connection.made == []
 
-    def test_a_response_body_is_never_copied_into_the_message(self, monkeypatch):
-        """A vendor's error text may echo the request, bearer key included, and
-        the message reaches the log and the stored detail."""
+
+class TestStatuses:
+    def test_an_http_error_keeps_its_status_and_never_reads_the_body(self, connection):
         secret = "apikey_" + "s" * 40
-        error = urllib.error.HTTPError(
-            "https://api.typesafe.ai/v1/systemone",
-            401,
-            "Unauthorized",
-            None,
-            io.BytesIO(f'{{"error": "invalid key {secret}"}}'.encode()),
-        )
-        monkeypatch.setattr(ts._OPENER, "open", _opener_raising(error))
-        with patch.object(Config, "TYPESAFE_API_KEY", secret):
+        response = _Response(401, f'{{"error": "invalid key {secret}"}}'.encode())
+        connection.script = {"response": response}
+        with _with_key(TYPESAFE_API_KEY=secret):
             with pytest.raises(ts.TypeSafeTransportError) as info:
                 ts.system_one("text", QUESTIONS)
         assert str(info.value) == "typesafe returned 401"
-        assert secret not in str(info.value)
         assert info.value.status == 401
+        assert response.closed and response._buf.tell() == 0
 
-    def test_an_invalid_url_is_a_transport_error_not_a_valueerror(self, monkeypatch):
-        monkeypatch.setattr(ts._OPENER, "open", _explode)
-        with (
-            patch.object(Config, "TYPESAFE_API_KEY", "test-key"),
-            patch.object(Config, "TYPESAFE_API_URL", "https://[bad"),
-        ):
+    def test_a_redirect_is_a_status_never_followed(self, connection):
+        connection.script = {"response": _Response(302, b"")}
+        with _with_key():
             with pytest.raises(ts.TypeSafeTransportError) as info:
                 ts.system_one("text", QUESTIONS)
-        assert "valid URL" in str(info.value)
+        assert info.value.status == 302
+        assert len(connection.made) == 1
 
-    def test_a_dripping_body_is_cut_off_at_the_wall_clock_deadline(self, monkeypatch):
-        """`timeout` bounds each socket operation; a peer sending one byte at a
-        time within it would otherwise keep the read alive indefinitely."""
 
-        class _Drip:
-            def read1(self, n=-1):
-                return b"x"
-
-            def read(self, n=-1):
-                raise AssertionError("read(n) blocks until n bytes; read1 must be used")
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return False
-
-        clock = {"now": 1000.0}
-
-        def _monotonic():
-            clock["now"] += 4.0
-            return clock["now"]
-
-        monkeypatch.setattr(ts.time, "monotonic", _monotonic)
-        monkeypatch.setattr(ts._OPENER, "open", lambda request, timeout=None: _Drip())
-        with (
-            patch.object(Config, "TYPESAFE_API_KEY", "test-key"),
-            patch.object(Config, "TYPESAFE_TIMEOUT_SECONDS", 10.0),
-        ):
-            with pytest.raises(ts.TypeSafeTransportError) as info:
-                ts.system_one("text", QUESTIONS)
-        assert "allowance" in str(info.value)
-        assert clock["now"] - 1000.0 < 30.0, (
-            "the loop stopped shortly after the deadline"
-        )
-
-    def test_a_timeout_is_a_transport_error_without_a_status(self, monkeypatch):
-        monkeypatch.setattr(ts._OPENER, "open", _opener_raising(TimeoutError("slow")))
-        with patch.object(Config, "TYPESAFE_API_KEY", "test-key"):
+class TestFailures:
+    def test_an_os_error_is_reported_by_class_and_errno(self, connection):
+        connection.script = {"raise_on_response": ConnectionRefusedError(61, "refused")}
+        with _with_key():
             with pytest.raises(ts.TypeSafeTransportError) as info:
                 ts.system_one("text", QUESTIONS)
         assert info.value.status is None
-        assert "unreachable" in str(info.value)
+        assert "ConnectionRefusedError(61)" in str(info.value)
 
-    def test_a_body_over_the_bound_is_refused_not_truncated(self, monkeypatch):
+    def test_a_malformed_status_line_is_reported_by_class_not_content(self, connection):
+        marker = "SENSITIVE_MARKER_" + "m" * 30
+        connection.script = {"raise_on_response": http.client.BadStatusLine(marker)}
+        with _with_key():
+            with pytest.raises(ts.TypeSafeTransportError) as info:
+                ts.system_one("text", QUESTIONS)
+        assert marker not in str(info.value)
+        assert "BadStatusLine" in str(info.value)
+
+    def test_the_watchdog_cuts_an_exchange_that_never_finishes(self, connection):
+        """A peer that sends a header byte every few seconds satisfies every
+        socket timeout and would otherwise block `getresponse()` for days."""
+        connection.script = {"hang": True}
+        with _with_key(TYPESAFE_TIMEOUT_SECONDS=0.5):
+            with pytest.raises(ts.TypeSafeTransportError) as info:
+                ts.system_one("text", QUESTIONS)
+        assert "time allowance" in str(info.value)
+        assert info.value.__cause__ is None
+        assert connection.made[0].closed.is_set()
+
+    def test_a_header_refusal_at_send_time_drops_the_chain(self, connection):
+        secret = "apikey_" + "s" * 40
+        connection.script = {
+            "raise_on_request": ValueError(
+                f"Invalid header value b'Bearer {secret}\\n'"
+            )
+        }
+        with _with_key(TYPESAFE_API_KEY=secret):
+            with pytest.raises(ts.TypeSafeTransportError) as info:
+                ts.system_one("text", QUESTIONS)
+        assert secret not in str(info.value)
+        assert info.value.__cause__ is None
+        assert info.value.__suppress_context__ is True
+
+
+class TestTheKeyNeverReachesAnErrorMessage:
+    def test_a_key_with_a_trailing_newline_is_refused_before_anything_is_sent(
+        self, connection
+    ):
+        secret = "apikey_" + "s" * 40 + "\n"
+        with patch.object(Config, "TYPESAFE_API_KEY", secret):
+            with pytest.raises(ts.TypeSafeTransportError) as info:
+                ts.system_one("text", QUESTIONS)
+        assert "malformed" in str(info.value)
+        assert "apikey_" not in str(info.value)
+        assert connection.made == []
+
+    @pytest.mark.parametrize("bad", ["with space", "tab\there", "ключ", ""])
+    def test_other_malformed_keys_are_refused_too(self, connection, bad):
+        with patch.object(Config, "TYPESAFE_API_KEY", bad):
+            with pytest.raises(ts.TypeSafeTransportError):
+                ts.system_one("text", QUESTIONS)
+        assert connection.made == []
+
+
+class TestBodies:
+    def test_a_body_over_the_bound_is_refused_not_truncated(self, connection):
         big = (
             b'{"answers": {"q": {"noul": 0.5}}, "pad": "' + b"x" * ts.MAX_RESPONSE_BYTES
         )
-        monkeypatch.setattr(ts._OPENER, "open", _opener_returning(big, {}))
-        with patch.object(Config, "TYPESAFE_API_KEY", "test-key"):
+        connection.script = {"response": _Response(200, big)}
+        with _with_key():
             with pytest.raises(ts.TypeSafeTransportError) as info:
                 ts.system_one("text", QUESTIONS)
         assert "over" in str(info.value)
@@ -211,117 +257,25 @@ class TestSystemOne:
         "body, fragment",
         [
             (b"<html>maintenance</html>", "non-JSON"),
+            (b"[" * 1100 + b"]" * 1100, "non-JSON"),
             (b'{"model": "jev-1.13.0"}', "answers"),
             (b'[{"answers": {}}]', "answers"),
             (b'{"answers": null}', "answers"),
         ],
     )
-    def test_a_body_without_answers_is_refused(self, monkeypatch, body, fragment):
-        monkeypatch.setattr(ts._OPENER, "open", _opener_returning(body, {}))
-        with patch.object(Config, "TYPESAFE_API_KEY", "test-key"):
+    def test_a_body_without_answers_is_refused(self, connection, body, fragment):
+        connection.script = {"response": _Response(200, body)}
+        with _with_key():
             with pytest.raises(ts.TypeSafeTransportError) as info:
                 ts.system_one("text", QUESTIONS)
         assert fragment in str(info.value)
 
-
-class TestPeerTextNeverReachesMessages:
-    def test_a_malformed_status_line_is_reported_by_class_not_content(
-        self, monkeypatch
-    ):
-        import http.client
-
-        marker = "SENSITIVE_MARKER_" + "m" * 30
-        monkeypatch.setattr(
-            ts._OPENER, "open", _opener_raising(http.client.BadStatusLine(marker))
-        )
-        with patch.object(Config, "TYPESAFE_API_KEY", "test-key"):
-            with pytest.raises(ts.TypeSafeTransportError) as info:
-                ts.system_one("text", QUESTIONS)
-        assert marker not in str(info.value)
-        assert "BadStatusLine" in str(info.value)
-
-    def test_an_os_error_is_reported_by_class_and_errno(self, monkeypatch):
-        monkeypatch.setattr(
-            ts._OPENER,
-            "open",
-            _opener_raising(
-                urllib.error.URLError(ConnectionRefusedError(61, "refused"))
-            ),
-        )
-        with patch.object(Config, "TYPESAFE_API_KEY", "test-key"):
-            with pytest.raises(ts.TypeSafeTransportError) as info:
-                ts.system_one("text", QUESTIONS)
-        assert "ConnectionRefusedError(61)" in str(info.value)
-
-    def test_a_body_nested_past_the_recursion_limit_is_a_transport_error(
-        self, monkeypatch
-    ):
-        body = b"[" * 1100 + b"]" * 1100
-        monkeypatch.setattr(ts._OPENER, "open", _opener_returning(body, {}))
-        with patch.object(Config, "TYPESAFE_API_KEY", "test-key"):
-            with pytest.raises(ts.TypeSafeTransportError) as info:
-                ts.system_one("text", QUESTIONS)
-        assert "non-JSON" in str(info.value)
-
-
-class TestIncrementalRead:
-    def test_a_response_without_read1_is_refused(self, monkeypatch):
-        class _Whole:
-            def read(self, n=-1):
-                return GOOD_BODY
-
-            def close(self):
-                pass
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return False
-
-        monkeypatch.setattr(ts._OPENER, "open", lambda request, timeout=None: _Whole())
-        with patch.object(Config, "TYPESAFE_API_KEY", "test-key"):
+    def test_a_response_without_read1_is_refused(self, connection):
+        connection.script = {"response": _Response(200, GOOD_BODY, incremental=False)}
+        with _with_key():
             with pytest.raises(ts.TypeSafeTransportError) as info:
                 ts.system_one("text", QUESTIONS)
         assert "incrementally" in str(info.value)
 
     def test_the_real_response_class_reads_incrementally(self):
-        import http.client
-
         assert callable(getattr(http.client.HTTPResponse, "read1", None))
-
-
-class TestTheKeyNeverReachesAnErrorMessage:
-    def test_a_key_with_a_trailing_newline_is_refused_before_anything_is_sent(
-        self, monkeypatch
-    ):
-        monkeypatch.setattr(ts._OPENER, "open", _explode)
-        secret = "apikey_" + "s" * 40 + "\n"
-        with patch.object(Config, "TYPESAFE_API_KEY", secret):
-            with pytest.raises(ts.TypeSafeTransportError) as info:
-                ts.system_one("text", QUESTIONS)
-        assert "malformed" in str(info.value)
-        assert "apikey_" not in str(info.value)
-
-    @pytest.mark.parametrize("bad", ["with space", "tab\there", "ключ", ""])
-    def test_other_malformed_keys_are_refused_too(self, monkeypatch, bad):
-        monkeypatch.setattr(ts._OPENER, "open", _explode)
-        with patch.object(Config, "TYPESAFE_API_KEY", bad):
-            with pytest.raises(ts.TypeSafeTransportError):
-                ts.system_one("text", QUESTIONS)
-
-    def test_a_header_refusal_at_send_time_drops_the_chain(self, monkeypatch):
-        secret = "apikey_" + "s" * 40
-        monkeypatch.setattr(
-            ts._OPENER,
-            "open",
-            _opener_raising(
-                ValueError(f"Invalid header value b'Bearer {secret}\\\\n'")
-            ),
-        )
-        with patch.object(Config, "TYPESAFE_API_KEY", secret):
-            with pytest.raises(ts.TypeSafeTransportError) as info:
-                ts.system_one("text", QUESTIONS)
-        assert secret not in str(info.value)
-        assert info.value.__cause__ is None
-        assert info.value.__suppress_context__ is True
