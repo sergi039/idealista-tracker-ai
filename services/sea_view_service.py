@@ -303,6 +303,11 @@ TEXT_PROXIMITY = "proximity"
 TEXT_NONE = "none"
 TEXT_UNAVAILABLE = "unavailable"
 
+# `utils/import_research_sheet.py` writes the owner's own notes into
+# `description` behind this prefix. They are not advert text, and they never
+# leave the subscription route (see `classify_text_with_ai`).
+RESEARCH_NOTES_PREFIX = "Research notes from "
+
 _AI_SYSTEM = (
     "You classify Spanish and English real-estate listing text. Answer with one "
     "JSON object and nothing else."
@@ -1412,6 +1417,21 @@ _JEV_CRITERIA = {
 }
 
 
+def _finite_unit_interval(value: Any) -> Optional[float]:
+    """`value` as a float in [0, 1], or None when it is anything else.
+
+    `bool` is an `int` to `isinstance`, Python's JSON decoder lets `NaN` and
+    `Infinity` through, and a value outside the interval breaks the API's
+    contract -- none of them may reach a threshold comparison.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if not math.isfinite(number) or not 0.0 <= number <= 1.0:
+        return None
+    return number
+
+
 def classify_text_with_jev(text: str) -> Dict[str, Any]:
     """One Choice question to Jev; `unavailable` whenever it cannot or should not decide.
 
@@ -1422,6 +1442,7 @@ def classify_text_with_jev(text: str) -> Dict[str, Any]:
     """
     from services import typesafe_transport
 
+    started = time.monotonic()
     try:
         payload = typesafe_transport.system_one(
             state={"listing_text": (text or "")[:2000]},
@@ -1441,29 +1462,39 @@ def classify_text_with_jev(text: str) -> Dict[str, Any]:
 
     answer = payload["answers"].get(_JEV_QUESTION_ID)
     answer = answer if isinstance(answer, dict) else {}
-    claim = str(answer.get("choice") or "").strip().lower()
-    confidence = answer.get("confidence")
-    if claim not in (TEXT_VIEW, TEXT_PROXIMITY, TEXT_NONE) or not isinstance(
-        confidence, (int, float)
+    claim = answer.get("choice")
+    confidence = _finite_unit_interval(answer.get("confidence"))
+    if (
+        answer.get("type") != "choice"
+        or claim not in (TEXT_VIEW, TEXT_PROXIMITY, TEXT_NONE)
+        or confidence is None
     ):
+        # Exact labels only: the criteria keys are what the API echoes back,
+        # and a "View" or a padded label is a contract violation, not a hint.
         logger.warning("Sea-view Jev returned an unexpected answer: %r", answer)
         return {"claim": TEXT_UNAVAILABLE, "error": "unexpected Jev answer"}
-    confidence = round(float(confidence), 3)
+    model = str(payload.get("model") or "")
+    # Compared before rounding: 0.6996 is below 0.7 and stays below it.
     if confidence < Config.SEA_VIEW_TEXT_MIN_CONFIDENCE:
         return {
             "claim": TEXT_UNAVAILABLE,
             "error": (
-                f"Jev confidence {confidence:.2f} below "
+                f"Jev confidence {confidence:.3f} below "
                 f"{Config.SEA_VIEW_TEXT_MIN_CONFIDENCE:.2f}"
             ),
-            "confidence": confidence,
+            "jev_claim": claim,
+            "confidence": round(confidence, 3),
+            "model": model,
+            "jev_ms": int((time.monotonic() - started) * 1000),
         }
     return {
         "claim": claim,
         "quote": "",
         "provider": "typesafe",
-        "confidence": confidence,
-        "model": str(payload.get("model") or ""),
+        "confidence": round(confidence, 3),
+        "model": model,
+        # Wall time of the Jev exchange, the number a p95 criterion reads.
+        "jev_ms": int((time.monotonic() - started) * 1000),
     }
 
 
@@ -1477,7 +1508,16 @@ def classify_text_with_ai(text: str) -> Dict[str, Any]:
     never from ingestion (`use_ai=False`), so neither route is reached
     unattended.
     """
-    jev = classify_text_with_jev(text)
+    if (text or "").startswith(RESEARCH_NOTES_PREFIX):
+        # The owner's own notes, not advert text: they stay on the subscription
+        # route and never reach a third party. They were also every
+        # disagreement in the 2026-09-19 A/B.
+        jev: Dict[str, Any] = {
+            "claim": TEXT_UNAVAILABLE,
+            "error": "research notes stay on the bridge",
+        }
+    else:
+        jev = classify_text_with_jev(text)
     if jev["claim"] != TEXT_UNAVAILABLE:
         return jev
     logger.info(
@@ -1485,6 +1525,9 @@ def classify_text_with_ai(text: str) -> Dict[str, Any]:
     )
     bridge = classify_text_with_bridge(text)
     if "confidence" in jev and bridge.get("claim") != TEXT_UNAVAILABLE:
+        # What Jev would have said and how sure it was: the record a later
+        # threshold review reads.
+        bridge["jev_claim"] = jev.get("jev_claim")
         bridge["jev_confidence"] = jev["confidence"]
     return bridge
 
@@ -1556,7 +1599,14 @@ def evaluate_text(
             # Which model decided, how sure it was, and -- when the bridge
             # decided after Jev declined -- the confidence Jev declined at:
             # the evidence a later threshold review reads, nothing else.
-            for key in ("provider", "confidence", "jev_confidence"):
+            for key in (
+                "provider",
+                "confidence",
+                "model",
+                "jev_claim",
+                "jev_confidence",
+                "jev_ms",
+            ):
                 if key in ai:
                     detail[key] = ai[key]
             return detail

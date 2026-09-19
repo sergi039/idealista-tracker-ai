@@ -67,6 +67,8 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import null
 from sqlalchemy.exc import IntegrityError
 
+from services.sea_view_service import RESEARCH_NOTES_PREFIX
+
 logger = logging.getLogger(__name__)
 
 SOURCE_NAME = "research_sheet"
@@ -176,7 +178,9 @@ def _description(research: Dict[str, Any], sheet: str) -> Optional[str]:
             parts.append(f"{label}: {value}")
     if not parts:
         return None
-    return f"Research notes from {sheet} — not the advert text. " + " · ".join(parts)
+    # The prefix is what keeps these notes on the subscription route in
+    # `services/sea_view_service.classify_text_with_ai`; change both together.
+    return f"{RESEARCH_NOTES_PREFIX}{sheet} — not the advert text. " + " · ".join(parts)
 
 
 def _existing(row: Dict[str, Any]):

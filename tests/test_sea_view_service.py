@@ -1358,6 +1358,7 @@ class TestClassifyTextWithJev:
             typesafe_transport, "system_one", self._answer("view", 0.97, captured)
         )
         result = svc.classify_text_with_jev("x" * 3000)
+        assert isinstance(result.pop("jev_ms"), int)
         assert result == {
             "claim": svc.TEXT_VIEW,
             "quote": "",
@@ -1409,3 +1410,145 @@ class TestClassifyTextWithJev:
         result = svc.classify_text_with_jev("Casa con vistas al mar")
         assert result["claim"] == svc.TEXT_UNAVAILABLE
         assert "529" in result["error"]
+
+
+class TestJevAnswerValidation:
+    """A Jev answer passes only as `type: choice`, an exact label, and a finite
+    confidence in [0, 1] compared to the threshold before rounding."""
+
+    @staticmethod
+    def _answering(answer, model="jev-1.13.0"):
+        def _system_one(state, questions, **kwargs):
+            return {"model": model, "answers": {"sea_claim": answer}, "usage": {}}
+
+        return _system_one
+
+    @pytest.mark.parametrize(
+        "confidence",
+        [True, float("nan"), float("inf"), 1.2, -0.1, "0.9", None],
+        ids=["bool", "nan", "inf", "above-one", "negative", "string", "missing"],
+    )
+    def test_a_confidence_that_is_not_a_finite_unit_number_is_unavailable(
+        self, monkeypatch, confidence
+    ):
+        from services import typesafe_transport
+
+        monkeypatch.setattr(
+            typesafe_transport,
+            "system_one",
+            self._answering(
+                {"type": "choice", "choice": "view", "confidence": confidence}
+            ),
+        )
+        result = svc.classify_text_with_jev("Casa con vistas al mar")
+        assert result["claim"] == svc.TEXT_UNAVAILABLE
+        assert "unexpected" in result["error"]
+
+    def test_the_threshold_is_compared_before_rounding(self, monkeypatch):
+        from unittest.mock import patch
+
+        from config import Config
+        from services import typesafe_transport
+
+        monkeypatch.setattr(
+            typesafe_transport,
+            "system_one",
+            self._answering({"type": "choice", "choice": "view", "confidence": 0.6996}),
+        )
+        with patch.object(Config, "SEA_VIEW_TEXT_MIN_CONFIDENCE", 0.7):
+            result = svc.classify_text_with_jev("Casa con vistas al mar")
+        assert result["claim"] == svc.TEXT_UNAVAILABLE
+        assert result["jev_claim"] == svc.TEXT_VIEW
+        assert result["confidence"] == 0.7, "recorded rounded, decided unrounded"
+        assert result["model"] == "jev-1.13.0"
+
+    def test_exactly_the_threshold_is_accepted(self, monkeypatch):
+        from unittest.mock import patch
+
+        from config import Config
+        from services import typesafe_transport
+
+        monkeypatch.setattr(
+            typesafe_transport,
+            "system_one",
+            self._answering(
+                {"type": "choice", "choice": "proximity", "confidence": 0.7}
+            ),
+        )
+        with patch.object(Config, "SEA_VIEW_TEXT_MIN_CONFIDENCE", 0.7):
+            result = svc.classify_text_with_jev("Parcela frente al mar")
+        assert result["claim"] == svc.TEXT_PROXIMITY
+        assert result["provider"] == "typesafe"
+        assert result["model"] == "jev-1.13.0"
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            {"type": "noul", "noul": 0.9},
+            {"type": "choice", "choice": "View", "confidence": 0.99},
+            {"type": "choice", "choice": " view ", "confidence": 0.99},
+            {"type": "choice", "choice": "maybe", "confidence": 0.99},
+        ],
+        ids=["wrong-type", "capitalised", "padded", "unknown-label"],
+    )
+    def test_anything_but_an_exact_choice_label_is_unavailable(
+        self, monkeypatch, answer
+    ):
+        from services import typesafe_transport
+
+        monkeypatch.setattr(typesafe_transport, "system_one", self._answering(answer))
+        result = svc.classify_text_with_jev("Casa con vistas al mar")
+        assert result["claim"] == svc.TEXT_UNAVAILABLE
+
+    def test_the_bridge_detail_keeps_what_jev_would_have_said(self, monkeypatch):
+        monkeypatch.setattr(
+            svc,
+            "classify_text_with_jev",
+            lambda text: {
+                "claim": svc.TEXT_UNAVAILABLE,
+                "error": "Jev confidence 0.630 below 0.70",
+                "jev_claim": svc.TEXT_VIEW,
+                "confidence": 0.63,
+                "model": "jev-1.13.0",
+            },
+        )
+        monkeypatch.setattr(
+            svc,
+            "classify_text_with_bridge",
+            lambda text: {
+                "claim": svc.TEXT_PROXIMITY,
+                "quote": "",
+                "provider": "bridge",
+            },
+        )
+        result = svc.evaluate_text("Plot", "Parcela frente al mar", True)
+        assert result["provider"] == "bridge"
+        assert result["jev_claim"] == svc.TEXT_VIEW
+        assert result["jev_confidence"] == 0.63
+
+
+class TestResearchNotesStayOnTheBridge:
+    def test_the_owners_notes_never_reach_jev(self, monkeypatch):
+        def _no_jev(text):
+            raise AssertionError("research notes must not be sent to a third party")
+
+        monkeypatch.setattr(svc, "classify_text_with_jev", _no_jev)
+        monkeypatch.setattr(
+            svc,
+            "classify_text_with_bridge",
+            lambda text: {"claim": svc.TEXT_NONE, "quote": "", "provider": "bridge"},
+        )
+        notes = (
+            f"{svc.RESEARCH_NOTES_PREFIX}sea_view_properties.csv — not the advert "
+            "text. Positives: the advert says vistas al mar."
+        )
+        result = svc.evaluate_text("", notes, True)
+        assert result["claim"] == svc.TEXT_NONE
+        assert result["source"] == "ai"
+        assert result["provider"] == "bridge"
+
+    def test_the_importer_writes_the_prefix_the_classifier_checks(self):
+        from utils import import_research_sheet
+
+        assert import_research_sheet.RESEARCH_NOTES_PREFIX is svc.RESEARCH_NOTES_PREFIX
+        assert svc.RESEARCH_NOTES_PREFIX == "Research notes from "

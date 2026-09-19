@@ -14,10 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ≥ `SEA_VIEW_TEXT_MIN_CONFIDENCE` (0.7); below it, without
   `TYPESAFE_API_KEY`, or on any transport failure the subscription bridge
   answers exactly as before. The stored detail records `provider`,
-  `confidence` and `jev_confidence`. `config.py` states the exception to
+  `confidence`, `model`, `jev_claim` and `jev_confidence`. The model is
+  pinned (`TYPESAFE_MODEL`, `jev-1.13.0`), a confidence must be a finite
+  number in [0, 1] and is compared before rounding, and research notes
+  (`RESEARCH_NOTES_PREFIX`) never reach Jev. `config.py` states the exception to
   "no API key anywhere" where it states the prohibition; ingestion
-  (`use_ai=False`) reaches neither model; `enrich_budget` is unchanged
-  because the bridge stays the worst case.
+  (`use_ai=False`) reaches neither model; `enrich_budget` adds the Jev
+  allowance to the bridge's, since the two calls run in sequence.
 - **Why**: the one subscription call an Enrich press makes is this
   three-way question, and it costs a cold CLI run and up to 300 s. Jev
   answers it in ~0.1 s for ~500 input tokens (~$0.00002, output free).

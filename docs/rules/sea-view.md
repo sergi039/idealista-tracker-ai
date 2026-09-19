@@ -199,3 +199,17 @@ quote — it selects, it does not write — so a Jev-decided row has an empty
 `quote`. This is the app's one per-token-billed route (`config.py`,
 `services/typesafe_transport.py`): nothing else may read the key, and ingestion
 (`use_ai=False`) reaches neither model.
+
+Refined the same day after an independent Codex (`gpt-6-astra`) review of the
+diff: the model is pinned (`TYPESAFE_MODEL`, `jev-1.13.0`) because the
+threshold was tuned against that release; a confidence is accepted only as a
+finite number in [0, 1] (`bool`, `NaN`, `Infinity` and out-of-range values are
+contract violations) and is compared to the threshold before rounding; the
+answer must carry `type: choice` and one of the exact three labels; research
+notes (`RESEARCH_NOTES_PREFIX`, written by `utils/import_research_sheet.py`)
+never reach Jev; the Enrich allowance adds the Jev timeout to the bridge's,
+because the two calls run in sequence; the detail also records `model` and,
+when the bridge decided after Jev declined, `jev_claim`. The transport refuses
+redirects and a non-https origin, since urllib would otherwise carry the bearer
+key to wherever a 3xx points. The pilot is a time-boxed experiment; its dates
+and exit criteria are in PR #574.

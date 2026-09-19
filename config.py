@@ -1,6 +1,20 @@
 import os
 
 
+def _bounded_float(name, default, low, high):
+    """A float setting that is finite and within [low, high], or fails at import.
+
+    `NaN` fails both comparisons and infinity fails one, so the range check
+    alone refuses them; a setting that gates a paid answer must not be
+    silently open.
+    """
+    raw = os.environ.get(name)
+    value = float(raw) if raw not in (None, "") else float(default)
+    if not low <= value <= high:
+        raise ValueError(f"{name}={raw!r} must be a finite number in [{low}, {high}]")
+    return value
+
+
 def _first_env(*names, default=None):
     """Return the first non-empty environment variable among names."""
     for name in names:
@@ -54,14 +68,22 @@ class Config:
     # as before (services/sea_view_service.classify_text_with_ai).
     TYPESAFE_API_KEY = os.environ.get("TYPESAFE_API_KEY")
     TYPESAFE_API_URL = os.environ.get("TYPESAFE_API_URL") or "https://api.typesafe.ai"
-    # Per HTTP operation: the SDK's own default, and ~100x a measured answer.
-    TYPESAFE_TIMEOUT_SECONDS = float(os.environ.get("TYPESAFE_TIMEOUT_SECONDS") or "10")
+    # Pinned, not `jev-latest`: the threshold below was tuned against this
+    # release, and the vendor's own guidance is to pin when a threshold is.
+    TYPESAFE_MODEL = os.environ.get("TYPESAFE_MODEL") or "jev-1.13.0"
+    # Per blocking socket operation (`urlopen`'s meaning): an allowance, not a
+    # deadline on the whole exchange. The SDK's own default, ~100x a measured
+    # answer, and counted into the Enrich press budget (services/enrich_budget).
+    TYPESAFE_TIMEOUT_SECONDS = _bounded_float(
+        "TYPESAFE_TIMEOUT_SECONDS", 10.0, 0.5, 120.0
+    )
     # Below this Choice confidence Jev abstains and the bridge decides. 0.7 was
     # measured on 2026-09-19 against the 42 bridge-labelled production rows:
     # 90.5 % of them at or above it with 100 % agreement, and every
-    # disagreement below it.
-    SEA_VIEW_TEXT_MIN_CONFIDENCE = float(
-        os.environ.get("SEA_VIEW_TEXT_MIN_CONFIDENCE") or "0.7"
+    # disagreement below it. An experimental parameter, not a guarantee: the
+    # sample is the one the threshold was chosen on.
+    SEA_VIEW_TEXT_MIN_CONFIDENCE = _bounded_float(
+        "SEA_VIEW_TEXT_MIN_CONFIDENCE", 0.7, 0.0, 1.0
     )
 
     # The single definition of the AI analysis timeout (#206 item 3). Used as

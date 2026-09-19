@@ -57,16 +57,22 @@ def lookup_budget_seconds() -> float:
 
 
 def ai_allowance_seconds() -> float:
-    """The one subscription call an Enrich press can make.
+    """The AI calls an Enrich press can make for the sea-view text signal.
 
-    The transport's default, because the caller takes it: `sea_view_service.
-    classify_text_with_ai` calls `subscription_transport.complete()` with no
-    `timeout=`.
+    Two, in sequence, since 2026-09-19: Jev first (`TYPESAFE_TIMEOUT_SECONDS`,
+    an allowance per socket operation) and, when Jev declines, the one
+    subscription call -- the transport's default, because the caller takes
+    it: `sea_view_service.classify_text_with_ai` calls
+    `subscription_transport.complete()` with no `timeout=`. They add up rather
+    than alternate: a Jev timeout is exactly the case that reaches the bridge.
     """
     from services.subscription_transport import DEFAULT_TIMEOUT_SECONDS
 
-    return float(DEFAULT_TIMEOUT_SECONDS) + float(
-        getattr(Config, "AI_BRIDGE_SOCKET_MARGIN_SECONDS", 25)
+    jev = float(getattr(Config, "TYPESAFE_TIMEOUT_SECONDS", 10.0))
+    return (
+        jev
+        + float(DEFAULT_TIMEOUT_SECONDS)
+        + float(getattr(Config, "AI_BRIDGE_SOCKET_MARGIN_SECONDS", 25))
     )
 
 
