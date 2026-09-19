@@ -229,3 +229,11 @@ transport failures ≤ 5 %, Jev p95 ≤ 1 s from `jev_ms`; fewer than 30 decisio
 ends the experiment as "insufficient traffic", and either outcome short of the
 criteria means removal — key revoked, transport, settings and the documented
 exception deleted, results kept.
+
+After the Tier 2 reviewer's first pass (`rx`, Codex): the transport never
+copies a response body into a message, a log line or the stored detail — a
+vendor's 4xx text may echo the request, bearer key included — and reports the
+HTTP status alone; an invalid `TYPESAFE_API_URL` is a transport error rather
+than an escaping `ValueError`; and the body read runs against a wall-clock
+deadline of `TYPESAFE_TIMEOUT_SECONDS`, so one exchange takes at most about
+twice that setting and the Enrich allowance counts it twice.

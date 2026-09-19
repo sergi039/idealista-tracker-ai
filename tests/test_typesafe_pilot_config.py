@@ -30,19 +30,21 @@ class TestBoundedFloat:
 
 
 class TestEnrichBudgetCountsJev:
-    def test_the_ai_allowance_adds_jev_before_the_bridge(self):
+    def test_the_ai_allowance_counts_jev_twice_before_the_bridge(self):
+        """Connect timeout plus the transport's read deadline, both the same
+        setting, then the bridge's own allowance."""
         margin = Config.AI_BRIDGE_SOCKET_MARGIN_SECONDS
         with patch.object(Config, "TYPESAFE_TIMEOUT_SECONDS", 10.0):
             assert enrich_budget.ai_allowance_seconds() == pytest.approx(
-                10.0 + DEFAULT_TIMEOUT_SECONDS + margin
+                20.0 + DEFAULT_TIMEOUT_SECONDS + margin
             )
         with patch.object(Config, "TYPESAFE_TIMEOUT_SECONDS", 25.0):
             assert enrich_budget.ai_allowance_seconds() == pytest.approx(
-                25.0 + DEFAULT_TIMEOUT_SECONDS + margin
+                50.0 + DEFAULT_TIMEOUT_SECONDS + margin
             )
 
-    def test_the_poll_ceiling_moves_with_the_jev_allowance(self):
+    def test_the_poll_ceiling_moves_with_twice_the_jev_timeout(self):
         with patch.object(Config, "TYPESAFE_TIMEOUT_SECONDS", 10.0):
             base = enrich_budget.poll_timeout_ms()
         with patch.object(Config, "TYPESAFE_TIMEOUT_SECONDS", 40.0):
-            assert enrich_budget.poll_timeout_ms() == base + 30_000
+            assert enrich_budget.poll_timeout_ms() == base + 60_000

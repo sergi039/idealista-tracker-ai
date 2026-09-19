@@ -30,6 +30,7 @@ from __future__ import annotations
 import http.client
 import json
 import logging
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Dict, Optional
@@ -44,7 +45,7 @@ SYSTEM_ONE_PATH = "/v1/systemone"
 # usage. Bounded so a misbehaving endpoint cannot hold memory hostage, and a
 # body that reaches the bound is refused, not truncated into a parse error.
 MAX_RESPONSE_BYTES = 1024 * 1024
-_ERROR_DETAIL_BYTES = 300
+_CHUNK_BYTES = 64 * 1024
 
 
 class TypeSafeTransportError(RuntimeError):
@@ -87,28 +88,47 @@ def is_configured() -> bool:
 
 def _base_url() -> str:
     base = (Config.TYPESAFE_API_URL or "").strip().rstrip("/")
-    parts = urlsplit(base)
+    try:
+        parts = urlsplit(base)
+    except ValueError as exc:  # an unbalanced IPv6 bracket, for one
+        raise TypeSafeTransportError("TYPESAFE_API_URL is not a valid URL") from exc
     if parts.scheme != "https" or not parts.netloc:
         raise TypeSafeTransportError("TYPESAFE_API_URL must be an https:// origin")
     return base
 
 
-def _error_detail(exc: urllib.error.HTTPError) -> str:
-    """The first bytes of an error body, or a marker when even that fails.
-
-    Reading the body is a second network operation: it can time out or be cut
-    off exactly like the first. Inside an `except` clause that failure would
-    escape past every sibling handler, so it is contained here.
-    """
+def _discard(response: Any) -> None:
+    """Close a response whose body is deliberately not read."""
     try:
-        return exc.read(8192).decode("utf-8", "replace")[:_ERROR_DETAIL_BYTES]
-    except Exception:  # noqa: BLE001 - the outer error is what is reported
-        return "<error body unreadable>"
-    finally:
-        try:
-            exc.close()
-        except Exception:  # noqa: BLE001 - nothing left to release
-            pass
+        response.close()
+    except Exception:  # noqa: BLE001 - nothing left to release
+        pass
+
+
+def _read_within(response: Any, deadline: float) -> bytes:
+    """The body, as long as it arrives within the deadline and the size bound.
+
+    The opener's `timeout` bounds each blocking socket operation, so a peer
+    sending one byte every few seconds could keep a single read alive for as
+    long as it liked. Reading in chunks against a wall-clock deadline turns
+    the allowance into a bound: at most one chunk's blocking time past it.
+    """
+    chunks: list = []
+    size = 0
+    while True:
+        chunk = response.read(_CHUNK_BYTES)
+        if not chunk:
+            return b"".join(chunks)
+        size += len(chunk)
+        if size > MAX_RESPONSE_BYTES:
+            raise TypeSafeTransportError(
+                f"typesafe returned a body over {MAX_RESPONSE_BYTES} bytes"
+            )
+        if time.monotonic() > deadline:
+            raise TypeSafeTransportError(
+                "typesafe response exceeded the time allowance"
+            )
+        chunks.append(chunk)
 
 
 def system_one(
@@ -122,8 +142,11 @@ def system_one(
 
     Every failure is a `TypeSafeTransportError`, so a caller has one thing to
     catch and never sees `urllib` internals. `timeout` bounds each blocking
-    socket operation, as `urlopen` defines it -- an allowance, not a deadline
-    on the whole exchange.
+    socket operation, as `urlopen` defines it, and the body read runs against
+    a wall-clock deadline of the same length, so one exchange takes at most
+    about twice `timeout`. No response body is ever copied into a message: a
+    vendor's error text may echo the request, bearer key included, and the
+    message reaches the log and the stored detail.
     """
     if not Config.TYPESAFE_API_KEY:
         raise TypeSafeNotConfigured("TYPESAFE_API_KEY is not configured")
@@ -146,12 +169,15 @@ def system_one(
         method="POST",
     )
     seconds = Config.TYPESAFE_TIMEOUT_SECONDS if timeout is None else timeout
+    deadline = time.monotonic() + seconds
     try:
         with _OPENER.open(request, timeout=seconds) as response:
-            body = response.read(MAX_RESPONSE_BYTES + 1)
+            body = _read_within(response, deadline)
     except urllib.error.HTTPError as exc:
+        # The status is the whole diagnosis; the body stays unread.
+        _discard(exc)
         raise TypeSafeTransportError(
-            f"typesafe returned {exc.code}: {_error_detail(exc)}", status=exc.code
+            f"typesafe returned {exc.code}", status=exc.code
         ) from exc
     except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
         reason = getattr(exc, "reason", exc)
@@ -159,10 +185,6 @@ def system_one(
             f"typesafe unreachable at {base}: {reason}"
         ) from exc
 
-    if len(body) > MAX_RESPONSE_BYTES:
-        raise TypeSafeTransportError(
-            f"typesafe returned a body over {MAX_RESPONSE_BYTES} bytes"
-        )
     try:
         decoded = json.loads(body)
     except ValueError as exc:

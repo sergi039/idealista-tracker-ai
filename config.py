@@ -71,9 +71,10 @@ class Config:
     # Pinned, not `jev-latest`: the threshold below was tuned against this
     # release, and the vendor's own guidance is to pin when a threshold is.
     TYPESAFE_MODEL = os.environ.get("TYPESAFE_MODEL") or "jev-1.13.0"
-    # Per blocking socket operation (`urlopen`'s meaning): an allowance, not a
-    # deadline on the whole exchange. The SDK's own default, ~100x a measured
-    # answer, and counted into the Enrich press budget (services/enrich_budget).
+    # Per blocking socket operation (`urlopen`'s meaning) and, in the transport,
+    # a wall-clock deadline on the body read, so one exchange takes at most
+    # about twice this. The SDK's own default, ~100x a measured answer; the
+    # Enrich press budget counts it twice (services/enrich_budget).
     TYPESAFE_TIMEOUT_SECONDS = _bounded_float(
         "TYPESAFE_TIMEOUT_SECONDS", 10.0, 0.5, 120.0
     )

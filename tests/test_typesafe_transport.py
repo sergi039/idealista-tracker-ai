@@ -124,22 +124,67 @@ class TestSystemOne:
         assert info.value.status == 401
         assert "401" in str(info.value)
 
-    def test_an_error_body_that_cannot_be_read_is_still_one_transport_error(
-        self, monkeypatch
-    ):
-        class _Cut(io.BytesIO):
-            def read(self, *args, **kwargs):
-                raise TimeoutError("the body never arrived")
-
+    def test_a_response_body_is_never_copied_into_the_message(self, monkeypatch):
+        """A vendor's error text may echo the request, bearer key included, and
+        the message reaches the log and the stored detail."""
+        secret = "apikey_" + "s" * 40
         error = urllib.error.HTTPError(
-            "https://api.typesafe.ai/v1/systemone", 529, "Overloaded", None, _Cut()
+            "https://api.typesafe.ai/v1/systemone",
+            401,
+            "Unauthorized",
+            None,
+            io.BytesIO(f'{{"error": "invalid key {secret}"}}'.encode()),
         )
         monkeypatch.setattr(ts._OPENER, "open", _opener_raising(error))
-        with patch.object(Config, "TYPESAFE_API_KEY", "test-key"):
+        with patch.object(Config, "TYPESAFE_API_KEY", secret):
             with pytest.raises(ts.TypeSafeTransportError) as info:
                 ts.system_one("text", QUESTIONS)
-        assert info.value.status == 529
-        assert "unreadable" in str(info.value)
+        assert str(info.value) == "typesafe returned 401"
+        assert secret not in str(info.value)
+        assert info.value.status == 401
+
+    def test_an_invalid_url_is_a_transport_error_not_a_valueerror(self, monkeypatch):
+        monkeypatch.setattr(ts._OPENER, "open", _explode)
+        with (
+            patch.object(Config, "TYPESAFE_API_KEY", "test-key"),
+            patch.object(Config, "TYPESAFE_API_URL", "https://[bad"),
+        ):
+            with pytest.raises(ts.TypeSafeTransportError) as info:
+                ts.system_one("text", QUESTIONS)
+        assert "valid URL" in str(info.value)
+
+    def test_a_dripping_body_is_cut_off_at_the_wall_clock_deadline(self, monkeypatch):
+        """`timeout` bounds each socket operation; a peer sending one byte at a
+        time within it would otherwise keep the read alive indefinitely."""
+
+        class _Drip:
+            def read(self, n=-1):
+                return b"x"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        clock = {"now": 1000.0}
+
+        def _monotonic():
+            clock["now"] += 4.0
+            return clock["now"]
+
+        monkeypatch.setattr(ts.time, "monotonic", _monotonic)
+        monkeypatch.setattr(ts._OPENER, "open", lambda request, timeout=None: _Drip())
+        with (
+            patch.object(Config, "TYPESAFE_API_KEY", "test-key"),
+            patch.object(Config, "TYPESAFE_TIMEOUT_SECONDS", 10.0),
+        ):
+            with pytest.raises(ts.TypeSafeTransportError) as info:
+                ts.system_one("text", QUESTIONS)
+        assert "allowance" in str(info.value)
+        assert clock["now"] - 1000.0 < 30.0, (
+            "the loop stopped shortly after the deadline"
+        )
 
     def test_a_timeout_is_a_transport_error_without_a_status(self, monkeypatch):
         monkeypatch.setattr(ts._OPENER, "open", _opener_raising(TimeoutError("slow")))
