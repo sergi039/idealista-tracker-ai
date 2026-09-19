@@ -289,3 +289,39 @@ class TestIncrementalRead:
         import http.client
 
         assert callable(getattr(http.client.HTTPResponse, "read1", None))
+
+
+class TestTheKeyNeverReachesAnErrorMessage:
+    def test_a_key_with_a_trailing_newline_is_refused_before_anything_is_sent(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(ts._OPENER, "open", _explode)
+        secret = "apikey_" + "s" * 40 + "\n"
+        with patch.object(Config, "TYPESAFE_API_KEY", secret):
+            with pytest.raises(ts.TypeSafeTransportError) as info:
+                ts.system_one("text", QUESTIONS)
+        assert "malformed" in str(info.value)
+        assert "apikey_" not in str(info.value)
+
+    @pytest.mark.parametrize("bad", ["with space", "tab\there", "ключ", ""])
+    def test_other_malformed_keys_are_refused_too(self, monkeypatch, bad):
+        monkeypatch.setattr(ts._OPENER, "open", _explode)
+        with patch.object(Config, "TYPESAFE_API_KEY", bad):
+            with pytest.raises(ts.TypeSafeTransportError):
+                ts.system_one("text", QUESTIONS)
+
+    def test_a_header_refusal_at_send_time_drops_the_chain(self, monkeypatch):
+        secret = "apikey_" + "s" * 40
+        monkeypatch.setattr(
+            ts._OPENER,
+            "open",
+            _opener_raising(
+                ValueError(f"Invalid header value b'Bearer {secret}\\\\n'")
+            ),
+        )
+        with patch.object(Config, "TYPESAFE_API_KEY", secret):
+            with pytest.raises(ts.TypeSafeTransportError) as info:
+                ts.system_one("text", QUESTIONS)
+        assert secret not in str(info.value)
+        assert info.value.__cause__ is None
+        assert info.value.__suppress_context__ is True

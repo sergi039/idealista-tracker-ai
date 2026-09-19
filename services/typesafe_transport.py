@@ -30,6 +30,7 @@ from __future__ import annotations
 import http.client
 import json
 import logging
+import re
 import time
 import urllib.error
 import urllib.request
@@ -46,6 +47,10 @@ SYSTEM_ONE_PATH = "/v1/systemone"
 # body that reaches the bound is refused, not truncated into a parse error.
 MAX_RESPONSE_BYTES = 1024 * 1024
 _CHUNK_BYTES = 64 * 1024
+# A bearer token is printable ASCII without whitespace. Anything else --
+# a trailing newline from a hand-edited .env, say -- would make http.client
+# refuse the header with a message that quotes it, credential included.
+_KEY_SHAPE = re.compile(r"[\x21-\x7e]+")
 
 
 class TypeSafeTransportError(RuntimeError):
@@ -165,6 +170,10 @@ def system_one(
     """
     if not Config.TYPESAFE_API_KEY:
         raise TypeSafeNotConfigured("TYPESAFE_API_KEY is not configured")
+    if not _KEY_SHAPE.fullmatch(Config.TYPESAFE_API_KEY):
+        raise TypeSafeTransportError(
+            "TYPESAFE_API_KEY is malformed (whitespace or control characters)"
+        )
     base = _base_url()
     if not questions:
         raise TypeSafeTransportError("system_one needs at least one question")
@@ -201,6 +210,13 @@ def system_one(
         raise TypeSafeTransportError(
             f"typesafe unreachable at {base}: {_failure_name(exc)}"
         ) from exc
+    except ValueError:
+        # http.client refuses a malformed header with a message that quotes
+        # it. The chain is dropped on purpose: a traceback would carry the
+        # value. The key-shape check above makes this unreachable in practice.
+        raise TypeSafeTransportError(
+            "typesafe request was refused before it was sent"
+        ) from None
 
     try:
         decoded = json.loads(body)
