@@ -1657,3 +1657,59 @@ class TestJevAttemptRecord:
         assert isinstance(result["jev_ms"], int)
         assert len(result["jev_text_sha256"]) == 16
         assert result["jev_text_chars"] == len("Casa con vistas al mar")
+
+
+class TestHostileAnswersStayOnTheBridge:
+    """Answer content is peer-controlled: it must neither escape as an
+    exception nor be copied into the log."""
+
+    def test_an_integer_too_large_for_a_float_is_unavailable(self, monkeypatch):
+        from services import typesafe_transport
+
+        monkeypatch.setattr(
+            typesafe_transport,
+            "system_one",
+            lambda state, questions, **kwargs: {
+                "model": "jev-1.13.0",
+                "answers": {
+                    "sea_claim": {
+                        "type": "choice",
+                        "choice": "view",
+                        "confidence": 10**400,
+                    }
+                },
+            },
+        )
+        result = svc.classify_text_with_jev("Casa con vistas al mar")
+        assert result["claim"] == svc.TEXT_UNAVAILABLE
+        assert result["jev_status"] == "error"
+
+    def test_an_unexpected_answer_is_logged_by_shape_not_content(
+        self, monkeypatch, caplog
+    ):
+        import logging
+
+        from services import typesafe_transport
+
+        marker = "SENSITIVE_MARKER_" + "m" * 30
+        monkeypatch.setattr(
+            typesafe_transport,
+            "system_one",
+            lambda state, questions, **kwargs: {
+                "model": "jev-1.13.0",
+                "answers": {
+                    "sea_claim": {
+                        "type": "choice",
+                        "choice": "invalid",
+                        "echo": marker,
+                        "confidence": 0.9,
+                    }
+                },
+            },
+        )
+        with caplog.at_level(logging.WARNING, logger="services.sea_view_service"):
+            result = svc.classify_text_with_jev("Casa con vistas al mar")
+        assert result["claim"] == svc.TEXT_UNAVAILABLE
+        assert marker not in caplog.text
+        assert "invalid" not in caplog.text
+        assert "not a label" in caplog.text

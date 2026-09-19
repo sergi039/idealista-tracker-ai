@@ -1427,7 +1427,10 @@ def _finite_unit_interval(value: Any) -> Optional[float]:
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    number = float(value)
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):  # an int too large for a float
+        return None
     if not math.isfinite(number) or not 0.0 <= number <= 1.0:
         return None
     return number
@@ -1501,7 +1504,18 @@ def classify_text_with_jev(text: str) -> Dict[str, Any]:
     ):
         # Exact labels only: the criteria keys are what the API echoes back,
         # and a "View" or a padded label is a contract violation, not a hint.
-        logger.warning("Sea-view Jev returned an unexpected answer: %r", answer)
+        # Shape only, never content: the answer is peer-controlled text and
+        # this line reaches the log.
+        logger.warning(
+            "Sea-view Jev returned an unexpected answer: type=%s choice=%s confidence=%s",
+            "choice"
+            if answer.get("type") == "choice"
+            else type(answer.get("type")).__name__,
+            claim
+            if claim in (TEXT_VIEW, TEXT_PROXIMITY, TEXT_NONE)
+            else "<not a label>",
+            type(answer.get("confidence")).__name__,
+        )
         return {
             "claim": TEXT_UNAVAILABLE,
             "error": "unexpected Jev answer",

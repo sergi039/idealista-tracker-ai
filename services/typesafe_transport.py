@@ -97,6 +97,15 @@ def _base_url() -> str:
     return base
 
 
+def _failure_name(exc: BaseException) -> str:
+    """`ClassName` or `ClassName(errno)`: what failed, never what the peer said."""
+    reason = getattr(exc, "reason", None)
+    inner = reason if isinstance(reason, BaseException) else exc
+    errno = getattr(inner, "errno", None)
+    name = type(inner).__name__
+    return f"{name}({errno})" if isinstance(errno, int) else name
+
+
 def _discard(response: Any) -> None:
     """Close a response whose body is deliberately not read."""
     try:
@@ -180,14 +189,16 @@ def system_one(
             f"typesafe returned {exc.code}", status=exc.code
         ) from exc
     except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
-        reason = getattr(exc, "reason", exc)
+        # The class and errno are the whole diagnosis. The exception's text
+        # can carry what the peer sent (a malformed status line, say), and
+        # this message reaches the log and the stored detail.
         raise TypeSafeTransportError(
-            f"typesafe unreachable at {base}: {reason}"
+            f"typesafe unreachable at {base}: {_failure_name(exc)}"
         ) from exc
 
     try:
         decoded = json.loads(body)
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:  # nesting past the limit, too
         raise TypeSafeTransportError("typesafe returned a non-JSON body") from exc
     if not isinstance(decoded, dict) or not isinstance(decoded.get("answers"), dict):
         raise TypeSafeTransportError("typesafe returned a body without answers")

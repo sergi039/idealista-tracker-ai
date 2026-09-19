@@ -219,3 +219,43 @@ class TestSystemOne:
             with pytest.raises(ts.TypeSafeTransportError) as info:
                 ts.system_one("text", QUESTIONS)
         assert fragment in str(info.value)
+
+
+class TestPeerTextNeverReachesMessages:
+    def test_a_malformed_status_line_is_reported_by_class_not_content(
+        self, monkeypatch
+    ):
+        import http.client
+
+        marker = "SENSITIVE_MARKER_" + "m" * 30
+        monkeypatch.setattr(
+            ts._OPENER, "open", _opener_raising(http.client.BadStatusLine(marker))
+        )
+        with patch.object(Config, "TYPESAFE_API_KEY", "test-key"):
+            with pytest.raises(ts.TypeSafeTransportError) as info:
+                ts.system_one("text", QUESTIONS)
+        assert marker not in str(info.value)
+        assert "BadStatusLine" in str(info.value)
+
+    def test_an_os_error_is_reported_by_class_and_errno(self, monkeypatch):
+        monkeypatch.setattr(
+            ts._OPENER,
+            "open",
+            _opener_raising(
+                urllib.error.URLError(ConnectionRefusedError(61, "refused"))
+            ),
+        )
+        with patch.object(Config, "TYPESAFE_API_KEY", "test-key"):
+            with pytest.raises(ts.TypeSafeTransportError) as info:
+                ts.system_one("text", QUESTIONS)
+        assert "ConnectionRefusedError(61)" in str(info.value)
+
+    def test_a_body_nested_past_the_recursion_limit_is_a_transport_error(
+        self, monkeypatch
+    ):
+        body = b"[" * 1100 + b"]" * 1100
+        monkeypatch.setattr(ts._OPENER, "open", _opener_returning(body, {}))
+        with patch.object(Config, "TYPESAFE_API_KEY", "test-key"):
+            with pytest.raises(ts.TypeSafeTransportError) as info:
+                ts.system_one("text", QUESTIONS)
+        assert "non-JSON" in str(info.value)
