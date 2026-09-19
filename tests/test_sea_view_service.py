@@ -1713,3 +1713,50 @@ class TestHostileAnswersStayOnTheBridge:
         assert marker not in caplog.text
         assert "invalid" not in caplog.text
         assert "not a label" in caplog.text
+
+
+class TestTheModelFieldIsPeerControlled:
+    @staticmethod
+    def _answering(model):
+        def _system_one(state, questions, **kwargs):
+            return {
+                "model": model,
+                "answers": {
+                    "sea_claim": {
+                        "type": "choice",
+                        "choice": "view",
+                        "confidence": 0.95,
+                    }
+                },
+            }
+
+        return _system_one
+
+    def test_an_answer_for_another_model_is_unavailable(self, monkeypatch):
+        from services import typesafe_transport
+
+        monkeypatch.setattr(
+            typesafe_transport, "system_one", self._answering("jev-9.9.9")
+        )
+        result = svc.classify_text_with_jev("Casa con vistas al mar")
+        assert result["claim"] == svc.TEXT_UNAVAILABLE
+        assert result["jev_error"] == "model mismatch"
+
+    def test_an_echoed_secret_in_the_model_field_is_never_stored(self, monkeypatch):
+        from services import typesafe_transport
+
+        marker = "apikey_" + "s" * 40
+        monkeypatch.setattr(typesafe_transport, "system_one", self._answering(marker))
+        result = svc.classify_text_with_jev("Casa con vistas al mar")
+        assert marker not in str(result)
+
+    def test_a_decided_row_stores_the_configured_constant(self, monkeypatch):
+        from config import Config
+        from services import typesafe_transport
+
+        monkeypatch.setattr(
+            typesafe_transport, "system_one", self._answering(Config.TYPESAFE_MODEL)
+        )
+        result = svc.classify_text_with_jev("Casa con vistas al mar")
+        assert result["claim"] == svc.TEXT_VIEW
+        assert result["model"] is Config.TYPESAFE_MODEL

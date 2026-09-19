@@ -1492,7 +1492,20 @@ def classify_text_with_jev(text: str) -> Dict[str, Any]:
             **record,
         }
 
-    model = str(payload.get("model") or "")
+    # The model field is peer-controlled text: it is checked against the
+    # pinned model, and only the configured constant is ever stored.
+    model = Config.TYPESAFE_MODEL
+    if payload.get("model") != model:
+        logger.warning("Sea-view Jev answered for a model other than the pinned one")
+        return {
+            "claim": TEXT_UNAVAILABLE,
+            "error": "unexpected Jev answer",
+            "jev_status": "error",
+            "jev_error": "model mismatch",
+            "model": model,
+            "jev_ms": _elapsed_ms(),
+            **record,
+        }
     answer = payload["answers"].get(_JEV_QUESTION_ID)
     answer = answer if isinstance(answer, dict) else {}
     claim = answer.get("choice")

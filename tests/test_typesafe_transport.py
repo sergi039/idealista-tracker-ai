@@ -158,8 +158,11 @@ class TestSystemOne:
         time within it would otherwise keep the read alive indefinitely."""
 
         class _Drip:
-            def read(self, n=-1):
+            def read1(self, n=-1):
                 return b"x"
+
+            def read(self, n=-1):
+                raise AssertionError("read(n) blocks until n bytes; read1 must be used")
 
             def __enter__(self):
                 return self
@@ -259,3 +262,30 @@ class TestPeerTextNeverReachesMessages:
             with pytest.raises(ts.TypeSafeTransportError) as info:
                 ts.system_one("text", QUESTIONS)
         assert "non-JSON" in str(info.value)
+
+
+class TestIncrementalRead:
+    def test_a_response_without_read1_is_refused(self, monkeypatch):
+        class _Whole:
+            def read(self, n=-1):
+                return GOOD_BODY
+
+            def close(self):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        monkeypatch.setattr(ts._OPENER, "open", lambda request, timeout=None: _Whole())
+        with patch.object(Config, "TYPESAFE_API_KEY", "test-key"):
+            with pytest.raises(ts.TypeSafeTransportError) as info:
+                ts.system_one("text", QUESTIONS)
+        assert "incrementally" in str(info.value)
+
+    def test_the_real_response_class_reads_incrementally(self):
+        import http.client
+
+        assert callable(getattr(http.client.HTTPResponse, "read1", None))

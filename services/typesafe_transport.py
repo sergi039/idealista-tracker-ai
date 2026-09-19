@@ -119,13 +119,19 @@ def _read_within(response: Any, deadline: float) -> bytes:
 
     The opener's `timeout` bounds each blocking socket operation, so a peer
     sending one byte every few seconds could keep a single read alive for as
-    long as it liked. Reading in chunks against a wall-clock deadline turns
-    the allowance into a bound: at most one chunk's blocking time past it.
+    long as it liked. `read1` returns whatever has arrived after at most one
+    socket read -- `read(n)` would block until `n` bytes had -- so checking
+    a wall-clock deadline after each call turns the allowance into a bound:
+    at most one socket operation's blocking time past it.
     """
+    read1 = getattr(response, "read1", None)
+    if read1 is None:
+        _discard(response)
+        raise TypeSafeTransportError("typesafe response cannot be read incrementally")
     chunks: list = []
     size = 0
     while True:
-        chunk = response.read(_CHUNK_BYTES)
+        chunk = read1(_CHUNK_BYTES)
         if not chunk:
             return b"".join(chunks)
         size += len(chunk)

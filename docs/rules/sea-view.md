@@ -237,3 +237,9 @@ HTTP status alone; an invalid `TYPESAFE_API_URL` is a transport error rather
 than an escaping `ValueError`; and the body read runs against a wall-clock
 deadline of `TYPESAFE_TIMEOUT_SECONDS`, so one exchange takes at most about
 twice that setting and the Enrich allowance counts it twice.
+
+Third reviewer pass: the body is read with `read1`, which returns whatever has
+arrived after one socket read, so a peer dripping bytes cannot hold a chunked
+read open past the deadline; and the `model` field of an answer is checked
+against the pinned model and only the configured constant is stored, because
+that field is peer-controlled text like everything else in the body.
