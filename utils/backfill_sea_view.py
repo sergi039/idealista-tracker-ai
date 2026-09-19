@@ -34,7 +34,11 @@ logger = logging.getLogger(__name__)
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Compute sea-view verdicts for properties (free sources only)."
+        description=(
+            "Compute sea-view verdicts: free geometry sources, plus Jev (billed "
+            "per token, when TYPESAFE_API_KEY is set) and the subscription bridge "
+            "for the text signal; --no-ai skips both."
+        )
     )
     parser.add_argument(
         "--limit", type=int, default=0, help="Limit properties processed (0 = all)."

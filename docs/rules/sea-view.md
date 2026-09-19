@@ -213,3 +213,19 @@ when the bridge decided after Jev declined, `jev_claim`. The transport refuses
 redirects and a non-https origin, since urllib would otherwise carry the bearer
 key to wherever a 3xx points. The pilot is a time-boxed experiment; its dates
 and exit criteria are in PR #574.
+
+What the pilot records, settled with Codex in the second round: on every
+attempt — Jev decided, Jev abstained, the transport failed, or research notes
+were kept away — the detail carries `jev_status` (`decided` / `abstained` /
+`error` / `research_notes`), `jev_error` when there was one, `jev_ms` (wall
+time of the exchange), `jev_text_sha256` (16 hex characters) and
+`jev_text_chars`, the fingerprint of the text sent rather than a copy of it;
+the record survives a bridge failure into the keyword fallback, and nothing at
+all is written when `TYPESAFE_API_KEY` is absent. Exit criteria agreed for
+PR #574: checkpoint 2026-10-03, end 2026-10-17; continuation needs at least 30
+unique Jev-decided listings audited by a person from the stored detail, zero
+false `view`, at most one other error, coverage ≥ 80 % of eligible attempts,
+transport failures ≤ 5 %, Jev p95 ≤ 1 s from `jev_ms`; fewer than 30 decisions
+ends the experiment as "insufficient traffic", and either outcome short of the
+criteria means removal — key revoked, transport, settings and the documented
+exception deleted, results kept.

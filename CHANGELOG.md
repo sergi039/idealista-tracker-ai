@@ -14,7 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ≥ `SEA_VIEW_TEXT_MIN_CONFIDENCE` (0.7); below it, without
   `TYPESAFE_API_KEY`, or on any transport failure the subscription bridge
   answers exactly as before. The stored detail records `provider`,
-  `confidence`, `model`, `jev_claim` and `jev_confidence`. The model is
+  `confidence`, `model`, `jev_status`, `jev_error`, `jev_claim`,
+  `jev_confidence`, `jev_ms` and a fingerprint of the text sent, on every
+  attempt including the keyword fallback. The model is
   pinned (`TYPESAFE_MODEL`, `jev-1.13.0`), a confidence must be a finite
   number in [0, 1] and is compared before rounding, and research notes
   (`RESEARCH_NOTES_PREFIX`) never reach Jev. `config.py` states the exception to

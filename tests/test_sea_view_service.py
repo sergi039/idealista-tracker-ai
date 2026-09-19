@@ -1359,6 +1359,9 @@ class TestClassifyTextWithJev:
         )
         result = svc.classify_text_with_jev("x" * 3000)
         assert isinstance(result.pop("jev_ms"), int)
+        assert result.pop("jev_status") == "decided"
+        assert result.pop("jev_text_chars") == 2000
+        assert len(result.pop("jev_text_sha256")) == 16
         assert result == {
             "claim": svc.TEXT_VIEW,
             "quote": "",
@@ -1552,3 +1555,105 @@ class TestResearchNotesStayOnTheBridge:
 
         assert import_research_sheet.RESEARCH_NOTES_PREFIX is svc.RESEARCH_NOTES_PREFIX
         assert svc.RESEARCH_NOTES_PREFIX == "Research notes from "
+
+
+class TestJevAttemptRecord:
+    """Every Jev attempt leaves its record in the detail, on every path."""
+
+    @staticmethod
+    def _stub_bridge(monkeypatch, claim):
+        monkeypatch.setattr(
+            svc,
+            "classify_text_with_bridge",
+            lambda text: {"claim": claim, "quote": "", "provider": "bridge"},
+        )
+
+    def test_a_transport_error_is_recorded_even_when_the_bridge_decides(
+        self, monkeypatch
+    ):
+        from services import typesafe_transport
+
+        def _down(state, questions, **kwargs):
+            raise typesafe_transport.TypeSafeTransportError(
+                "typesafe returned 529: overloaded", status=529
+            )
+
+        monkeypatch.setattr(typesafe_transport, "system_one", _down)
+        self._stub_bridge(monkeypatch, svc.TEXT_PROXIMITY)
+        result = svc.evaluate_text("Plot", "Parcela frente al mar", True)
+        assert result["claim"] == svc.TEXT_PROXIMITY
+        assert result["provider"] == "bridge"
+        assert result["jev_status"] == "error"
+        assert "529" in result["jev_error"]
+        assert isinstance(result["jev_ms"], int)
+        assert result["jev_text_chars"] == len("Parcela frente al mar Plot")
+        assert len(result["jev_text_sha256"]) == 16
+
+    def test_the_record_survives_a_bridge_failure_into_the_keyword_fallback(
+        self, monkeypatch
+    ):
+        from services import typesafe_transport
+
+        def _down(state, questions, **kwargs):
+            raise typesafe_transport.TypeSafeTransportError(
+                "typesafe unreachable at https://api.typesafe.ai: timed out"
+            )
+
+        monkeypatch.setattr(typesafe_transport, "system_one", _down)
+        monkeypatch.setattr(
+            svc,
+            "classify_text_with_bridge",
+            lambda text: {"claim": svc.TEXT_UNAVAILABLE, "error": "bridge down"},
+        )
+        result = svc.evaluate_text("Casa con vistas al mar", "", True)
+        assert result["source"] == "keywords_only"
+        assert result["ai_error"] == "bridge down"
+        assert result["jev_status"] == "error"
+        assert "unreachable" in result["jev_error"]
+
+    def test_without_a_key_nothing_about_jev_is_recorded(self, monkeypatch):
+        from unittest.mock import patch
+
+        from config import Config
+
+        self._stub_bridge(monkeypatch, svc.TEXT_VIEW)
+        with patch.object(Config, "TYPESAFE_API_KEY", None):
+            result = svc.evaluate_text("Casa con vistas al mar", "", True)
+        assert result["provider"] == "bridge"
+        assert not [key for key in result if key.startswith("jev_")]
+
+    def test_research_notes_record_why_jev_was_skipped(self, monkeypatch):
+        def _explode(text):
+            raise AssertionError("research notes must not reach Jev")
+
+        monkeypatch.setattr(svc, "classify_text_with_jev", _explode)
+        self._stub_bridge(monkeypatch, svc.TEXT_NONE)
+        notes = f"{svc.RESEARCH_NOTES_PREFIX}sheet — not the advert text. vistas al mar"
+        result = svc.evaluate_text("", notes, True)
+        assert result["jev_status"] == "research_notes"
+        assert result["provider"] == "bridge"
+
+    def test_a_decided_row_carries_status_timing_and_fingerprint(self, monkeypatch):
+        from services import typesafe_transport
+
+        monkeypatch.setattr(
+            typesafe_transport,
+            "system_one",
+            lambda state, questions, **kwargs: {
+                "model": "jev-1.13.0",
+                "answers": {
+                    "sea_claim": {
+                        "type": "choice",
+                        "choice": "view",
+                        "confidence": 0.95,
+                    }
+                },
+            },
+        )
+        result = svc.evaluate_text("Casa con vistas al mar", "", True)
+        assert result["provider"] == "typesafe"
+        assert result["jev_status"] == "decided"
+        assert result["model"] == "jev-1.13.0"
+        assert isinstance(result["jev_ms"], int)
+        assert len(result["jev_text_sha256"]) == 16
+        assert result["jev_text_chars"] == len("Casa con vistas al mar")
