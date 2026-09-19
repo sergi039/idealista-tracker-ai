@@ -183,3 +183,19 @@ The 120 stored rows keep their `no` until re-evaluated;
 rule for the mini applies. `tests/test_sea_view_over_nearer_ground.py` builds
 1282's own terrain — a near brow with open water past it — because an abstract
 ridge blocks everything and reproduces nothing.
+
+**The text claim's first reader is TypeSafe's Jev, and the bridge decides
+whatever Jev declines** (2026-09-19). `classify_text_with_ai` asks Jev one
+typed Choice question — `view` / `proximity` / `none`, the same three rules
+`_AI_PROMPT` states in prose — and takes the answer when its confidence is at
+or above `SEA_VIEW_TEXT_MIN_CONFIDENCE` (0.7). Below it, without
+`TYPESAFE_API_KEY`, or on any transport failure the subscription bridge answers
+exactly as before, and the stored detail records `provider` (`typesafe` or
+`bridge`), `confidence`, and `jev_confidence` when the bridge decided after Jev
+declined. Measured before the switch against the 42 bridge-labelled production
+rows: 92.9 % agreement overall, 100 % at or above 0.7 with 90.5 % coverage, and
+every disagreement a "research notes, not the advert" text. Jev returns no
+quote — it selects, it does not write — so a Jev-decided row has an empty
+`quote`. This is the app's one per-token-billed route (`config.py`,
+`services/typesafe_transport.py`): nothing else may read the key, and ingestion
+(`use_ai=False`) reaches neither model.

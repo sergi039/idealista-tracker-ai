@@ -1386,7 +1386,110 @@ def _matched_keywords(text: str) -> Tuple[List[str], List[str]]:
     return view_hits, proximity_hits
 
 
+# The same three rules `_AI_PROMPT` states in prose, as the criteria of one
+# typed Choice question. Keep the two in step: they are one question asked of
+# two models, and the bridge decides whatever Jev declines.
+_JEV_QUESTION_ID = "sea_claim"
+_JEV_INSTRUCTIONS = (
+    "Does this Spanish or English real-estate listing text claim that the sea "
+    "can be SEEN from the property? Marketing text is not evidence of a view "
+    "unless it actually says so. A mention that belongs to a town name or "
+    "agency boilerplate is not a claim."
+)
+_JEV_CRITERIA = {
+    TEXT_VIEW: (
+        "The text says you can see the sea from the property (vistas al mar, "
+        "sea views, frente al mar overlooking the water)."
+    ),
+    TEXT_PROXIMITY: (
+        "The sea or a beach is only mentioned as being nearby (cerca del mar, "
+        "a pie de playa, a 5 minutos de la playa), without saying it can be seen."
+    ),
+    TEXT_NONE: (
+        "The sea is not really claimed at all, or the mention belongs to the "
+        "town name or agency boilerplate."
+    ),
+}
+
+
+def classify_text_with_jev(text: str) -> Dict[str, Any]:
+    """One Choice question to Jev; `unavailable` whenever it cannot or should not decide.
+
+    "Should not" is a confidence below `SEA_VIEW_TEXT_MIN_CONFIDENCE`: the
+    answer is then handed back with the confidence attached so the caller can
+    record why the bridge was asked instead. Jev returns no quote -- it selects,
+    it does not write -- so `quote` is empty here on purpose.
+    """
+    from services import typesafe_transport
+
+    try:
+        payload = typesafe_transport.system_one(
+            state={"listing_text": (text or "")[:2000]},
+            questions={
+                _JEV_QUESTION_ID: {
+                    "type": "choice",
+                    "instructions": _JEV_INSTRUCTIONS,
+                    "criteria": _JEV_CRITERIA,
+                }
+            },
+        )
+    except typesafe_transport.TypeSafeNotConfigured as exc:
+        return {"claim": TEXT_UNAVAILABLE, "error": str(exc)}
+    except typesafe_transport.TypeSafeTransportError as exc:
+        logger.warning("Sea-view Jev classification unavailable: %s", exc)
+        return {"claim": TEXT_UNAVAILABLE, "error": str(exc)}
+
+    answer = payload["answers"].get(_JEV_QUESTION_ID)
+    answer = answer if isinstance(answer, dict) else {}
+    claim = str(answer.get("choice") or "").strip().lower()
+    confidence = answer.get("confidence")
+    if claim not in (TEXT_VIEW, TEXT_PROXIMITY, TEXT_NONE) or not isinstance(
+        confidence, (int, float)
+    ):
+        logger.warning("Sea-view Jev returned an unexpected answer: %r", answer)
+        return {"claim": TEXT_UNAVAILABLE, "error": "unexpected Jev answer"}
+    confidence = round(float(confidence), 3)
+    if confidence < Config.SEA_VIEW_TEXT_MIN_CONFIDENCE:
+        return {
+            "claim": TEXT_UNAVAILABLE,
+            "error": (
+                f"Jev confidence {confidence:.2f} below "
+                f"{Config.SEA_VIEW_TEXT_MIN_CONFIDENCE:.2f}"
+            ),
+            "confidence": confidence,
+        }
+    return {
+        "claim": claim,
+        "quote": "",
+        "provider": "typesafe",
+        "confidence": confidence,
+        "model": str(payload.get("model") or ""),
+    }
+
+
 def classify_text_with_ai(text: str) -> Dict[str, Any]:
+    """What the sea mention means: Jev first, the subscription bridge after.
+
+    Jev answers when it is configured and sure. Without a key, on any transport
+    failure, or below `SEA_VIEW_TEXT_MIN_CONFIDENCE`, the bridge answers
+    exactly as it always did, and the detail records the confidence Jev
+    declined at. Only ever called for text that already mentions the sea, and
+    never from ingestion (`use_ai=False`), so neither route is reached
+    unattended.
+    """
+    jev = classify_text_with_jev(text)
+    if jev["claim"] != TEXT_UNAVAILABLE:
+        return jev
+    logger.info(
+        "Sea-view text: Jev did not decide (%s); asking the bridge", jev.get("error")
+    )
+    bridge = classify_text_with_bridge(text)
+    if "confidence" in jev and bridge.get("claim") != TEXT_UNAVAILABLE:
+        bridge["jev_confidence"] = jev["confidence"]
+    return bridge
+
+
+def classify_text_with_bridge(text: str) -> Dict[str, Any]:
     """Ask the subscription bridge whether the text claims a view.
 
     The bridge runs on the owner's Claude subscription, not an API key, and is
@@ -1417,7 +1520,11 @@ def classify_text_with_ai(text: str) -> Dict[str, Any]:
     claim = str(parsed.get("claim") or "").strip().lower()
     if claim not in (TEXT_VIEW, TEXT_PROXIMITY, TEXT_NONE):
         return {"claim": TEXT_UNAVAILABLE, "error": f"unexpected claim {claim!r}"}
-    return {"claim": claim, "quote": str(parsed.get("quote") or "")[:200]}
+    return {
+        "claim": claim,
+        "quote": str(parsed.get("quote") or "")[:200],
+        "provider": "bridge",
+    }
 
 
 def evaluate_text(
@@ -1446,6 +1553,12 @@ def evaluate_text(
             detail.update(
                 {"claim": ai["claim"], "source": "ai", "quote": ai.get("quote", "")}
             )
+            # Which model decided, how sure it was, and -- when the bridge
+            # decided after Jev declined -- the confidence Jev declined at:
+            # the evidence a later threshold review reads, nothing else.
+            for key in ("provider", "confidence", "jev_confidence"):
+                if key in ai:
+                    detail[key] = ai[key]
             return detail
         detail["ai_error"] = ai.get("error")
 

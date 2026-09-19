@@ -44,6 +44,26 @@ class Config:
     )
     AI_BRIDGE_TOKEN = os.environ.get("AI_BRIDGE_TOKEN")
 
+    # The one exception to "no API key anywhere", and it is deliberately
+    # narrow (owner, 2026-09-19): TypeSafe's Jev answers the sea-view *text
+    # claim* -- one typed Choice question, ~500 input tokens at $0.042 per
+    # million, output free, ~0.1 s -- where the bridge spends a cold CLI run
+    # and up to 300 s of an Enrich press on the same three-way call. Nothing
+    # else may read this key: analysis, summaries and taste stay on the
+    # subscription bridge. Unset, the route is absent and the bridge answers
+    # as before (services/sea_view_service.classify_text_with_ai).
+    TYPESAFE_API_KEY = os.environ.get("TYPESAFE_API_KEY")
+    TYPESAFE_API_URL = os.environ.get("TYPESAFE_API_URL") or "https://api.typesafe.ai"
+    # Per HTTP operation: the SDK's own default, and ~100x a measured answer.
+    TYPESAFE_TIMEOUT_SECONDS = float(os.environ.get("TYPESAFE_TIMEOUT_SECONDS") or "10")
+    # Below this Choice confidence Jev abstains and the bridge decides. 0.7 was
+    # measured on 2026-09-19 against the 42 bridge-labelled production rows:
+    # 90.5 % of them at or above it with 100 % agreement, and every
+    # disagreement below it.
+    SEA_VIEW_TEXT_MIN_CONFIDENCE = float(
+        os.environ.get("SEA_VIEW_TEXT_MIN_CONFIDENCE") or "0.7"
+    )
+
     # The single definition of the AI analysis timeout (#206 item 3). Used as
     # the `timeout` handed to services/subscription_transport.py's
     # `complete()` by both services/property_ai_service.py and
