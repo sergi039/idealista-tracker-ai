@@ -195,6 +195,7 @@ pytest tests/ --cov=app --cov-report=html    # coverage report
 
 ## Hard rules
 
+- **A key for an external service lives in `.env` on the mini and nowhere else** (2026-09-19): the mini runs the app, a laptop only writes code, so a one-off script that needs a paid key runs on the mini or in CI — `TYPESAFE_API_KEY` reached a MacBook `~/.env` because a measurement script was run from the client machine.
 - Never read or echo `.env` — it holds IMAP and API credentials. Required config is validated at startup and fails fast; do not add silent fallbacks around it.
 - **Nothing unattended spends Google money any more** (owner, 2026-08-17): `AUTO_TRAVEL_ENRICHMENT` defaults to false and every place that decides it is fail-closed (#376, `tests/test_scheduler_flag_fails_closed.py`); a dev checkout must not run the scheduler (`AUTO_START_SCHEDULER=false`). → docs/rules/google-spend.md
 - **A machine that does not ingest on a tick does not ingest on a click either** (#388): `services/ingest_policy.py` is the one home, the endpoint's first statement refuses with 409 reading `app.config`, and the control is absent on all three surfaces; a script through `docker exec` is outside that boundary. → docs/rules/google-spend.md
