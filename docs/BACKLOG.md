@@ -13,6 +13,36 @@ must be an ancestor of `main`.
 
 ## Open
 
+### Four input shapes take the Jev route out instead of to the bridge
+
+- **Anchor:** `services/typesafe_transport.py` (`_KEY_SHAPE`, `_origin`,
+  `connection.connect`, `watchdog.start`); `services/sea_view_service.py`
+  (`jev_text_sha256`).
+- **Found 2026-09-19** by the Tier 2 reviewer (`rx`, Codex) on PR #574, one
+  pass after the six it had already produced. Each is real and each is
+  narrower than the last; the review loop was stopped at the owner's call
+  under `rules/common/workflow-risk.md` (an attack-fix loop over one diff does
+  not converge), and these four were parked rather than fixed in the same PR.
+- **What breaks, for whom:** in four input shapes the sea-view text claim
+  raises instead of falling back to the subscription bridge, so one Enrich
+  press ends with an error rather than a verdict. Nobody is affected today:
+  three of the four need a hand-edited `.env` or a hostile endpoint, and the
+  fourth needs an advert whose text carries a lone UTF-16 surrogate.
+  1. `TYPESAFE_API_URL` with a space in the host (`https://bad host`):
+     `HTTPSConnection` raises `InvalidURL` before the `try`.
+  2. A resolver that blocks for a minute: the watchdog closes no socket
+     because none exists yet, so `connect()` outlives the allowance. Only a
+     resolution off the calling thread bounds this; the phase-boundary check
+     stops the request going out, it does not shorten the wait.
+  3. Listing text containing a lone surrogate (`\ud800`): hashing it for
+     `jev_text_sha256` raises `UnicodeEncodeError`.
+  4. Thread exhaustion: `watchdog.start()` raises `RuntimeError`.
+- **Check:** `rg -n 'except TypeSafeTransportError' services/typesafe_transport.py`
+  — a fix wraps connection construction, resolution and the watchdog in the
+  same failure path, and hashes with `errors="replace"`.
+- **Cost of not fixing:** one failed Enrich press, retried by hand. No data is
+  written wrong: every one of these raises before a verdict is stored.
+
 ### 46 houses in subscription 21 are filed as bare land
 
 - **Anchor:** `utils/import_research_sheet.py` (`classify_sources` fed the
