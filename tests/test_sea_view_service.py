@@ -1230,3 +1230,535 @@ class TestDistanceMath:
     def test_curvature_drop_is_the_textbook_value(self):
         # ~6.4 m at 10 km with the 7/6 refraction radius.
         assert svc._curvature_drop_m(10_000) == pytest.approx(6.7, abs=0.3)
+
+
+class TestJevFirst:
+    """The text claim asks Jev first; the bridge decides whatever Jev declines."""
+
+    def test_jev_decides_when_configured_and_sure_and_the_bridge_is_not_asked(
+        self, monkeypatch
+    ):
+        def _no_bridge(text):
+            raise AssertionError("the bridge must not be asked when Jev decided")
+
+        monkeypatch.setattr(
+            svc,
+            "classify_text_with_jev",
+            lambda text: {
+                "claim": svc.TEXT_VIEW,
+                "quote": "",
+                "provider": "typesafe",
+                "confidence": 0.97,
+                "model": "jev-1.13.0",
+            },
+        )
+        monkeypatch.setattr(svc, "classify_text_with_bridge", _no_bridge)
+        result = svc.evaluate_text("Casa con vistas al mar", "", True)
+        assert result["claim"] == svc.TEXT_VIEW
+        assert result["source"] == "ai"
+        assert result["provider"] == "typesafe"
+        assert result["confidence"] == 0.97
+        assert "jev_confidence" not in result
+
+    def test_below_the_threshold_the_bridge_decides_and_the_detail_says_so(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            svc,
+            "classify_text_with_jev",
+            lambda text: {
+                "claim": svc.TEXT_UNAVAILABLE,
+                "error": "Jev confidence 0.63 below 0.70",
+                "confidence": 0.63,
+            },
+        )
+        monkeypatch.setattr(
+            svc,
+            "classify_text_with_bridge",
+            lambda text: {
+                "claim": svc.TEXT_PROXIMITY,
+                "quote": "cerca del mar",
+                "provider": "bridge",
+            },
+        )
+        result = svc.evaluate_text("Plot", "Parcela cerca del mar, vistas", True)
+        assert result["claim"] == svc.TEXT_PROXIMITY
+        assert result["source"] == "ai"
+        assert result["provider"] == "bridge"
+        assert result["jev_confidence"] == 0.63
+
+    def test_without_a_key_jev_is_absent_and_the_bridge_answers_as_before(
+        self, monkeypatch
+    ):
+        from unittest.mock import patch
+
+        from config import Config
+        from services import typesafe_transport
+
+        def _no_network(*args, **kwargs):
+            raise AssertionError("no request may leave without a key")
+
+        monkeypatch.setattr(
+            typesafe_transport.http.client, "HTTPSConnection", _no_network
+        )
+        monkeypatch.setattr(
+            svc,
+            "classify_text_with_bridge",
+            lambda text: {
+                "claim": svc.TEXT_VIEW,
+                "quote": "vistas al mar",
+                "provider": "bridge",
+            },
+        )
+        with patch.object(Config, "TYPESAFE_API_KEY", None):
+            result = svc.evaluate_text("Casa con vistas al mar", "", True)
+        assert result["claim"] == svc.TEXT_VIEW
+        assert result["source"] == "ai"
+        assert result["provider"] == "bridge"
+        assert "jev_confidence" not in result
+
+    def test_ingestion_reaches_neither_jev_nor_the_bridge(self, monkeypatch):
+        def _explode(text):
+            raise AssertionError("use_ai=False must not reach any model")
+
+        monkeypatch.setattr(svc, "classify_text_with_jev", _explode)
+        monkeypatch.setattr(svc, "classify_text_with_bridge", _explode)
+        result = svc.evaluate_text("Casa con vistas al mar", "", False)
+        assert result["claim"] == svc.TEXT_VIEW
+        assert result["source"] == "keywords_only"
+
+
+class TestClassifyTextWithJev:
+    """`classify_text_with_jev` reads one Choice answer and nothing else."""
+
+    @staticmethod
+    def _answer(choice, confidence, captured=None):
+        def _system_one(state, questions, **kwargs):
+            if captured is not None:
+                captured["state"] = state
+                captured["questions"] = questions
+            return {
+                "model": "jev-1.13.0",
+                "answers": {
+                    "sea_claim": {
+                        "type": "choice",
+                        "choice": choice,
+                        "confidence": confidence,
+                        "probabilities": {choice: confidence},
+                    }
+                },
+                "usage": {"input_tokens": 480, "output_tokens": 41},
+            }
+
+        return _system_one
+
+    def test_a_sure_answer_is_taken_with_its_confidence_and_model(self, monkeypatch):
+        from services import typesafe_transport
+
+        captured = {}
+        monkeypatch.setattr(
+            typesafe_transport, "system_one", self._answer("view", 0.97, captured)
+        )
+        result = svc.classify_text_with_jev("x" * 3000)
+        assert isinstance(result.pop("jev_ms"), int)
+        assert result.pop("jev_status") == "decided"
+        assert result.pop("jev_text_chars") == 2000
+        assert len(result.pop("jev_text_sha256")) == 16
+        assert result == {
+            "claim": svc.TEXT_VIEW,
+            "quote": "",
+            "provider": "typesafe",
+            "confidence": 0.97,
+            "model": "jev-1.13.0",
+        }
+        assert len(captured["state"]["listing_text"]) == 2000
+        question = captured["questions"]["sea_claim"]
+        assert question["type"] == "choice"
+        assert set(question["criteria"]) == {
+            svc.TEXT_VIEW,
+            svc.TEXT_PROXIMITY,
+            svc.TEXT_NONE,
+        }
+
+    def test_an_unsure_answer_is_unavailable_and_keeps_the_confidence(
+        self, monkeypatch
+    ):
+        from services import typesafe_transport
+
+        monkeypatch.setattr(
+            typesafe_transport, "system_one", self._answer("view", 0.63)
+        )
+        result = svc.classify_text_with_jev("Parcela cerca del mar")
+        assert result["claim"] == svc.TEXT_UNAVAILABLE
+        assert result["confidence"] == 0.63
+        assert "0.63" in result["error"]
+
+    def test_an_answer_outside_the_three_claims_is_unavailable(self, monkeypatch):
+        from services import typesafe_transport
+
+        monkeypatch.setattr(
+            typesafe_transport, "system_one", self._answer("maybe", 0.99)
+        )
+        result = svc.classify_text_with_jev("Casa")
+        assert result["claim"] == svc.TEXT_UNAVAILABLE
+        assert "unexpected" in result["error"]
+
+    def test_a_transport_failure_is_unavailable_and_not_an_exception(self, monkeypatch):
+        from services import typesafe_transport
+
+        def _down(state, questions, **kwargs):
+            raise typesafe_transport.TypeSafeTransportError(
+                "typesafe returned 529: overloaded", status=529
+            )
+
+        monkeypatch.setattr(typesafe_transport, "system_one", _down)
+        result = svc.classify_text_with_jev("Casa con vistas al mar")
+        assert result["claim"] == svc.TEXT_UNAVAILABLE
+        assert "529" in result["error"]
+
+
+class TestJevAnswerValidation:
+    """A Jev answer passes only as `type: choice`, an exact label, and a finite
+    confidence in [0, 1] compared to the threshold before rounding."""
+
+    @staticmethod
+    def _answering(answer, model="jev-1.13.0"):
+        def _system_one(state, questions, **kwargs):
+            return {"model": model, "answers": {"sea_claim": answer}, "usage": {}}
+
+        return _system_one
+
+    @pytest.mark.parametrize(
+        "confidence",
+        [True, float("nan"), float("inf"), 1.2, -0.1, "0.9", None],
+        ids=["bool", "nan", "inf", "above-one", "negative", "string", "missing"],
+    )
+    def test_a_confidence_that_is_not_a_finite_unit_number_is_unavailable(
+        self, monkeypatch, confidence
+    ):
+        from services import typesafe_transport
+
+        monkeypatch.setattr(
+            typesafe_transport,
+            "system_one",
+            self._answering(
+                {"type": "choice", "choice": "view", "confidence": confidence}
+            ),
+        )
+        result = svc.classify_text_with_jev("Casa con vistas al mar")
+        assert result["claim"] == svc.TEXT_UNAVAILABLE
+        assert "unexpected" in result["error"]
+
+    def test_the_threshold_is_compared_before_rounding(self, monkeypatch):
+        from unittest.mock import patch
+
+        from config import Config
+        from services import typesafe_transport
+
+        monkeypatch.setattr(
+            typesafe_transport,
+            "system_one",
+            self._answering({"type": "choice", "choice": "view", "confidence": 0.6996}),
+        )
+        with patch.object(Config, "SEA_VIEW_TEXT_MIN_CONFIDENCE", 0.7):
+            result = svc.classify_text_with_jev("Casa con vistas al mar")
+        assert result["claim"] == svc.TEXT_UNAVAILABLE
+        assert result["jev_claim"] == svc.TEXT_VIEW
+        assert result["confidence"] == 0.7, "recorded rounded, decided unrounded"
+        assert result["model"] == "jev-1.13.0"
+
+    def test_exactly_the_threshold_is_accepted(self, monkeypatch):
+        from unittest.mock import patch
+
+        from config import Config
+        from services import typesafe_transport
+
+        monkeypatch.setattr(
+            typesafe_transport,
+            "system_one",
+            self._answering(
+                {"type": "choice", "choice": "proximity", "confidence": 0.7}
+            ),
+        )
+        with patch.object(Config, "SEA_VIEW_TEXT_MIN_CONFIDENCE", 0.7):
+            result = svc.classify_text_with_jev("Parcela frente al mar")
+        assert result["claim"] == svc.TEXT_PROXIMITY
+        assert result["provider"] == "typesafe"
+        assert result["model"] == "jev-1.13.0"
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            {"type": "noul", "noul": 0.9},
+            {"type": "choice", "choice": "View", "confidence": 0.99},
+            {"type": "choice", "choice": " view ", "confidence": 0.99},
+            {"type": "choice", "choice": "maybe", "confidence": 0.99},
+        ],
+        ids=["wrong-type", "capitalised", "padded", "unknown-label"],
+    )
+    def test_anything_but_an_exact_choice_label_is_unavailable(
+        self, monkeypatch, answer
+    ):
+        from services import typesafe_transport
+
+        monkeypatch.setattr(typesafe_transport, "system_one", self._answering(answer))
+        result = svc.classify_text_with_jev("Casa con vistas al mar")
+        assert result["claim"] == svc.TEXT_UNAVAILABLE
+
+    def test_the_bridge_detail_keeps_what_jev_would_have_said(self, monkeypatch):
+        monkeypatch.setattr(
+            svc,
+            "classify_text_with_jev",
+            lambda text: {
+                "claim": svc.TEXT_UNAVAILABLE,
+                "error": "Jev confidence 0.630 below 0.70",
+                "jev_claim": svc.TEXT_VIEW,
+                "confidence": 0.63,
+                "model": "jev-1.13.0",
+            },
+        )
+        monkeypatch.setattr(
+            svc,
+            "classify_text_with_bridge",
+            lambda text: {
+                "claim": svc.TEXT_PROXIMITY,
+                "quote": "",
+                "provider": "bridge",
+            },
+        )
+        result = svc.evaluate_text("Plot", "Parcela frente al mar", True)
+        assert result["provider"] == "bridge"
+        assert result["jev_claim"] == svc.TEXT_VIEW
+        assert result["jev_confidence"] == 0.63
+
+
+class TestResearchNotesStayOnTheBridge:
+    def test_the_owners_notes_never_reach_jev(self, monkeypatch):
+        def _no_jev(text):
+            raise AssertionError("research notes must not be sent to a third party")
+
+        monkeypatch.setattr(svc, "classify_text_with_jev", _no_jev)
+        monkeypatch.setattr(
+            svc,
+            "classify_text_with_bridge",
+            lambda text: {"claim": svc.TEXT_NONE, "quote": "", "provider": "bridge"},
+        )
+        notes = (
+            f"{svc.RESEARCH_NOTES_PREFIX}sea_view_properties.csv — not the advert "
+            "text. Positives: the advert says vistas al mar."
+        )
+        result = svc.evaluate_text("", notes, True)
+        assert result["claim"] == svc.TEXT_NONE
+        assert result["source"] == "ai"
+        assert result["provider"] == "bridge"
+
+    def test_the_importer_writes_the_prefix_the_classifier_checks(self):
+        from utils import import_research_sheet
+
+        assert import_research_sheet.RESEARCH_NOTES_PREFIX is svc.RESEARCH_NOTES_PREFIX
+        assert svc.RESEARCH_NOTES_PREFIX == "Research notes from "
+
+
+class TestJevAttemptRecord:
+    """Every Jev attempt leaves its record in the detail, on every path."""
+
+    @staticmethod
+    def _stub_bridge(monkeypatch, claim):
+        monkeypatch.setattr(
+            svc,
+            "classify_text_with_bridge",
+            lambda text: {"claim": claim, "quote": "", "provider": "bridge"},
+        )
+
+    def test_a_transport_error_is_recorded_even_when_the_bridge_decides(
+        self, monkeypatch
+    ):
+        from services import typesafe_transport
+
+        def _down(state, questions, **kwargs):
+            raise typesafe_transport.TypeSafeTransportError(
+                "typesafe returned 529: overloaded", status=529
+            )
+
+        monkeypatch.setattr(typesafe_transport, "system_one", _down)
+        self._stub_bridge(monkeypatch, svc.TEXT_PROXIMITY)
+        result = svc.evaluate_text("Plot", "Parcela frente al mar", True)
+        assert result["claim"] == svc.TEXT_PROXIMITY
+        assert result["provider"] == "bridge"
+        assert result["jev_status"] == "error"
+        assert "529" in result["jev_error"]
+        assert isinstance(result["jev_ms"], int)
+        assert result["jev_text_chars"] == len("Parcela frente al mar Plot")
+        assert len(result["jev_text_sha256"]) == 16
+
+    def test_the_record_survives_a_bridge_failure_into_the_keyword_fallback(
+        self, monkeypatch
+    ):
+        from services import typesafe_transport
+
+        def _down(state, questions, **kwargs):
+            raise typesafe_transport.TypeSafeTransportError(
+                "typesafe unreachable at https://api.typesafe.ai: timed out"
+            )
+
+        monkeypatch.setattr(typesafe_transport, "system_one", _down)
+        monkeypatch.setattr(
+            svc,
+            "classify_text_with_bridge",
+            lambda text: {"claim": svc.TEXT_UNAVAILABLE, "error": "bridge down"},
+        )
+        result = svc.evaluate_text("Casa con vistas al mar", "", True)
+        assert result["source"] == "keywords_only"
+        assert result["ai_error"] == "bridge down"
+        assert result["jev_status"] == "error"
+        assert "unreachable" in result["jev_error"]
+
+    def test_without_a_key_nothing_about_jev_is_recorded(self, monkeypatch):
+        from unittest.mock import patch
+
+        from config import Config
+
+        self._stub_bridge(monkeypatch, svc.TEXT_VIEW)
+        with patch.object(Config, "TYPESAFE_API_KEY", None):
+            result = svc.evaluate_text("Casa con vistas al mar", "", True)
+        assert result["provider"] == "bridge"
+        assert not [key for key in result if key.startswith("jev_")]
+
+    def test_research_notes_record_why_jev_was_skipped(self, monkeypatch):
+        def _explode(text):
+            raise AssertionError("research notes must not reach Jev")
+
+        monkeypatch.setattr(svc, "classify_text_with_jev", _explode)
+        self._stub_bridge(monkeypatch, svc.TEXT_NONE)
+        notes = f"{svc.RESEARCH_NOTES_PREFIX}sheet — not the advert text. vistas al mar"
+        result = svc.evaluate_text("", notes, True)
+        assert result["jev_status"] == "research_notes"
+        assert result["provider"] == "bridge"
+
+    def test_a_decided_row_carries_status_timing_and_fingerprint(self, monkeypatch):
+        from services import typesafe_transport
+
+        monkeypatch.setattr(
+            typesafe_transport,
+            "system_one",
+            lambda state, questions, **kwargs: {
+                "model": "jev-1.13.0",
+                "answers": {
+                    "sea_claim": {
+                        "type": "choice",
+                        "choice": "view",
+                        "confidence": 0.95,
+                    }
+                },
+            },
+        )
+        result = svc.evaluate_text("Casa con vistas al mar", "", True)
+        assert result["provider"] == "typesafe"
+        assert result["jev_status"] == "decided"
+        assert result["model"] == "jev-1.13.0"
+        assert isinstance(result["jev_ms"], int)
+        assert len(result["jev_text_sha256"]) == 16
+        assert result["jev_text_chars"] == len("Casa con vistas al mar")
+
+
+class TestHostileAnswersStayOnTheBridge:
+    """Answer content is peer-controlled: it must neither escape as an
+    exception nor be copied into the log."""
+
+    def test_an_integer_too_large_for_a_float_is_unavailable(self, monkeypatch):
+        from services import typesafe_transport
+
+        monkeypatch.setattr(
+            typesafe_transport,
+            "system_one",
+            lambda state, questions, **kwargs: {
+                "model": "jev-1.13.0",
+                "answers": {
+                    "sea_claim": {
+                        "type": "choice",
+                        "choice": "view",
+                        "confidence": 10**400,
+                    }
+                },
+            },
+        )
+        result = svc.classify_text_with_jev("Casa con vistas al mar")
+        assert result["claim"] == svc.TEXT_UNAVAILABLE
+        assert result["jev_status"] == "error"
+
+    def test_an_unexpected_answer_is_logged_by_shape_not_content(
+        self, monkeypatch, caplog
+    ):
+        import logging
+
+        from services import typesafe_transport
+
+        marker = "SENSITIVE_MARKER_" + "m" * 30
+        monkeypatch.setattr(
+            typesafe_transport,
+            "system_one",
+            lambda state, questions, **kwargs: {
+                "model": "jev-1.13.0",
+                "answers": {
+                    "sea_claim": {
+                        "type": "choice",
+                        "choice": "invalid",
+                        "echo": marker,
+                        "confidence": 0.9,
+                    }
+                },
+            },
+        )
+        with caplog.at_level(logging.WARNING, logger="services.sea_view_service"):
+            result = svc.classify_text_with_jev("Casa con vistas al mar")
+        assert result["claim"] == svc.TEXT_UNAVAILABLE
+        assert marker not in caplog.text
+        assert "invalid" not in caplog.text
+        assert "not a label" in caplog.text
+
+
+class TestTheModelFieldIsPeerControlled:
+    @staticmethod
+    def _answering(model):
+        def _system_one(state, questions, **kwargs):
+            return {
+                "model": model,
+                "answers": {
+                    "sea_claim": {
+                        "type": "choice",
+                        "choice": "view",
+                        "confidence": 0.95,
+                    }
+                },
+            }
+
+        return _system_one
+
+    def test_an_answer_for_another_model_is_unavailable(self, monkeypatch):
+        from services import typesafe_transport
+
+        monkeypatch.setattr(
+            typesafe_transport, "system_one", self._answering("jev-9.9.9")
+        )
+        result = svc.classify_text_with_jev("Casa con vistas al mar")
+        assert result["claim"] == svc.TEXT_UNAVAILABLE
+        assert result["jev_error"] == "model mismatch"
+
+    def test_an_echoed_secret_in_the_model_field_is_never_stored(self, monkeypatch):
+        from services import typesafe_transport
+
+        marker = "apikey_" + "s" * 40
+        monkeypatch.setattr(typesafe_transport, "system_one", self._answering(marker))
+        result = svc.classify_text_with_jev("Casa con vistas al mar")
+        assert marker not in str(result)
+
+    def test_a_decided_row_stores_the_configured_constant(self, monkeypatch):
+        from config import Config
+        from services import typesafe_transport
+
+        monkeypatch.setattr(
+            typesafe_transport, "system_one", self._answering(Config.TYPESAFE_MODEL)
+        )
+        result = svc.classify_text_with_jev("Casa con vistas al mar")
+        assert result["claim"] == svc.TEXT_VIEW
+        assert result["model"] is Config.TYPESAFE_MODEL

@@ -30,6 +30,7 @@ and Copernicus EU-DEM 25 m through OpenTopoData. Google is not involved, so the
 billing that blocks #98 does not block this.
 """
 
+import hashlib
 import json
 import logging
 import math
@@ -302,6 +303,11 @@ TEXT_VIEW = "view"
 TEXT_PROXIMITY = "proximity"
 TEXT_NONE = "none"
 TEXT_UNAVAILABLE = "unavailable"
+
+# `utils/import_research_sheet.py` writes the owner's own notes into
+# `description` behind this prefix. They are not advert text, and they never
+# leave the subscription route (see `classify_text_with_ai`).
+RESEARCH_NOTES_PREFIX = "Research notes from "
 
 _AI_SYSTEM = (
     "You classify Spanish and English real-estate listing text. Answer with one "
@@ -1386,7 +1392,235 @@ def _matched_keywords(text: str) -> Tuple[List[str], List[str]]:
     return view_hits, proximity_hits
 
 
+# The same three rules `_AI_PROMPT` states in prose, as the criteria of one
+# typed Choice question. Keep the two in step: they are one question asked of
+# two models, and the bridge decides whatever Jev declines.
+_JEV_QUESTION_ID = "sea_claim"
+_JEV_INSTRUCTIONS = (
+    "Does this Spanish or English real-estate listing text claim that the sea "
+    "can be SEEN from the property? Marketing text is not evidence of a view "
+    "unless it actually says so. A mention that belongs to a town name or "
+    "agency boilerplate is not a claim."
+)
+_JEV_CRITERIA = {
+    TEXT_VIEW: (
+        "The text says you can see the sea from the property (vistas al mar, "
+        "sea views, frente al mar overlooking the water)."
+    ),
+    TEXT_PROXIMITY: (
+        "The sea or a beach is only mentioned as being nearby (cerca del mar, "
+        "a pie de playa, a 5 minutos de la playa), without saying it can be seen."
+    ),
+    TEXT_NONE: (
+        "The sea is not really claimed at all, or the mention belongs to the "
+        "town name or agency boilerplate."
+    ),
+}
+
+
+def _finite_unit_interval(value: Any) -> Optional[float]:
+    """`value` as a float in [0, 1], or None when it is anything else.
+
+    `bool` is an `int` to `isinstance`, Python's JSON decoder lets `NaN` and
+    `Infinity` through, and a value outside the interval breaks the API's
+    contract -- none of them may reach a threshold comparison.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):  # an int too large for a float
+        return None
+    if not math.isfinite(number) or not 0.0 <= number <= 1.0:
+        return None
+    return number
+
+
+def classify_text_with_jev(text: str) -> Dict[str, Any]:
+    """One Choice question to Jev; `unavailable` whenever it cannot or should not decide.
+
+    "Should not" is a confidence below `SEA_VIEW_TEXT_MIN_CONFIDENCE`: the
+    answer is then handed back with the confidence attached so the caller can
+    record why the bridge was asked instead. Jev returns no quote -- it selects,
+    it does not write -- so `quote` is empty here on purpose.
+
+    Every attempt returns its record (`jev_status`, `jev_ms`, the fingerprint
+    of the text sent, and the answer or the error), because the pilot's audit
+    and its p95 read every attempt, not only the decided ones. A missing key
+    is the one exception: the route is absent, and there is nothing to record.
+    """
+    from services import typesafe_transport
+
+    sent = (text or "")[:2000]
+    record: Dict[str, Any] = {
+        # What was judged, without duplicating it: an auditor compares the
+        # current text's fingerprint with this one and knows whether the row
+        # still says what Jev saw.
+        "jev_text_sha256": hashlib.sha256(sent.encode("utf-8")).hexdigest()[:16],
+        "jev_text_chars": len(sent),
+    }
+    started = time.monotonic()
+
+    def _elapsed_ms() -> int:
+        return int((time.monotonic() - started) * 1000)
+
+    try:
+        payload = typesafe_transport.system_one(
+            state={"listing_text": sent},
+            questions={
+                _JEV_QUESTION_ID: {
+                    "type": "choice",
+                    "instructions": _JEV_INSTRUCTIONS,
+                    "criteria": _JEV_CRITERIA,
+                }
+            },
+        )
+    except typesafe_transport.TypeSafeNotConfigured as exc:
+        return {
+            "claim": TEXT_UNAVAILABLE,
+            "error": str(exc),
+            "jev_status": "not_configured",
+        }
+    except typesafe_transport.TypeSafeTransportError as exc:
+        logger.warning("Sea-view Jev classification unavailable: %s", exc)
+        return {
+            "claim": TEXT_UNAVAILABLE,
+            "error": str(exc),
+            "jev_status": "error",
+            "jev_error": str(exc)[:160],
+            "jev_ms": _elapsed_ms(),
+            **record,
+        }
+
+    # The model field is peer-controlled text: it is checked against the
+    # pinned model, and only the configured constant is ever stored.
+    model = Config.TYPESAFE_MODEL
+    if payload.get("model") != model:
+        logger.warning("Sea-view Jev answered for a model other than the pinned one")
+        return {
+            "claim": TEXT_UNAVAILABLE,
+            "error": "unexpected Jev answer",
+            "jev_status": "error",
+            "jev_error": "model mismatch",
+            "model": model,
+            "jev_ms": _elapsed_ms(),
+            **record,
+        }
+    answer = payload["answers"].get(_JEV_QUESTION_ID)
+    answer = answer if isinstance(answer, dict) else {}
+    claim = answer.get("choice")
+    confidence = _finite_unit_interval(answer.get("confidence"))
+    if (
+        answer.get("type") != "choice"
+        or claim not in (TEXT_VIEW, TEXT_PROXIMITY, TEXT_NONE)
+        or confidence is None
+    ):
+        # Exact labels only: the criteria keys are what the API echoes back,
+        # and a "View" or a padded label is a contract violation, not a hint.
+        # Shape only, never content: the answer is peer-controlled text and
+        # this line reaches the log.
+        logger.warning(
+            "Sea-view Jev returned an unexpected answer: type=%s choice=%s confidence=%s",
+            "choice"
+            if answer.get("type") == "choice"
+            else type(answer.get("type")).__name__,
+            claim
+            if claim in (TEXT_VIEW, TEXT_PROXIMITY, TEXT_NONE)
+            else "<not a label>",
+            type(answer.get("confidence")).__name__,
+        )
+        return {
+            "claim": TEXT_UNAVAILABLE,
+            "error": "unexpected Jev answer",
+            "jev_status": "error",
+            "jev_error": "unexpected Jev answer",
+            "model": model,
+            "jev_ms": _elapsed_ms(),
+            **record,
+        }
+    # Compared before rounding: 0.6996 is below 0.7 and stays below it.
+    if confidence < Config.SEA_VIEW_TEXT_MIN_CONFIDENCE:
+        return {
+            "claim": TEXT_UNAVAILABLE,
+            "error": (
+                f"Jev confidence {confidence:.3f} below "
+                f"{Config.SEA_VIEW_TEXT_MIN_CONFIDENCE:.2f}"
+            ),
+            "jev_status": "abstained",
+            "jev_claim": claim,
+            "confidence": round(confidence, 3),
+            "model": model,
+            "jev_ms": _elapsed_ms(),
+            **record,
+        }
+    return {
+        "claim": claim,
+        "quote": "",
+        "provider": "typesafe",
+        "jev_status": "decided",
+        "confidence": round(confidence, 3),
+        "model": model,
+        "jev_ms": _elapsed_ms(),
+        **record,
+    }
+
+
+# The pilot's record, copied into the stored detail on every path -- Jev
+# decided, the bridge decided, or the keywords did -- so an audit sees every
+# attempt, its outcome and its wall time (`docs/rules/sea-view.md`).
+_JEV_RECORD_KEYS = (
+    "provider",
+    "confidence",
+    "model",
+    "jev_status",
+    "jev_error",
+    "jev_claim",
+    "jev_confidence",
+    "jev_ms",
+    "jev_text_sha256",
+    "jev_text_chars",
+)
+
+
 def classify_text_with_ai(text: str) -> Dict[str, Any]:
+    """What the sea mention means: Jev first, the subscription bridge after.
+
+    Jev answers when it is configured and sure. Without a key, on any transport
+    failure, or below `SEA_VIEW_TEXT_MIN_CONFIDENCE`, the bridge answers
+    exactly as it always did, and the detail records the confidence Jev
+    declined at. Only ever called for text that already mentions the sea, and
+    never from ingestion (`use_ai=False`), so neither route is reached
+    unattended.
+    """
+    if (text or "").startswith(RESEARCH_NOTES_PREFIX):
+        # The owner's own notes, not advert text: they stay on the subscription
+        # route and never reach a third party. They were also every
+        # disagreement in the 2026-09-19 A/B.
+        jev: Dict[str, Any] = {
+            "claim": TEXT_UNAVAILABLE,
+            "error": "research notes stay on the bridge",
+            "jev_status": "research_notes",
+        }
+    else:
+        jev = classify_text_with_jev(text)
+    if jev["claim"] != TEXT_UNAVAILABLE:
+        return jev
+    logger.info(
+        "Sea-view text: Jev did not decide (%s); asking the bridge", jev.get("error")
+    )
+    bridge = classify_text_with_bridge(text)
+    if jev.get("jev_status") != "not_configured":
+        # What Jev attempted -- or would have said -- rides along whatever the
+        # bridge answered, so the record survives a bridge failure too.
+        for key in _JEV_RECORD_KEYS:
+            if key in jev and key not in ("provider", "confidence"):
+                bridge[key] = jev[key]
+        if "confidence" in jev:
+            bridge["jev_confidence"] = jev["confidence"]
+    return bridge
+
+
+def classify_text_with_bridge(text: str) -> Dict[str, Any]:
     """Ask the subscription bridge whether the text claims a view.
 
     The bridge runs on the owner's Claude subscription, not an API key, and is
@@ -1417,7 +1651,11 @@ def classify_text_with_ai(text: str) -> Dict[str, Any]:
     claim = str(parsed.get("claim") or "").strip().lower()
     if claim not in (TEXT_VIEW, TEXT_PROXIMITY, TEXT_NONE):
         return {"claim": TEXT_UNAVAILABLE, "error": f"unexpected claim {claim!r}"}
-    return {"claim": claim, "quote": str(parsed.get("quote") or "")[:200]}
+    return {
+        "claim": claim,
+        "quote": str(parsed.get("quote") or "")[:200],
+        "provider": "bridge",
+    }
 
 
 def evaluate_text(
@@ -1442,6 +1680,11 @@ def evaluate_text(
 
     if use_ai:
         ai = classify_text_with_ai(text)
+        # The pilot's record, kept on every path including the keyword
+        # fallback below, so an audit sees every attempt.
+        for key in _JEV_RECORD_KEYS:
+            if key in ai:
+                detail[key] = ai[key]
         if ai.get("claim") != TEXT_UNAVAILABLE:
             detail.update(
                 {"claim": ai["claim"], "source": "ai", "quote": ai.get("quote", "")}

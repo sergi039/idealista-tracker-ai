@@ -1,15 +1,19 @@
 """Compute the sea-view verdict for stored properties.
 
 Unlike `bulk_ai_analysis.py` and `recalc_travel_times.py` this tool spends no
-money: OpenStreetMap and OpenTopoData are free and keyless. It is still slow on
-purpose -- OpenTopoData's public instance asks for one call per second, and the
-`--sleep` default keeps Overpass comfortable too.
+Google money: OpenStreetMap and OpenTopoData are free and keyless. It is still
+slow on purpose -- OpenTopoData's public instance asks for one call per second,
+and the `--sleep` default keeps Overpass comfortable too.
 
     python -m utils.backfill_sea_view --only-missing
     python -m utils.backfill_sea_view --limit 20 --no-ai
 
-`--no-ai` skips the subscription bridge, so the text signal falls back to the
-unambiguous keywords only. The verdict records which path it took.
+The text signal is the one step that is not free of charge: with
+`TYPESAFE_API_KEY` configured it asks TypeSafe's Jev first (billed per token,
+about $0.00002 per row whose text mentions the sea; rows without a mention
+never reach it) and the subscription bridge when Jev declines. `--no-ai` skips
+both, so the text signal falls back to the unambiguous keywords only. The
+verdict records which path it took (`provider`, `confidence`).
 """
 
 import argparse
@@ -30,7 +34,11 @@ logger = logging.getLogger(__name__)
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Compute sea-view verdicts for properties (free sources only)."
+        description=(
+            "Compute sea-view verdicts: free geometry sources, plus Jev (billed "
+            "per token, when TYPESAFE_API_KEY is set) and the subscription bridge "
+            "for the text signal; --no-ai skips both."
+        )
     )
     parser.add_argument(
         "--limit", type=int, default=0, help="Limit properties processed (0 = all)."
@@ -43,7 +51,7 @@ def main() -> None:
     parser.add_argument(
         "--no-ai",
         action="store_true",
-        help="Do not call the subscription bridge; keywords only.",
+        help="Skip Jev (billed per token) and the subscription bridge; keywords only.",
     )
     parser.add_argument(
         "--dry-run",

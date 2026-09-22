@@ -1,6 +1,20 @@
 import os
 
 
+def _bounded_float(name, default, low, high):
+    """A float setting that is finite and within [low, high], or fails at import.
+
+    `NaN` fails both comparisons and infinity fails one, so the range check
+    alone refuses them; a setting that gates a paid answer must not be
+    silently open.
+    """
+    raw = os.environ.get(name)
+    value = float(raw) if raw not in (None, "") else float(default)
+    if not low <= value <= high:
+        raise ValueError(f"{name}={raw!r} must be a finite number in [{low}, {high}]")
+    return value
+
+
 def _first_env(*names, default=None):
     """Return the first non-empty environment variable among names."""
     for name in names:
@@ -43,6 +57,36 @@ class Config:
         os.environ.get("AI_BRIDGE_URL") or "http://host.docker.internal:5061"
     )
     AI_BRIDGE_TOKEN = os.environ.get("AI_BRIDGE_TOKEN")
+
+    # The one exception to "no API key anywhere", and it is deliberately
+    # narrow (owner, 2026-09-19): TypeSafe's Jev answers the sea-view *text
+    # claim* -- one typed Choice question, ~500 input tokens at $0.042 per
+    # million, output free, ~0.1 s -- where the bridge spends a cold CLI run
+    # and up to 300 s of an Enrich press on the same three-way call. Nothing
+    # else may read this key: analysis, summaries and taste stay on the
+    # subscription bridge. Unset, the route is absent and the bridge answers
+    # as before (services/sea_view_service.classify_text_with_ai).
+    TYPESAFE_API_KEY = os.environ.get("TYPESAFE_API_KEY")
+    TYPESAFE_API_URL = os.environ.get("TYPESAFE_API_URL") or "https://api.typesafe.ai"
+    # Pinned, not `jev-latest`, and not a setting: the threshold below was
+    # tuned against this release, so moving to another one is a code change
+    # that re-measures the threshold, never an environment variable.
+    TYPESAFE_MODEL = "jev-1.13.0"
+    # Per blocking socket operation (`urlopen`'s meaning) and, in the transport,
+    # a wall-clock deadline on the body read, so one exchange takes at most
+    # about twice this. The SDK's own default, ~100x a measured answer; the
+    # Enrich press budget counts it twice (services/enrich_budget).
+    TYPESAFE_TIMEOUT_SECONDS = _bounded_float(
+        "TYPESAFE_TIMEOUT_SECONDS", 10.0, 0.5, 120.0
+    )
+    # Below this Choice confidence Jev abstains and the bridge decides. 0.7 was
+    # measured on 2026-09-19 against the 42 bridge-labelled production rows:
+    # 90.5 % of them at or above it with 100 % agreement, and every
+    # disagreement below it. An experimental parameter, not a guarantee: the
+    # sample is the one the threshold was chosen on.
+    SEA_VIEW_TEXT_MIN_CONFIDENCE = _bounded_float(
+        "SEA_VIEW_TEXT_MIN_CONFIDENCE", 0.7, 0.0, 1.0
+    )
 
     # The single definition of the AI analysis timeout (#206 item 3). Used as
     # the `timeout` handed to services/subscription_transport.py's

@@ -183,3 +183,77 @@ The 120 stored rows keep their `no` until re-evaluated;
 rule for the mini applies. `tests/test_sea_view_over_nearer_ground.py` builds
 1282's own terrain — a near brow with open water past it — because an abstract
 ridge blocks everything and reproduces nothing.
+
+**The text claim's first reader is TypeSafe's Jev, and the bridge decides
+whatever Jev declines** (2026-09-19). `classify_text_with_ai` asks Jev one
+typed Choice question — `view` / `proximity` / `none`, the same three rules
+`_AI_PROMPT` states in prose — and takes the answer when its confidence is at
+or above `SEA_VIEW_TEXT_MIN_CONFIDENCE` (0.7). Below it, without
+`TYPESAFE_API_KEY`, or on any transport failure the subscription bridge answers
+exactly as before, and the stored detail records `provider` (`typesafe` or
+`bridge`), `confidence`, and `jev_confidence` when the bridge decided after Jev
+declined. Measured before the switch against the 42 bridge-labelled production
+rows: 92.9 % agreement overall, 100 % at or above 0.7 with 90.5 % coverage, and
+every disagreement a "research notes, not the advert" text. Jev returns no
+quote — it selects, it does not write — so a Jev-decided row has an empty
+`quote`. This is the app's one per-token-billed route (`config.py`,
+`services/typesafe_transport.py`): nothing else may read the key, and ingestion
+(`use_ai=False`) reaches neither model.
+
+Refined the same day after an independent Codex (`gpt-6-astra`) review of the
+diff: the model is pinned (`TYPESAFE_MODEL`, `jev-1.13.0`) because the
+threshold was tuned against that release; a confidence is accepted only as a
+finite number in [0, 1] (`bool`, `NaN`, `Infinity` and out-of-range values are
+contract violations) and is compared to the threshold before rounding; the
+answer must carry `type: choice` and one of the exact three labels; research
+notes (`RESEARCH_NOTES_PREFIX`, written by `utils/import_research_sheet.py`)
+never reach Jev; the Enrich allowance adds the Jev timeout to the bridge's,
+because the two calls run in sequence; the detail also records `model` and,
+when the bridge decided after Jev declined, `jev_claim`. The transport refuses
+redirects and a non-https origin, since urllib would otherwise carry the bearer
+key to wherever a 3xx points. The pilot is a time-boxed experiment; its dates
+and exit criteria are in PR #574.
+
+What the pilot records, settled with Codex in the second round: on every
+attempt — Jev decided, Jev abstained, the transport failed, or research notes
+were kept away — the detail carries `jev_status` (`decided` / `abstained` /
+`error` / `research_notes`), `jev_error` when there was one, `jev_ms` (wall
+time of the exchange), `jev_text_sha256` (16 hex characters) and
+`jev_text_chars`, the fingerprint of the text sent rather than a copy of it;
+the record survives a bridge failure into the keyword fallback, and nothing at
+all is written when `TYPESAFE_API_KEY` is absent. Exit criteria agreed for
+PR #574: checkpoint 2026-10-03, end 2026-10-17; continuation needs at least 30
+unique Jev-decided listings audited by a person from the stored detail, zero
+false `view`, at most one other error, coverage ≥ 80 % of eligible attempts,
+transport failures ≤ 5 %, Jev p95 ≤ 1 s from `jev_ms`; fewer than 30 decisions
+ends the experiment as "insufficient traffic", and either outcome short of the
+criteria means removal — key revoked, transport, settings and the documented
+exception deleted, results kept.
+
+After the Tier 2 reviewer's first pass (`rx`, Codex): the transport never
+copies a response body into a message, a log line or the stored detail — a
+vendor's 4xx text may echo the request, bearer key included — and reports the
+HTTP status alone; an invalid `TYPESAFE_API_URL` is a transport error rather
+than an escaping `ValueError`; and the body read runs against a wall-clock
+deadline of `TYPESAFE_TIMEOUT_SECONDS`, so one exchange takes at most about
+twice that setting and the Enrich allowance counts it twice.
+
+Third reviewer pass: the body is read with `read1`, which returns whatever has
+arrived after one socket read, so a peer dripping bytes cannot hold a chunked
+read open past the deadline; and the `model` field of an answer is checked
+against the pinned model and only the configured constant is stored, because
+that field is peer-controlled text like everything else in the body.
+
+Fifth reviewer pass: a per-operation timeout never bounded the exchange —
+a peer sending one header byte per operation could hold the connect or the
+headers open for days — so the transport now speaks `http.client` directly
+under a watchdog (`threading.Timer`) that closes the connection when
+`TYPESAFE_TIMEOUT_SECONDS` runs out, in whatever phase the exchange is; a 3xx
+is a status like any other and is never followed.
+
+Sixth reviewer pass: the allowance is re-checked at every phase boundary —
+after connect, after the request, after the response headers and after each
+chunk — because a phase that holds no socket yet (name resolution) outlives
+the watchdog's close, and the request must not go out, or bill, once the
+allowance is gone; and the model pin is a constant, not an environment
+setting, since the threshold was measured against one release.
