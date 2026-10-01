@@ -166,10 +166,10 @@ text had in `CLAUDE.md`; `docs/rules/README.md` lists the files in that order.
   it** (owner request 2026-08-31). Those tests CREATE and DROP databases on
   whatever that variable names, as whatever role it carries, so the server has
   to be one nobody else is using. Two are not: `127.0.0.1:5434` is the mini's
-  `idealista-db`, and **`127.0.0.1:5432` on this Mac is Postgres.app, which is
-  the inbox-zero project's database server** — the owner's global rules
-  reserve it for that project and forbid this one from connecting to it at
-  all.
+  `idealista-db`, and **`127.0.0.1:5432` on this Mac is the shared Docker
+  `local-postgres` container** (until 2026-09-29 it was Postgres.app serving
+  inbox-zero; both are retired) — it holds other local projects' databases, so
+  this one must not connect to it at all.
 
   It was used anyway, which is the part worth keeping. A session needed a real
   PostgreSQL for migration 025, ran `open -a Postgres` and then `createdb -U

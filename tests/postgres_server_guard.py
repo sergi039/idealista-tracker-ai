@@ -68,8 +68,8 @@ def refusal(found, target):
         "databases which are not this test run's: "
         + ", ".join(found)
         + ". These tests CREATE and DROP databases on that server, so it must "
-        "be a throwaway nobody else is using — 127.0.0.1:5432 is inbox-zero's "
-        "Postgres.app and 127.0.0.1:5434 is the mini's idealista-db, and "
+        "be a throwaway nobody else is using — 127.0.0.1:5432 is the shared "
+        "Docker local-postgres and 127.0.0.1:5434 is the mini's idealista-db, and "
         "neither is one. This project keeps no local database at all: the "
         "throwaway server is a container on the mini, tunnelled to "
         "127.0.0.1:55432 and removed by `stop`:\n"
