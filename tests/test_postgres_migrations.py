@@ -25,7 +25,7 @@ the migrations are exercised on production's own major version. Offline it
 fails and says so; the fallback is CI, never a database on this machine.
 
 What is NOT a throwaway server: 127.0.0.1:5432, which on a Mac here is
-Postgres.app and holds inbox-zero's live database, and 127.0.0.1:5434, the
+the shared Docker `local-postgres` holding other projects' databases, and 127.0.0.1:5434, the
 mini's `idealista-db`. `postgres_url` refuses both before it issues a single
 CREATE DATABASE — see tests/postgres_server_guard.py.
 
