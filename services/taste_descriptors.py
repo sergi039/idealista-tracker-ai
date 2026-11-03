@@ -16,9 +16,10 @@ from collections import defaultdict
 from typing import Any, Iterable
 
 from services import sea_view_service, visual_input as visual_input_service
+from services.property_classification_service import listing_kind
 from services.subscription_criteria import effective_figures
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 VALID_STATUSES = frozenset({"supported", "claimed", "unknown", "conflicting"})
 
 
@@ -387,12 +388,17 @@ def _mark_numeric_conflicts(observations: list[dict[str, Any]]) -> None:
 
 
 def _merge_visual(
-    aspects: dict[str, list[dict[str, Any]]], visual_input: Any, fingerprint: str
+    aspects: dict[str, list[dict[str, Any]]],
+    visual_input: Any,
+    prop: Any,
+    fingerprint: str,
 ) -> dict[str, str] | None:
     block = _dict(visual_input)
     if (
         block.get("schema_version") != 1
-        or block.get("property_fingerprint") != fingerprint
+        or not visual_property_fingerprint_matches(
+            prop, block.get("property_fingerprint"), current_fingerprint=fingerprint
+        )
         or not isinstance(block.get("input_fingerprint"), str)
         or re.fullmatch(r"[0-9a-f]{64}", block["input_fingerprint"]) is None
     ):
@@ -488,6 +494,30 @@ def _merge_visual(
     }
 
 
+def _walking_beach_evidence(travel: Any) -> dict[str, Any] | None:
+    """Only a walking route can establish pedestrian beach access.
+
+    The current travel writer records driving routes. Neither a short drive
+    nor a long one establishes how far the beach is on foot; absent and
+    unrecognized modes abstain too. Keep the raw route available in travel.
+    """
+    beaches = _dict(_dict(travel).get("beaches"))
+    if (
+        beaches.get("status") != "ok"
+        or beaches.get("mode") != "walking"
+        or not isinstance(beaches.get("items"), list)
+        or not beaches["items"]
+    ):
+        return None
+    duration = _finite_positive(_dict(beaches["items"][0]).get("duration_min"))
+    if duration is None:
+        return None
+    return {
+        "value": "walkable" if duration <= 15 else "far",
+        "measured_at": _one_line(beaches.get("measured_at")),
+    }
+
+
 def descriptor_input(prop: Any) -> dict[str, Any]:
     """Evidence consumed by :func:`build_descriptor`, excluding taste itself.
 
@@ -524,22 +554,7 @@ def descriptor_input(prop: Any) -> dict[str, Any]:
             }
         )
 
-    travel = _dict(getattr(prop, "travel", None))
-    beaches = _dict(travel.get("beaches"))
-    beach_evidence: dict[str, Any] | None = None
-    if (
-        beaches.get("status") == "ok"
-        and isinstance(beaches.get("items"), list)
-        and beaches["items"]
-    ):
-        duration = _finite_positive(_dict(beaches["items"][0]).get("duration_min"))
-        if duration is not None:
-            beach_evidence = {
-                "value": "walkable" if duration <= 15 else "far",
-                "measured_at": _one_line(beaches.get("measured_at")),
-            }
-
-    return {
+    projection = {
         "id": getattr(prop, "id", None),
         "figures": figures,
         "plot_claims": plot_claims,
@@ -550,10 +565,20 @@ def descriptor_input(prop: Any) -> dict[str, Any]:
             else None,
         },
         "sea_view": sea_evidence,
-        "beach_access": beach_evidence,
+        "beach_access": _walking_beach_evidence(getattr(prop, "travel", None)),
         # `_text_claims` consumes only this normalized, bounded line.
         "description": _one_line(getattr(prop, "description", None), 1800),
     }
+    kind = listing_kind(
+        getattr(prop, "property_category", None),
+        getattr(prop, "property_subtype", None),
+    )
+    # Preserve saved photo evidence and profiles for unchanged, correctly read
+    # houses/land. Only kinds the old binary inference misread need a new
+    # fingerprint; switching to or from one still changes this projection.
+    if kind != ("land" if figures.get("bare_land") else "house"):
+        projection["property_kind"] = kind
+    return projection
 
 
 def input_fingerprint(prop: Any) -> str:
@@ -561,6 +586,44 @@ def input_fingerprint(prop: Any) -> str:
         descriptor_input(prop), ensure_ascii=False, sort_keys=True, default=str
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def visual_property_fingerprint_matches(
+    prop: Any, stored: Any, *, current_fingerprint: str | None = None
+) -> bool:
+    """Keep valid photos across the correction of driving-as-walking evidence.
+
+    A legacy hash is accepted only when every other input still matches and
+    the canonical house/land kind was already correct. Reconstruct the old
+    beach projection from the CURRENT row; never trust a saved replacement
+    projection. This compatibility hash validates photos only: recommendations
+    keep the corrected input fingerprint and therefore become stale normally.
+    """
+    if not isinstance(stored, str):
+        return False
+    if stored == (current_fingerprint or input_fingerprint(prop)):
+        return True
+    projection = descriptor_input(prop)
+    if "property_kind" in projection or projection["beach_access"] is not None:
+        return False
+    beaches = _dict(_dict(getattr(prop, "travel", None)).get("beaches"))
+    if (
+        beaches.get("status") != "ok"
+        or not isinstance(beaches.get("items"), list)
+        or not beaches["items"]
+    ):
+        return False
+    duration = _finite_positive(_dict(beaches["items"][0]).get("duration_min"))
+    if duration is None:
+        return False
+    # Exact pre-correction projection, solely for matching already stored
+    # visual evidence. It must never become a descriptor observation again.
+    projection["beach_access"] = {
+        "value": "walkable" if duration <= 15 else "far",
+        "measured_at": _one_line(beaches.get("measured_at")),
+    }
+    raw = json.dumps(projection, ensure_ascii=False, sort_keys=True, default=str)
+    return stored == hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def build_descriptor(
@@ -596,12 +659,16 @@ def build_descriptor(
                 value=figures["plot_m2"],
             )
         )
+    kind = listing_kind(
+        getattr(prop, "property_category", None),
+        getattr(prop, "property_subtype", None),
+    )
     aspects["property_kind"].append(
         _evidence(
             source_kind="canonical",
             source_id="property_classification",
-            status="supported",
-            value="land" if figures.get("bare_land") else "house",
+            status="supported" if kind is not None else "unknown",
+            value=kind,
         )
     )
 
@@ -662,25 +729,17 @@ def build_descriptor(
             )
         )
 
-    travel = _dict(getattr(prop, "travel", None))
-    beaches = _dict(travel.get("beaches"))
-    if (
-        beaches.get("status") == "ok"
-        and isinstance(beaches.get("items"), list)
-        and beaches["items"]
-    ):
-        first = _dict(beaches["items"][0])
-        duration = _finite_positive(first.get("duration_min"))
-        if duration is not None:
-            aspects["beach_access"].append(
-                _evidence(
-                    source_kind="measurement",
-                    source_id="travel.beaches",
-                    status="supported",
-                    value="walkable" if duration <= 15 else "far",
-                    observed_at=_one_line(beaches.get("measured_at")),
-                )
+    beach_evidence = _walking_beach_evidence(getattr(prop, "travel", None))
+    if beach_evidence is not None:
+        aspects["beach_access"].append(
+            _evidence(
+                source_kind="measurement",
+                source_id="travel.beaches",
+                status="supported",
+                value=beach_evidence["value"],
+                observed_at=beach_evidence["measured_at"],
             )
+        )
 
     for aspect_id, observation in _text_claims(
         getattr(prop, "description", None),
@@ -695,7 +754,7 @@ def build_descriptor(
     ):
         aspects[aspect_id].append(observation)
 
-    visual_fingerprints = _merge_visual(aspects, visual_input, fingerprint)
+    visual_fingerprints = _merge_visual(aspects, visual_input, prop, fingerprint)
     descriptor = {
         "schema_version": SCHEMA_VERSION,
         "property_id": getattr(prop, "id", None),

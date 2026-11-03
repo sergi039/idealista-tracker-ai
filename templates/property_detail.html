@@ -2761,7 +2761,7 @@ async function setPropertyListingStatus(propertyId, status) {
         return;
     }
     try {
-        const response = await fetch(`/api/property/${propertyId}/set-status`, {
+        const response = await window.csrfFetch(`/api/property/${propertyId}/set-status`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({status: status})
@@ -2855,7 +2855,7 @@ async function checkPropertyListingStatus(propertyId) {
     };
 
     try {
-        const response = await fetch(`/api/property/${propertyId}/check-status`, {
+        const response = await window.csrfFetch(`/api/property/${propertyId}/check-status`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'}
         });
@@ -3352,7 +3352,7 @@ async function runGoogleEnrichment(propertyId) {
         || `/api/property/${propertyId}/enrich`;
 
     try {
-        const resp = await fetch(url, {
+        const resp = await window.csrfFetch(url, {
             /* `analyze: true` says, once and up front, that the AI analyses
                are part of this press. The server queues them itself when the
                enrichment job finishes, so the sequel no longer depends on this
@@ -3657,7 +3657,7 @@ async function runClaudeAnalysis(propertyId, queuedJobId) {
             return { ok: false, status: 202 };
         }
 
-        const resp = await fetch(`/api/property/${propertyId}/analyze/structured`, {
+        const resp = await window.csrfFetch(`/api/property/${propertyId}/analyze/structured`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ provider: 'claude' })
@@ -4073,7 +4073,7 @@ async function generateChatGPTAnalysis(propertyId, queuedJobId) {
            press: `applyAnalysis` and `handleFailure` are defined below, so the
            attach branch has to sit after them, and a fetch fired here would
            already have started the second paid run it exists to avoid. */
-        const resp = queuedJobId ? null : await fetch(`/api/property/${propertyId}/analyze/structured`, {
+        const resp = queuedJobId ? null : await window.csrfFetch(`/api/property/${propertyId}/analyze/structured`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ provider: 'openai' })

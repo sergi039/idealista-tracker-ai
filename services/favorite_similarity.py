@@ -241,7 +241,10 @@ class ListingFacts:
     is_rejected: bool
     kind: Optional[str]
     typology: Optional[str]
-    subtype: Optional[str]
+    # Preserve the canonical fields read by effective_figures: a land row's
+    # area is its parcel even when the importer recorded area_type="built".
+    property_category: Optional[str]
+    property_subtype: Optional[str]
     price: Optional[float]
     area: Optional[float]
     area_type: Optional[str]
@@ -390,7 +393,8 @@ def facts_from_row(row: Sequence[Any]) -> ListingFacts:
         == owner_review.REJECTED,
         kind=listing_kind(category, subtype),
         typology=house_typology(title),
-        subtype=_text(subtype),
+        property_category=_text(category),
+        property_subtype=_text(subtype),
         price=_positive_number(price),
         area=_surface(area),
         area_type=_text(area_type),

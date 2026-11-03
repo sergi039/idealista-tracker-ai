@@ -121,7 +121,11 @@ def run(argv: Sequence[str] | None = None) -> int:
                 current = (
                     isinstance(existing, dict)
                     and existing.get("schema_version") == 1
-                    and existing.get("property_fingerprint") == property_fingerprint
+                    and taste_descriptors.visual_property_fingerprint_matches(
+                        prop,
+                        existing.get("property_fingerprint"),
+                        current_fingerprint=property_fingerprint,
+                    )
                     and existing.get("input_fingerprint")
                     == envelope["input_fingerprint"]
                 )

@@ -32,6 +32,8 @@ the cadastre stored under "the pin the portal published" is the STATUS-002
 mistake in a new column.
 """
 
+import re
+
 import pytest
 
 from app import create_app, db
@@ -877,9 +879,22 @@ class TestTheApiSaysWhenItRefusedTheRefresh:
     caller told nothing reads the silence as "done"."""
 
     def _post(self, client, prop_id, refresh):
-        return client.post(
-            f"/api/property/{prop_id}/enrich" + ("?refresh_coords=1" if refresh else "")
+        page = client.get("/properties", base_url="https://localhost")
+        assert page.status_code == 200
+        match = re.search(
+            r'<meta name="csrf-token" content="([^"]+)">',
+            page.get_data(as_text=True),
         )
+        assert match is not None
+        token = match.group(1)
+        response = client.post(
+            f"/api/property/{prop_id}/enrich"
+            + ("?refresh_coords=1" if refresh else ""),
+            base_url="https://localhost",
+            headers={"X-CSRFToken": token, "Referer": "https://localhost/properties"},
+        )
+        assert response.status_code == 200
+        return response
 
     def test_it_names_the_refusal_and_does_not_pass_the_flag_on(self, app, monkeypatch):
         seen = {}
