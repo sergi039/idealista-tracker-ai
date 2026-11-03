@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -514,15 +515,31 @@ class TestTheLedger:
 
 
 class TestTheEntryPoints:
+    def _post(self, app, path):
+        # Reach the spend gate as a real page client, with CSRF still enabled.
+        client = app.test_client()
+        page = client.get("/properties", base_url="https://localhost")
+        assert page.status_code == 200
+        match = re.search(
+            r'<meta name="csrf-token" content="([^"]+)">',
+            page.get_data(as_text=True),
+        )
+        assert match is not None
+        token = match.group(1)
+        return client.post(
+            path,
+            base_url="https://localhost",
+            headers={"X-CSRFToken": token, "Referer": "https://localhost/properties"},
+        )
+
     def test_bulk_enrich_all_refuses_instead_of_looping_over_the_table(self, app):
         """The single widest uncontrolled spender in the tree.
 
-        Unauthenticated, CSRF-exempt, rate-limited only at 2 per 5 minutes,
+        Previously unauthenticated and CSRF-exempt, limited to 2 per 5 minutes,
         and it called `enrich_land` on every row with an empty enrichment
         column. Measured 2026-08-26: no template and no static asset calls it.
         """
-        client = app.test_client()
-        response = client.post("/api/lands/enrich-all")
+        response = self._post(app, "/api/lands/enrich-all")
         assert response.status_code == 409
         body = response.get_json()
         assert body["success"] is False
@@ -530,7 +547,8 @@ class TestTheEntryPoints:
 
     def test_bulk_enrich_all_makes_no_request_at_all(self, app):
         with patch.object(google_spend, "request_with_retries") as issue:
-            app.test_client().post("/api/lands/enrich-all")
+            response = self._post(app, "/api/lands/enrich-all")
+        assert response.status_code == 409
         issue.assert_not_called()
 
     def test_the_property_enrich_route_opens_one(self, app, no_authorization):
@@ -561,7 +579,7 @@ class TestTheEntryPoints:
             "enrich_property",
             side_effect=_capture,
         ):
-            response = app.test_client().post(f"/api/property/{prop.id}/enrich")
+            response = self._post(app, f"/api/property/{prop.id}/enrich")
 
         assert response.status_code == 200
         assert seen["actor"] == "api:manual_property_enrichment", (
@@ -590,7 +608,7 @@ class TestTheEntryPoints:
             "services.enrichment_service.EnrichmentService.enrich_land",
             side_effect=_capture,
         ):
-            response = app.test_client().post(f"/api/land/{land.id}/enrich")
+            response = self._post(app, f"/api/land/{land.id}/enrich")
 
         assert response.status_code == 200
         assert seen["actor"] == "api:manual_enrichment"

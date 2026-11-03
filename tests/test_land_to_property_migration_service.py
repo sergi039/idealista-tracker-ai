@@ -1,4 +1,5 @@
 from decimal import Decimal
+import re
 
 import pytest
 
@@ -87,9 +88,19 @@ def test_land_to_property_migration_endpoint(client, app):
         db.session.add(land)
         db.session.commit()
 
+    page = client.get("/properties", base_url="https://localhost")
+    assert page.status_code == 200
+    match = re.search(
+        r'<meta name="csrf-token" content="([^"]+)">',
+        page.get_data(as_text=True),
+    )
+    assert match is not None
+    token = match.group(1)
     resp = client.post(
         "/api/migrate/lands-to-properties",
         json={"dry_run": False, "limit": 10, "profile_name": "Legacy Lands API"},
+        base_url="https://localhost",
+        headers={"X-CSRFToken": token, "Referer": "https://localhost/properties"},
     )
     assert resp.status_code == 200
     data = resp.get_json()
