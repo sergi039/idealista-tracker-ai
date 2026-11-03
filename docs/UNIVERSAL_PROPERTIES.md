@@ -55,10 +55,14 @@ This repo contains an optional one-way migration helper to copy legacy `lands` r
   - `limit` (int, optional)
   - `profile_name` (string, optional; default `"Legacy Lands"`)
 
-Example:
+Programmatic writes use the same CSRF check as browser buttons: first read
+`/properties`, retain its session cookie, and use the `csrf-token` meta value
+as `X-CSRFToken`. In this example, `cookie_jar` and `csrf_token` contain that
+matching cookie file and token; HTTPS callers also send the same-origin Referer.
 
 ```bash
 curl -X POST http://localhost:5050/api/migrate/lands-to-properties \
+  --cookie "$cookie_jar" -H "X-CSRFToken: $csrf_token" \
   -H 'Content-Type: application/json' \
   -d '{"dry_run": false, "profile_name": "Legacy Lands"}'
 ```

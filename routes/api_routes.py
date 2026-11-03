@@ -382,8 +382,8 @@ def bulk_enrichment():
     """Refused: unbounded paid enrichment has no owner behind it.
 
     This endpoint selected every `Land` missing any enrichment block and called
-    `enrich_land` on each. It is unauthenticated (owner decision 2026-08-08),
-    CSRF-exempt (`app.py`: `csrf.exempt(api_bp)`), and its only friction was a
+    `enrich_land` on each. It had no authentication or CSRF protection, and
+    its only friction was a
     2-per-5-minutes rate limit -- so one request spent an amount of Google
     credit bounded by nothing except how many rows the table happened to hold.
     Measured 2026-08-26: **no template and no static asset calls it.** It is a
@@ -2556,15 +2556,10 @@ def manual_property_enrichment(property_id: int):
         # enrichment. The page says so once, up front, instead of driving the
         # sequence step by step.
         #
-        # **Read from the JSON body only, unlike `refresh_coords` above.** The
-        # JSON API blueprints are CSRF-exempt and there is no authentication
-        # (owner decision 2026-08-08), so the only thing standing between a
-        # page on another origin and this endpoint is that a simple form POST
-        # cannot set `Content-Type: application/json` and anything that can
-        # takes a CORS preflight this app does not answer. A `?analyze=1` in
-        # the query string would hand that page the AI spend as well, which is
-        # a wider surface than the ticket asked for and buys nothing: the one
-        # caller posts JSON.
+        # Read explicit analysis intent from the JSON body only, unlike
+        # `refresh_coords` above. The browser sends a session-bound CSRF
+        # token; a query parameter still must not opt the caller into AI
+        # spend that the submitted body did not request.
         analyze = bool(payload.get("analyze")) if isinstance(payload, dict) else False
 
         # A refresh asked for on a row whose location a person established is
@@ -2972,8 +2967,7 @@ def check_land_status(land_id):
 def check_property_status(property_id):
     """Check whether a universal Property listing is still live on Idealista.
 
-    Rate-limited on purpose: this endpoint is unauthenticated and CSRF-exempt
-    like the rest of the JSON API, and every call spends one outbound request
+    Rate-limited on purpose: every call spends one outbound request
     on idealista. Without a cap, a page left in a loop would drive the scraper
     straight past the throttle the lands sweep is careful to respect.
 

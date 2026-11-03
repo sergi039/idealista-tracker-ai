@@ -326,7 +326,7 @@ window.IdealistaApp = {
         if (!buttons || !buttons.length) return;
 
         const toggle = async (propertyId) => {
-            const response = await fetch(`/api/property/${propertyId}/favorite`, {
+            const response = await window.csrfFetch(`/api/property/${propertyId}/favorite`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -399,7 +399,7 @@ window.IdealistaApp = {
         };
 
         const run = async (propertyId, provider) => {
-            const resp = await fetch(`/api/property/${propertyId}/analyze/structured`, {
+            const resp = await window.csrfFetch(`/api/property/${propertyId}/analyze/structured`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ provider })
@@ -1495,7 +1495,7 @@ function saveEnvironment(event, resourceId, resourceType = 'land') {
     };
     
     // Send update to server
-    fetch(`/api/${resourceType}/${resourceId}/environment`, {
+    window.csrfFetch(`/api/${resourceType}/${resourceId}/environment`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',

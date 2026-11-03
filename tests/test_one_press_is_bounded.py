@@ -1113,7 +1113,7 @@ class TestTheAnalysisDoesNotDependOnATabStayingOpen:
         )
         # Claude returns before its fetch; ChatGPT cannot (its handlers are
         # defined below the fetch), so its request is skipped at the call.
-        assert "queuedJobId ? null : await fetch(" in detail
+        assert "queuedJobId ? null : await window.csrfFetch(" in detail
         assert "runClaudeAnalysis(propertyId, queued.claude)" in detail
         assert "generateChatGPTAnalysis(propertyId, queued.openai)" in detail
 

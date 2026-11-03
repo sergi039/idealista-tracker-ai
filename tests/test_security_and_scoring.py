@@ -186,7 +186,8 @@ class TestNoLoginGate:
     and so anyone reintroducing it does it deliberately, not by accident.
 
     The paired risk is recorded in README: with no token gate, the JSON API is
-    reachable by anything that can talk to localhost, and api_bp is CSRF-exempt."""
+    reachable by anything that can talk to localhost. Browser writes require
+    the session-bound CSRF token; these tests isolate the no-login contract."""
 
     def test_login_route_is_gone(self, non_testing_client):
         """/login and /logout must not exist as routes any more."""

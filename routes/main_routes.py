@@ -343,6 +343,24 @@ def _criteria_context():
     return subscription_criteria.profile_context(Property)
 
 
+def _recommendation_selection(query, profile_data, profile_summary, similarity_ctx):
+    """One recommendation reading and hard-exclusion set for page and CSV."""
+    context = taste_recommendation.build_context(
+        query.all(),
+        profile_data,
+        profile_summary,
+        similarity_ctx=similarity_ctx,
+    )
+    excluded_ids = [
+        property_id
+        for property_id, reading in context.readings.items()
+        if reading.get("eligibility") == "excluded"
+    ]
+    if excluded_ids:
+        query = query.filter(Property.id.notin_(excluded_ids))
+    return query, context, len(excluded_ids)
+
+
 # The filter bar's dimensions, in the order the page applies them. One home
 # for the page's own rows AND for every count drawn beside its controls: a
 # counted option is a promise about the page that picking it opens, and the
@@ -2070,20 +2088,14 @@ def properties():
         )
         recommendation_excluded_count = 0
         if wants_recommendation_ranking:
-            recommendation_context = taste_recommendation.build_context(
-                query.all(),
-                recommendation_profile_data,
-                recommendation_profile_summary,
-                similarity_ctx=similarity_ctx,
+            query, recommendation_context, recommendation_excluded_count = (
+                _recommendation_selection(
+                    query,
+                    recommendation_profile_data,
+                    recommendation_profile_summary,
+                    similarity_ctx,
+                )
             )
-            excluded_ids = [
-                property_id
-                for property_id, reading in recommendation_context.readings.items()
-                if reading.get("eligibility") == "excluded"
-            ]
-            recommendation_excluded_count = len(excluded_ids)
-            if excluded_ids:
-                query = query.filter(Property.id.notin_(excluded_ids))
 
         # Sorting (safe allow-list). An unknown sort -- an old /lands bookmark
         # asking for travel_time_nearest_beach, say -- falls back to the
@@ -3891,9 +3903,8 @@ def set_review(property_id):
 
     One dedicated route validating a small closed set, flashing a result and
     redirecting -- the `set_advertiser` / `set_pool_absence` idiom, and on
-    `main_bp`, so the form carries a CSRF token. There is no JSON twin: every
-    endpoint on `api_bp` is CSRF-exempt, and this writes the one thing in the
-    application a person typed rather than a measurement.
+    `main_bp`, so the form carries a CSRF token. There is no JSON twin: the
+    form submits the owner decision and redirects back to its visible result.
 
     Both fields are submitted together because they are edited together, and
     because `services.owner_review.set_review` records one event describing the
@@ -5925,15 +5936,25 @@ def export_properties_csv():
         # never consulted.
         hide_removed_filter = resolve_hide_removed(request.args)
 
-        sort_by = request.args.get("sort", "created_at")
+        mode = request.args.get("mode", "combined")
+        sort_by = request.args.get("sort") or (
+            "recommendation" if mode == "recommendation" else DEFAULT_PROPERTY_SORT
+        )
         sort_order = request.args.get("order", "desc")
+        wants_recommendation_ranking = (
+            mode == "recommendation" or sort_by == "recommendation"
+        )
 
+        export_options = [
+            defer(Property.enhanced_description),
+            defer(Property.ai_analysis),
+        ]
+        # Descriptors read the listing text. Fetch it once with the candidate
+        # set when ranking, rather than one deferred query for each listing.
+        if not wants_recommendation_ranking:
+            export_options.append(defer(Property.description))
         query = apply_profile_filter(
-            Property.query.options(
-                defer(Property.description),
-                defer(Property.enhanced_description),
-                defer(Property.ai_analysis),
-            ),
+            Property.query.options(*export_options),
             Property.search_profile_id,
             profile_selection,
         )
@@ -6029,6 +6050,14 @@ def export_properties_csv():
                 Property.listing_status.notin_(DELISTED_LISTING_STATUSES)
             )
 
+        recommendation_context = None
+        if wants_recommendation_ranking:
+            profile_data = taste_service.load_current_profile()
+            profile_summary = taste_service.recommendation_profile_state(profile_data)
+            query, recommendation_context, _ = _recommendation_selection(
+                query, profile_data, profile_summary, similarity_ctx
+            )
+
         # Same ordering as /properties, tiebreaker included: the export link
         # forwards whatever the page is sorted by, so an allow-list that does
         # not know a value would hand back the same rows in another order.
@@ -6053,6 +6082,10 @@ def export_properties_csv():
             # sort=similarity hands back the page's order.
             "similarity": favorite_similarity.sort_expression(Property, similarity_ctx),
         }
+        if recommendation_context is not None:
+            sort_columns["recommendation"] = taste_recommendation.sort_expression(
+                Property, recommendation_context
+            )
         if sort_by == "investment_metrics":
             rank = investment_rating_rank(Property)
             rank_order = rank.asc() if sort_order == "asc" else rank.desc()

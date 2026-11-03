@@ -16,9 +16,10 @@ from collections import defaultdict
 from typing import Any, Iterable
 
 from services import sea_view_service, visual_input as visual_input_service
+from services.property_classification_service import listing_kind
 from services.subscription_criteria import effective_figures
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 VALID_STATUSES = frozenset({"supported", "claimed", "unknown", "conflicting"})
 
 
@@ -488,6 +489,30 @@ def _merge_visual(
     }
 
 
+def _walking_beach_evidence(travel: Any) -> dict[str, Any] | None:
+    """Only a walking route can establish pedestrian beach access.
+
+    The current travel writer records driving routes. Neither a short drive
+    nor a long one establishes how far the beach is on foot; absent and
+    unrecognized modes abstain too. Keep the raw route available in travel.
+    """
+    beaches = _dict(_dict(travel).get("beaches"))
+    if (
+        beaches.get("status") != "ok"
+        or beaches.get("mode") != "walking"
+        or not isinstance(beaches.get("items"), list)
+        or not beaches["items"]
+    ):
+        return None
+    duration = _finite_positive(_dict(beaches["items"][0]).get("duration_min"))
+    if duration is None:
+        return None
+    return {
+        "value": "walkable" if duration <= 15 else "far",
+        "measured_at": _one_line(beaches.get("measured_at")),
+    }
+
+
 def descriptor_input(prop: Any) -> dict[str, Any]:
     """Evidence consumed by :func:`build_descriptor`, excluding taste itself.
 
@@ -524,22 +549,7 @@ def descriptor_input(prop: Any) -> dict[str, Any]:
             }
         )
 
-    travel = _dict(getattr(prop, "travel", None))
-    beaches = _dict(travel.get("beaches"))
-    beach_evidence: dict[str, Any] | None = None
-    if (
-        beaches.get("status") == "ok"
-        and isinstance(beaches.get("items"), list)
-        and beaches["items"]
-    ):
-        duration = _finite_positive(_dict(beaches["items"][0]).get("duration_min"))
-        if duration is not None:
-            beach_evidence = {
-                "value": "walkable" if duration <= 15 else "far",
-                "measured_at": _one_line(beaches.get("measured_at")),
-            }
-
-    return {
+    projection = {
         "id": getattr(prop, "id", None),
         "figures": figures,
         "plot_claims": plot_claims,
@@ -550,10 +560,20 @@ def descriptor_input(prop: Any) -> dict[str, Any]:
             else None,
         },
         "sea_view": sea_evidence,
-        "beach_access": beach_evidence,
+        "beach_access": _walking_beach_evidence(getattr(prop, "travel", None)),
         # `_text_claims` consumes only this normalized, bounded line.
         "description": _one_line(getattr(prop, "description", None), 1800),
     }
+    kind = listing_kind(
+        getattr(prop, "property_category", None),
+        getattr(prop, "property_subtype", None),
+    )
+    # Preserve saved photo evidence and profiles for unchanged, correctly read
+    # houses/land. Only kinds the old binary inference misread need a new
+    # fingerprint; switching to or from one still changes this projection.
+    if kind != ("land" if figures.get("bare_land") else "house"):
+        projection["property_kind"] = kind
+    return projection
 
 
 def input_fingerprint(prop: Any) -> str:
@@ -596,12 +616,16 @@ def build_descriptor(
                 value=figures["plot_m2"],
             )
         )
+    kind = listing_kind(
+        getattr(prop, "property_category", None),
+        getattr(prop, "property_subtype", None),
+    )
     aspects["property_kind"].append(
         _evidence(
             source_kind="canonical",
             source_id="property_classification",
-            status="supported",
-            value="land" if figures.get("bare_land") else "house",
+            status="supported" if kind is not None else "unknown",
+            value=kind,
         )
     )
 
@@ -662,25 +686,17 @@ def build_descriptor(
             )
         )
 
-    travel = _dict(getattr(prop, "travel", None))
-    beaches = _dict(travel.get("beaches"))
-    if (
-        beaches.get("status") == "ok"
-        and isinstance(beaches.get("items"), list)
-        and beaches["items"]
-    ):
-        first = _dict(beaches["items"][0])
-        duration = _finite_positive(first.get("duration_min"))
-        if duration is not None:
-            aspects["beach_access"].append(
-                _evidence(
-                    source_kind="measurement",
-                    source_id="travel.beaches",
-                    status="supported",
-                    value="walkable" if duration <= 15 else "far",
-                    observed_at=_one_line(beaches.get("measured_at")),
-                )
+    beach_evidence = _walking_beach_evidence(getattr(prop, "travel", None))
+    if beach_evidence is not None:
+        aspects["beach_access"].append(
+            _evidence(
+                source_kind="measurement",
+                source_id="travel.beaches",
+                status="supported",
+                value=beach_evidence["value"],
+                observed_at=beach_evidence["measured_at"],
             )
+        )
 
     for aspect_id, observation in _text_claims(
         getattr(prop, "description", None),

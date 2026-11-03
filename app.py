@@ -262,9 +262,8 @@ def create_app(testing: bool = False):
     app.register_blueprint(api_bp, url_prefix="/api")
     app.register_blueprint(language_bp, url_prefix="/api")
 
-    # Exempt JSON API blueprints from CSRF (they use token/session auth, not form submissions)
-    csrf.exempt(api_bp)
-    csrf.exempt(language_bp)
+    # Browser APIs have no separate token authentication. Keep their writes
+    # under Flask-WTF too; fetch/HTMX send the token rendered by base.html.
 
     # Issue #140: those two blueprints answer JSON, so their errors must too.
     # Each registers its own HTTPException handler for what its views raise;

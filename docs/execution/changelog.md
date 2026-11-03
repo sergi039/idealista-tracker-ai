@@ -1,5 +1,18 @@
 # Execution changelog
 
+## 2026-11-03
+
+- Protect browser API writes with the existing session-bound CSRF token,
+  including fetch and HTMX callers; read-only endpoints keep their behavior.
+- Require an explicit walking route before beach travel can support pedestrian
+  access. Driving measurements remain available without becoming walking facts.
+- Preserve canonical property kinds in recommendation descriptors, including
+  unknown types, and invalidate only changed reference evidence.
+- Preserve land classification through the Similar SQL projection so parcel
+  size still contributes when imported area types say built or unknown.
+- Apply the same recommendation exclusions and ordering to the page and its CSV
+  export, including recommendation mode with an explicitly chosen sort.
+
 ## 2026-09-08
 
 - Made recommendation rows compact: group repeated evidence labels per outcome,

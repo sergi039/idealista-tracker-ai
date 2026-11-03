@@ -855,9 +855,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // AI refresh: the POST runs one synchronous bridge call that takes a few
     // minutes (issue #276), so once the owner confirms, the button becomes a
     // spinner and stays disabled — a second press mid-wait would be a second
-    // paid bridge call. The synchronous form POST itself stays as is: a
-    // polling variant would need a state-changing JSON endpoint, and those
-    // are CSRF-exempt (see app.py).
+    // paid bridge call. The synchronous form POST itself stays as is.
     const aiRefreshForm = document.getElementById('ai-refresh-form');
     const aiRefreshBtn = document.getElementById('ai-refresh-button');
     if (aiRefreshForm && aiRefreshBtn) {

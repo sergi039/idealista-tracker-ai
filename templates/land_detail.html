@@ -1411,7 +1411,7 @@
 // Toggle favorite status for a property
 async function toggleFavorite(landId) {
     try {
-        const response = await fetch(`/api/land/${landId}/favorite`, {
+        const response = await window.csrfFetch(`/api/land/${landId}/favorite`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -1459,7 +1459,7 @@ async function setListingStatus(landId, status) {
         return;
     }
     try {
-        const response = await fetch(`/api/land/${landId}/set-status`, {
+        const response = await window.csrfFetch(`/api/land/${landId}/set-status`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({status: status})
@@ -1540,7 +1540,7 @@ async function checkListingStatus(landId, btn) {
     };
 
     try {
-        const response = await fetch(`/api/land/${landId}/check-status`, {
+        const response = await window.csrfFetch(`/api/land/${landId}/check-status`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -2215,7 +2215,7 @@ function runClaudeAnalysis(landId) {
         showTransientAlert(alertsId, alertType, message || 'Claude request failed.', 4500);
     };
 
-    fetch(`/api/analyze/property/${landId}/structured`, {
+    window.csrfFetch(`/api/analyze/property/${landId}/structured`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody)
@@ -2529,7 +2529,7 @@ async function generateChatGPTAnalysis() {
         // A press always recomputes now (#219/#234), so there is no `force`
         // flag left for the endpoint to read -- mirrors runClaudeAnalysis's
         // requestBody above, which dropped the same distinction earlier.
-        const resp = await fetch(`/api/analysis/generate/{{ land.id }}/openai`, {
+        const resp = await window.csrfFetch(`/api/analysis/generate/{{ land.id }}/openai`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({})

@@ -617,7 +617,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         btn.disabled = true;
         try {
-            const response = await fetch(`/api/property/${propertyId}/favorite`, {
+            const response = await window.csrfFetch(`/api/property/${propertyId}/favorite`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' }
             });
