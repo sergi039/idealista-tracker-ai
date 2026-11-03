@@ -154,9 +154,9 @@ What that means in practice:
 - The app must stay bound to loopback. `docker-compose.yml` publishes it as
   `127.0.0.1:5001:5001` — dropping that prefix exposes the whole database,
   the settings UI and the paid AI/enrichment endpoints to your network.
-- The JSON API is CSRF-exempt (it used to rely on the token instead), so any
-  page open in your browser can POST to `localhost:5001` and trigger work that
-  costs money. Weigh that before leaving the container running.
+- Browser API writes require the session-bound CSRF token rendered by the
+  app. Fetch and HTMX callers send it automatically; programmatic writes need
+  a matching session cookie and token. This does not replace access control.
 
 ### Example `.env` file
 

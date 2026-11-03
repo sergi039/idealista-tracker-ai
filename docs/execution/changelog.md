@@ -5,7 +5,8 @@
 - Protect browser API writes with the existing session-bound CSRF token,
   including fetch and HTMX callers; read-only endpoints keep their behavior.
 - Require an explicit walking route before beach travel can support pedestrian
-  access. Driving measurements remain available without becoming walking facts.
+  access. Driving measurements remain available without becoming walking facts;
+  unchanged validated photo evidence survives this semantic correction.
 - Preserve canonical property kinds in recommendation descriptors, including
   unknown types, and invalidate only changed reference evidence.
 - Preserve land classification through the Similar SQL projection so parcel

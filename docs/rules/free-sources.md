@@ -188,8 +188,8 @@ text had in `CLAUDE.md`; `docs/rules/README.md` lists the files in that order.
   finished first and freed the key -- including on the path where the poller
   gave up and there are no ids to attach to, which is why the page does not
   dispatch there at all. The flag asking for the sequel is read from the JSON
-  body only: these blueprints are CSRF-exempt and unauthenticated, and a
-  simple cross-origin form POST cannot set `Content-Type: application/json`.
+  body only: the submitted body expresses explicit analysis intent, while
+  the session-bound CSRF token protects the browser write.
 
   **The client's poll budget is for silence, not duration.** No constant can
   be a run's worst case -- the executor's queue is unbounded, a `FOR UPDATE`

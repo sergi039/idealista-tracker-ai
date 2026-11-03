@@ -295,3 +295,145 @@ def test_unchanged_correct_kinds_keep_existing_photo_evidence_and_profile(
         for row in taste_descriptors.aspect_values(descriptor, "house_condition")
     ] == [("weathered", "photo")]
     assert taste_service.recommendation_profile_state(snapshot)["state"] == "current"
+
+
+# Computed by the baseline 4f51a0d descriptor on this exact property. Its
+# driving route used to hash as walking access, although the photos did not
+# change when that interpretation was corrected.
+_DRIVING_PHOTO_FINGERPRINT = (
+    "02e7ca2c46d8c51bb40587978077b1413d4e43cacfaa5c0413ff2ac6ea9781a5"
+)
+
+
+def _legacy_driving_photo_property():
+    return _property(
+        is_favorite=True,
+        travel={
+            "beaches": {
+                "status": "ok",
+                "mode": "driving",
+                "items": [{"duration_min": 14}],
+            }
+        },
+        taste={
+            "visual_descriptor": {
+                "schema_version": 1,
+                "input_fingerprint": "a" * 64,
+                "property_fingerprint": _DRIVING_PHOTO_FINGERPRINT,
+                "visual_observations": [
+                    {
+                        "aspect_id": "house_condition",
+                        "value": "weathered",
+                        "status": "claimed",
+                        "evidence": {
+                            "source_kind": "photo",
+                            "source_id": "property:9:photo:0",
+                            "image_sha256": "b" * 64,
+                            "image_index": 0,
+                        },
+                        "confidence": 0.8,
+                        "limitation": "Only the visible facade is in frame.",
+                    }
+                ],
+            }
+        },
+    )
+
+
+def test_legacy_driving_projection_keeps_photos_but_dirties_recommendations(app):
+    profile = SearchProfile(id=24, name="Reference", is_active=True)
+    prop = _legacy_driving_photo_property()
+    db.session.add_all([profile, prop])
+    db.session.commit()
+    signals = taste_service.collect_signals()
+    signals[0]["descriptor"]["input_fingerprint"] = _DRIVING_PHOTO_FINGERPRINT
+    saved_profile = _snapshot()
+    saved_profile["signals_fingerprint"] = taste_service.signals_fingerprint(signals)
+
+    descriptor = taste_descriptors.build_descriptor(
+        prop, visual_input=prop.taste["visual_descriptor"]
+    )
+
+    assert [
+        (row["value"], row["source_kind"])
+        for row in taste_descriptors.aspect_values(descriptor, "house_condition")
+    ] == [("weathered", "photo")]
+    assert taste_descriptors.aspect_values(descriptor, "beach_access") == []
+    assert descriptor["input_fingerprint"] != _DRIVING_PHOTO_FINGERPRINT
+    assert taste_service.recommendation_profile_state(saved_profile)["state"] == "dirty"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("description", "Changed listing facts"),
+        ("area", 250),
+        ("plot_area", 1200),
+        ("property_subtype", "apartment"),
+        ("property_subtype", None),
+    ],
+)
+def test_legacy_photo_compatibility_does_not_hide_other_changed_facts(field, value):
+    prop = _legacy_driving_photo_property()
+    setattr(prop, field, value)
+
+    descriptor = taste_descriptors.build_descriptor(
+        prop, visual_input=prop.taste["visual_descriptor"]
+    )
+
+    assert taste_descriptors.aspect_values(descriptor, "house_condition") == []
+    assert "visual_descriptor_fingerprint" not in descriptor
+
+
+def test_legacy_photo_compatibility_still_refuses_invalid_image_provenance():
+    prop = _legacy_driving_photo_property()
+    prop.taste["visual_descriptor"]["visual_observations"][0]["evidence"][
+        "image_sha256"
+    ] = "invalid"
+
+    descriptor = taste_descriptors.build_descriptor(
+        prop, visual_input=prop.taste["visual_descriptor"]
+    )
+
+    assert taste_descriptors.aspect_values(descriptor, "house_condition") == []
+
+
+def test_visual_cli_does_not_reextract_valid_legacy_beach_photos(app, monkeypatch):
+    import app as app_module
+    from services import visual_input
+    from tests.test_extract_visual_descriptors import _image, _without_real_marker
+    from utils import extract_visual_descriptors
+
+    _without_real_marker(monkeypatch)
+    profile = SearchProfile(id=24, name="Reference", is_active=True)
+    prop = _legacy_driving_photo_property()
+    image = _image()
+    envelope = visual_input.build_visual_input([image])
+    observation = prop.taste["visual_descriptor"]["visual_observations"][0]
+    observation["evidence"].update(
+        source_id=image["source_id"], image_sha256=image["content_sha256"]
+    )
+    prop.taste = {
+        "visual_descriptor": {
+            **envelope,
+            "property_fingerprint": _DRIVING_PHOTO_FINGERPRINT,
+            "visual_observations": [observation],
+        }
+    }
+    db.session.add_all([profile, prop])
+    db.session.commit()
+    monkeypatch.setattr(app_module, "create_app", lambda: app)
+    monkeypatch.setattr(
+        visual_input, "download_portal_photo_inputs", lambda *_args, **_kwargs: [image]
+    )
+    monkeypatch.setattr(
+        visual_input,
+        "extract_visual_observations",
+        lambda *_args, **_kwargs: pytest.fail("unchanged photos requested extraction"),
+    )
+
+    assert extract_visual_descriptors.run(["--ids", str(prop.id), "--apply"]) == 0
+    db.session.refresh(prop)
+    assert prop.taste["visual_descriptor"]["property_fingerprint"] == (
+        _DRIVING_PHOTO_FINGERPRINT
+    )

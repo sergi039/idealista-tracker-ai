@@ -52,7 +52,7 @@ text had in `CLAUDE.md`; `docs/rules/README.md` lists the files in that order.
 
   **A machine that does not ingest on a tick does not ingest on a click
   either** (#388). The flag governed the *scheduler* and nothing else, while
-  `POST /api/ingest/email/run` — the Manual Sync button, CSRF-exempt and
+  `POST /api/ingest/email/run` — the Manual Sync button, then CSRF-exempt and
   behind no authentication — read the same mailbox on one press regardless of
   it, with a 5/minute rate limit as the only friction. The rule now has one
   home, `services/ingest_policy.py`, and two readers: the endpoint refuses

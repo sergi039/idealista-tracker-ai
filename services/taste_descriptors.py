@@ -388,12 +388,17 @@ def _mark_numeric_conflicts(observations: list[dict[str, Any]]) -> None:
 
 
 def _merge_visual(
-    aspects: dict[str, list[dict[str, Any]]], visual_input: Any, fingerprint: str
+    aspects: dict[str, list[dict[str, Any]]],
+    visual_input: Any,
+    prop: Any,
+    fingerprint: str,
 ) -> dict[str, str] | None:
     block = _dict(visual_input)
     if (
         block.get("schema_version") != 1
-        or block.get("property_fingerprint") != fingerprint
+        or not visual_property_fingerprint_matches(
+            prop, block.get("property_fingerprint"), current_fingerprint=fingerprint
+        )
         or not isinstance(block.get("input_fingerprint"), str)
         or re.fullmatch(r"[0-9a-f]{64}", block["input_fingerprint"]) is None
     ):
@@ -583,6 +588,44 @@ def input_fingerprint(prop: Any) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def visual_property_fingerprint_matches(
+    prop: Any, stored: Any, *, current_fingerprint: str | None = None
+) -> bool:
+    """Keep valid photos across the correction of driving-as-walking evidence.
+
+    A legacy hash is accepted only when every other input still matches and
+    the canonical house/land kind was already correct. Reconstruct the old
+    beach projection from the CURRENT row; never trust a saved replacement
+    projection. This compatibility hash validates photos only: recommendations
+    keep the corrected input fingerprint and therefore become stale normally.
+    """
+    if not isinstance(stored, str):
+        return False
+    if stored == (current_fingerprint or input_fingerprint(prop)):
+        return True
+    projection = descriptor_input(prop)
+    if "property_kind" in projection or projection["beach_access"] is not None:
+        return False
+    beaches = _dict(_dict(getattr(prop, "travel", None)).get("beaches"))
+    if (
+        beaches.get("status") != "ok"
+        or not isinstance(beaches.get("items"), list)
+        or not beaches["items"]
+    ):
+        return False
+    duration = _finite_positive(_dict(beaches["items"][0]).get("duration_min"))
+    if duration is None:
+        return False
+    # Exact pre-correction projection, solely for matching already stored
+    # visual evidence. It must never become a descriptor observation again.
+    projection["beach_access"] = {
+        "value": "walkable" if duration <= 15 else "far",
+        "measured_at": _one_line(beaches.get("measured_at")),
+    }
+    raw = json.dumps(projection, ensure_ascii=False, sort_keys=True, default=str)
+    return stored == hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def build_descriptor(
     prop: Any,
     *,
@@ -711,7 +754,7 @@ def build_descriptor(
     ):
         aspects[aspect_id].append(observation)
 
-    visual_fingerprints = _merge_visual(aspects, visual_input, fingerprint)
+    visual_fingerprints = _merge_visual(aspects, visual_input, prop, fingerprint)
     descriptor = {
         "schema_version": SCHEMA_VERSION,
         "property_id": getattr(prop, "id", None),
