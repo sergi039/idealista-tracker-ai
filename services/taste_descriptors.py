@@ -18,6 +18,7 @@ from typing import Any, Iterable
 from services import sea_view_service, visual_input as visual_input_service
 from services.property_classification_service import listing_kind
 from services.subscription_criteria import effective_figures
+from services import neighbours_service
 
 SCHEMA_VERSION = 2
 VALID_STATUSES = frozenset({"supported", "claimed", "unknown", "conflicting"})
@@ -453,6 +454,13 @@ def _merge_visual(
             or not limitation.strip()
         ):
             continue
+        # A facade cannot establish off-frame neighbours or their absence.
+        # Keep the extractor's vocabulary, but only cadastre may support it.
+        if (
+            row["aspect_id"] in {"neighbor_privacy", "nearby_buildings"}
+            and status != "unknown"
+        ):
+            status = "claimed"
         observation = _evidence(
             source_kind="photo",
             source_id=evidence["source_id"],
@@ -569,6 +577,9 @@ def descriptor_input(prop: Any) -> dict[str, Any]:
         # `_text_claims` consumes only this normalized, bounded line.
         "description": _one_line(getattr(prop, "description", None), 1800),
     }
+    neighbours = neighbours_service.read_verdict(prop)
+    if neighbours:
+        projection["neighbours"] = neighbours
     kind = listing_kind(
         getattr(prop, "property_category", None),
         getattr(prop, "property_subtype", None),
@@ -684,6 +695,35 @@ def build_descriptor(
         )
 
     enrichment = _dict(getattr(prop, "enrichment", None))
+    neighbours = neighbours_service.read_verdict(prop)
+    if neighbours:
+        observed = _one_line(neighbours.get("measured_at"))
+        for aspect, value, state in (
+            ("neighbor_privacy", "unknown", "unknown"),
+            ("nearby_buildings", neighbours["buildings_within_100m"], "supported"),
+            (
+                "agricultural_context",
+                "present"
+                if neighbours["agricultural_buildings_within_100m"]
+                else "absent",
+                "supported"
+                if neighbours["agricultural_buildings_within_100m"]
+                or not neighbours["unknown_use_buildings_within_100m"]
+                else "unknown",
+            ),
+        ):
+            aspects[aspect].append(
+                _evidence(
+                    source_kind="measurement",
+                    source_id="neighbours.catastro_inspire_buildings",
+                    status=state,
+                    value=value if state != "unknown" else "unknown",
+                    observed_at=observed,
+                    quote="50/100m privacy thresholds fail owner reference calibration; categorical privacy awaits an owner decision"
+                    if aspect == "neighbor_privacy"
+                    else None,
+                )
+            )
     cadastre = _dict(enrichment.get("cadastre"))
     geometry = _dict(cadastre.get("geometry"))
     cadastral_area = _finite_positive(geometry.get("area_m2"))

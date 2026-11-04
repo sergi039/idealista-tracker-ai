@@ -59,6 +59,8 @@ import logging
 import math
 import re
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -78,7 +80,31 @@ DNPRC_URL = (
 # calls is conservative against an undocumented limit, and an interactive press
 # never waits at all because the gate is idle between them.
 CATASTRO_MIN_INTERVAL_S = 1.0
-CATASTRO_GATE = RateGate(CATASTRO_MIN_INTERVAL_S, name="catastro")
+_catastro_interval = ContextVar("catastro_interval", default=CATASTRO_MIN_INTERVAL_S)
+
+
+class _CatastroGate(RateGate):
+    def _interval(self) -> float:
+        return max(super()._interval(), _catastro_interval.get())
+
+
+CATASTRO_GATE = _CatastroGate(CATASTRO_MIN_INTERVAL_S, name="catastro")
+
+
+@contextmanager
+def shortlist_requests():
+    """At most five starts/minute for this shortlist walk, on the SAME gate.
+
+    Context-local policy avoids changing other threads' request settings. The
+    gate's reservations remain shared with the parcel and address clients.
+    Like RateGate itself this is process-local, not an IP-wide quota service.
+    """
+    token = _catastro_interval.set(12.0)
+    try:
+        yield
+    finally:
+        _catastro_interval.reset(token)
+
 
 REQUEST_TIMEOUT_S = 20
 
@@ -233,12 +259,51 @@ def _parse_gml(text: str, expected_epsg: int) -> Dict[str, Any]:
 
     return {
         "rings": rings,
+        "polygons": surface_polygons(parcel),
         "declared_area_m2": float(declared.text)
         if declared is not None and declared.text
         else None,
         "reference": (reference.text or "").strip() if reference is not None else None,
         "reference_point": reference_point,
     }
+
+
+def surface_polygons(element: ET.Element) -> list:
+    """Preserve each GML exterior and its holes, including multipart surfaces.
+
+    Coordinates stay in the source CRS. The consumer must check that CRS and
+    validate the resulting polygons before measuring anything.
+    """
+    polygons = []
+    for patch in element.iter():
+        if patch.tag not in {f"{_GML_NS}Polygon", f"{_GML_NS}PolygonPatch"}:
+            continue
+        rings = []
+        for boundary in ["exterior", "interior"]:
+            for ring in patch.findall(f"{_GML_NS}{boundary}"):
+                pos = ring.find(f".//{_GML_NS}posList")
+                if pos is None or pos.get("srsDimension", "2") != "2":
+                    raise CadastreError(MALFORMED, "missing or non-2D polygon ring")
+                try:
+                    values = [float(n) for n in (pos.text or "").split()]
+                except ValueError as exc:
+                    raise CadastreError(
+                        MALFORMED, "invalid polygon coordinate"
+                    ) from exc
+                if (
+                    len(values) < 8
+                    or len(values) % 2
+                    or not all(math.isfinite(n) for n in values)
+                    or values[:2] != values[-2:]
+                ):
+                    raise CadastreError(MALFORMED, "invalid or open polygon ring")
+                rings.append(list(zip(values[::2], values[1::2])))
+        if not rings or patch.find(f"{_GML_NS}exterior") is None:
+            raise CadastreError(MALFORMED, "polygon has no exterior")
+        polygons.append(rings)
+    if not polygons:
+        raise CadastreError(MALFORMED, "no polygon surface")
+    return polygons
 
 
 def _ring_area(ring: List[Tuple[float, float]]) -> float:

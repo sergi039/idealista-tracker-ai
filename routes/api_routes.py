@@ -2520,7 +2520,7 @@ def toggle_property_favorite(property_id):
 
 
 @api_bp.route("/property/<int:property_id>/enrich", methods=["POST"])
-@limiter.limit("10 per minute")
+@limiter.limit("5 per minute")
 def manual_property_enrichment(property_id: int):
     """Manually trigger Google enrichment for a universal Property."""
     try:

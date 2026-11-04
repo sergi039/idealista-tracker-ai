@@ -707,7 +707,13 @@ def _exact_names(wanted: Any) -> List[Tuple[str, ...]]:
 
 
 def parcel_for_address(
-    province: str, municipality: str, sigla: str, street: str, number: Any
+    province: str,
+    municipality: str,
+    sigla: str,
+    street: str,
+    number: Any,
+    *,
+    require_unique_parcel: bool = False,
 ) -> Dict[str, Any]:
     """The cadastral reference at one street number, from `Consulta_DNPLOC`.
 
@@ -740,10 +746,23 @@ def parcel_for_address(
     holder = result.get("bico") if isinstance(result.get("bico"), dict) else result
     item = holder.get("bi") if isinstance(holder, dict) else None
     if isinstance(item, list):
+        if require_unique_parcel:
+            references = {_reference_from_rc(e) for e in item if isinstance(e, dict)}
+            if None in references or len({r[:14] for r in references if r}) != 1:
+                return {"status": MALFORMED, "detail": "address has no unique parcel"}
         item = item[0] if item else None
     if not isinstance(item, dict):
         # `lrcdnp` is the shape a street number with several parcels answers in.
         listed = result.get("lrcdnp")
+        if require_unique_parcel:
+            entries = listed.get("rcdnp") if isinstance(listed, dict) else listed
+            entries = entries if isinstance(entries, list) else [entries]
+            references = {_reference_from_rc(e) for e in entries if isinstance(e, dict)}
+            if None in references:
+                return {"status": MALFORMED, "detail": "unreadable address parcel"}
+            references = {r[:14] for r in references if r}
+            if len(references) != 1:
+                return {"status": MALFORMED, "detail": "address has no unique parcel"}
         item = _first_listed(listed)
     if not isinstance(item, dict):
         return {"status": NOT_FOUND, "detail": "no bien inmueble at that number"}

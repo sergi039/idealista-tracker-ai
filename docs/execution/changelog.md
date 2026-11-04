@@ -1,5 +1,14 @@
 # Execution changelog
 
+## 2026-11-04
+
+- Measure neighbouring Catastro building footprints from a known parcel's full
+  outline on an explicit Enrich press, with independent locked writes and a
+  dry-run-first, ID-scoped shortlist tool. Preserve raw counts and typed uses;
+  leave privacy categorical judgment unknown because both owner references
+  contradict the proposed 50/100 m thresholds. Keep facade-photo neighbour
+  evidence as claims so off-frame buildings cannot become supported facts.
+
 ## 2026-11-03
 
 - Put Recommendations first in the result controls, alongside its status and
