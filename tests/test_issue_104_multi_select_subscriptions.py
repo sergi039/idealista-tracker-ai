@@ -521,7 +521,7 @@ class TestNoSubscriptionOption:
             + [_anchor_href(body, 'id="mode-investment-btn"')]
             + [_anchor_href(body, 'id="view-cards-btn"')]
         )
-        assert len(hrefs) >= 8
+        assert len(hrefs) == 7
         for href in hrefs:
             assert _query_params(href).get("profile_id") == expected, href
 
@@ -684,23 +684,11 @@ class TestFilterBarKeepsOneControl:
         ), "the filter form needs an explicit all-profiles fallback value"
 
     def test_nothing_narrowed_is_said_once(self, client, subscriptions):
-        """Amended 2026-08-09: the chip says it, the menu does not repeat it.
-
-        The dropdown used to be the page's only subscription control, so its
-        label had to read "All subscriptions". It now stands beside chips that
-        carry that state themselves, and a menu echoing them would put the
-        same words on screen twice. What is pinned is what the old assertion
-        was really protecting: something on the toolbar states the selection,
-        and nothing claims a narrowed view when nothing is narrowed.
-        """
+        """The one scope selector states the unfiltered selection."""
         body = client.get("/properties?profile_id=all").get_data(as_text=True)
-        chip = re.search(
-            r'<a[^>]*href="[^"]*profile_id=all[^"]*"[^>]*>\s*(?:<span[^>]*>\s*)?'
-            r"All subscriptions",
-            _switcher(body),
-        )
-        assert chip, "the All subscriptions chip is missing from the toolbar"
-        assert "btn-primary" in chip.group(0), "it has to be the marked one"
+        assert "properties-subscription-chips" not in _switcher(body)
+        label = re.search(r'id="profile-select-label">(.*?)</span>', body, re.S)
+        assert label and label.group(1) == "All subscriptions"
 
         button = re.search(
             r'id="profile-select-dropdown"[^>]*>(.*?)</button>', body, re.S
@@ -783,7 +771,9 @@ class TestSelectionSurvivesEveryLink:
             as_text=True
         )
         hrefs = _anchor_hrefs(body, "lands-th-link")
-        assert len(hrefs) >= 5, f"expected the sortable column headers, got {hrefs}"
+        assert len(hrefs) == 3, (
+            f"expected title, price and assessment headers, got {hrefs}"
+        )
         for href in hrefs:
             self._assert_ids(href, pair["ids"])
 

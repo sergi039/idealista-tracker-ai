@@ -10,6 +10,7 @@
    it exports what the count is counting. #}
 
 {% block content %}
+{% from "components/ui.html" import icon, filter_chip, state_label with context %}
 {# Every in-page link has to carry the whole view state -- filters, scoring
    mode and cards/list choice -- or clicking a column header silently throws
    half of it away. Every filter the route applies belongs here, and the order
@@ -602,22 +603,10 @@
 
 <div class="row">
     <div class="col-12">
-        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-            <h1 class="h3 mb-0">
-                <i class="fas fa-map-marked-alt me-2"></i>
-                {{ t('properties') }}
-                <small class="text-body-secondary ms-2 fw-normal properties-last-sync">
-                    {{ t('last_sync') }}: <span id="last-sync">{{ t('loading') }}...</span>
-                </small>
+        <div class="workspace-page-heading">
+            <h1 class="mb-0">{{ t('properties') }}
+                <small class="text-body-secondary fw-normal properties-last-sync">{{ t('last_sync') }}: <span id="last-sync">{{ t('loading') }}...</span></small>
             </h1>
-
-            {# The map has to be reachable *with the current selection* --
-               left to itself it resolves a subscription of its own. #}
-            <a class="btn btn-outline-secondary btn-sm"
-               href="{{ url_for('main.map_view', **map_args) }}"
-               title="View properties on map">
-                <i class="fas fa-map me-1"></i>Map
-            </a>
         </div>
 
         {# One subscription control, not two (2026-08-09). The saved searches
@@ -644,50 +633,18 @@
            unassigned rows, an empty selection -- is only visible here, so the
            menu says it instead. #}
         {% set chip_state = (profile_selection.state == 'all') or (profile_selection.single_id in live_ids and not profile_selection.include_unassigned) %}
-        {% if chip_state %}
-            {% set menu_label = 'More' %}
-        {% elif selected_option %}
-            {% set menu_label = selected_option.name %}
-        {% elif profile_selection.include_unassigned and not profile_selection.checked_ids %}
-            {% set menu_label = t('no_subscription') %}
-        {% else %}
-            {% set menu_label = profile_selection.label %}
-        {% endif %}
-        <div class="d-flex flex-wrap align-items-center gap-2 mb-2" id="subscription-switcher">
-            <span class="text-body-secondary small">
-                <i class="fas fa-envelope-open-text me-1"></i>{{ t('subscriptions') }} ({{ live_subscriptions|length }})
-            </span>
-            <div class="btn-group btn-group-sm properties-subscription-chips" role="group" aria-label="{{ t('subscriptions') }}">
-                <a class="btn {{ 'btn-primary' if profile_selection.state == 'all' else 'btn-outline-secondary' }}"
-                   href="{{ url_for('main.properties', **dict(base_args, profile_id='all', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">
-                    <span class="properties-subscription-name">{{ t('all_subscriptions') }}</span>
-                </a>
-                {% for option in live_subscriptions %}
-                    <a class="btn {{ 'btn-primary' if profile_selection.single_id == option.id else 'btn-outline-secondary' }}"
-                       href="{{ url_for('main.properties', **dict(base_args, profile_id=option.id, page=1, sort=current_filters.sort_by, order=current_filters.order)) }}"
-                       title="Show only this subscription">
-                        <span class="properties-subscription-name">{{ option.name }}</span>
-                        <span class="badge bg-body-tertiary text-body-secondary border ms-1">{{ option.count }}</span>
-                    </a>
-                {% endfor %}
-            </div>
-
-            {# Combine several / archive / no subscription (#104). Its
-               checkboxes belong to the filter form below via `form=`, so
-               Apply still carries them with JavaScript switched off. #}
+        {% set menu_label = t('all_subscriptions') if profile_selection.state == 'all' else selected_option.name if selected_option else profile_selection.label %}
+        <div class="d-flex flex-wrap align-items-center" id="subscription-switcher">
             <div class="dropdown">
-                <button class="btn btn-sm {{ 'btn-outline-secondary' if chip_state else 'btn-primary' }} dropdown-toggle"
-                        type="button"
-                        id="profile-select-dropdown"
-                        data-bs-toggle="dropdown"
-                        data-bs-auto-close="outside"
-                        aria-expanded="false"
-                        title="Combine subscriptions, or open the archive">
-                    <span id="profile-select-label">{{ menu_label }}</span>
+                <button class="btn btn-outline-secondary dropdown-toggle" type="button" id="profile-select-dropdown"
+                        data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" title="{{ t('subscriptions') }}">
+                    {{ icon('folder-open') }}<span id="profile-select-label">{{ menu_label }}</span>
                 </button>
                 <div class="dropdown-menu p-2 properties-subscription-menu" id="profile-select-menu"
                      aria-labelledby="profile-select-dropdown">
                     <div>
+                        <label class="visually-hidden" for="subscription-search">{{ t('workspace_subscription_search') }}</label>
+                        <input class="form-control subscription-menu-search" type="search" id="subscription-search" placeholder="{{ t('workspace_subscription_search') }}">
                         {# Nothing ticked usually means "all subscriptions" --
                            but a form with nothing ticked submits no profile_id
                            at all, which is indistinguishable from an old
@@ -809,6 +766,10 @@
                             </div>
                         {% endif %}
                     </div>
+                    <div class="subscription-menu-actions">
+                        <button class="btn btn-primary w-100" type="submit" form="filter-form">{{ t('apply') }}</button>
+                        <p class="small text-body-secondary mt-2 mb-0" id="subscription-draft-note" hidden>{{ t('workspace_selection_draft') }}</p>
+                    </div>
                 </div>
             </div>
             {% if profile_selection.truncated %}
@@ -817,6 +778,7 @@
                 </span>
             {% endif %}
 
+            <details class="scope-maintenance"><summary>{{ t('workspace_maintenance') }} {{ icon('chevron-down') }}</summary><div class="scope-maintenance-body">
             {# Travel targets and the recalculation belong to one saved
                search, so they only appear when exactly one is on screen --
                beside the subscription they act on, not inside the filters. #}
@@ -843,7 +805,7 @@
                nothing to retrain. #}
             {% if taste_version is defined and taste_version %}
                 <form method="POST" action="{{ url_for('main.retrain_taste') }}" class="d-inline"
-                      onsubmit="return confirm({{ t('taste_retrain_confirm')|tojson }});">
+                      onsubmit='return confirm({{ t("taste_retrain_confirm")|tojson }});'>
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                     <button class="btn btn-outline-danger btn-sm" type="submit"
                             title="{{ t('taste_retrain_title') }}">
@@ -852,18 +814,19 @@
                 </form>
             {% endif %}
 
+            </div></details>
             {# Two switches, not two form fields: they change what is on
                screen straight away, the way the subscription chips do. The
                filter form re-posts their state as hidden inputs so Apply
                cannot silently switch them off. #}
-            <div class="ms-auto d-flex flex-wrap align-items-center gap-2">
-                <a class="btn btn-sm {{ 'btn-warning' if current_filters.favorites else 'btn-outline-secondary' }}"
+            <div class="scope-utilities">
+                <a class="btn btn-sm scope-switch btn-outline-secondary"
                    href="{{ url_for('main.properties', **dict(base_args, favorites=none if current_filters.favorites else 'on', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}"
                    title="Show only the listings you starred"
                    aria-pressed="{{ 'true' if current_filters.favorites else 'false' }}">
                     <i class="fas fa-star me-1 {{ '' if current_filters.favorites else 'text-warning' }}"></i>{{ t('favorites') }}
                 </a>
-                <a class="btn btn-sm {{ 'btn-secondary' if current_filters.hide_removed else 'btn-outline-secondary' }}"
+                <a class="btn btn-sm scope-switch btn-outline-secondary"
                    href="{{ url_for('main.properties', **dict(base_args, hide_removed=none if current_filters.hide_removed else 'on', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}"
                    title="Hide listings that were removed or sold"
                    aria-pressed="{{ 'true' if current_filters.hide_removed else 'false' }}">
@@ -872,6 +835,10 @@
             </div>
         </div>
 
+
+        {% set applied_filter_keys = [('search', 'search'), ('category', 'type'), ('municipality', 'municipality'), ('subtype', 'workspace_subtype'), ('source', 'source'), ('advertiser', 'workspace_seller'), ('verdict', 'workspace_verdict'), ('action', 'next_action'), ('sea_view', 'workspace_sea'), ('build', 'workspace_build'), ('sea_dist', 'workspace_distance'), ('measured', 'workspace_measured'), ('criteria', 'workspace_criteria'), ('similar', 'workspace_similar'), ('inv_metr', 'workspace_investment')] %}
+        {% set applied = namespace(count=0, advanced=0) %}
+        {% for key, label_key in applied_filter_keys %}{% if base_args.get(key) %}{% set applied.count = applied.count + 1 %}{% if key not in ('search', 'category', 'municipality') %}{% set applied.advanced = applied.advanced + 1 %}{% endif %}{% endif %}{% endfor %}
         <!-- Filters -->
         <div class="card mb-3 filters-card" id="filters-card">
             <div class="card-body p-2">
@@ -880,7 +847,7 @@
                    Municipalities", "Inv. metr: all"), which is what let the
                    panel shrink from five rows to one. Search leads it, on its
                    own, because it is the control that is reached for first. #}
-                <form method="GET" id="filter-form" class="d-flex flex-wrap align-items-center gap-2">
+                <form method="GET" id="filter-form" class="workspace-filter-form" data-submit="explicit">
                     <!-- Hidden inputs to preserve state -->
                     <input type="hidden" name="mode" value="{{ current_filters.mode or 'combined' }}">
                     <input type="hidden" name="view_type" value="{{ view_type }}">
@@ -894,6 +861,7 @@
                         <input type="hidden" name="hide_removed" value="on">
                     {% endif %}
 
+<div class="workspace-filter-primary">
                     <div class="input-group input-group-sm properties-filter-search">
                         <span class="input-group-text" aria-hidden="true"><i class="fas fa-search"></i></span>
                         <input type="text" class="form-control" id="search" name="search"
@@ -902,7 +870,7 @@
                                placeholder="{{ t('search_properties') }}">
                     </div>
 
-                    <div class="vr d-none d-xl-block my-1"></div>
+
 
                     <div class="input-group input-group-sm properties-filter-type">
                         {# The choices come from the subscriptions on screen, not from
@@ -919,18 +887,9 @@
                                 <option value="{{ c }}" {{ 'selected' if current_filters.category == c }}>{{ c }}</option>
                             {% endfor %}
                         </select>
-                        <select class="form-select" id="subtype" name="subtype" aria-label="Subtype">
-                            <option value="">All subtypes</option>
-                            {% if has_unclassified_subtype or current_filters.subtype == '__none__' %}
-                                <option value="__none__" {{ 'selected' if current_filters.subtype == '__none__' }}>Unclassified</option>
-                            {% endif %}
-                            {% for s in subtypes %}
-                                <option value="{{ s }}" {{ 'selected' if current_filters.subtype == s }}>{{ s }}</option>
-                            {% endfor %}
-                        </select>
                     </div>
 
-                    <select class="form-select form-select-sm properties-filter-select" id="municipality" name="municipality"
+                    <select class="form-select workspace-filter-municipality" id="municipality" name="municipality"
                             aria-label="{{ t('municipality') }}">
                         <option value="">{{ t('all_municipalities') }}</option>
                         {# One option per real municipality, not per stored spelling:
@@ -947,6 +906,33 @@
                             </option>
                         {% endfor %}
                     </select>
+                    <div class="d-flex align-items-center gap-2">
+                        <button type="submit" class="btn btn-primary btn-sm">
+                            <i class="fas fa-search me-1"></i>{{ t('apply') }}
+                        </button>
+                        {# `remember=forget`: the bare page returns to the last
+                           state chosen here (utils/listing_filter_memory.py),
+                           so clearing has to drop that memory first. #}
+                        <a href="{{ url_for('main.properties', remember='forget') }}" class="btn btn-outline-secondary btn-sm"
+                           title="Clear every filter">
+                            <i class="fas fa-times me-1"></i>{{ t('clear') }}
+                        </a>
+                    </div>
+</div>
+                    <details class="workspace-advanced-filters" id="additional-filters">
+                        <summary>{{ icon('sliders') }}{{ t('workspace_filters') }}{% if applied.advanced %} · {{ applied.advanced }}{% endif %} {{ icon('chevron-down') }}</summary>
+                        <div class="workspace-advanced-fields">
+
+                        <label>{{ t('workspace_subtype') }}<select class="form-select" id="subtype" name="subtype" aria-label="Subtype">
+                            <option value="">All subtypes</option>
+                            {% if has_unclassified_subtype or current_filters.subtype == '__none__' %}
+                                <option value="__none__" {{ 'selected' if current_filters.subtype == '__none__' }}>Unclassified</option>
+                            {% endif %}
+                            {% for s in subtypes %}
+                                <option value="{{ s }}" {{ 'selected' if current_filters.subtype == s }}>{{ s }}</option>
+                            {% endfor %}
+                        </select></label>
+
 
                     {# Which site the listing is on. Offered only when the
                        subscriptions on screen really hold more than one -- a
@@ -955,7 +941,7 @@
                        the same one the badge on the row uses, so the filter and
                        the badge cannot disagree. #}
                     {% if sources|length > 1 %}
-                    <select class="form-select form-select-sm properties-filter-select" id="source" name="source"
+                    <label>{{ t('source') }}<select class="form-select form-select-sm properties-filter-select" id="source" name="source"
                             aria-label="{{ t('source') }}">
                         <option value="">{{ t('source_all') }}</option>
                         {% for source in sources %}
@@ -964,7 +950,7 @@
                                 {{ source.label }}{% if source.count %} ({{ source.count }}){% endif %}
                             </option>
                         {% endfor %}
-                    </select>
+                    </select></label>
                     {% elif current_filters.source %}
                         <input type="hidden" name="source" value="{{ current_filters.source }}"/>
                     {% endif %}
@@ -976,7 +962,7 @@
                        badge (services/advertiser.py), so the count beside an
                        option and the badges it selects cannot disagree. #}
                     {% if advertisers|length > 1 %}
-                    <select class="form-select form-select-sm properties-filter-select" id="advertiser" name="advertiser"
+                    <label>{{ t('workspace_seller') }}<select class="form-select form-select-sm properties-filter-select" id="advertiser" name="advertiser"
                             aria-label="{{ t('advertiser') }}">
                         <option value="">{{ t('advertiser_all') }}</option>
                         {% for seller in advertisers %}
@@ -985,7 +971,7 @@
                                 {{ t('advertiser_' ~ seller.value) }}{% if seller.count %} ({{ seller.count }}){% endif %}
                             </option>
                         {% endfor %}
-                    </select>
+                    </select></label>
                     {% elif current_filters.advertiser %}
                         <input type="hidden" name="advertiser" value="{{ current_filters.advertiser }}"/>
                     {% endif %}
@@ -1010,7 +996,7 @@
                        says so, and `all` is spelled out beside it
                        (services/owner_review.DECISION_ALL). #}
                     {% if verdicts|length > 1 or (verdicts and rejected_hidden_count) %}
-                    <select class="form-select form-select-sm properties-filter-select" id="verdict" name="verdict"
+                    <label>{{ t('workspace_verdict') }}<select class="form-select form-select-sm properties-filter-select" id="verdict" name="verdict"
                             aria-label="{{ t('owner_verdict') }}">
                         <option value="">{{ t('owner_verdict_default') }}</option>
                         <option value="all" {{ 'selected' if current_filters.verdict == 'all' }}>{{ t('owner_verdict_all') }}</option>
@@ -1020,7 +1006,7 @@
                                 {{ t(choice.label_key) }}{% if choice.count %} ({{ choice.count }}){% endif %}
                             </option>
                         {% endfor %}
-                    </select>
+                    </select></label>
                     {% elif current_filters.verdict %}
                         <input type="hidden" name="verdict" value="{{ current_filters.verdict }}"/>
                     {% endif %}
@@ -1030,7 +1016,7 @@
                        anything on, so an option selecting it selects nothing
                        anyone is looking for. #}
                     {% if actions %}
-                    <select class="form-select form-select-sm properties-filter-select" id="action" name="action"
+                    <label>{{ t('next_action') }}<select class="form-select form-select-sm properties-filter-select" id="action" name="action"
                             aria-label="{{ t('next_action') }}">
                         <option value="">{{ t('next_action_all') }}</option>
                         {% for choice in actions %}
@@ -1039,7 +1025,7 @@
                                 {{ t(choice.label_key) }}{% if choice.count %} ({{ choice.count }}){% endif %}
                             </option>
                         {% endfor %}
-                    </select>
+                    </select></label>
                     {% elif current_filters.action %}
                         <input type="hidden" name="action" value="{{ current_filters.action }}"/>
                     {% endif %}
@@ -1054,25 +1040,25 @@
                        it needs Google Distance Matrix, and per #98 not one row holds
                        a travel time. Sea view needs no paid API, which is why it
                        came back on its own. #}
-                    <select class="form-select form-select-sm properties-filter-select" id="sea_view" name="sea_view"
+                    <label>{{ t('workspace_sea') }}<select class="form-select form-select-sm properties-filter-select" id="sea_view" name="sea_view"
                             aria-label="{{ t('sea_view') }}">
                         <option value="" {{ 'selected' if not current_filters.sea_view }}>{{ t('sea_view_any') }}</option>
                         <option value="yes" {{ 'selected' if current_filters.sea_view == 'yes' }}>{{ t('sea_view_confirmed') }}</option>
                         <option value="likely" {{ 'selected' if current_filters.sea_view in ('likely', 'on') }}>{{ t('sea_view_yes_or_likely') }}</option>
-                    </select>
+                    </select></label>
 
                     {# Curated buildability (`attributes.land_classification`,
                        written by hand-run curation from planning documents and
                        research sheets). A row nobody curated matches only
                        "all": absence is not a classification (#98). #}
-                    <select class="form-select form-select-sm properties-filter-select" id="build" name="build"
+                    <label>{{ t('workspace_build') }}<select class="form-select form-select-sm properties-filter-select" id="build" name="build"
                             aria-label="{{ t('build_filter') }}">
                         <option value="" {{ 'selected' if not current_filters.build }}>{{ t('build_any') }}</option>
                         <option value="solar" {{ 'selected' if current_filters.build == 'solar' }}>{{ t('build_solar') }}</option>
                         <option value="urbanizable" {{ 'selected' if current_filters.build == 'urbanizable' }}>{{ t('build_urbanizable') }}</option>
                         <option value="claimed" {{ 'selected' if current_filters.build == 'claimed' }}>{{ t('build_claimed') }}</option>
                         <option value="classified" {{ 'selected' if current_filters.build == 'classified' }}>{{ t('build_classified') }}</option>
-                    </select>
+                    </select></label>
 
                     {# Straight-line metres to the coastline, cut at walking
                        reach (~5 km/h). Matches only a *measured* distance --
@@ -1080,37 +1066,37 @@
                        centroid's figure (#358), the same number the plot badge
                        and the property page already show captioned. A row
                        nobody measured never matches a cut (#98). #}
-                    <select class="form-select form-select-sm properties-filter-select" id="sea_dist" name="sea_dist"
+                    <label>{{ t('workspace_distance') }}<select class="form-select form-select-sm properties-filter-select" id="sea_dist" name="sea_dist"
                             aria-label="{{ t('sea_distance_filter') }}">
                         <option value="" {{ 'selected' if not current_filters.sea_dist }}>{{ t('sea_distance_any') }}</option>
                         <option value="400" {{ 'selected' if current_filters.sea_dist == '400' }}>{{ t('sea_distance_400') }}</option>
                         <option value="800" {{ 'selected' if current_filters.sea_dist == '800' }}>{{ t('sea_distance_800') }}</option>
                         <option value="1600" {{ 'selected' if current_filters.sea_dist == '1600' }}>{{ t('sea_distance_1600') }}</option>
-                    </select>
+                    </select></label>
 
                     {# #379: the score rests on the criteria that answered, and this
                        is the reader's lever -- not a reorder the app decides for
                        them. "Fully measured" is coverage recorded at 100%; a row
                        scored before coverage was recorded is not full until rescored. #}
-                    <select class="form-select form-select-sm properties-filter-select" id="measured" name="measured"
+                    <label>{{ t('workspace_measured') }}<select class="form-select form-select-sm properties-filter-select" id="measured" name="measured"
                             aria-label="{{ t('measured_filter') }}">
                         <option value="" {{ 'selected' if not current_filters.measured }}>{{ t('measured_any') }}</option>
                         <option value="full" {{ 'selected' if current_filters.measured == 'full' }}>{{ t('measured_full') }}</option>
-                    </select>
+                    </select></label>
 
                     {# The subscription's own criteria (house >= 150, plot >= 700).
                        Drawn only while some subscription carries criteria; the
                        default hides measured fails (never a favorited/reviewed
                        row) and the disclosure beside the count says how many. #}
                     {% if criteria_enabled is defined and criteria_enabled %}
-                    <select class="form-select form-select-sm properties-filter-select" id="criteria" name="criteria"
+                    <label>{{ t('workspace_criteria') }}<select class="form-select form-select-sm properties-filter-select" id="criteria" name="criteria"
                             aria-label="{{ t('criteria_filter') }}">
                         <option value="" {{ 'selected' if not current_filters.criteria }}>{{ t('criteria_default') }}</option>
                         <option value="all" {{ 'selected' if current_filters.criteria == 'all' }}>{{ t('criteria_all') }}</option>
                         <option value="pass" {{ 'selected' if current_filters.criteria == 'pass' }}>{{ t('criteria_pass') }}</option>
                         <option value="unknown" {{ 'selected' if current_filters.criteria == 'unknown' }}>{{ t('criteria_unknown') }}</option>
                         <option value="fail" {{ 'selected' if current_filters.criteria == 'fail' }}>{{ t('criteria_fail') }}</option>
-                    </select>
+                    </select></label>
                     {% endif %}
 
                     {# Likeness to the subscription's favorites
@@ -1123,46 +1109,81 @@
                        unrecognised value typed into the URL travels as a hidden
                        input and narrows nothing. #}
                     {% if similarity_enabled is defined and similarity_enabled %}
-                    <select class="form-select form-select-sm properties-filter-select" id="similar" name="similar"
+                    <label>{{ t('workspace_similar') }}<select class="form-select form-select-sm properties-filter-select" id="similar" name="similar"
                             aria-label="{{ t('similar_filter') }}"{% if not similarity_reference_count %} title="{{ t('similar_no_reference_hint') }}"{% endif %}>
                         <option value="" {{ 'selected' if not current_filters.similar }}>{{ t('similar_any') }}</option>
                         <option value="80" {{ 'selected' if current_filters.similar == '80' }}>{{ t('similar_80') }}</option>
                         <option value="70" {{ 'selected' if current_filters.similar == '70' }}>{{ t('similar_70') }}</option>
                         <option value="60" {{ 'selected' if current_filters.similar == '60' }}>{{ t('similar_60') }}</option>
-                    </select>
+                    </select></label>
                     {% elif current_filters.similar %}
                         <input type="hidden" name="similar" value="{{ current_filters.similar }}"/>
                     {% endif %}
 
-                    <select class="form-select form-select-sm properties-filter-select" id="inv_metr" name="inv_metr"
+                    <label>{{ t('workspace_investment') }}<select class="form-select form-select-sm properties-filter-select" id="inv_metr" name="inv_metr"
                             aria-label="Investment metrics rating">
                         <option value="" {{ 'selected' if not current_filters.inv_metr }}>Inv. metr: all</option>
                         <option value="EXCELLENT" {{ 'selected' if current_filters.inv_metr == 'EXCELLENT' }}>Inv. metr: excellent</option>
                         <option value="GOOD" {{ 'selected' if current_filters.inv_metr == 'GOOD' }}>Inv. metr: good</option>
                         <option value="MODERATE" {{ 'selected' if current_filters.inv_metr == 'MODERATE' }}>Inv. metr: moderate</option>
                         <option value="BELOW" {{ 'selected' if current_filters.inv_metr == 'BELOW' }}>Inv. metr: below</option>
-                    </select>
+                    </select></label>
 
+</div>
+                        <p class="small text-body-secondary mt-2 mb-0">{{ t('workspace_apply_hint') }}</p>
+                        {% set additional_clear = dict(base_args, page=1, sort=current_filters.sort_by, order=current_filters.order) %}
+                        {% for key, label_key in applied_filter_keys if key not in ('search', 'category', 'municipality') %}{% set _ = additional_clear.update({key: none}) %}{% endfor %}
+                        <a class="btn btn-link mt-2" id="clear-additional-filters" href="{{ url_for('main.properties', **additional_clear) }}">{{ t('workspace_clear_advanced') }}</a>
+                    </details>
+                </form>
+                <div class="workspace-filter-meta" id="active-filter-chips">
+                    {% for key, label_key in applied_filter_keys %}
+                        {% if base_args.get(key) %}
+                            {{ filter_chip(t(label_key), base_args.get(key), url_for('main.properties', **dict(base_args, **{key: none, 'page': 1, 'sort': current_filters.sort_by, 'order': current_filters.order}))) }}
+                        {% endif %}
+                    {% endfor %}
+                </div>
+                <div class="workspace-applied-notes">
+</div>
+
+            </div>
+        </div>
+
+        {# Outside the "any rows?" branch on purpose: the scoring modes, the
+           view switch and the export are view controls, and a filter that
+           happens to match nothing must not take them off the page. The view
+           switch sits here with the other display controls rather than in the
+           filter bar -- it changes how the same rows are drawn, it does not
+           change which rows they are. #}
+        <section id="properties-results" aria-label="{{ t('properties') }}">
+            <div class="workspace-result-controls">
+                <div class="workspace-result-tabs" aria-label="{{ t('workspace_assessment') }}">
+                    <a id="mode-all-btn" class="workspace-result-tab" aria-current="{{ 'true' if active_mode != 'recommendation' else 'false' }}"
+                       href="{{ url_for('main.properties', **dict(base_args, mode='combined', sort='created_at', order='desc')) }}">{{ t('workspace_all') }}</a>
+                    <a id="mode-recommendation-btn" class="workspace-result-tab" aria-describedby="recommendation-entry-help" aria-current="{{ 'true' if active_mode == 'recommendation' else 'false' }}"
+                       href="{{ url_for('main.properties', **dict(base_args, favorites=None, mode='recommendation', sort='recommendation', order='desc')) }}" title="{{ t('recommendation_mode_title') }}">{{ t('workspace_auto') }}</a>
+                </div>
+                <div class="workspace-result-tools">
                     <div class="input-group input-group-sm properties-filter-sort">
                         <span class="input-group-text" title="{{ t('sort_by') }}" aria-hidden="true">
                             <i class="fas fa-arrow-down-wide-short"></i>
                         </span>
-                        <select class="form-select" id="sort" name="sort" aria-label="{{ t('sort_by') }}">
+                        <select class="form-select" id="sort" name="sort" aria-label="{{ t('sort_by') }}" form="filter-form">
                             {% if current_filters.mode == 'investment' %}
-                                <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>&#128188; Investment Score</option>
-                                <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>&#127969; Lifestyle Score</option>
+                                <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>Investment Score</option>
+                                <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>Lifestyle Score</option>
                                 <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>Combined Score</option>
                             {% elif current_filters.mode == 'lifestyle' %}
-                                <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>&#127969; Lifestyle Score</option>
-                                <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>&#128188; Investment Score</option>
+                                <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>Lifestyle Score</option>
+                                <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>Investment Score</option>
                                 <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>Combined Score</option>
                             {% elif current_filters.mode == 'recommendation' %}
                                 <option value="recommendation" {{ 'selected' if current_filters.sort_by == 'recommendation' }}>{{ t('recommendation_sort_label') }}</option>
                                 <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>Combined Score</option>
                             {% else %}
                                 <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>Combined Score</option>
-                                <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>&#128188; Investment Score</option>
-                                <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>&#127969; Lifestyle Score</option>
+                                <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>Investment Score</option>
+                                <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>Lifestyle Score</option>
                             {% endif %}
                             <option value="price" {{ 'selected' if current_filters.sort_by == 'price' }}>{{ t('price') }}</option>
                             <option value="area" {{ 'selected' if current_filters.sort_by == 'area' }}>{{ t('area') }}</option>
@@ -1193,84 +1214,75 @@
                             <option value="similarity" {{ 'selected' if current_filters.sort_by == 'similarity' }}>{{ t('similarity_sort_label') }}</option>
                             {% endif %}
                         </select>
-                        <select class="form-select properties-filter-order" name="order" aria-label="Sort direction">
+                        <select class="form-select properties-filter-order" name="order" aria-label="Sort direction" form="filter-form">
                             <option value="desc" {{ 'selected' if current_filters.order == 'desc' }}>↓</option>
                             <option value="asc" {{ 'selected' if current_filters.order == 'asc' }}>↑</option>
                         </select>
                     </div>
 
-                    <div class="d-flex align-items-center gap-2 ms-auto">
-                        <button type="submit" class="btn btn-primary btn-sm">
-                            <i class="fas fa-search me-1"></i>{{ t('apply') }}
-                        </button>
-                        {# `remember=forget`: the bare page returns to the last
-                           state chosen here (utils/listing_filter_memory.py),
-                           so clearing has to drop that memory first. #}
-                        <a href="{{ url_for('main.properties', remember='forget') }}" class="btn btn-outline-secondary btn-sm"
-                           title="Clear every filter">
-                            <i class="fas fa-times me-1"></i>{{ t('clear') }}
-                        </a>
+<div class="dropdown">
+                    <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">{{ t({'combined': 'workspace_rating_general', 'investment': 'workspace_rating_investment', 'lifestyle': 'workspace_rating_lifestyle', 'taste': 'workspace_rating_taste'}.get(active_mode, 'workspace_assessment')) }}</button>
+                    <!-- Compact Mode Toggle Buttons -->
+                    <div class="dropdown-menu dropdown-menu-end" role="group" aria-label="Analysis mode">
+                        <a id="mode-combined-btn"
+                           class="dropdown-item"
+                           href="{{ url_for('main.properties', **dict(base_args, mode='combined', sort='score_total', order='desc')) }}"
+                           title="Combined Analysis - Shows overall property rating">{{ t('workspace_rating_general') }}</a>
+                        <a id="mode-investment-btn"
+                           class="dropdown-item"
+                           href="{{ url_for('main.properties', **dict(base_args, mode='investment', sort='score_investment', order='desc')) }}"
+                           title="Investment Analysis - Focus on rental yield and ROI">{{ t('workspace_rating_investment') }}</a>
+                        <a id="mode-lifestyle-btn"
+                           class="dropdown-item"
+                           href="{{ url_for('main.properties', **dict(base_args, mode='lifestyle', sort='score_lifestyle', order='desc')) }}"
+                           title="Lifestyle Analysis - Focus on quality of life factors">{{ t('workspace_rating_lifestyle') }}</a>
+                        <a id="mode-taste-btn"
+                           class="dropdown-item"
+                           href="{{ url_for('main.properties', **dict(base_args, mode='taste', sort='taste_score', order='desc')) }}"
+                           title="{{ t('taste_mode_title') }}">{{ t('workspace_rating_taste') }}</a>
                     </div>
-                </form>
-            </div>
-        </div>
-
-        {# Outside the "any rows?" branch on purpose: the scoring modes, the
-           view switch and the export are view controls, and a filter that
-           happens to match nothing must not take them off the page. The view
-           switch sits here with the other display controls rather than in the
-           filter bar -- it changes how the same rows are drawn, it does not
-           change which rows they are. #}
-        <section class="mb-3" id="properties-results" aria-label="{{ t('properties') }}">
-            <div class="recommendation-entry mb-3">
-                <div class="d-flex flex-wrap align-items-center gap-3">
-                    <a id="mode-recommendation-btn"
-                       class="btn btn-primary recommendation-entry-button"
-                       aria-describedby="recommendation-entry-help"
-                       {% if active_mode == 'recommendation' %}aria-current="true"{% endif %}
-                       href="{{ url_for('main.properties', **dict(base_args, favorites=None, mode='recommendation', sort='recommendation', order='desc')) }}"
-                       title="{{ t('recommendation_mode_title') }}">
-                        <i class="fas fa-compass me-1"></i>{{ t('recommendation_sort_label') }}
+</div>
+                    <div class="btn-group btn-group-sm" role="group" aria-label="{{ t('workspace_assessment') }}">
+                        <a id="view-list-btn"
+                           class="btn btn-outline-secondary {{ 'active' if view_type == 'list' else '' }}"
+                           href="{{ url_for('main.properties', **dict(base_args, view_type='list', sort=current_filters.sort_by, order=current_filters.order)) }}"
+                           title="Table view - Compact data in rows">
+                            {{ t('workspace_table') }}
+                        </a>
+                        <a id="view-cards-btn"
+                           class="btn btn-outline-secondary {{ 'active' if view_type == 'cards' else '' }}"
+                           href="{{ url_for('main.properties', **dict(base_args, view_type='cards', sort=current_filters.sort_by, order=current_filters.order)) }}"
+                           title="Card view - Visual property cards">
+                            {{ t('workspace_cards') }}
+                        </a>
+                    <a id="view-map-btn" class="btn btn-outline-secondary" title="View properties on map" href="{{ url_for('main.map_view', **map_args) }}">{{ t('map') }}</a></div><div class="dropdown">
+                    <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">{{ t('workspace_actions') }}</button>
+                    <div class="dropdown-menu dropdown-menu-end">                    {# This link is the export's own copy of the filter set, and a
+                       key missing from it is a filter the CSV silently drops:
+                       `measured` was, so a page finding 72 listings exported 471 rows
+                       (measured against production 2026-08-20). `hide_removed` is
+                       stated in both directions -- 'off' as well as 'on' -- so the
+                       export never re-derives a default the page has already
+                       resolved. #}
+                    <a class="dropdown-item"
+                       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, verdict=current_filters.verdict or None, action=current_filters.action or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, sea_dist=current_filters.sea_dist or None, build=current_filters.build or None, measured=current_filters.measured or None, similar=current_filters.similar or None, criteria=current_filters.criteria or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else 'off', mode=current_filters.mode, sort=current_filters.sort_by, order=current_filters.order) }}"
+                       title="Download filtered data as CSV">
+                        <i class="fas fa-download me-1"></i>{{ t('export_csv') }}
                     </a>
-                    <p id="recommendation-entry-help" class="mb-0 small">{{ t('recommendation_entry_help') }}</p>
-                </div>
-                <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
-                    {% if recommendation_profile is defined and recommendation_profile %}
-                        {% set _rp = recommendation_profile %}
-                        <span id="recommendation-profile-status" class="small" data-recommendation-profile-state="{{ _rp.get('state', 'none') }}">
-                            {% if _rp.get('state') == 'current' %}
-                                <i class="fas fa-compass me-1"></i>{{ t('recommendation_profile_current')|format(_rp.get('positive_reference_count', 0), _rp.get('mapped_clause_count', 0)) }}
-                                {% if _rp.get('unapplied_clause_count', 0) %} {{ t('recommendation_profile_unapplied')|format(_rp.get('unapplied_clause_count', 0)) }}{% endif %}
-                            {% elif _rp.get('state') == 'dirty' %}
-                                <i class="fas fa-clock-rotate-left me-1"></i>{{ t('recommendation_profile_dirty') }}
-                            {% elif _rp.get('state') == 'pending' %}
-                                <i class="fas fa-hourglass-half me-1"></i>{{ t('recommendation_profile_pending') }}
-                            {% elif _rp.get('state') == 'failed' %}
-                                <i class="fas fa-triangle-exclamation me-1"></i>{{ t('recommendation_profile_failed') }}
-                            {% else %}
-                                <i class="fas fa-compass me-1"></i>{{ t('recommendation_profile_none') }}
-                            {% endif %}
-                        </span>
-                        {% if _rp.get('usable_signal_count', 0) and _rp.get('state') in ('none', 'dirty', 'failed') %}
-                            <form method="POST" action="{{ url_for('main.refresh_taste_recommendations') }}" class="d-inline"
-                                  onsubmit='return confirm({{ t("recommendation_refresh_confirm")|tojson }});'>
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                                <button id="recommendation-refresh-button" class="btn btn-outline-primary btn-sm" type="submit"
-                                        title="{{ t('recommendation_refresh_title') }}">
-                                    <i class="fas fa-rotate me-1"></i>{{ t('recommendation_refresh_button') }}
-                                </button>
-                            </form>
-                        {% endif %}
-                    {% endif %}
-                    {% if recommendation_excluded_count %}
-                        <span id="recommendation-hard-exclusions" class="text-body-secondary small">
-                            {{ t('recommendation_hard_exclusions')|format(recommendation_excluded_count) }}
-                        </span>
-                    {% endif %}
-                </div>
+                    {# The one way into the import page. Placed in the result
+                       row rather than the toolbar or the filter bar: it does
+                       not change which rows are shown and it is not a
+                       subscription control -- it acts on the collection, like
+                       Export beside it. #}
+                    <a class="dropdown-item"
+                       href="{{ url_for('main.import_listings') }}"
+                       title="{{ t('import_listings') }}">
+                        <i class="fas fa-plus me-1"></i>{{ t('import_listings') }}
+                    </a>
+</div>
+                </div></div>
             </div>
-            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
-                <div class="d-flex flex-wrap align-items-center gap-2">
+            <div class="workspace-result-status">
                     <strong>{{ pagination.total if pagination else properties|length }} {{ t('properties_found') }}</strong>
                     {% if similarity_notice %}{{ similarity_coverage() }}{% endif %}
                     {# What an empty result looked for. "0 properties found" is
@@ -1424,74 +1436,40 @@
                             </span>
                         {% endfor %}
                     {% endif %}
-                </div>
-                <div class="d-flex flex-wrap align-items-center gap-2">
-                    <!-- Compact Mode Toggle Buttons -->
-                    <div class="btn-group btn-group-sm" role="group" aria-label="Analysis mode">
-                        <a id="mode-combined-btn"
-                           class="btn {{ 'btn-secondary' if active_mode == 'combined' else 'btn-outline-secondary' }}"
-                           href="{{ url_for('main.properties', **dict(base_args, mode='combined', sort='score_total', order='desc')) }}"
-                           title="Combined Analysis - Shows overall property rating">
-                            <i class="fas fa-balance-scale"></i>
-                        </a>
-                        <a id="mode-investment-btn"
-                           class="btn {{ 'btn-success' if active_mode == 'investment' else 'btn-outline-secondary' }}"
-                           href="{{ url_for('main.properties', **dict(base_args, mode='investment', sort='score_investment', order='desc')) }}"
-                           title="Investment Analysis - Focus on rental yield and ROI">
-                            <i class="fas fa-chart-line"></i>
-                        </a>
-                        <a id="mode-lifestyle-btn"
-                           class="btn {{ 'btn-warning' if active_mode == 'lifestyle' else 'btn-outline-secondary' }}"
-                           href="{{ url_for('main.properties', **dict(base_args, mode='lifestyle', sort='score_lifestyle', order='desc')) }}"
-                           title="Lifestyle Analysis - Focus on quality of life factors">
-                            <i class="fas fa-home"></i>
-                        </a>
-                        <a id="mode-taste-btn"
-                           class="btn {{ 'btn-danger' if active_mode == 'taste' else 'btn-outline-secondary' }}"
-                           href="{{ url_for('main.properties', **dict(base_args, mode='taste', sort='taste_score', order='desc')) }}"
-                           title="{{ t('taste_mode_title') }}">
-                            <i class="fas fa-heart"></i>
-                        </a>
-                    </div>
-                    <div class="btn-group btn-group-sm" role="group" aria-label="View type">
-                        <a id="view-list-btn"
-                           class="btn btn-outline-secondary {{ 'active' if view_type == 'list' else '' }}"
-                           href="{{ url_for('main.properties', **dict(base_args, view_type='list', sort=current_filters.sort_by, order=current_filters.order)) }}"
-                           title="Table view - Compact data in rows">
-                            <i class="fas fa-list"></i>
-                        </a>
-                        <a id="view-cards-btn"
-                           class="btn btn-outline-secondary {{ 'active' if view_type == 'cards' else '' }}"
-                           href="{{ url_for('main.properties', **dict(base_args, view_type='cards', sort=current_filters.sort_by, order=current_filters.order)) }}"
-                           title="Card view - Visual property cards">
-                            <i class="fas fa-th-large"></i>
-                        </a>
-                    </div>
-                    {# This link is the export's own copy of the filter set, and a
-                       key missing from it is a filter the CSV silently drops:
-                       `measured` was, so a page finding 72 listings exported 471 rows
-                       (measured against production 2026-08-20). `hide_removed` is
-                       stated in both directions -- 'off' as well as 'on' -- so the
-                       export never re-derives a default the page has already
-                       resolved. #}
-                    <a class="btn btn-success btn-sm"
-                       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, verdict=current_filters.verdict or None, action=current_filters.action or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, sea_dist=current_filters.sea_dist or None, build=current_filters.build or None, measured=current_filters.measured or None, similar=current_filters.similar or None, criteria=current_filters.criteria or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else 'off', mode=current_filters.mode, sort=current_filters.sort_by, order=current_filters.order) }}"
-                       title="Download filtered data as CSV">
-                        <i class="fas fa-download me-1"></i>{{ t('export_csv') }}
-                    </a>
-                    {# The one way into the import page. Placed in the result
-                       row rather than the toolbar or the filter bar: it does
-                       not change which rows are shown and it is not a
-                       subscription control -- it acts on the collection, like
-                       Export beside it. #}
-                    <a class="btn btn-outline-primary btn-sm"
-                       href="{{ url_for('main.import_listings') }}"
-                       title="{{ t('import_listings') }}">
-                        <i class="fas fa-plus me-1"></i>{{ t('import_listings') }}
-                    </a>
-                </div>
-            </div>
-            <details class="properties-coverage mt-2" id="properties-coverage">
+                                    {% if recommendation_profile is defined and recommendation_profile %}
+                        {% set _rp = recommendation_profile %}
+                        <span id="recommendation-profile-status" class="small" data-recommendation-profile-state="{{ _rp.get('state', 'none') }}">
+                            {% if _rp.get('state') == 'current' %}
+                                <i class="fas fa-compass me-1"></i>{{ t('recommendation_profile_current')|format(_rp.get('positive_reference_count', 0), _rp.get('mapped_clause_count', 0)) }}
+                                {% if _rp.get('unapplied_clause_count', 0) %} {{ t('recommendation_profile_unapplied')|format(_rp.get('unapplied_clause_count', 0)) }}{% endif %}
+                            {% elif _rp.get('state') == 'dirty' %}
+                                <i class="fas fa-clock-rotate-left me-1"></i>{{ t('recommendation_profile_dirty') }}
+                            {% elif _rp.get('state') == 'pending' %}
+                                <i class="fas fa-hourglass-half me-1"></i>{{ t('recommendation_profile_pending') }}
+                            {% elif _rp.get('state') == 'failed' %}
+                                <i class="fas fa-triangle-exclamation me-1"></i>{{ t('recommendation_profile_failed') }}
+                            {% else %}
+                                <i class="fas fa-compass me-1"></i>{{ t('recommendation_profile_none') }}
+                            {% endif %}
+                        </span>
+                        {% if _rp.get('version') and _rp.get('state') in ('dirty', 'pending', 'failed') %}<span class="small">{{ t('workspace_previous') }}</span>{% endif %}
+                        {% if _rp.get('usable_signal_count', 0) and _rp.get('state') in ('none', 'dirty', 'failed') %}
+                            <form method="POST" action="{{ url_for('main.refresh_taste_recommendations') }}" class="d-inline"
+                                  onsubmit='return confirm({{ t("recommendation_refresh_confirm")|tojson }});'>
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                <button id="recommendation-refresh-button" class="btn btn-outline-primary btn-sm" type="submit"
+                                        title="{{ t('recommendation_refresh_title') }}">
+                                    <i class="fas fa-rotate me-1"></i>{{ t('recommendation_refresh_button') }}
+                                </button>
+                            </form>
+                        {% endif %}
+                    {% endif %}
+                    {% if recommendation_excluded_count %}
+                        <span id="recommendation-hard-exclusions" class="text-body-secondary small">
+                            {{ t('recommendation_hard_exclusions')|format(recommendation_excluded_count) }}
+                        </span>
+                    {% endif %}
+            <details class="properties-coverage" id="properties-coverage">
                 <summary>{{ t('properties_coverage_details') }}</summary>
                 <div class="d-flex flex-column align-items-start gap-2 mt-2">
                     {# How many of those rows carry a status anybody established.
@@ -1550,7 +1528,10 @@
                         </span>
                     {% endif %}
                 </div>
-            </details>
+            </details></div>
+            <p id="recommendation-entry-help" class="visually-hidden">{{ t('workspace_rank_explanation') }}</p>
+            {% if current_filters.favorites %}<p class="small text-body-secondary mb-2" id="recommendation-favorites-note">{{ t('workspace_favorites_clear_hint') }}</p>{% endif %}
+
         </section>
 
         <!-- Properties Display -->
@@ -1561,127 +1542,19 @@
                 <div class="card mb-4">
                     <div class="card-body p-0">
                         <div class="table-responsive">
-                            <table class="table table-hover mb-0 lands-table properties-list-table{{ ' recommendation-table' if active_mode == 'recommendation' else '' }}">
-                                <thead class="lands-table-head">
-                                    {# Column widths live in style.css (`.col-*`), not in inline
-                                       styles: an inline `min-width: 120px !important` cannot be
-                                       relaxed by a media query, which is exactly what the tablet
-                                       layout has to do to fit 11 columns on screen. #}
-                                    <tr>
-                                        {% if active_mode == 'investment' %}
-                                            <th class="col-score" style="background-color: #198754; color: #fff;">
-                                                {{ sort_header('score_investment', 'Investment', base_args, current_filters) }}
-                                            </th>
-                                        {% elif active_mode == 'lifestyle' %}
-                                            <th class="col-score" style="background-color: #ffc107; color: #212529;">
-                                                {{ sort_header('score_lifestyle', 'Lifestyle', base_args, current_filters) }}
-                                            </th>
-                                        {% elif active_mode == 'taste' %}
-                                            <th class="col-score" style="background-color: #d63384; color: #fff;">
-                                                {{ sort_header('taste_score', t('taste_score_label'), base_args, current_filters) }}
-                                            </th>
-                                        {% elif active_mode == 'recommendation' %}
-                                            <th class="col-score" style="background-color: #0d6efd; color: #fff;">
-                                                {{ sort_header('recommendation', t('recommendation_column_label'), base_args, current_filters) }}
-                                            </th>
-                                        {% else %}
-                                            <th class="col-score">
-                                                {{ sort_header('score_total', t('score'), base_args, current_filters) }}
-                                            </th>
-                                        {% endif %}
-                                        <th class="col-fav" title="Favorites">
-                                            <i class="fas fa-star text-warning"></i>
-                                        </th>
-                                        <th class="col-photo" title="{{ t('photos_column_title') }}">
-                                            <i class="far fa-image"></i>
-                                        </th>
-                                        <th class="lands-title-col col-title">{{ sort_header('title', t('title'), base_args, current_filters) }}</th>
-                                        <th class="col-price">
-                                            {{ sort_header('price', t('price'), base_args, current_filters) }}
-                                        </th>
-                                        <th class="col-area">
-                                            {{ sort_header('area', t('area'), base_args, current_filters) }}
-                                        </th>
-                                        <th class="col-coords">{{ t('coords') }}</th>
-                                        <th class="col-travel">{{ t('travel') }}</th>
-                                        <th class="col-inv" title="Investment Metrics">
-                                            {{ sort_header('investment_metrics', 'Inv. Metr.', base_args, current_filters) }}
-                                        </th>
-                                        <th class="col-type">{{ t('type') }}</th>
-                                        <th class="col-added">
-                                            {{ sort_header('created_at', t('added'), base_args, current_filters) }}
-                                        </th>
-                                        <th class="col-actions">{{ t('actions') }}</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
+                            <table class="table table-hover mb-0 lands-table properties-list-table workspace-data-table{{ ' recommendation-table' if active_mode == 'recommendation' else '' }}">
+                                <thead class="lands-table-head"><tr>
+    <th class="lands-title-col col-title" scope="col">{{ sort_header('title', t('workspace_object'), base_args, current_filters) }}</th>
+    <th class="col-price" scope="col">{{ sort_header('price', t('workspace_price_area'), base_args, current_filters) }}</th>
+    <th class="col-score" scope="col">{% if active_mode == 'recommendation' %}{{ sort_header('recommendation', t('workspace_reason'), base_args, current_filters) }}{% else %}{{ sort_header({'combined': 'score_total', 'investment': 'score_investment', 'lifestyle': 'score_lifestyle', 'taste': 'taste_score'}.get(active_mode, 'score_total'), t({'combined': 'workspace_rating_general', 'investment': 'workspace_rating_investment', 'lifestyle': 'workspace_rating_lifestyle', 'taste': 'workspace_rating_taste'}.get(active_mode, 'workspace_assessment')), base_args, current_filters) }}{% endif %}</th>
+    <th class="col-actions" scope="col">{{ t('workspace_decision') }}</th>
+</tr></thead><tbody>
                                     {% for p in properties %}
                                         <tr class="property-row {% if p.listing_status in ('removed', 'sold') %}listing-inactive{% endif %}"
                                             data-listing-status="{{ listing_verdict_for(p).state }}">
-                                            <td class="col-score" {% if active_mode == 'investment' %}style="background-color: rgba(25, 135, 84, 0.2);"{% elif active_mode == 'lifestyle' %}style="background-color: rgba(255, 193, 7, 0.2);"{% elif active_mode == 'taste' %}style="background-color: rgba(214, 51, 132, 0.15);"{% elif active_mode == 'recommendation' %}style="background-color: rgba(13, 110, 253, 0.12);"{% endif %}>
-                                                {% if active_mode == 'investment' %}
-                                                    {{ score_badge(p.score_investment|float if p.score_investment is not none else none, 'font-weight: bold; font-size: 0.9em;') }}
-                                                {% elif active_mode == 'lifestyle' %}
-                                                    {{ score_badge(p.score_lifestyle|float if p.score_lifestyle is not none else none, 'font-weight: bold; font-size: 0.9em;') }}
-                                                {% elif active_mode == 'taste' %}
-                                                    {% set _taste = taste_for(p, taste_version) %}
-                                                    {{ score_badge(_taste.score if _taste.state != 'none' else none, 'font-weight: bold; font-size: 0.9em;') }}
-                                                    {% if _taste.state == 'stale' %}
-                                                        <i class="fas fa-clock-rotate-left text-body-secondary" title="{{ t('taste_stale_hint') }}"></i>
-                                                    {% endif %}
-                                                {% elif active_mode == 'recommendation' %}
-                                                    <i class="fas fa-compass text-primary" title="{{ t('recommendation_mode_title') }}"></i>
-                                                {% else %}
-                                                    {{ score_badge(p.score_total|float if p.score_total is not none else none, '') }}
-                                                    {{ coverage_hint(p) }}
-                                                {% endif %}
-                                                {# The taste score rides beside the score in EVERY
-                                                   mode (#498 follow-up): a ranking only one mode
-                                                   shows is a ranking nobody discovers. Small chip,
-                                                   not a twelfth column — the tablet layout keeps
-                                                   its width. #}
-                                                {% if active_mode != 'taste' and taste_version is defined and taste_version %}
-                                                    {% set _t = taste_for(p, taste_version) %}
-                                                    {% if _t.state == 'ok' %}
-                                                        <span class="badge d-block mt-1" style="background-color: #d63384; font-size: 0.65em;"
-                                                              title="{{ t('taste_score_label') }}">&hearts; {{ '%.0f'|format(_t.score) }}</span>
-                                                    {% endif %}
-                                                {% endif %}
-                                                {# Likeness to the subscription's favorites, beside the
-                                                   score in every mode for the reason the taste chip is
-                                                   (services/favorite_similarity.py). The tooltip names
-                                                   the favorite it is nearest to and the facts it rests
-                                                   on; a row that cannot be placed keeps its number,
-                                                   muted, with the reason it never ranks. #}
-                                                {% if similarity_ctx is defined and similarity_ctx %}
-                                                    {% set _sim = similarity_ctx.read(p.id) %}
-                                                    {% if _sim.state in ('ok', 'thin', 'rejected') %}
-                                                        {% set _facts = [] %}
-                                                        {% for _name in _sim.compared %}{% set _ = _facts.append(t('similarity_component_' ~ _name)) %}{% endfor %}
-                                                        <span class="badge d-block mt-1 similarity-chip" data-similarity-state="{{ _sim.state }}"
-                                                              style="background-color: {{ '#0d6efd' if _sim.state == 'ok' else '#6c757d' }}; font-size: 0.65em;"
-                                                              title="{% if _sim.state == 'thin' %}{{ t('similarity_thin_hint')|format(_facts|join(', ')) }}{% elif _sim.state == 'rejected' %}{{ t('similarity_rejected') }}{% else %}{{ t('similarity_chip_title')|format('%.1f'|format(_sim.score), _sim.reference_id, _facts|join(', ')) }}{% endif %}">&asymp; {{ '%.1f'|format(_sim.score) }}{% if _sim.compared_count < _sim.fact_count %} <span class="opacity-75">{{ _sim.compared_count }}/{{ _sim.fact_count }}</span>{% endif %}</span>
-                                                    {% endif %}
-                                                {% endif %}
-                                            </td>
-                                            <td class="col-fav">
-                                                <button class="btn btn-link p-0 property-favorite-btn"
-                                                        data-property-id="{{ p.id }}"
-                                                        title="{{ 'Remove from favorites' if p.is_favorite else 'Add to favorites' }}">
-                                                    <i class="fas fa-star {{ 'text-warning' if p.is_favorite else 'text-muted' }}"
-                                                       style="font-size: 1.1rem; cursor: pointer;"></i>
-                                                </button>
-                                            </td>
-                                            {# The listing's own first photograph. For the 711 rows
-                                               that carry no description this is the only thing on the
-                                               line that can be judged, which is the whole reason the
-                                               URLs are captured (services/portal_photos.py). A row with
-                                               none renders an empty cell rather than a placeholder
-                                               asserting there are no pictures -- most of the table has
-                                               simply never been looked at. #}
-                                            {% set _row_photos = photos_for(p) %}
-                                            <td class="col-photo">
-                                                {% if _row_photos.state == 'captured' %}
+                                            <td class="lands-title-col col-title">
+    {% set _row_photos = photos_for(p) %}
+    <div class="workspace-property-summary"><div class="workspace-photo"{% if _row_photos.state != 'captured' %} hidden{% endif %}>{% if _row_photos.state == 'captured' %}
                                                     <a href="{{ url_for('main.property_detail', property_id=p.id) }}"
                                                        title="{{ tn('photos_captured', _row_photos.count) }}">
                                                         <img src="{{ _row_photos.photos[0].url }}" class="listing-thumb" alt=""
@@ -1690,10 +1563,7 @@
                                                     </a><span class="listing-photo-missing" title="{{ t('photo_gone') }}" hidden>
                                                         <i class="fas fa-triangle-exclamation text-body-secondary"></i>
                                                     </span>
-                                                {% endif %}
-                                            </td>
-                                            <td class="lands-title-col col-title">
-                                                <div class="fw-bold">
+                                                {% endif %}</div><div class="workspace-property-copy"><div class="fw-bold">
                                                     <a href="{{ url_for('main.property_detail', property_id=p.id) }}"
                                                        class="text-decoration-none table-title property-table-title"
                                                        title="{{ p.title or ('Property #' ~ p.id) }}">
@@ -1704,59 +1574,25 @@
                                                    municipality moves here rather than off the page; CSS shows
                                                    this line only in the width band where that happens. #}
                                                 {% if p.municipality %}
-                                                    <div class="small text-muted property-row-municipality">
+                                                    <div class="workspace-municipality">
                                                         <i class="fas fa-map-marker-alt me-1"></i>{{ p.municipality }}
                                                     </div>
                                                 {% endif %}
-                                                <div class="mt-1 d-flex flex-wrap gap-1">
+                                                {% if p.location_lat and p.location_lon %}
+                                                    {% if p.location_accuracy != 'precise' %}<div class="workspace-location-warning">{{ t('approximate_origin_short') }}</div>{% endif %}
+                                                {% else %}<div class="workspace-location-warning">{{ t('not_located_short') }}</div>{% endif %}
+                                                <div class="workspace-property-facts">
                                                     {% if show_subscription %}{{ subscription_badge(p, profile_names) }}{% endif %}
                                     {{ source_badge(p) }}
                                                     {{ advertiser_badge(p) }}
-                                                    {{ owner_review_badges(p, review_today) }}
+
                                                     {{ sea_view_badge(p) }}
                                                     {{ hazard_badge(p) }}
                                                     {{ plot_badges(p) }}
                                                 </div>
-                                                {% set _recommendation = (recommendation_readings or {}).get(p.id) %}
-                                                {{ recommendation_reading(_recommendation) }}
-                                            </td>
-                                            <td class="col-price">
-                                                {% if p.price %}
-                                                    <div>
-                                                        <strong>{{ '{:,.0f}'.format(p.price|float) }}€</strong>
-                                                        {% if p.previous_price and p.price_change_amount %}
-                                                            {% if p.price_change_amount|float < 0 %}
-                                                                <div class="price-change price-reduced">
-                                                                    <i class="fas fa-arrow-down me-1"></i>
-                                                                    <small class="text-success fw-bold">
-                                                                        -{{ '{:,.0f}'.format(-(p.price_change_amount|float)) }}€
-                                                                    </small>
-                                                                    <br><small class="text-muted">was {{ '{:,.0f}'.format(p.previous_price|float) }}€</small>
-                                                                </div>
-                                                            {% else %}
-                                                                <div class="price-change price-increased">
-                                                                    <i class="fas fa-arrow-up me-1"></i>
-                                                                    <small class="text-danger fw-bold">
-                                                                        +{{ '{:,.0f}'.format(p.price_change_amount|float) }}€
-                                                                    </small>
-                                                                    <br><small class="text-muted">was {{ '{:,.0f}'.format(p.previous_price|float) }}€</small>
-                                                                </div>
-                                                            {% endif %}
-                                                        {% endif %}
-                                                    </div>
-                                                {% else %}
-                                                    <span class="text-muted">-</span>
-                                                {% endif %}
-                                            </td>
-                                            <td class="col-area">
-                                                {% if p.area %}
-                                                    {{ '{:,.0f}'.format(p.area|float) }} m²
-                                                {% else %}
-                                                    <span class="text-muted">-</span>
-                                                {% endif %}
-                                            </td>
-                                            <td class="col-coords">
-                                                {% if p.location_lat and p.location_lon %}
+                                                </div></div>
+    <details class="workspace-row-details"><summary>{{ t('workspace_facts') }}</summary><div class="workspace-row-details-body">
+        <div class="col-coords"><strong>{{ t('coords') }}</strong><br>{% if p.location_lat and p.location_lon %}
                                                     <a href="https://www.google.com/maps/search/?api=1&amp;query={{ p.location_lat }},{{ p.location_lon }}"
                                                        target="_blank" rel="noopener" class="text-decoration-none"
                                                        title="{% if p.location_accuracy == 'precise' %}Precise location{% elif p.location_accuracy == 'approximate' %}Approximate location{% else %}Unknown accuracy{% endif %}">
@@ -1784,21 +1620,57 @@
                                                     {% if p.municipality %}
                                                         <small class="text-muted d-block compact-text">{{ p.municipality }}</small>
                                                     {% endif %}
-                                                {% endif %}
-                                            </td>
-                                            <td class="col-travel">{{ travel_badges(p, travel_display_targets) }}</td>
-                                            <td class="col-inv">
-                                                {% if p.investment_metrics_rating %}
+                                                {% endif %}</div>
+        <div class="col-travel"><strong>{{ t('travel') }}</strong>{{ travel_badges(p, travel_display_targets) }}</div>
+        <div class="col-inv"><strong>{{ t('workspace_investment') }}</strong> {% if p.investment_metrics_rating %}
                                                     <span class="badge inv-metr-badge {{ p.investment_metrics_badge_class or 'bg-secondary' }}"
                                                           title="{{ p.investment_metrics_rating_full or '' }}">
                                                         {{ p.investment_metrics_rating }}
                                                     </span>
                                                 {% else %}
                                                     <span class="text-muted">-</span>
-                                                {% endif %}
-                                            </td>
-                                            <td class="col-type">
-                                                <div class="d-flex flex-wrap gap-1 properties-type-badges">
+                                                {% endif %}</div>
+        <div class="col-added"><strong>{{ t('workspace_added') }}</strong> {% if p.created_at %}
+                                                    <small>{{ p.created_at.strftime('%d %b %y') }}</small>
+                                                {% else %}
+                                                    <span class="text-muted">-</span>
+                                                {% endif %}</div>
+        <div class="workspace-source-actions">
+            {% if p.location_lat and p.location_lon %}<a class="btn btn-outline-secondary" href="{{ url_for('main.map_view', **dict(map_args, focus=p.id)) }}">{{ t('map') }}</a>{% endif %}
+            {% if p.url %}<a class="btn btn-outline-secondary" href="{{ p.url }}" target="_blank" rel="noopener">{{ t('workspace_source') }}</a>{% endif %}
+        </div>
+    </div></details>
+</td>
+<td class="col-price">{% if p.price %}
+                                                    <div>
+                                                        <strong>{{ '{:,.0f}'.format(p.price|float) }}€</strong>
+                                                        {% if p.previous_price and p.price_change_amount %}
+                                                            {% if p.price_change_amount|float < 0 %}
+                                                                <div class="price-change price-reduced">
+                                                                    <i class="fas fa-arrow-down me-1"></i>
+                                                                    <small class="text-success fw-bold">
+                                                                        -{{ '{:,.0f}'.format(-(p.price_change_amount|float)) }}€
+                                                                    </small>
+                                                                    <br><small class="text-muted">was {{ '{:,.0f}'.format(p.previous_price|float) }}€</small>
+                                                                </div>
+                                                            {% else %}
+                                                                <div class="price-change price-increased">
+                                                                    <i class="fas fa-arrow-up me-1"></i>
+                                                                    <small class="text-danger fw-bold">
+                                                                        +{{ '{:,.0f}'.format(p.price_change_amount|float) }}€
+                                                                    </small>
+                                                                    <br><small class="text-muted">was {{ '{:,.0f}'.format(p.previous_price|float) }}€</small>
+                                                                </div>
+                                                            {% endif %}
+                                                        {% endif %}
+                                                    </div>
+                                                {% else %}
+                                                    <span class="text-muted">-</span>
+                                                {% endif %}<div class="workspace-price-facts"><span class="col-area">{% if p.area %}
+                                                    {{ '{:,.0f}'.format(p.area|float) }} m²
+                                                {% else %}
+                                                    <span class="text-muted">-</span>
+                                                {% endif %}</span></div><div class="col-type workspace-price-facts"><div class="d-flex flex-wrap gap-1 properties-type-badges">
                                                     {% if p.property_category %}
                                                         <span class="badge text-bg-secondary">{{ p.property_category }}</span>
                                                     {% else %}
@@ -1808,39 +1680,73 @@
                                                         <span class="badge badge-neutral">{{ p.property_subtype }}</span>
                                                     {% endif %}
                                                     {{ listing_status_badge(p) }}
-                                                </div>
-                                            </td>
-                                            <td class="col-added">
-                                                {% if p.created_at %}
-                                                    <small>{{ p.created_at.strftime('%d %b %y') }}</small>
+                                                </div></div></td>
+<td class="col-score">
+    {% set _recommendation = (recommendation_readings or {}).get(p.id) %}
+    {% if active_mode == 'recommendation' %}
+        {% if _recommendation %}{{ recommendation_reading(_recommendation) }}{% else %}<span class="text-body-secondary">{{ t('workspace_no_reading') }}</span>{% endif %}
+    {% else %}<div class="workspace-primary-score">{% if active_mode == 'investment' %}
+                                                    {{ score_badge(p.score_investment|float if p.score_investment is not none else none, 'font-weight: bold; font-size: 0.9em;') }}
+                                                {% elif active_mode == 'lifestyle' %}
+                                                    {{ score_badge(p.score_lifestyle|float if p.score_lifestyle is not none else none, 'font-weight: bold; font-size: 0.9em;') }}
+                                                {% elif active_mode == 'taste' %}
+                                                    {% set _taste = taste_for(p, taste_version) %}
+                                                    {{ score_badge(_taste.score if _taste.state != 'none' else none, 'font-weight: bold; font-size: 0.9em;') }}
+                                                    {% if _taste.state == 'stale' %}
+                                                        <i class="fas fa-clock-rotate-left text-body-secondary" title="{{ t('taste_stale_hint') }}"></i>
+                                                    {% endif %}
+                                                {% elif active_mode == 'recommendation' %}
+                                                    <i class="fas fa-compass text-primary" title="{{ t('recommendation_mode_title') }}"></i>
                                                 {% else %}
-                                                    <span class="text-muted">-</span>
+                                                    {{ score_badge(p.score_total|float if p.score_total is not none else none, '') }}
+                                                    {{ coverage_hint(p) }}
                                                 {% endif %}
-                                            </td>
-                                            <td class="col-actions">
-                                                <div class="d-flex gap-1 properties-actions">
-                                                    {% if p.location_lat and p.location_lon %}
-                                                        {# Carry the selection: /map auto-selects a different
-                                                           profile, and the focused listing may not be in it. #}
-                                                        <a href="{{ url_for('main.map_view', **dict(map_args, focus=p.id)) }}"
-                                                           class="btn btn-info btn-sm" aria-label="Show on map" title="Show on Map">
-                                                            <i class="fas fa-map-marker-alt"></i>
-                                                        </a>
+                                                </div>{% endif %}
+    <details class="workspace-secondary-scores"><summary>{{ t('workspace_assessment') }}</summary>
+        {% if active_mode == 'recommendation' %}<div>{{ t('score') }}: {{ score_badge(p.score_total|float if p.score_total is not none else none, '') }} {{ coverage_hint(p) }}</div>{% else %}{{ recommendation_reading(_recommendation) }}{% endif %}
+{# The taste score rides beside the score in EVERY
+                                                   mode (#498 follow-up): a ranking only one mode
+                                                   shows is a ranking nobody discovers. Small chip,
+                                                   not a twelfth column — the tablet layout keeps
+                                                   its width. #}
+                                                {% if active_mode != 'taste' and taste_version is defined and taste_version %}
+                                                    {% set _t = taste_for(p, taste_version) %}
+                                                    {% if _t.state == 'ok' %}
+                                                        <span class="badge d-block mt-1" style="background-color: #d63384; font-size: 0.65em;"
+                                                              title="{{ t('taste_score_label') }}">&hearts; {{ '%.0f'|format(_t.score) }}</span>
                                                     {% endif %}
-                                                    {% if p.url %}
-                                                        <a href="{{ p.url }}" target="_blank" rel="noopener"
-                                                           class="btn btn-success btn-sm" aria-label="Open on Idealista" title="View on Idealista">
-                                                            <i class="fas fa-home"></i>
-                                                        </a>
+                                                {% endif %}
+                                                {# Likeness to the subscription's favorites, beside the
+                                                   score in every mode for the reason the taste chip is
+                                                   (services/favorite_similarity.py). The tooltip names
+                                                   the favorite it is nearest to and the facts it rests
+                                                   on; a row that cannot be placed keeps its number,
+                                                   muted, with the reason it never ranks. #}
+                                                {% if similarity_ctx is defined and similarity_ctx %}
+                                                    {% set _sim = similarity_ctx.read(p.id) %}
+                                                    {% if _sim.state in ('ok', 'thin', 'rejected') %}
+                                                        {% set _facts = [] %}
+                                                        {% for _name in _sim.compared %}{% set _ = _facts.append(t('similarity_component_' ~ _name)) %}{% endfor %}
+                                                        <span class="badge d-block mt-1 similarity-chip" data-similarity-state="{{ _sim.state }}"
+                                                              style="background-color: {{ '#0d6efd' if _sim.state == 'ok' else '#6c757d' }}; font-size: 0.65em;"
+                                                              title="{% if _sim.state == 'thin' %}{{ t('similarity_thin_hint')|format(_facts|join(', ')) }}{% elif _sim.state == 'rejected' %}{{ t('similarity_rejected') }}{% else %}{{ t('similarity_chip_title')|format('%.1f'|format(_sim.score), _sim.reference_id, _facts|join(', ')) }}{% endif %}">&asymp; {{ '%.1f'|format(_sim.score) }}{% if _sim.compared_count < _sim.fact_count %} <span class="opacity-75">{{ _sim.compared_count }}/{{ _sim.fact_count }}</span>{% endif %}</span>
                                                     {% endif %}
-                                                    <a class="btn btn-outline-secondary btn-sm"
-                                                       href="{{ url_for('main.property_detail', property_id=p.id) }}"
-                                                       aria-label="{{ t('view_details') }}" title="{{ t('view_details') }}">
-                                                        <i class="fas fa-arrow-up-right-from-square"></i>
-                                                    </a>
-                                                </div>
-                                            </td>
-                                        </tr>
+                                                {% endif %}</details>
+</td>
+<td class="col-actions"><div class="workspace-owner-decision">
+    <div class="workspace-owner-actions"><button class="btn btn-link p-0 property-favorite-btn"
+                                                        data-property-id="{{ p.id }}"
+                                                        title="{{ 'Remove from favorites' if p.is_favorite else 'Add to favorites' }}" aria-pressed="{{ 'true' if p.is_favorite else 'false' }}" aria-label="{{ t('favorites') }}: {{ p.title or p.id }}">
+                                                    <i class="fas fa-star {{ 'text-warning' if p.is_favorite else 'text-muted' }}"
+                                                       style="font-size: 1.1rem; cursor: pointer;"></i>
+                                                </button><a class="btn btn-outline-secondary" href="{{ url_for('main.property_detail', property_id=p.id) }}">{{ t('workspace_open') }}</a></div>
+    {% set _decision = owner_decision_for(p) %}
+    {{ owner_review_badges(p, review_today) }}
+    {% if not _decision.decided %}<span>{{ t('workspace_not_decided') }}</span>{% endif %}
+    {% set _action = owner_action_for(p, review_today) %}
+    {% if _action.state != 'none' %}<div class="mt-2">{{ _action.action }}{% if _action.due_on %}<br>{{ _action.due_on.strftime('%d %b %Y') }}{% endif %}</div>{% endif %}
+</div></td>
+</tr>
                                     {% endfor %}
                                 </tbody>
                             </table>
@@ -2202,7 +2108,9 @@
 
         function refresh() {
             const checked = options.filter(option => option.checked);
-            label.textContent = checked.length ? checked.length + ' selected' : 'All subscriptions';
+            label.textContent = checked.length ? checked.length + ' · ' + {{ t('subscriptions')|tojson }} : {{ t('all_subscriptions')|tojson }};
+            const draft = document.getElementById('subscription-draft-note');
+            if (draft) draft.hidden = ticked() === applied;
             if (fallback) {
                 // A disabled input is not submitted, so the fallback only
                 // travels when nothing is ticked -- which is exactly when it
@@ -2225,22 +2133,7 @@
             });
         }
 
-        // The menu sits beside the subscription chips now, outside the filter
-        // form, so the form's auto-submit no longer sees these boxes -- which
-        // is what makes ticking several of them possible in the first place.
-        // Closing the menu is the moment the selection is finished, so that is
-        // when it is applied; Apply in the filter bar does the same thing for
-        // anyone who never opens it.
-        const dropdown = toggle.closest('.dropdown');
-        if (dropdown && form) {
-            dropdown.addEventListener('hidden.bs.dropdown', function () {
-                if (ticked() !== applied) {
-                    applied = ticked();
-                    form.submit();
-                }
-            });
-        }
-
+        // Checkbox edits are drafts until the explicit form-associated Apply.
         // Deliberately no refresh() on load: the server already rendered the
         // label and the fallback, and it knows things the DOM does not (a
         // selected id with no checkbox, an explicit selection that matched

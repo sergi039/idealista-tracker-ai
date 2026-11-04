@@ -466,7 +466,7 @@ window.IdealistaApp = {
 
     setupFilterForms: function() {
         const filterForm = document.getElementById('filter-form');
-        if (!filterForm) return;
+        if (!filterForm || filterForm.dataset.submit === 'explicit') return;
 
         let filterTimeout;
         const inputs = filterForm.querySelectorAll('input, select');

@@ -1,5 +1,15 @@
 # Execution changelog
 
+## 2026-11-04
+
+- Replace the crowded catalog header with labelled collapsible navigation,
+  one subscription selector, explicit filter Apply and four readable row
+  groups. Keep recommendation status compact and secondary evidence expandable.
+- Establish shared Bootstrap tokens, Jinja components and a read-only design
+  catalog so future pages follow the same interface contract.
+- Preserve the complete taste-retraining confirmation text in its HTML
+  attribute; the confirmation now executes before the existing paid POST.
+
 ## 2026-11-03
 
 - Put Recommendations first in the result controls, alongside its status and

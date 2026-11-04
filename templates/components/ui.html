@@ -1,0 +1,14 @@
+{# Shared Bootstrap components. Data and URL ownership stay with their callers. #}
+{% macro icon(name) -%}<i class="fas fa-{{ name }} ui-icon" aria-hidden="true"></i>{%- endmacro %}
+
+{% macro nav_item(endpoint, label, symbol, active=false) -%}
+<a class="workspace-nav-link{{ ' active' if active else '' }}" href="{{ url_for(endpoint) }}"{% if active %} aria-current="page"{% endif %}>{{ icon(symbol) }}{{ t(label) }}</a>
+{%- endmacro %}
+
+{% macro filter_chip(label, value, href) -%}
+<a class="filter-chip" href="{{ href }}" aria-label="{{ t('workspace_remove_filter') }}: {{ label }} — {{ value }}"><span>{{ label }}: {{ value }}</span>{{ icon('xmark') }}</a>
+{%- endmacro %}
+
+{% macro state_label(label, tone='neutral') -%}
+<span class="ui-state ui-state-{{ tone if tone in ('neutral', 'success', 'warning', 'danger') else 'neutral' }}">{{ label }}</span>
+{%- endmacro %}

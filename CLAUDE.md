@@ -47,6 +47,10 @@ pytest tests/ --cov=app --cov-report=html    # coverage report
 - Merge `main` in a `git worktree` when another session holds uncommitted edits to the same files; a squash-merged branch conflicts with its own follow-up, and the resolution is your version, verified by diff. → docs/rules/run-and-deploy.md
 - The dual-build isolation contract from the transition — legacy on 5001 vs universal on 5050, unique Docker names, separate IMAP labels and cookie names — lives in docs/DEV_RULES.md and TODO.md; respect it if you ever run both side by side.
 
+## Interface design → docs/design/README.md
+
+- **Use the approved Bootstrap workspace contract** (owner, 2026-11-04): shared tokens/components, labelled collapsible navigation, one subscription multiselect, explicit filter Apply, visible applied conditions and compact recommendation states. Keep Bootstrap 5.3.2 and the existing icon family. Read `docs/design/README.md` before changing templates, CSS or UI JavaScript; `/design-system` is the read-only component reference. No alternate listing state, score, framework or hidden measurement semantics.
+
 ## Product rules
 
 ### Listing surface and subscriptions → docs/rules/subscriptions.md
