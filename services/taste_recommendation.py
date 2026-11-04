@@ -5,11 +5,12 @@ from __future__ import annotations
 import hashlib
 import math
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Iterable
 
 from sqlalchemy import case, false
 
-from services import taste_descriptors, taste_preferences
+from services import subscription_criteria, taste_descriptors, taste_preferences
 
 _VISUAL_RESEMBLANCE_ASPECTS = frozenset(
     {
@@ -29,6 +30,8 @@ _CONTRADICTORY_VALUE_PAIRS = {
         {
             frozenset({"well_maintained", "major_renovation"}),
             frozenset({"well_maintained", "ruined"}),
+            frozenset({"well_maintained", "renovation_needed"}),
+            frozenset({"well_maintained", "unfinished"}),
         }
     ),
     "room_scale": frozenset(
@@ -90,6 +93,12 @@ def _value_relationship(candidate: str, source: str, aspect_id: str) -> str:
     verification instead of manufacturing a conflict.
     """
     if candidate == source:
+        return "equivalent"
+    if (
+        aspect_id == "house_condition"
+        and candidate == "ruined"
+        and source == "major_renovation"
+    ):
         return "equivalent"
     if (
         aspect_id == "agricultural_context"
@@ -364,6 +373,7 @@ def _reading(
     reference_ids: list[int],
     profile_state: str,
     similarity_reading: dict[str, Any] | None = None,
+    criteria: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     property_id = prop.id
     if (
@@ -414,6 +424,43 @@ def _reading(
             continue
         candidate_values = _usable_values(candidate_rows, aspect_id)
         source_values = _clause_values(clause, source_rows, aspect_id)
+        # "Para reformar" establishes a renovation risk, not its extent.
+        # It may lower a candidate against an aversion to major works, but
+        # cannot become a supported violation or enforce a hard exclusion.
+        renovation_risk = [
+            row
+            for row in candidate_rows
+            if row.get("value") == "renovation_needed"
+            and row.get("status") in {"supported", "claimed"}
+        ]
+        if (
+            aspect_id == "house_condition"
+            and clause.get("polarity") == "avoid"
+            and "major_renovation" in source_values
+            and renovation_risk
+            and not any(
+                row.get("value") in {"major_renovation", "ruined"}
+                for row in candidate_rows
+            )
+        ):
+            facet = _facet(
+                aspect_id,
+                renovation_risk,
+                source_property_id=clause.get("source_property_id"),
+            )
+            facet.update(
+                status="claimed", hard=False, reason="renovation_extent_unknown"
+            )
+            if any(
+                row.get("value") == "well_maintained"
+                and row.get("status") in {"supported", "claimed"}
+                for row in candidate_rows
+            ):
+                facet.update(status="conflicting", reason="renovation_scope_unresolved")
+                needs.append(facet)
+            else:
+                conflicts.append(facet)
+            continue
         if not candidate_values or not source_values:
             needs.append(
                 {
@@ -474,9 +521,66 @@ def _reading(
             )
             conflicts.append(facet)
 
+    # Reviewed/favorited rows survive the normal criteria filter by design.
+    # That exemption keeps them visible, but must not erase their shortfall
+    # from recommendation ranking. Unknown figures never become violations.
+    criteria_verdict = subscription_criteria.read_verdict(prop, criteria)
+    for check, passed in criteria_verdict.get("checks", {}).items():
+        relevant += 1
+        aspect_id = {
+            "house": "house_area_m2",
+            "plot": "plot_area_m2",
+            "price": "budget_condition",
+        }[check]
+        bound_key = "max_price_eur" if check == "price" else f"min_{check}_m2"
+        facet = {
+            "aspect_id": aspect_id,
+            "label_key": f"recommendation_aspect_{aspect_id}",
+            "status": "supported" if passed is not None else "unknown",
+            "source_kind": "subscription_criteria",
+            "source_property_id": None,
+            "evidence": f"{bound_key}={criteria[bound_key]}",
+            "hard": False,
+        }
+        # Disagreement about the exact surface is not necessarily disagreement
+        # about a bound. Reuse the criteria reader for each reported surface:
+        # all below still means a shortfall; straddling means unknown. Keep
+        # the source disagreement visible even when the bound is unanimous.
+        if _strongest_status(_rows(descriptor, aspect_id)) == "conflicting":
+            needs.append({**facet, "status": "conflicting"})
+            if check not in {"house", "plot"}:
+                continue
+            verdicts = {
+                subscription_criteria.read_verdict(
+                    SimpleNamespace(
+                        area=row.get("value"),
+                        plot_area=row.get("value"),
+                        area_type="built",
+                    ),
+                    {bound_key: criteria[bound_key]},
+                )["checks"][check]
+                for row in _rows(descriptor, aspect_id)
+            }
+            if verdicts not in ({True}, {False}):
+                continue
+            passed = verdicts.pop()
+            facet["status"] = "claimed"
+        if passed is not None and facet["status"] == "supported":
+            supported += 1
+        if passed is False:
+            conflicts.append(facet)
+        elif passed is None:
+            needs.append(facet)
+        else:
+            matches.append(facet)
+
+    # Repeating the same preference in several reviews is not several
+    # independent wins or penalties. Preserve all source facets for display.
+    match_aspects = {facet["aspect_id"] for facet in matches}
+    conflict_aspects = {facet["aspect_id"] for facet in conflicts}
     if conflicts:
         group = "conflict"
-    elif relevant and supported == relevant and matches:
+    elif relevant and supported == relevant and matches and not needs:
         group = "confident"
     else:
         group = "potential"
@@ -499,8 +603,8 @@ def _reading(
         group_base = 0.0
     rank_value = (
         group_base
-        + min(len(matches), 20) * 10
-        - min(len(conflicts), 20) * 10
+        + min(len(match_aspects), 20) * 10
+        - min(len(conflict_aspects), 20) * 10
         + numeric_component
         + visual_match_count
     )
@@ -609,6 +713,9 @@ def build_context(
             profile_state=profile_summary.get("state", "none"),
             similarity_reading=(
                 similarity_ctx.read(prop.id) if similarity_ctx is not None else None
+            ),
+            criteria=subscription_criteria.read_criteria(
+                getattr(prop, "search_profile", None)
             ),
         )
     return RecommendationContext(profile=profile_summary, readings=readings)

@@ -23,6 +23,60 @@ from tests import setup_test_environment
 CRITERIA = {"min_house_m2": 150.0, "min_plot_m2": 700.0}
 
 
+def test_budget_card_keeps_full_eur_amounts(app):
+    with app.app_context():
+        profile = SearchProfile(
+            name="Large budget", is_active=True, criteria={"max_price_eur": 1250000}
+        )
+        db.session.add(profile)
+        db.session.commit()
+        prop = _mk(profile.id, price=1234567, currency="EUR")
+        page = app.test_client().get(f"/properties/{prop.id}")
+        assert page.status_code == 200
+        assert b"1,234,567.00" in page.data
+        assert b"1,250,000.00" in page.data
+
+
+@pytest.mark.parametrize(
+    "price,currency,state",
+    [
+        (300000, "EUR", "pass"),
+        (300001, "EUR", "fail"),
+        (335000, " eur ", "fail"),
+        (None, "EUR", "unknown"),
+        (0, "EUR", "unknown"),
+        (300001, "USD", "unknown"),
+        (float("inf"), "EUR", "unknown"),
+    ],
+)
+def test_explicit_budget_has_identical_python_and_sql_verdict(
+    app, price, currency, state
+):
+    criteria = {**CRITERIA, "max_price_eur": 300000}
+    with app.app_context():
+        profile = SearchProfile(name="Budget", is_active=True, criteria=criteria)
+        db.session.add(profile)
+        db.session.commit()
+        prop = _mk(profile.id, area=200, plot_area=900, price=price, currency=currency)
+        assert subscription_criteria.read_criteria(profile) == criteria
+        assert subscription_criteria.read_verdict(prop, criteria)["state"] == state
+        query = Property.query.filter_by(id=prop.id)
+        assert bool(
+            query.filter(
+                subscription_criteria.failing_expression(Property, criteria)
+            ).count()
+        ) == (state == "fail")
+        assert bool(
+            query.filter(
+                subscription_criteria.passing_expression(Property, criteria)
+            ).count()
+        ) == (state == "pass")
+        page = app.test_client().get(f"/properties/{prop.id}")
+        assert page.status_code == 200
+        if state == "fail":
+            assert b"over budget" in page.data
+
+
 @pytest.fixture
 def app():
     setup_test_environment()

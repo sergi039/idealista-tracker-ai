@@ -3,6 +3,77 @@
 from types import SimpleNamespace
 
 from services import taste_descriptors
+import pytest
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        (
+            "La segunda vivienda está completamente para rehabilitar.",
+            "major_renovation",
+        ),
+        ("Aunque requiere algunas reformas menores.", "renovation_needed"),
+        ("Se vende chalet forrado en piedra para terminar.", "unfinished"),
+        ("La vivienda se encuentra para reforma integral.", "major_renovation"),
+        ("La vivienda esta para restaurar.", "renovation_needed"),
+        ("La casa necesita reformas.", "renovation_needed"),
+    ],
+)
+def test_explicit_current_spanish_works_are_claimed_not_ignored(text, expected):
+    prop = _property()
+    prop.description = text
+    rows = taste_descriptors.aspect_values(
+        taste_descriptors.build_descriptor(prop), "house_condition"
+    )
+    assert any(row["value"] == expected and row["status"] == "claimed" for row in rows)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "No major renovation required.",
+        "Does not need major renovation.",
+        "Sin reforma integral.",
+        "No needs renovation.",
+        "Recién rehabilitada en 2015, con reforma integral terminada.",
+        "La casa está terminada; el bajo cubierta está sin terminar.",
+        "La casa no está para reformar: está completamente reformada y lista para entrar a vivir.",
+        "No es una casa para reformar.",
+        "La casa no está en buen estado.",
+    ],
+)
+def test_negated_renovation_is_not_a_candidate_drawback(text):
+    prop = _property()
+    prop.description = text
+    assert (
+        taste_descriptors.aspect_values(
+            taste_descriptors.build_descriptor(prop), "house_condition"
+        )
+        == []
+    )
+
+
+def test_new_claim_reader_preserves_existing_photo_evidence():
+    prop = _property()
+    prop.attributes["condition"] = "para reformar"
+    # Captured from the pre-fix descriptor against this unchanged fixture.
+    old_hash = "8a978ec928b640911dda3f44fe852d0273727529c57f94091cc3525475e40023"
+    assert taste_descriptors.visual_property_fingerprint_matches(prop, old_hash)
+    before = taste_descriptors.input_fingerprint(prop)
+    prop.attributes["condition"] = "buen estado"
+    assert taste_descriptors.input_fingerprint(prop) != before
+
+
+def test_a_street_named_pareada_is_not_evidence_of_attached_neighbours():
+    prop = _property()
+    prop.title = "Casa en venta en calle Pareada, Bergondo"
+    assert (
+        taste_descriptors.aspect_values(
+            taste_descriptors.build_descriptor(prop), "neighbor_privacy"
+        )
+        == []
+    )
 
 
 def _property():

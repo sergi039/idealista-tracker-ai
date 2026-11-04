@@ -210,3 +210,20 @@ current signal basis. The isolated four-row artifact rendered in about 0.17 s;
 production-scale request cost has not been profiled. Reusing that request-local
 basis is a performance follow-up if measurement shows it matters, without
 changing ranking or freshness semantics.
+
+Stored listing condition, title-head typology and explicit research risk fields
+also supply claims. In particular, an attached title is a privacy claim, not a
+cadastral neighbour count; “para reformar” supplies a renovation risk whose
+extent remains unknown. These may demote a candidate but cannot enforce hard
+exclusions. Likely sea view is claimed rather than supported evidence. Repeated
+owner clauses retain every source in the explanation but count once per aspect
+in ranking. Stated subscription bounds supply positive matches when met and
+conflicts when violated, including reviewed rows that the normal criteria filter
+deliberately keeps visible. Unknown figures remain verification needs.
+Ready-house evidence alongside an unspecified renovation claim is conflicting,
+not proof of major works on the main house. Negated condition phrases supply no
+positive condition claim. Legacy research area repair moves only the original
+source-key-proven plot figure and leaves house area unknown; explicit house
+measurements require a separately verified source, never prose inference.
+Conflicting exact areas still yield a claimed bound match or shortfall when
+every credible source agrees on that bound; the exact area remains a check.

@@ -1,5 +1,11 @@
 # The listing surface and its subscriptions
 
+The optional `search_profiles.criteria.max_price_eur` enforces an explicit EUR
+budget beside the area minimums. Missing/non-EUR/unusable prices are unknown;
+Python and SQL share the same bounds and reviewed-row exemptions. Text in a
+description is never silently parsed into a budget: adopting a stated budget
+requires an explicit criteria update with a recorded source.
+
 Moved verbatim from `CLAUDE.md` (lines 238–414 at commit 8697ff7,
 2026-09-03): the long form of the one-line rules `CLAUDE.md` keeps. Nothing
 below was rewritten. "Above", "below" and "this file" refer to the order the
