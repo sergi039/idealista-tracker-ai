@@ -245,8 +245,16 @@ class TestRetrain:
         assert response.status_code == 400
         enqueue.assert_not_called()
 
+    @pytest.mark.parametrize(
+        "page_url",
+        [
+            "/properties?profile_id=all",
+            "/properties?mode=recommendation&sort=recommendation",
+        ],
+        ids=["ordinary-list", "recommendations"],
+    )
     def test_recommendation_page_distinguishes_dirty_from_queued_refresh(
-        self, client, app
+        self, client, app, page_url
     ):
         profile = _profile()
         _mk(
@@ -256,9 +264,7 @@ class TestRetrain:
         )
         _ledger()
 
-        dirty_html = client.get(
-            "/properties?mode=recommendation&sort=recommendation"
-        ).data.decode()
+        dirty_html = client.get(page_url).data.decode()
         assert "Recommendations need a refresh" in dirty_html
         assert 'id="recommendation-refresh-button"' in dirty_html
         refresh_form = dirty_html[dirty_html.index("taste/recommendations/refresh") :]
@@ -275,9 +281,7 @@ class TestRetrain:
         )
         db.session.commit()
 
-        pending_html = client.get(
-            "/properties?mode=recommendation&sort=recommendation"
-        ).data.decode()
+        pending_html = client.get(page_url).data.decode()
         assert "Recommendations are being prepared" in pending_html
         assert 'id="recommendation-refresh-button"' not in pending_html
 
@@ -287,9 +291,7 @@ class TestRetrain:
         job.finished_at = datetime.now(timezone.utc)
         db.session.commit()
 
-        failed_html = client.get(
-            "/properties?mode=recommendation&sort=recommendation"
-        ).data.decode()
+        failed_html = client.get(page_url).data.decode()
         assert "Recommendations could not be refreshed" in failed_html
         assert 'id="recommendation-refresh-button"' in failed_html
 

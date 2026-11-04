@@ -2,6 +2,11 @@
 
 ## 2026-11-03
 
+- Put Recommendations first in the result controls, alongside its status and
+  refresh action even in the ordinary list. Move detailed coverage into an
+  expandable section so the way to recommendations is no longer buried in
+  diagnostics; filters, ranking and stored evidence retain their behavior.
+
 - Protect browser API writes with the existing session-bound CSRF token,
   including fetch and HTMX callers; read-only endpoints keep their behavior.
 - Require an explicit walking route before beach travel can support pedestrian
