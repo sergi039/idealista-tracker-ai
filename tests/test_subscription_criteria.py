@@ -23,6 +23,20 @@ from tests import setup_test_environment
 CRITERIA = {"min_house_m2": 150.0, "min_plot_m2": 700.0}
 
 
+def test_budget_card_keeps_full_eur_amounts(app):
+    with app.app_context():
+        profile = SearchProfile(
+            name="Large budget", is_active=True, criteria={"max_price_eur": 1250000}
+        )
+        db.session.add(profile)
+        db.session.commit()
+        prop = _mk(profile.id, price=1234567, currency="EUR")
+        page = app.test_client().get(f"/properties/{prop.id}")
+        assert page.status_code == 200
+        assert b"1,234,567.00" in page.data
+        assert b"1,250,000.00" in page.data
+
+
 @pytest.mark.parametrize(
     "price,currency,state",
     [

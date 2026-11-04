@@ -450,7 +450,15 @@ def _reading(
             facet.update(
                 status="claimed", hard=False, reason="renovation_extent_unknown"
             )
-            conflicts.append(facet)
+            if any(
+                row.get("value") == "well_maintained"
+                and row.get("status") in {"supported", "claimed"}
+                for row in candidate_rows
+            ):
+                facet.update(status="conflicting", reason="renovation_scope_unresolved")
+                needs.append(facet)
+            else:
+                conflicts.append(facet)
             continue
         if not candidate_values or not source_values:
             needs.append(

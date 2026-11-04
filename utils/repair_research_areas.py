@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 from datetime import datetime, timezone
 
 from app import create_app, db
@@ -31,9 +30,9 @@ def proposed_areas(prop):
     """The importer key proves this is still the original Plot m² figure.
 
     A changed price, area, URL or title refuses automatic repair. A filled
-    plot column is left alone. Research prose supplies a house area only in
-    an explicit, narrowly named home; buildability and outbuilding totals
-    never supply it.
+    plot column is left alone. Research prose cannot establish the main
+    house's area: guest houses, future buildings and disputed totals need a
+    separate sourced correction. This repair leaves the house unmeasured.
     """
     enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
     imported = enrichment.get("import")
@@ -51,29 +50,7 @@ def proposed_areas(prop):
     )
     if prop.source_email_id != original_key:
         return None
-    house = None
-    research = imported.get("research")
-    research = research if isinstance(research, dict) else {}
-    # The subject must be the house, not an outbuilding or future building.
-    patterns = (
-        r"\b(?:detached\s+)?house\s+(\d+(?:\.\d+)?)\s*m[2²]\b",
-        r"^(\d+(?:\.\d+)?)\s*m[2²]\s+(?:over\s+three\s+floors|split\s+into\s+two\s+dwellings)\b",
-        r"^(\d+(?:\.\d+)?)\s*m[2²],\s*\d+\s+(?:bedrooms|bed\b)",
-        r"\bonly\s+(\d+(?:\.\d+)?)\s*m[2²]\s+built\b",
-    )
-    matches = set()
-    for key in ("Key Positives", "Key Risks / Notes"):
-        text = research.get(key)
-        if not isinstance(text, str):
-            continue
-        for pattern in patterns:
-            for match in re.finditer(pattern, text[:4000], re.IGNORECASE):
-                number = import_research_sheet._number(match.group(1))
-                if number is not None and number < 1e9:
-                    matches.add(number)
-    if len(matches) == 1:
-        house = matches.pop()
-    return {"area": house, "plot_area": str(prop.area), "area_type": "built"}
+    return {"area": None, "plot_area": str(prop.area), "area_type": "built"}
 
 
 def repair(*, apply=False, snapshot_path="", ids=None):

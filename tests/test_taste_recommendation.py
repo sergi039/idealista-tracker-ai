@@ -1830,6 +1830,45 @@ def test_stored_renovation_and_privacy_claims_lower_rank_without_hard_exclusion(
     assert duplicated["rank_value"] == readings[renovation.id]["rank_value"]
 
 
+def test_ready_house_with_repair_claim_of_unclear_scope_requires_verification(app):
+    profile = _profile()
+    reference = _property(
+        profile,
+        title="No major works",
+        owner_verdict="rejected",
+        owner_verdict_reason="Никогда не хочу большую реконструкцию.",
+    )
+    candidate = _property(
+        profile,
+        title="Ready house, annex work",
+        attributes={"condition": "buen estado"},
+        description="Casa lista para entrar. Anexo para reformar.",
+    )
+    reading = taste_recommendation.build_context(
+        [candidate],
+        _recommendation_profile(
+            [reference.id],
+            clauses=taste_preferences.compile_signals(
+                [
+                    {
+                        "property_id": reference.id,
+                        "profile_id": profile.id,
+                        "verdict": "rejected",
+                        "reason": reference.owner_verdict_reason,
+                    }
+                ]
+            ),
+        ),
+        {"state": "current"},
+    ).readings[candidate.id]
+    assert reading["group"] == "potential"
+    assert reading["conflicts"] == []
+    assert any(
+        f["aspect_id"] == "house_condition" and f["status"] == "conflicting"
+        for f in reading["needs_verification"]
+    )
+
+
 def test_subscription_shortfalls_penalize_reviewed_rows_but_unknowns_do_not(app):
     profile = _profile()
     profile.criteria = {"min_house_m2": 150, "min_plot_m2": 700}

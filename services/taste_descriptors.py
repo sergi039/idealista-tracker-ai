@@ -297,34 +297,42 @@ def _text_claims(
         ):
             needles += ("major renovation", "full restoration", "complete restoration")
         matched = any(needle in low for needle in needles)
+        unfinished_matches = []
         if aspect_id == "house_condition" and value == "unfinished":
             # The house itself must be unfinished; an optional unfinished
             # attic/annex does not establish an unfinished house.
-            matched = matched or bool(
-                re.search(
+            unfinished_matches = list(
+                re.finditer(
                     r"\b(?:casa|chalet|vivienda)(?:\s+(?:unifamiliar|independiente|forrad[ao]|de|en|piedra)){0,6}\s+para terminar\b",
                     low,
                 )
             )
+            matched = matched or bool(unfinished_matches)
         if (
             matched
             and aspect_id == "house_condition"
-            and value in {"major_renovation", "renovation_needed", "ruined"}
             and source_kind in {"listing_claim", "research_claim"}
         ):
-            # Seller/research negation is not an affirmative repair claim.
+            # A negated keyword does not establish the candidate's condition.
             # Owner phrases retain their words for the preference compiler.
             matched = any(
                 not re.search(
                     r"(?:\bno|\bnot|\bwithout|\bsin|\bне|\bбез)\s+"
-                    r"(?:(?:need(?:s)?|require[sd]?|necesita|требуется)\s+)?$",
+                    r"(?:(?:need(?:s)?|require[sd]?|necesita|requiere|требуется|est[aá]|es)\s+)?"
+                    r"(?:en\s+)?(?:(?:un|una)\s+(?:(?:casa|chalet|vivienda)\s+)?)?$",
                     low[: match.start()],
                 )
                 and not re.match(
                     r"\s+(?:is\s+)?not\s+(?:needed|required)\b", low[match.end() :]
                 )
-                for needle in needles
-                for match in re.finditer(re.escape(needle), low)
+                for match in (
+                    [
+                        match
+                        for needle in needles
+                        for match in re.finditer(r"(?<!\w)" + re.escape(needle), low)
+                    ]
+                    + unfinished_matches
+                )
             )
         if aspect_id == "beach_access" and value == "walkable":
             matched = _walkable_beach_claim(low)

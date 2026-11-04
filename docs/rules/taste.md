@@ -220,3 +220,8 @@ owner clauses retain every source in the explanation but count once per aspect
 in ranking. Stated subscription bounds supply positive matches when met and
 conflicts when violated, including reviewed rows that the normal criteria filter
 deliberately keeps visible. Unknown figures remain verification needs.
+Ready-house evidence alongside an unspecified renovation claim is conflicting,
+not proof of major works on the main house. Negated condition phrases supply no
+positive condition claim. Legacy research area repair moves only the original
+source-key-proven plot figure and leaves house area unknown; explicit house
+measurements require a separately verified source, never prose inference.

@@ -450,7 +450,7 @@ def test_legacy_area_repair_is_dry_run_backed_up_idempotent_and_restorable(
         snapshot = str(tmp_path / "areas.json")
         result = repair_research_areas.repair(apply=True, snapshot_path=snapshot)
         assert result["count"] == 1
-        assert (prop.area, prop.plot_area) == (248, 3500)
+        assert (prop.area, prop.plot_area) == (None, 3500)
         assert (
             json.loads((tmp_path / "areas.json").read_text())["rows"][0]["before"][
                 "area"
@@ -470,6 +470,10 @@ def test_legacy_area_repair_is_dry_run_backed_up_idempotent_and_restorable(
         "317 m2 built but only 100 m2 usable - the rest is outbuildings.",
         "Buildable 350 m2; outbuildings 123 m2.",
         "House 248 m2; another house 270 m2.",
+        "Ruin to rebuild; guest house 60 m2",
+        "Licence granted for a new house 180 m2",
+        "Cadastre says house 120 m2, advert claims 248",
+        "House 317 m2 built but only 100 m2 usable - the rest is outbuildings.",
     ],
 )
 def test_repair_does_not_invent_house_area_from_ambiguous_totals(
@@ -499,4 +503,4 @@ def test_area_repair_preserves_hand_edits_and_restore_refuses_newer_edit(app, tm
         assert repair_research_areas.restore(snapshot, apply=True)["skipped"] == [
             prop.id
         ]
-        assert (prop.area, prop.plot_area) == (248, 3600)
+        assert (prop.area, prop.plot_area) == (None, 3600)

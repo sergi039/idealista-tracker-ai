@@ -38,6 +38,9 @@ def test_explicit_current_spanish_works_are_claimed_not_ignored(text, expected):
         "No needs renovation.",
         "Recién rehabilitada en 2015, con reforma integral terminada.",
         "La casa está terminada; el bajo cubierta está sin terminar.",
+        "La casa no está para reformar: está completamente reformada y lista para entrar a vivir.",
+        "No es una casa para reformar.",
+        "La casa no está en buen estado.",
     ],
 )
 def test_negated_renovation_is_not_a_candidate_drawback(text):
