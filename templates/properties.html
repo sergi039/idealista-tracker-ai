@@ -1687,12 +1687,12 @@
     {% if active_mode == 'recommendation' %}
         {% if _recommendation %}{{ recommendation_reading(_recommendation) }}{% else %}<span class="text-body-secondary">{{ t('workspace_no_reading') }}</span>{% endif %}
     {% else %}<div class="workspace-primary-score">{% if active_mode == 'investment' %}
-                                                    {{ score_badge(p.score_investment|float if p.score_investment is not none else none, 'font-weight: bold; font-size: 0.9em;') }}
+                                                    {{ score_badge(p.score_investment|float if p.score_investment is not none else none, 'font-weight: bold; font-size: 0.875rem;') }}
                                                 {% elif active_mode == 'lifestyle' %}
-                                                    {{ score_badge(p.score_lifestyle|float if p.score_lifestyle is not none else none, 'font-weight: bold; font-size: 0.9em;') }}
+                                                    {{ score_badge(p.score_lifestyle|float if p.score_lifestyle is not none else none, 'font-weight: bold; font-size: 0.875rem;') }}
                                                 {% elif active_mode == 'taste' %}
                                                     {% set _taste = taste_for(p, taste_version) %}
-                                                    {{ score_badge(_taste.score if _taste.state != 'none' else none, 'font-weight: bold; font-size: 0.9em;') }}
+                                                    {{ score_badge(_taste.score if _taste.state != 'none' else none, 'font-weight: bold; font-size: 0.875rem;') }}
                                                     {% if _taste.state == 'stale' %}
                                                         <i class="fas fa-clock-rotate-left text-body-secondary" title="{{ t('taste_stale_hint') }}"></i>
                                                     {% endif %}
@@ -1713,7 +1713,7 @@
                                                 {% if active_mode != 'taste' and taste_version is defined and taste_version %}
                                                     {% set _t = taste_for(p, taste_version) %}
                                                     {% if _t.state == 'ok' %}
-                                                        <span class="badge d-block mt-1" style="background-color: #d63384; font-size: 0.65em;"
+                                                        <span class="badge d-block mt-1" style="background-color: #d63384; font-size: 0.75rem;"
                                                               title="{{ t('taste_score_label') }}">&hearts; {{ '%.0f'|format(_t.score) }}</span>
                                                     {% endif %}
                                                 {% endif %}
@@ -1729,7 +1729,7 @@
                                                         {% set _facts = [] %}
                                                         {% for _name in _sim.compared %}{% set _ = _facts.append(t('similarity_component_' ~ _name)) %}{% endfor %}
                                                         <span class="badge d-block mt-1 similarity-chip" data-similarity-state="{{ _sim.state }}"
-                                                              style="background-color: {{ '#0d6efd' if _sim.state == 'ok' else '#6c757d' }}; font-size: 0.65em;"
+                                                              style="background-color: {{ '#0d6efd' if _sim.state == 'ok' else '#6c757d' }}; font-size: 0.75rem;"
                                                               title="{% if _sim.state == 'thin' %}{{ t('similarity_thin_hint')|format(_facts|join(', ')) }}{% elif _sim.state == 'rejected' %}{{ t('similarity_rejected') }}{% else %}{{ t('similarity_chip_title')|format('%.1f'|format(_sim.score), _sim.reference_id, _facts|join(', ')) }}{% endif %}">&asymp; {{ '%.1f'|format(_sim.score) }}{% if _sim.compared_count < _sim.fact_count %} <span class="opacity-75">{{ _sim.compared_count }}/{{ _sim.fact_count }}</span>{% endif %}</span>
                                                     {% endif %}
                                                 {% endif %}</details>
@@ -1816,7 +1816,7 @@
                                         {% if active_mode != 'taste' and taste_version is defined and taste_version %}
                                             {% set _t = taste_for(p, taste_version) %}
                                             {% if _t.state == 'ok' %}
-                                                <span class="badge" style="background-color: #d63384; font-size: 0.7em;"
+                                                <span class="badge" style="background-color: #d63384; font-size: 0.75rem;"
                                                       title="{{ t('taste_score_label') }}">&hearts; {{ '%.0f'|format(_t.score) }}</span>
                                             {% endif %}
                                         {% endif %}
