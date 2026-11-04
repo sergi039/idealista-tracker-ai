@@ -344,6 +344,7 @@ window.IdealistaApp = {
 
             const related = document.querySelectorAll(`.property-favorite-btn[data-property-id="${propertyId}"]`);
             related.forEach(button => {
+                button.setAttribute('aria-pressed', data.is_favorite ? 'true' : 'false');
                 const icon = button.querySelector('i.fa-star');
                 if (!icon) return;
 
@@ -466,7 +467,7 @@ window.IdealistaApp = {
 
     setupFilterForms: function() {
         const filterForm = document.getElementById('filter-form');
-        if (!filterForm) return;
+        if (!filterForm || filterForm.dataset.submit === 'explicit') return;
 
         let filterTimeout;
         const inputs = filterForm.querySelectorAll('input, select');

@@ -30,6 +30,7 @@ import pytest
 from app import create_app, db
 from models import Property, SearchProfile
 from tests import setup_test_environment
+from tests.test_workspace_ui import subscription_options
 
 
 @pytest.fixture
@@ -126,14 +127,7 @@ def _rendered(response):
 
 
 def _chip_badge(body, name):
-    match = re.search(
-        r'<span class="properties-subscription-name">'
-        + re.escape(name)
-        + r'</span>\s*<span class="badge[^"]*">(\d+)</span>',
-        body,
-    )
-    assert match, f"no chip badge found for {name}"
-    return int(match.group(1))
+    return subscription_options(body)[name][0]
 
 
 class TestTheBadgeIsALiveCount:
@@ -142,18 +136,23 @@ class TestTheBadgeIsALiveCount:
         # 4 rows in the subscription, one of them removed.
         assert _chip_badge(body, "Land at Norte") == 3
 
-    def test_the_menu_count_agrees_with_the_chip(self, client, app):
+    def test_the_menu_count_matches_the_scoped_results(self, client, app):
         with app.app_context():
             norte_id = SearchProfile.query.filter_by(name="Land at Norte").one().id
         body = _rendered(client.get("/properties", query_string={"profile_id": "all"}))
-        # The same option.count, rendered a second time as the menu label.
+        # The single selector counts what its scoped request actually shows.
         label = re.search(
             rf'for="profile-option-{norte_id}">\s*Land at Norte\s*'
             r'<span class="text-body-secondary">\((\d+)\)</span>',
             body,
         )
         assert label, "no menu label for the subscription"
-        assert int(label.group(1)) == _chip_badge(body, "Land at Norte")
+        opened = _rendered(
+            client.get("/properties", query_string={"profile_id": norte_id})
+        )
+        count = re.search(r"<strong[^>]*>\s*(\d+)\s+properties found", opened)
+        assert count, "the scoped page must disclose its result count"
+        assert int(label.group(1)) == int(count.group(1)) == 3
 
     def test_the_hidden_note_counts_live_listings_only(self, client):
         body = _rendered(client.get("/properties", query_string={"profile_id": "all"}))

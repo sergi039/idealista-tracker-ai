@@ -17,7 +17,6 @@ What is pinned here:
   entirely, which read as "no travel data" rather than "several profiles").
 """
 
-import html
 import re
 
 import pytest
@@ -25,6 +24,7 @@ import pytest
 from app import create_app, db
 from models import Property, SearchProfile
 from tests import setup_test_environment
+from tests.test_workspace_ui import subscription_options
 
 
 @pytest.fixture
@@ -324,13 +324,10 @@ class TestTravelSurvivesTheUnion:
 
 
 class TestTheSavedSearchesAreVisibleOnThePage:
-    """The owner's two saved searches have to be readable without opening
-    anything.
+    """The approved 2026-11-04 workspace uses one multiselect + Apply.
 
-    They are listed on idealista.com as "Your searches (2)", by name. A
-    filter control reading "All subscriptions" says nothing about what the
-    owner is actually subscribed to, and the first build hid both names
-    inside a closed dropdown -- which read as "my subscriptions are missing".
+    Full names/counts remain in that selector; the selected scope stays visible
+    in its closed label. The old always-visible chip strip is superseded.
     """
 
     def test_both_live_subscriptions_are_named_on_the_page(self, client, subscriptions):
@@ -339,23 +336,20 @@ class TestTheSavedSearchesAreVisibleOnThePage:
         assert "houses at your custom search area norte" in markup
 
     def test_each_one_carries_its_listing_count(self, client, subscriptions):
-        markup = _switcher(client.get("/properties").get_data(as_text=True))
-        link = re.search(
-            rf'href="[^"]*profile_id={subscriptions["land_id"]}[^"]*"(.*?)</a>',
-            markup,
-            re.S,
-        )
-        assert link and ">1<" in link.group(1)
-
-    def test_one_click_narrows_to_that_subscription(self, client, subscriptions):
         body = client.get("/properties").get_data(as_text=True)
-        hrefs = re.findall(r'href="([^"]*profile_id=[^"]*)"', html.unescape(body))
-        target = f"profile_id={subscriptions['houses_id']}"
-        assert any(target in href for href in hrefs)
+        assert subscription_options(body)["Land at Norte"][0] == 1
 
-        narrowed = client.get(
-            f"/properties?profile_id={subscriptions['houses_id']}"
-        ).get_data(as_text=True)
+    def test_apply_narrows_to_that_subscription(self, client, subscriptions):
+        body = client.get("/properties").get_data(as_text=True)
+        checkbox = re.search(
+            rf'<input[^>]*id="profile-option-{subscriptions["houses_id"]}"[^>]*>', body
+        )
+        assert checkbox and 'form="filter-form"' in checkbox.group(0)
+        count, href = subscription_options(body)[
+            "houses at your custom search area norte"
+        ]
+        narrowed = client.get(href).get_data(as_text=True)
+        assert count == 1
         assert "HouseListingUniqueTitle" in narrowed
         assert "LandListingUniqueTitle" not in narrowed
 
@@ -376,8 +370,9 @@ class TestTheSavedSearchesAreVisibleOnThePage:
                 as_text=True
             )
         )
-        link = re.search(
-            rf'<a[^>]*href="[^"]*profile_id={subscriptions["land_id"]}[^"]*"[^>]*>',
-            markup,
+        checkbox = re.search(
+            rf'<input[^>]*id="profile-option-{subscriptions["land_id"]}"[^>]*>', markup
         )
-        assert link and "btn-primary" in link.group(0)
+        assert checkbox and "checked" in checkbox.group(0)
+        label = re.search(r'id="profile-select-label"[^>]*>(.*?)</span>', markup, re.S)
+        assert label and "Land at Norte" in label.group(1)

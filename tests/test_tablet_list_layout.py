@@ -33,17 +33,9 @@ STYLESHEET = Path(__file__).resolve().parents[1] / "static" / "css" / "style.css
 
 # Every column the list table renders, in template order.
 COLUMN_CLASSES = (
-    "col-score",
-    "col-fav",
-    "col-photo",
     "col-title",
     "col-price",
-    "col-area",
-    "col-coords",
-    "col-travel",
-    "col-inv",
-    "col-type",
-    "col-added",
+    "col-score",
     "col-actions",
 )
 
@@ -140,6 +132,14 @@ class TestColumnWidthsStayInCss:
             assert f'class="{column_class}"' in table or f" {column_class}" in table, (
                 f"{column_class} is missing from the list table"
             )
+
+    def test_four_primary_groups_keep_secondary_facts_accessible(self, client, listing):
+        table = _list_table(client.get("/properties").get_data(as_text=True))
+        head = table.split("</thead>", 1)[0]
+        assert len(re.findall(r"<th\b", head)) == 4
+        assert 'class="workspace-row-details"' in table
+        assert "TabletLayoutUniqueTitle" in table
+        assert "43.5723" in table
 
     def test_no_inline_widths_in_the_table(self, client, listing):
         """An inline min-width/width would outrank the tablet media queries."""

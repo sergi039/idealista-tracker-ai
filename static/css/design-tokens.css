@@ -1,0 +1,47 @@
+/* The only palette for the shared workspace layer. Bootstrap stays at 5.3.2. */
+:root,
+[data-bs-theme="light"] {
+    --ui-canvas: #f5f7fa;
+    --ui-surface: #ffffff;
+    --ui-text: #172435;
+    --ui-muted: #566579;
+    --ui-border: #d8dee8;
+    --ui-accent: #2457d6;
+    --ui-accent-soft: #edf2ff;
+    --ui-on-accent: #ffffff;
+    --ui-button-primary: #2457d6;
+    --ui-success: #176445;
+    --ui-success-soft: #edf8f2;
+    --ui-warning: #85530a;
+    --ui-warning-soft: #fff5e4;
+    --ui-danger: #ad3340;
+    --ui-danger-soft: #fff0f1;
+    --ui-shadow: 0 16px 48px #17243525;
+    --ui-space-1: 0.25rem;
+    --ui-space-2: 0.5rem;
+    --ui-space-3: 0.75rem;
+    --ui-space-4: 1rem;
+    --ui-space-6: 1.5rem;
+    --ui-space-8: 2rem;
+    --ui-radius-control: 0.375rem;
+    --ui-radius-panel: 0.625rem;
+    --ui-control-height: 2.5rem;
+    --ui-nav-width: 13rem;
+}
+
+[data-bs-theme="dark"] {
+    --ui-canvas: #111827;
+    --ui-surface: #1f2937;
+    --ui-text: #f3f4f6;
+    --ui-muted: #b8c2d0;
+    --ui-border: #475569;
+    --ui-accent: #93b4ff;
+    --ui-accent-soft: #233659;
+    --ui-success: #86dfb4;
+    --ui-success-soft: #193a30;
+    --ui-warning: #f3cf89;
+    --ui-warning-soft: #3b3021;
+    --ui-danger: #ffa6af;
+    --ui-danger-soft: #4a2630;
+    --ui-shadow: 0 16px 48px #00000055;
+}
