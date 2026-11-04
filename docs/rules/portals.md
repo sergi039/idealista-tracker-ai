@@ -244,7 +244,8 @@ the authority (`https://media.yaencontre.com@evil.test/x.jpg` has a host of
 module says plainly that a secret in the PATH is undetectable and that the real
 mitigation is a fact about the source rather than about the list. **A URL that
 is not a listing photograph is refused, per portal**: fotocasa serves the agency
-logo from `/images/client/` on the same host as `/images/ads/`, and a yaencontre
+logo from `/images/client/` on the same host as `/images/ads/` and the legacy
+`/images/anuncio/` (seven live rows measured 2026-11-04), and a yaencontre
 email carries 24 `<img>` tags of which 13 are chrome and one is a tracking pixel
 whose query is `apikey=`. **What the payload NAMED is stored beside what was
 captured** (`{"items": [...], "published": N}`), because eight refused URLs left

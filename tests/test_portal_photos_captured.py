@@ -110,6 +110,24 @@ def _prop(profile, slug, **kwargs):
 
 
 class TestCaptureFromTheRealPayloads:
+    def test_legacy_fotocasa_listing_photos_are_not_dropped(self):
+        # Production #2372 names 14 photos under /images/anuncio/, while
+        # current adverts use /images/ads/. /images/client/ remains a logo.
+        photo = "https://static.fotocasa.es/images/anuncio/123/photo.jpg?rule=original"
+        capture = portal_photos.from_fotocasa_payload(
+            {
+                "multimedia": [
+                    {"src": photo, "type": "image"},
+                    {
+                        "src": "https://static.fotocasa.es/images/client/123/logo.jpg",
+                        "type": "image",
+                    },
+                ]
+            },
+            None,
+        )
+        assert capture == {"items": [{"url": photo, "type": "image"}], "published": 2}
+
     def test_fotocasa_nine_photos_and_never_the_agency_logo(self):
         listing = fotocasa_source.parse_listing(
             _fixture(FOTOCASA_FIXTURE),
