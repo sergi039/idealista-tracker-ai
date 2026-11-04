@@ -2107,24 +2107,26 @@
             const ids = ticked();
             return ids ? 'ids:' + ids : 'fallback:' + (fallback ? fallback.value : 'all');
         }
-        const appliedIds = ticked();
-        const appliedFallback = fallback ? fallback.value : 'all';
-        const applied = selection();
+        // Defaults belong to the server; live form properties may already
+        // contain a draft restored by browser history or reload.
+        const appliedIds = options.filter(option => option.defaultChecked).map(option => option.value).join(',');
+        const appliedFallback = {{ profile_selection.form_fallback_value|tojson }};
+        const applied = appliedIds ? 'ids:' + appliedIds : 'fallback:' + appliedFallback;
+
+        function disclose() {
+            if (fallback) fallback.disabled = options.some(option => option.checked);
+            const draft = document.getElementById('subscription-draft-note');
+            if (draft) draft.hidden = selection() === applied;
+        }
 
         function refresh(requestAll = false) {
-            const checked = options.filter(option => option.checked);
             if (fallback) {
-                // A disabled input is not submitted, so the fallback only
-                // travels when nothing is ticked -- which is exactly when it
-                // is needed.
-                fallback.disabled = checked.length > 0;
                 // Reversing checkbox edits restores the exact server fallback,
                 // including an explicitly empty or otherwise unrepresented scope.
                 // Only the All button overrides a matching initial checkbox set.
                 fallback.value = !requestAll && ticked() === appliedIds ? appliedFallback : 'all';
             }
-            const draft = document.getElementById('subscription-draft-note');
-            if (draft) draft.hidden = selection() === applied;
+            disclose();
         }
 
         options.forEach(option => option.addEventListener('change', () => refresh()));
@@ -2137,12 +2139,14 @@
             });
         }
 
-        // Checkbox edits are drafts until the explicit form-associated Apply.
-        // Deliberately no refresh() on load: the server already rendered the
-        // label and the fallback, and it knows things the DOM does not (a
-        // selected id with no checkbox, an explicit selection that matched
-        // nothing). Recomputing here would overwrite a correct state with a
-        // guess.
+        // Reconcile restored form properties without changing their values:
+        // an explicit All draft must survive returning from another page too.
+        disclose();
+        toggle.addEventListener('show.bs.dropdown', disclose);
+        window.addEventListener('pageshow', () => {
+            disclose();
+            window.setTimeout(disclose, 0);
+        });
     })();
 
     // Picking a similarity cut asks for the most alike rows, so the sort
