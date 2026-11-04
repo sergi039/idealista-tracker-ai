@@ -18,7 +18,12 @@ from utils.google_spend import (
     CAP_INGEST_TRAVEL,
     authorized_spend,
 )
-from services import fotocasa_source, milanuncios_source, yaencontre_source
+from services import (
+    fotocasa_source,
+    milanuncios_source,
+    portal_photos,
+    yaencontre_source,
+)
 from services.settings_service import SettingsService
 from services.search_profile_service import SearchProfileService
 from services.property_classification_service import PropertyClassificationService
@@ -776,6 +781,9 @@ class PropertyIMAPService:
                                 "property_subtype": subtype,
                                 "description": description,
                                 "attributes": attrs,
+                                "photos": portal_photos.from_idealista_email(body).get(
+                                    idealista_id
+                                ),
                                 "idealista_property_id": idealista_id,
                             }
                         )
@@ -1522,6 +1530,8 @@ class PropertyIMAPService:
                     prop.description = email_data.get("description")
                     prop.attributes = email_data.get("attributes")
                     prop.email_date = email_date
+                    if email_data.get("photos"):
+                        prop.enrichment = {"import": {"photos": email_data["photos"]}}
 
                     db.session.add(prop)
                     db.session.commit()

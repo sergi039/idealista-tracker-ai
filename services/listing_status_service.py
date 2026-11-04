@@ -10,9 +10,11 @@ import time
 import random
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple, Optional, Dict, Tuple
+from urllib.parse import urlsplit, parse_qs
 
 from models import Land, LandHistory, Property, SyncHistory
 from app import db
+from services import fotocasa_source, milanuncios_source
 
 #  moved to utils/http.py with  (#399) and is
 # re-exported here: it was this module's for months, and
@@ -21,6 +23,7 @@ from utils.http import (  # noqa: F401  (re-export)
     HostBreakers,
     RefusalBreaker,
     request_with_retries,
+    HTTP_USER_AGENT,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,8 +75,7 @@ class ListingStatusService:
         "se ha vendido",
     ]
 
-    # User agent to mimic browser
-    USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    USER_AGENT = HTTP_USER_AGENT
 
     # When idealista refuses this machine it refuses everything: measured
     # 2026-08-10, the home page answers 403 with the same DataDome block page a
@@ -99,6 +101,7 @@ class ListingStatusService:
     )
 
     def __init__(self):
+        self.captured_photos = None
         self.session = requests.Session()
         self.session.headers.update(
             {
@@ -132,6 +135,7 @@ class ListingStatusService:
         storage contract is unchanged: 'error' still writes nothing, so no
         reason here can become a status.
         """
+        self.captured_photos = None
         if not url:
             return Observation("error", None, "no_url")
 
@@ -153,19 +157,20 @@ class ListingStatusService:
             return Observation("error", None, "backing_off")
 
         try:
+            host = urlsplit(url).hostname
+            gate = None
+            if host in ("www.fotocasa.es", "fotocasa.es"):
+                gate = fotocasa_source.FOTOCASA_GATE
+            elif host in ("www.milanuncios.com", "milanuncios.com"):
+                gate = milanuncios_source.MILANUNCIOS_GATE
             response = request_with_retries(
                 self.session.get,
                 url,
                 timeout=15,
                 allow_redirects=True,
                 logger=logger,
+                gate=gate,
             )
-
-            # Check for 404
-            if response.status_code == 404:
-                # A reached answer, not a refusal: the host talked to us.
-                breaker.record_success()
-                return Observation("removed", None)
 
             # Check response content
             content = response.text.lower()
@@ -175,6 +180,19 @@ class ListingStatusService:
                 if pattern.lower() in content:
                     logger.warning(f"Hit captcha protection for: {url}")
                     return self._refused("blocked", url)
+
+            final_url = getattr(response, "url", None)
+            final = urlsplit(
+                final_url if isinstance(final_url, str) and final_url else url
+            )
+            if (host or "").removeprefix("www.") != (final.hostname or "").removeprefix(
+                "www."
+            ):
+                return self._refused("not_the_listing_page", url)
+
+            if response.status_code in (404, 410):
+                breaker.record_success()
+                return Observation("removed", None)
 
             # Everything below reads the body as if it were the listing page,
             # so refuse anything that is not a plain 200 first. An error page
@@ -194,6 +212,46 @@ class ListingStatusService:
                     "blocked" if response.status_code in (401, 403) else "http_error"
                 )
                 return self._refused(reason, url)
+
+            # Fotocasa's explicit missing-property redirect is an answer about
+            # this request. A bare search redirect is still no evidence.
+            if (
+                host in ("www.fotocasa.es", "fotocasa.es")
+                and fotocasa_source.listing_id_from_url(url) is not None
+                and final.hostname in ("www.fotocasa.es", "fotocasa.es")
+                and final.path.endswith("/l")
+                and "propertyNotFound" in parse_qs(final.query, keep_blank_values=True)
+            ):
+                breaker.record_success()
+                return Observation("removed", None)
+
+            if not self._looks_like_listing_page(url, response):
+                return self._refused("not_the_listing_page", url)
+
+            # These pages embed translations including 'vendido' even for live
+            # adverts. Read their listing payload, never the page-wide lexicon.
+            if host in ("www.fotocasa.es", "fotocasa.es"):
+                # No URL fallback id: the payload must name the advert itself.
+                listing = fotocasa_source.parse_listing(response.text, "")
+                if (
+                    not listing.ok
+                    or listing.listing_id != fotocasa_source.listing_id_from_url(url)
+                ):
+                    return self._refused(listing.refusal or "not_the_listing_page", url)
+                self.captured_photos = listing.photos
+                breaker.record_success()
+                return Observation("active", None)
+            if host in ("www.milanuncios.com", "milanuncios.com"):
+                listing = milanuncios_source.parse_listing(response.text, "")
+                if listing.get("reason") or listing.get(
+                    "listing_id"
+                ) != milanuncios_source.listing_id_from_url(url):
+                    return self._refused(
+                        listing.get("reason") or "not_the_listing_page", url
+                    )
+                self.captured_photos = listing.get("photos")
+                breaker.record_success()
+                return Observation("active", None)
 
             # Check for sold patterns
             for pattern in self.SOLD_PATTERNS:
@@ -260,6 +318,8 @@ class ListingStatusService:
     _LISTING_ID_PATTERNS = (
         (re.compile(r"/inmueble/(\d+)"), "inmueble/{id}(?!\\d)"),
         (re.compile(r"/(\d{4,})/d/?(?:[?#]|$)"), "/{id}/d(?![0-9])"),
+        (re.compile(r"/inmueble-\d+-(\d+)"), r"/inmueble-\d+-{id}(?!\d)"),
+        (re.compile(r"-(\d+)\.htm(?:[?#]|$)"), r"-{id}\.htm(?:$|[?#])"),
     )
 
     @classmethod
@@ -304,7 +364,13 @@ class ListingStatusService:
             return True
 
         final_url = (getattr(response, "url", "") or "").lower()
-        return bool(re.search(served, final_url))
+        asked = urlsplit(url)
+        final = urlsplit(final_url)
+        if (asked.hostname or "").removeprefix("www.") != (
+            final.hostname or ""
+        ).removeprefix("www."):
+            return False
+        return bool(re.search(served, final.path))
 
     def _extract_removal_date(self, html_content: str) -> Optional[str]:
         """Try to extract the removal date from the page content"""

@@ -57,7 +57,7 @@ FOTOCASA_FIRST = (
 FOTOCASA_AGENCY_LOGO_PATH = "/images/client/"
 MILANUNCIOS_FIRST = (
     "https://images.milanuncios.com/api/v1/ma-ad-media-pro/images/"
-    "b22fc08c-e4cf-4f81-af36-54b9a0a3c764"
+    "b22fc08c-e4cf-4f81-af36-54b9a0a3c764?rule=hw396_70"
 )
 TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
 YAENCONTRE_FIRST = (
