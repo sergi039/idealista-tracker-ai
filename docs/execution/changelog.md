@@ -12,6 +12,13 @@
   reviewed rows; support an explicit EUR budget with identical Python/SQL
   criteria. A likely sea view remains potential evidence.
 
+- Replace the crowded catalog header with labelled collapsible navigation,
+  one subscription selector, explicit filter Apply and four readable row
+  groups. Keep recommendation status compact and secondary evidence expandable.
+- Establish shared Bootstrap tokens, Jinja components and a read-only design
+  catalog so future pages follow the same interface contract.
+- Preserve the complete taste-retraining confirmation text in its HTML
+  attribute; the confirmation now executes before the existing paid POST.
 - Accept Fotocasa's legacy listing-photo path `/images/anuncio/` alongside
   `/images/ads/`; seven live listings published photos that the old path guard
   discarded. Agency logos under `/images/client/` remain excluded.

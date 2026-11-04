@@ -1599,6 +1599,12 @@ def index():
     return redirect(url_for("main.properties"))
 
 
+@main_bp.route("/design-system")
+def design_system():
+    """Read-only examples of the shared Bootstrap interface contract."""
+    return render_template("design_system.html")
+
+
 @main_bp.route("/properties")
 def properties():
     """Properties listing -- the working page since issue #105."""

@@ -103,7 +103,9 @@ class TestNavbarTranslatesFully:
             session["language"] = "es"
         body = client.get("/profiles").get_data(as_text=True)
         assert TRANSLATIONS["es"]["settings"] in body
-        assert TRANSLATIONS["es"]["map"] in body
+        # Map is now a catalog representation, not global navigation.
+        catalog = client.get("/properties").get_data(as_text=True)
+        assert TRANSLATIONS["es"]["map"] in catalog
         # The literal English words must not survive as nav labels: they only
         # ever appeared as `icon</i>Label`, so that shape is what is banned.
         assert not re.search(r"</i>Settings\s*<", body)

@@ -5,6 +5,10 @@ Moved verbatim from `CLAUDE.md` (lines 594–682 at commit 8697ff7,
 below was rewritten. "Above", "below" and "this file" refer to the order the
 text had in `CLAUDE.md`; `docs/rules/README.md` lists the files in that order.
 
+## Approved workspace redesign (2026-11-04)
+
+The owner approved `docs/design/README.md` and its catalog concept for implementation and publication. That contract supersedes the historical chip strip and always-expanded filter layout below: one subscription multiselect with explicit Apply, labelled result modes, progressive filters and visible applied-condition removal links. Four table groups retain all detailed evidence through native disclosures. The three control responsibilities, full remaining width, initial table/date and signed-session memory remain unchanged. No new scoring or data model accompanies this redesign.
+
 **The "to beach" sort is live** (issue #271, PR #272): the Phase-2 backfill
 put measured beach times into `travel["beaches"]`, so the old #98 placeholder
 ("not one row holds a travel time") is retired. The list sort and the CSV

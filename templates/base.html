@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ get_current_language() }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -20,10 +20,11 @@
         (function () {
             try {
                 const stored = localStorage.getItem('theme');
-                const theme = stored || 'dark';
+                const theme = stored || 'light';
+                document.documentElement.dataset.navCollapsed = localStorage.getItem('workspace-nav-collapsed') || 'false';
                 document.documentElement.setAttribute('data-bs-theme', theme);
             } catch (e) {
-                document.documentElement.setAttribute('data-bs-theme', 'dark');
+                document.documentElement.setAttribute('data-bs-theme', 'light');
             }
         })();
     </script>
@@ -39,6 +40,8 @@
     
     <!-- Custom CSS -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-tokens.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/workspace.css') }}">
     
     <script>
         function setLanguage(langCode) {
@@ -63,81 +66,41 @@
         }
     </script>
 </head>
-<body>
-    <!-- Navigation -->
-    <nav class="navbar navbar-expand-lg bg-body-tertiary border-bottom">
-        <div class="container">
-            <a class="navbar-brand" href="{{ url_for('main.index') }}">
-                <i class="fas fa-map-marked-alt me-2"></i>
-                {{ t('app_title') }}
-            </a>
-            
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
-                <span class="navbar-toggler-icon"></span>
-            </button>
-            
-            <div class="collapse navbar-collapse" id="navbarNav">
-                <ul class="navbar-nav me-auto">
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('main.properties') }}">
-                            <i class="fas fa-list me-1"></i>{{ t('properties') }}
-                        </a>
-                    </li>
-                    {# One surface (owner decision 2026-08-09): the archived
-                       `lands` rows are mirrored into `properties` under their own
-                       subscription, so there is no second listing page to link. #}
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('main.map_view') }}">
-                            <i class="fas fa-map me-1"></i>{{ t('map') }}
-                        </a>
-                    </li>
-                    {# Its own entry, not a tab inside the list: the page
-                       compares *municipalities*, and the owner asked for it
-                       in the menu (2026-08-14). #}
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('main.municipalities') }}">
-                            <i class="fas fa-city me-1"></i>{{ t('municipalities') }}
-                        </a>
-                    </li>
-                    {# The building-rules reference (/construccion): a
-                       READER's page, not a listing surface — the one-surface
-                       rule of 2026-08-09 is about listings and stays intact.
-                       The concejo overlay is an explicit human choice; no
-                       listing is ever auto-bound to a concejo here (design
-                       decision after seven review rounds, 2026-08-21). #}
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('main.construccion') }}">
-                            <i class="fas fa-file-signature me-1"></i>{{ t('construccion') }}
-                        </a>
-                    </li>
-                    {# The agency table (/agencies, owner request 2026-08-22):
-                       a dated measurement of which agencies hold the most
-                       detached houses <= 300k in Asturias and Cantabria. A
-                       reference page like /municipalities, not a listing
-                       surface. #}
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('main.agencies') }}">
-                            <i class="fas fa-building me-1"></i>{{ t('agencies') }}
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('main.criteria') }}">
-                            <i class="fas fa-sliders-h me-1"></i>{{ t('scoring_criteria') }}
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('main.profiles') }}">
-                            <i class="fas fa-envelope-open-text me-1"></i>{{ t('subscriptions') }}
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('main.property_settings') }}">
-                            <i class="fas fa-gear me-1"></i>{{ t('settings') }}
-                        </a>
-                    </li>
-                </ul>
-
-                <ul class="navbar-nav">
+<body class="app-workspace">
+    {% from "components/ui.html" import icon, nav_item with context %}
+    <a class="visually-hidden-focusable workspace-skip" href="#main-content">{{ t("workspace_skip") }}</a>
+    <aside class="offcanvas-xl offcanvas-start workspace-sidebar" tabindex="-1" id="navbarNav" aria-labelledby="workspace-nav-title">
+        <div class="offcanvas-header">
+            <h2 class="offcanvas-title h5" id="workspace-nav-title">{{ t('workspace_menu') }}</h2>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#navbarNav" aria-label="{{ t('close') }}"></button>
+        </div>
+        <div class="offcanvas-body">
+            <a class="workspace-brand" href="{{ url_for('main.properties') }}"><span class="workspace-brand-mark">IR</span>IdealistaRank</a>
+            <nav aria-label="{{ t('workspace_navigation') }}">
+                <div class="workspace-nav-group">
+                    {{ nav_item('main.properties', 'properties', 'list', request.endpoint in ('main.properties', 'main.property_detail', 'main.map_view', 'main.import_listings')) }}
+                    {{ nav_item('main.profiles', 'workspace_manage_subscriptions', 'folder-open', request.endpoint in ('main.profiles', 'main.edit_profile', 'main.new_profile')) }}
+                </div>
+                <div class="workspace-nav-group">
+                    <p class="workspace-nav-heading">{{ t('workspace_reference') }}</p>
+                    {{ nav_item('main.municipalities', 'municipalities', 'city', request.endpoint == 'main.municipalities') }}
+                    {{ nav_item('main.agencies', 'agencies', 'building', request.endpoint == 'main.agencies') }}
+                    {{ nav_item('main.construccion', 'construccion', 'file-lines', request.endpoint == 'main.construccion') }}
+                </div>
+                <div class="workspace-nav-group">
+                    <p class="workspace-nav-heading">{{ t('workspace_configuration') }}</p>
+                    {{ nav_item('main.criteria', 'scoring_criteria', 'sliders', request.endpoint == 'main.criteria') }}
+                    {{ nav_item('main.property_settings', 'settings', 'gear', request.endpoint == 'main.property_settings') }}
+                </div>
+            </nav>
+            <button class="btn btn-link workspace-collapse" id="workspace-collapse" type="button">{{ icon('angles-left') }}{{ t('workspace_collapse') }}</button>
+        </div>
+    </aside>
+    <div class="workspace-content">
+    <header class="workspace-topbar">
+        <button class="btn btn-outline-secondary workspace-menu-button" id="workspace-menu" type="button" aria-controls="navbarNav" aria-label="{{ t('workspace_menu') }}">{{ icon('bars') }}{{ t('workspace_menu') }}</button>
+        <span class="workspace-topbar-title">{{ t('workspace_personal') }}</span>
+        <ul class="workspace-utilities list-unstyled mb-0 ms-auto">
                     {% block nav_primary_action %}
                     {# Absent exactly where the endpoint would refuse: a machine
                        that does not ingest on a cron tick does not ingest on one
@@ -185,10 +148,8 @@
                             </ul>
                         </div>
                     </li>
-                </ul>
-            </div>
-        </div>
-    </nav>
+        </ul>
+    </header>
 
     <!-- Notifications + loading indicators (fixed overlay; avoid layout shift) -->
     <div id="app-notification-container" class="app-notification-container" aria-live="polite" aria-atomic="true">
@@ -202,34 +163,19 @@
     
 
     <!-- Main content -->
-    <main class="container mt-4 pb-5">
+    <main class="container pb-5" id="main-content" tabindex="-1">
         {% block content %}{% endblock %}
     </main>
 
-    <!-- Footer -->
-    <footer class="bg-body-tertiary border-top py-4 mt-5">
-        <div class="container">
-            <div class="row">
-                <div class="col-md-6">
-                    <h6>{{ t('app_title') }}</h6>
-                    <p class="small text-body-secondary">
-                        Universal tracking + AI analysis for Idealista listings
-                    </p>
-                </div>
-                <div class="col-md-6 text-md-end">
-                    <small class="text-body-secondary">
-                        Not affiliated with Idealista
-                    </small>
-                </div>
-            </div>
-        </div>
-    </footer>
+    <footer class="workspace-footer">{{ t('workspace_footer') }}</footer>
+    </div>
 
     <!-- Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     
     <!-- Custom JS -->
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/workspace.js') }}"></script>
 
     {# Flash messages -> ephemeral toasts (do not take page space) #}
     {% set flashed = get_flashed_messages(with_categories=true) %}
