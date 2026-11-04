@@ -13,8 +13,6 @@ from models import Property
 from services import portal_photos
 from services.listing_status_service import ListingStatusService
 from tests import setup_test_environment
-from utils import audit_property_listings as audit
-from utils.backfill_idealista_photos import fill
 
 FOTO = "https://www.fotocasa.es/es/comprar/terreno/aviles/x/190280914/d"
 MIL = "https://www.milanuncios.com/venta-de-casas/x-612329827.htm"
@@ -137,9 +135,11 @@ def row(key, **kwargs):
 
 
 def entry(p, **kwargs):
+    from utils.audit_property_listings import baseline
+
     return {
         "id": p.id,
-        "baseline": audit.baseline(p),
+        "baseline": baseline(p),
         "observed_at": datetime.now(timezone.utc).isoformat(),
         "status": "removed",
         "refusal": None,
@@ -150,6 +150,8 @@ def entry(p, **kwargs):
 
 
 def test_apply_only_answers_with_fresh_unchanged_baseline(app):
+    from utils import audit_property_listings as audit
+
     p = row("a")
     e = entry(p)
     assert audit.apply_entry(e) == "applied"
@@ -161,6 +163,8 @@ def test_apply_only_answers_with_fresh_unchanged_baseline(app):
 
 @pytest.mark.parametrize("kind", ["refused", "expired", "changed", "manual"])
 def test_unanswered_stale_or_changed_rows_are_not_rewritten(app, kind):
+    from utils import audit_property_listings as audit
+
     p = row(kind)
     e = entry(p)
     if kind == "refused":
@@ -179,6 +183,8 @@ def test_unanswered_stale_or_changed_rows_are_not_rewritten(app, kind):
 
 
 def test_mail_backfill_fills_all_profile_copies_without_creating_or_overwriting(app):
+    from utils.backfill_idealista_photos import fill
+
     a = row("one", enrichment={"location": {"source": "manual"}})
     b = row("two")
     c = row(
@@ -224,6 +230,8 @@ def test_new_idealista_ingestion_persists_the_captured_email_photo(app, monkeypa
 
 
 def test_audit_photo_fill_preserves_other_blocks_and_measured_empty(app):
+    from utils import audit_property_listings as audit
+
     photos = {"items": [{"url": PHOTO}], "published": 1}
     p = row("with-location", enrichment={"location": {"source": "manual"}})
     assert audit.apply_entry(entry(p, status="active", photos=photos)) == "applied"
@@ -237,6 +245,7 @@ def test_audit_photo_fill_preserves_other_blocks_and_measured_empty(app):
 
 
 def test_apply_rechecks_baseline_after_taking_row_lock(app, monkeypatch):
+    from utils import audit_property_listings as audit
     from contextlib import contextmanager
 
     p = row("raced")
