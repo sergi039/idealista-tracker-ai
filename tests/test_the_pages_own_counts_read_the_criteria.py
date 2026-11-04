@@ -49,19 +49,11 @@ from flask import template_rendered
 from app import create_app, db
 from models import Property, SearchProfile
 from tests import setup_test_environment
+from tests.listing_menu import subscription_options
 
 CRITERIA = {"min_house_m2": 150.0, "min_plot_m2": 700.0}
 
 TOTAL_RE = re.compile(r"<strong>\s*(\d+)\s+properties found\s*</strong>")
-
-# A subscription chip: its href, its name, its badge count — in the order the
-# template emits them, so the count read is the one beside that name.
-CHIP_RE = re.compile(
-    r'<a\b[^>]*href="([^"]+)"[^>]*>\s*'
-    r'<span class="properties-subscription-name">([^<]+)</span>\s*'
-    r'<span class="badge[^"]*"[^>]*>(\d+)</span>',
-    re.S,
-)
 
 COUNTED_SELECTS = ("municipality", "source", "advertiser", "verdict", "action")
 
@@ -211,11 +203,7 @@ def _total(client, url):
 
 
 def _chips(body):
-    """{name: (count, href)} for every subscription chip on the page."""
-    return {
-        name.strip(): (int(count), html.unescape(href))
-        for href, name, count in CHIP_RE.findall(body)
-    }
+    return subscription_options(body)
 
 
 def _options(body, select_name):

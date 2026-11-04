@@ -30,6 +30,7 @@ import pytest
 from app import create_app, db
 from models import Property, SearchProfile
 from tests import setup_test_environment
+from tests.listing_menu import subscription_options
 
 
 @pytest.fixture
@@ -126,14 +127,7 @@ def _rendered(response):
 
 
 def _chip_badge(body, name):
-    match = re.search(
-        r'<span class="properties-subscription-name">'
-        + re.escape(name)
-        + r'</span>\s*<span class="badge[^"]*">(\d+)</span>',
-        body,
-    )
-    assert match, f"no chip badge found for {name}"
-    return int(match.group(1))
+    return subscription_options(body)[name][0]
 
 
 class TestTheBadgeIsALiveCount:

@@ -220,8 +220,8 @@
 
 /* The disclosure trigger shares the first filter row; no second empty row. */
 .workspace-filter-form { position: relative; }
-.workspace-filter-primary { padding-right: 8.5rem; }
-.workspace-advanced-filters > summary { position: absolute; top: 0; right: 0; border: 1px solid var(--ui-border); padding: var(--ui-space-2); border-radius: var(--ui-radius-control); }
+.workspace-filter-primary { padding-right: 12rem; }
+.workspace-advanced-filters > summary { position: absolute; top: 0; right: 0; max-width: calc(12rem - var(--ui-space-2)); border: 1px solid var(--ui-border); padding: var(--ui-space-2); border-radius: var(--ui-radius-control); }
 .workspace-advanced-filters[open] .workspace-advanced-fields { margin-top: var(--ui-space-3); }
 .app-workspace main.container { padding-top: var(--ui-space-4); }
 .workspace-page-heading { margin-bottom: var(--ui-space-2); }
