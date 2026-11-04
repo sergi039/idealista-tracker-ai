@@ -168,7 +168,7 @@ def normalise_photo_url(value: Any) -> Optional[str]:
         and not parsed.query
         and not parsed.fragment
     ):
-        return url + "?rule=hw396_70"
+        return parsed._replace(query="rule=hw396_70").geturl()
     return url
 
 

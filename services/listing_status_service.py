@@ -181,6 +181,15 @@ class ListingStatusService:
                     logger.warning(f"Hit captcha protection for: {url}")
                     return self._refused("blocked", url)
 
+            final_url = getattr(response, "url", None)
+            final = urlsplit(
+                final_url if isinstance(final_url, str) and final_url else url
+            )
+            if (host or "").removeprefix("www.") != (final.hostname or "").removeprefix(
+                "www."
+            ):
+                return self._refused("not_the_listing_page", url)
+
             if response.status_code in (404, 410):
                 breaker.record_success()
                 return Observation("removed", None)
@@ -206,7 +215,6 @@ class ListingStatusService:
 
             # Fotocasa's explicit missing-property redirect is an answer about
             # this request. A bare search redirect is still no evidence.
-            final = urlsplit(getattr(response, "url", "") or "")
             if (
                 host in ("www.fotocasa.es", "fotocasa.es")
                 and fotocasa_source.listing_id_from_url(url) is not None
@@ -223,7 +231,8 @@ class ListingStatusService:
             # These pages embed translations including 'vendido' even for live
             # adverts. Read their listing payload, never the page-wide lexicon.
             if host in ("www.fotocasa.es", "fotocasa.es"):
-                listing = fotocasa_source.parse_listing(response.text, url)
+                # No URL fallback id: the payload must name the advert itself.
+                listing = fotocasa_source.parse_listing(response.text, "")
                 if (
                     not listing.ok
                     or listing.listing_id != fotocasa_source.listing_id_from_url(url)
@@ -233,7 +242,7 @@ class ListingStatusService:
                 breaker.record_success()
                 return Observation("active", None)
             if host in ("www.milanuncios.com", "milanuncios.com"):
-                listing = milanuncios_source.parse_listing(response.text, url)
+                listing = milanuncios_source.parse_listing(response.text, "")
                 if listing.get("reason") or listing.get(
                     "listing_id"
                 ) != milanuncios_source.listing_id_from_url(url):

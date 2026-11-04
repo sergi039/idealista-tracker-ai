@@ -257,3 +257,34 @@ def test_apply_rechecks_baseline_after_taking_row_lock(app, monkeypatch):
     db.session.refresh(p)
     assert p.listing_status == "active"
     assert p.listing_status_source == "manual"
+
+
+@pytest.mark.parametrize("code", [200, 404, 410])
+def test_foreign_host_cannot_remove_a_listing_even_on_404(code):
+    result, _ = observe(
+        FOTO, "Not Found", final="https://evil.example/l?propertyNotFound", code=code
+    )
+    assert result.status == "error"
+    assert result.refusal == "not_the_listing_page"
+
+
+@pytest.mark.parametrize(
+    "url,body",
+    [
+        (
+            FOTO,
+            '<script id="__initial_props__" type="application/json">{"realEstate": {}}</script>',
+        ),
+        (
+            MIL,
+            '<script>window.__INITIAL_PROPS__ = JSON.parse("{\\"ad\\":{\\"sellType\\":\\"supply\\"}}");</script>',
+        ),
+    ],
+)
+def test_payload_without_own_listing_identity_is_unresolved(url, body):
+    result, _ = observe(url, body)
+    assert result.status == "error"
+
+
+def test_empty_milanuncios_query_gets_a_valid_rendition():
+    assert portal_photos.normalise_photo_url(BARE + "?") == BARE + "?rule=hw396_70"
