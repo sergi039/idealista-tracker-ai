@@ -32,6 +32,8 @@ states there when extending the shared vocabulary.
   active location. Endpoint ownership remains with Flask.
 - `filter_chip(label, value, href)`: a readable condition and accessible removal
   link. Its caller supplies the complete canonical query state.
+- `filter_value(key, value, choices)`: existing translated option meanings and
+  explicit distance units; never expose query sentinels or invent walking times.
 - `state_label(label, tone)`: neutral/success/warning/danger only; never infer
   meaning from color alone.
 
@@ -46,6 +48,10 @@ Body text is 14–16px, supplementary text at least 12px. Table headers may be
 use tabular numerals. No emoji as system icons, arbitrary accent colors or
 inline `!important` width fixes. Dark mode uses explicit foreground/background
 pairs, not a mechanical inversion.
+
+Default link colors use low specificity so Bootstrap button/badge/alert
+foregrounds keep their component semantics. The fixed desktop sidebar must
+scroll independently in short windows and at enlarged text sizes.
 
 ## Navigation and width
 

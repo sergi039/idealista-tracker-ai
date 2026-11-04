@@ -174,6 +174,35 @@ def test_shared_design_layer_cannot_add_another_palette_or_framework():
     assert "tabler.min.css" not in base and "lucide" not in base
 
 
+@pytest.mark.parametrize(
+    "lang,key,value,meaning",
+    [
+        ("en", "sea_dist", "400", "≤ 400 m"),
+        ("en", "sea_view", "likely", "confirmed or likely"),
+        ("en", "build", "claimed", "claimed by seller"),
+        ("en", "similar", "70", "≥ 70"),
+        ("en", "category", "__none__", "Unknown"),
+        ("es", "sea_view", "likely", "confirmada o probable"),
+        ("es", "build", "claimed", "según el vendedor"),
+    ],
+)
+def test_applied_conditions_disclose_units_and_the_actual_option_meaning(
+    client, lang, key, value, meaning
+):
+    with client.session_transaction() as session:
+        session["language"] = lang
+    response = client.get(
+        "/properties",
+        query_string={"mode": "combined", "view_type": "list", key: value},
+    )
+    assert response.status_code == 200
+    labels = re.findall(
+        r'class="filter-chip"[^>]*>\s*<span>(.*?)</span>', response.text, re.S
+    )
+    assert any(meaning in " ".join(unescape(label).split()) for label in labels)
+    assert all("__none__" not in label for label in labels)
+
+
 def subscription_options(body):
     map_link = re.search(r'<a\b[^>]*id="view-map-btn"[^>]*href="([^"]+)"', body)
     if not map_link:

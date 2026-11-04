@@ -9,6 +9,28 @@
 <a class="filter-chip" href="{{ href }}" aria-label="{{ t('workspace_remove_filter') }}: {{ label }} — {{ value }}"><span>{{ label }}: {{ value }}</span>{{ icon('xmark') }}</a>
 {%- endmacro %}
 
+{# Read the existing option vocabulary; raw query values are not UI labels. #}
+{% macro filter_value(key, value, choices=[]) -%}
+    {%- set labels = {
+        'sea_view': {'yes': 'sea_view_confirmed', 'likely': 'sea_view_yes_or_likely', 'on': 'sea_view_yes_or_likely'},
+        'build': {'solar': 'build_solar', 'urbanizable': 'build_urbanizable', 'claimed': 'build_claimed', 'classified': 'build_classified'},
+        'criteria': {'all': 'criteria_all', 'pass': 'criteria_pass', 'unknown': 'criteria_unknown', 'fail': 'criteria_fail'},
+        'measured': {'full': 'measured_full'},
+        'similar': {'80': 'similar_80', '70': 'similar_70', '60': 'similar_60'}
+    } -%}
+    {%- if key == 'sea_dist' and value in ('400', '800', '1600') -%}
+        ≤ {{ value }} m
+    {%- elif key in ('category', 'subtype', 'municipality', 'source') and value == '__none__' -%}
+        {{ t('unknown') }}
+    {%- elif labels.get(key, {}).get(value) -%}
+        {{ t(labels[key][value]).split(': ', 1)[-1] }}
+    {%- else -%}
+        {%- set display = namespace(text=value) -%}
+        {%- for choice in choices if choice.value == value -%}{%- set display.text = t(choice.label_key) -%}{%- endfor -%}
+        {{ display.text }}
+    {%- endif -%}
+{%- endmacro %}
+
 {% macro state_label(label, tone='neutral') -%}
 <span class="ui-state ui-state-{{ tone if tone in ('neutral', 'success', 'warning', 'danger') else 'neutral' }}">{{ label }}</span>
 {%- endmacro %}

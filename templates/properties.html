@@ -10,7 +10,7 @@
    it exports what the count is counting. #}
 
 {% block content %}
-{% from "components/ui.html" import icon, filter_chip, state_label with context %}
+{% from "components/ui.html" import icon, filter_chip, filter_value, state_label with context %}
 {# Every in-page link has to carry the whole view state -- filters, scoring
    mode and cards/list choice -- or clicking a column header silently throws
    half of it away. Every filter the route applies belongs here, and the order
@@ -1139,7 +1139,7 @@
                 <div class="workspace-filter-meta" id="active-filter-chips">
                     {% for key, label_key in applied_filter_keys %}
                         {% if base_args.get(key) %}
-                            {{ filter_chip(t(label_key), base_args.get(key), url_for('main.properties', **dict(base_args, **{key: none, 'page': 1, 'sort': current_filters.sort_by, 'order': current_filters.order}))) }}
+                            {{ filter_chip(t(label_key), filter_value(key, base_args.get(key), verdicts if key == 'verdict' else actions if key == 'action' else []), url_for('main.properties', **dict(base_args, **{key: none, 'page': 1, 'sort': current_filters.sort_by, 'order': current_filters.order}))) }}
                         {% endif %}
                     {% endfor %}
                 </div>
