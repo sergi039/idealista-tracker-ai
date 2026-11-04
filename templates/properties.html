@@ -768,10 +768,10 @@
                     </div>
                     <div class="subscription-menu-actions">
                         <button class="btn btn-primary w-100" type="submit" form="filter-form">{{ t('apply') }}</button>
-                        <p class="small text-body-secondary mt-2 mb-0" id="subscription-draft-note" hidden>{{ t('workspace_selection_draft') }}</p>
                     </div>
                 </div>
             </div>
+            <p class="small text-body-secondary mb-0" id="subscription-draft-note" role="status" hidden>{{ t('workspace_selection_draft') }}</p>
             {% if profile_selection.truncated %}
                 <span class="small text-warning-emphasis" id="profile-selection-truncated">
                     {{ tn('selection_truncated', max_selected_profiles) }}
@@ -1578,8 +1578,9 @@
                                                         <i class="fas fa-map-marker-alt me-1"></i>{{ p.municipality }}
                                                     </div>
                                                 {% endif %}
-                                                {% if p.location_lat and p.location_lon %}
-                                                    {% if p.location_accuracy != 'precise' %}<div class="workspace-location-warning">{{ t('approximate_origin_short') }}</div>{% endif %}
+                                                {% if p.location_lat is not none and p.location_lon is not none %}
+                                                    {% if p.location_accuracy == 'approximate' %}<div class="workspace-location-warning">{{ t('approximate_origin_short') }}</div>
+                                                    {% elif p.location_accuracy != 'precise' %}<div class="workspace-location-warning">{{ t('workspace_accuracy_unknown') }}</div>{% endif %}
                                                 {% else %}<div class="workspace-location-warning">{{ t('not_located_short') }}</div>{% endif %}
                                                 <div class="workspace-property-facts">
                                                     {% if show_subscription %}{{ subscription_badge(p, profile_names) }}{% endif %}
@@ -1592,7 +1593,7 @@
                                                 </div>
                                                 </div></div>
     <details class="workspace-row-details"><summary>{{ t('workspace_facts') }}</summary><div class="workspace-row-details-body">
-        <div class="col-coords"><strong>{{ t('coords') }}</strong><br>{% if p.location_lat and p.location_lon %}
+        <div class="col-coords"><strong>{{ t('coords') }}</strong><br>{% if p.location_lat is not none and p.location_lon is not none %}
                                                     <a href="https://www.google.com/maps/search/?api=1&amp;query={{ p.location_lat }},{{ p.location_lon }}"
                                                        target="_blank" rel="noopener" class="text-decoration-none"
                                                        title="{% if p.location_accuracy == 'precise' %}Precise location{% elif p.location_accuracy == 'approximate' %}Approximate location{% else %}Unknown accuracy{% endif %}">
@@ -1636,7 +1637,7 @@
                                                     <span class="text-muted">-</span>
                                                 {% endif %}</div>
         <div class="workspace-source-actions">
-            {% if p.location_lat and p.location_lon %}<a class="btn btn-outline-secondary" href="{{ url_for('main.map_view', **dict(map_args, focus=p.id)) }}">{{ t('map') }}</a>{% endif %}
+            {% if p.location_lat is not none and p.location_lon is not none %}<a class="btn btn-outline-secondary" href="{{ url_for('main.map_view', **dict(map_args, focus=p.id)) }}">{{ t('map') }}</a>{% endif %}
             {% if p.url %}<a class="btn btn-outline-secondary" href="{{ p.url }}" target="_blank" rel="noopener">{{ t('workspace_source') }}</a>{% endif %}
         </div>
     </div></details>
@@ -1900,7 +1901,7 @@
 
                                 <!-- Location -->
                                 <div class="mb-3">
-                                    {% if p.location_lat and p.location_lon %}
+                                    {% if p.location_lat is not none and p.location_lon is not none %}
                                         <div class="d-flex align-items-center">
                                             <a href="https://www.google.com/maps/search/?api=1&amp;query={{ p.location_lat }},{{ p.location_lon }}"
                                                target="_blank" rel="noopener" class="text-decoration-none d-flex align-items-center">
@@ -1933,7 +1934,7 @@
                             <!-- Card Footer with Actions -->
                             <div class="card-footer d-flex justify-content-between align-items-center">
                                 <div class="d-flex gap-2">
-                                    {% if p.location_lat and p.location_lon %}
+                                    {% if p.location_lat is not none and p.location_lon is not none %}
                                         {# Same as the table view: `focus` alone is not enough,
                                            /map would resolve its own profile. #}
                                         <a href="{{ url_for('main.map_view', **dict(map_args, focus=p.id)) }}"
@@ -2088,13 +2089,11 @@
 <script>
     // Subscription menu (issue #104). Progressive enhancement only: the
     // server reads the ticked checkboxes on its own, so with JavaScript off
-    // the menu still filters -- it just keeps the redundant
-    // `profile_id=all` fallback in the URL and shows a stale button label.
+    // the menu still filters. The closed label always names the applied
+    // server selection; pending changes are disclosed outside the menu.
     (function () {
         const toggle = document.getElementById('profile-select-dropdown');
         const menu = document.getElementById('profile-select-menu');
-        const label = document.getElementById('profile-select-label') || toggle;
-        const form = document.getElementById('filter-form');
         if (!toggle || !menu) {
             return;
         }
@@ -2104,13 +2103,14 @@
         function ticked() {
             return options.filter(option => option.checked).map(option => option.value).join(',');
         }
-        let applied = ticked();
+        function selection() {
+            const ids = ticked();
+            return ids ? 'ids:' + ids : 'fallback:' + (fallback ? fallback.value : 'all');
+        }
+        const applied = selection();
 
         function refresh() {
             const checked = options.filter(option => option.checked);
-            label.textContent = checked.length ? checked.length + ' · ' + {{ t('subscriptions')|tojson }} : {{ t('all_subscriptions')|tojson }};
-            const draft = document.getElementById('subscription-draft-note');
-            if (draft) draft.hidden = ticked() === applied;
             if (fallback) {
                 // A disabled input is not submitted, so the fallback only
                 // travels when nothing is ticked -- which is exactly when it
@@ -2121,6 +2121,8 @@
                 // dropdown, an empty tick list means "all".
                 fallback.value = 'all';
             }
+            const draft = document.getElementById('subscription-draft-note');
+            if (draft) draft.hidden = selection() === applied;
         }
 
         options.forEach(option => option.addEventListener('change', refresh));

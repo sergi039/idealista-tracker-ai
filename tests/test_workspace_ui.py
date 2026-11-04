@@ -203,6 +203,51 @@ def test_applied_conditions_disclose_units_and_the_actual_option_meaning(
     assert all("__none__" not in label for label in labels)
 
 
+@pytest.mark.parametrize(
+    "accuracy,located,warning",
+    [
+        (None, True, "Location accuracy unknown"),
+        ("unknown", True, "Location accuracy unknown"),
+        ("street", True, "Location accuracy unknown"),
+        ("approximate", True, "Approximate location"),
+        ("precise", True, None),
+        ("approximate", False, "Not located"),
+    ],
+)
+def test_visible_location_preserves_unknown_accuracy(
+    client, accuracy, located, warning
+):
+    row = Property.query.filter_by(municipality="Arteixo").one()
+    row.location_accuracy = accuracy
+    if not located:
+        row.location_lat = row.location_lon = None
+    db.session.commit()
+    response = client.get(
+        "/properties?mode=combined&view_type=list&search=Workspace+house+Arteixo"
+    )
+    assert response.status_code == 200
+    warnings = re.findall(
+        r'<div class="workspace-location-warning">(.*?)</div>', response.text
+    )
+    assert warnings == ([warning] if warning else [])
+
+
+@pytest.mark.parametrize("lat,lon", [(0.0, -8.5), (43.3, 0.0)])
+def test_zero_coordinate_remains_located_with_unknown_accuracy(client, lat, lon):
+    row = Property.query.filter_by(municipality="Arteixo").one()
+    row.location_lat, row.location_lon, row.location_accuracy = lat, lon, None
+    db.session.commit()
+    body = client.get(
+        "/properties?mode=combined&view_type=list&search=Workspace+house+Arteixo"
+    ).text
+    assert (
+        '<div class="workspace-location-warning">Location accuracy unknown</div>'
+        in body
+    )
+    assert "0.0000" in body
+    assert re.search(rf'href="/map\?[^\"]*focus={row.id}(?:&amp;|\")', body)
+
+
 def subscription_options(body):
     map_link = re.search(r'<a\b[^>]*id="view-map-btn"[^>]*href="([^"]+)"', body)
     if not map_link:

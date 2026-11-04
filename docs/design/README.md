@@ -80,6 +80,9 @@ All GET filter edits are drafts until **Apply** or Enter submits the form.
 Subscription menu checkboxes use the same form through `form=filter-form`;
 closing the menu must not submit unrelated drafts. One-click scope/view/mode
 links use the **applied** server state, not unsaved DOM values.
+The closed subscription label always names that applied scope. A pending scope
+change stays visibly disclosed outside the menu until Apply or reversal of the
+draft; an explicitly empty selection and All remain distinct.
 
 Every applied additional condition stays visible outside the closed panel as
 a removable chip. Generate removal URLs from `base_args`, retaining `mode`,
@@ -105,6 +108,7 @@ Secondary measurements, coordinates, source links, dates and investment
 information remain in row details and the property page. Significant conflicts,
 approximate location and unknown measurements cannot disappear to meet a height
 budget. A brief reason may wrap; its full evidence is keyboard-accessible. A
+coordinate with unknown accuracy must say unknown, not approximate. A
 missing photograph is not proof that no photograph exists. A rejected/favorite
 row remains governed by the existing selection service, never by CSS or JS.
 
