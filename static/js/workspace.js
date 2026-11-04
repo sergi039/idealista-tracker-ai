@@ -4,20 +4,30 @@ document.addEventListener('DOMContentLoaded', function () {
     const menu = document.getElementById('workspace-menu');
     const collapse = document.getElementById('workspace-collapse');
     if (sidebar && menu && collapse) {
+        const desktop = window.matchMedia('(min-width: 1200px)');
         const setCollapsed = (value) => {
             document.documentElement.dataset.navCollapsed = String(value);
             try { localStorage.setItem('workspace-nav-collapsed', String(value)); } catch (_) { /* Presentation can remain transient. */ }
         };
         collapse.addEventListener('click', () => { setCollapsed(true); menu.focus(); });
         menu.addEventListener('click', () => {
-            if (window.matchMedia('(min-width: 1200px)').matches) {
+            if (desktop.matches) {
                 setCollapsed(false);
                 collapse.focus();
             } else {
                 bootstrap.Offcanvas.getOrCreateInstance(sidebar).show(menu);
             }
         });
-        sidebar.addEventListener('hidden.bs.offcanvas', () => menu.focus());
+        // The desktop sidebar stays fixed, so Bootstrap's position-based
+        // responsive cleanup does not apply. Let its instance release the
+        // backdrop, focus trap and body scroll lock before using the rail.
+        window.addEventListener('resize', () => {
+            if (desktop.matches) bootstrap.Offcanvas.getInstance(sidebar)?.hide();
+        }, { passive: true });
+        sidebar.addEventListener('hidden.bs.offcanvas', () => {
+            const target = desktop.matches && document.documentElement.dataset.navCollapsed !== 'true' ? collapse : menu;
+            target.focus();
+        });
     }
 
     const search = document.getElementById('subscription-search');

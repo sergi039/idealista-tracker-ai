@@ -60,6 +60,8 @@ and restored with **Menu**. There is no icon-only rail. Its preference may live
 in localStorage because it is presentation, not listing state. Below 1200px,
 use Bootstrap's labelled offcanvas menu with keyboard dismissal and focus
 return. The main area uses **all remaining width**, without a maximum cap.
+Entering the desktop layout must dismiss any mobile offcanvas through Bootstrap
+so no backdrop, focus trap or body scroll lock survives the transition.
 
 Properties is the one listing entry. Map is a representation control carrying
 the same selection, not a duplicate global listing section. Manage subscriptions

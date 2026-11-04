@@ -20,7 +20,7 @@
     border-radius: var(--ui-radius-control);
     font-size: 0.875rem;
 }
-.app-workspace .btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--ui-space-2); }
+.app-workspace .btn { min-width: var(--ui-control-height); display: inline-flex; align-items: center; justify-content: center; gap: var(--ui-space-2); }
 .app-workspace .btn-outline-secondary { --bs-btn-color: var(--ui-muted); --bs-btn-border-color: var(--ui-border); --bs-btn-hover-bg: var(--ui-accent-soft); --bs-btn-hover-color: var(--ui-accent); --bs-btn-hover-border-color: var(--ui-accent); }
 .app-workspace .btn-primary { --bs-btn-bg: var(--ui-button-primary); --bs-btn-border-color: var(--ui-button-primary); --bs-btn-color: var(--ui-on-accent); }
 .app-workspace .btn-link { text-decoration: none; }
@@ -48,7 +48,7 @@
 .workspace-brand { display: flex; align-items: center; gap: var(--ui-space-2); color: var(--ui-text) !important; font-weight: 700; font-size: 1rem; text-decoration: none; margin: 0 var(--ui-space-2) var(--ui-space-8); }
 .workspace-brand-mark { display: grid; place-items: center; width: 2rem; height: 2rem; background: var(--ui-accent-soft); color: var(--ui-accent); border-radius: var(--ui-radius-panel); font-size: 0.75rem; }
 .workspace-nav-group { margin-bottom: var(--ui-space-6); }
-.workspace-nav-heading { margin: 0 var(--ui-space-3) var(--ui-space-2); text-transform: uppercase; font-size: 0.6875rem; letter-spacing: 0.08em; color: var(--ui-muted); }
+.workspace-nav-heading { margin: 0 var(--ui-space-3) var(--ui-space-2); text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.08em; color: var(--ui-muted); }
 .workspace-nav-link { display: flex; align-items: center; gap: var(--ui-space-3); min-height: var(--ui-control-height); padding: var(--ui-space-2) var(--ui-space-3); margin-block: var(--ui-space-1); border-radius: var(--ui-radius-control); text-decoration: none; color: var(--ui-muted) !important; font-size: 0.8125rem; line-height: 1.45; }
 .workspace-nav-link:hover,
 .workspace-nav-link.active { background: var(--ui-accent-soft); color: var(--ui-accent) !important; }
@@ -86,7 +86,7 @@
 .workspace-advanced-fields > label { min-width: 0; font-size: 0.75rem; color: var(--ui-muted); }
 .workspace-advanced-fields > label > .form-select { margin-top: var(--ui-space-1); color: var(--ui-text); }
 .workspace-filter-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-space-2); width: 100%; }
-.filter-chip { display: inline-flex; align-items: center; gap: var(--ui-space-2); padding: var(--ui-space-1) var(--ui-space-2); background: var(--ui-accent-soft); color: var(--ui-accent); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); text-decoration: none; font-size: 0.75rem; max-width: 100%; min-height: 2rem; }
+.filter-chip { display: inline-flex; align-items: center; gap: var(--ui-space-2); padding: var(--ui-space-1) var(--ui-space-2); background: var(--ui-accent-soft); color: var(--ui-accent); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); text-decoration: none; font-size: 0.75rem; max-width: 100%; min-height: var(--ui-control-height); }
 .filter-chip span { overflow-wrap: anywhere; }
 .workspace-result-controls { display: flex; align-items: center; justify-content: space-between; gap: var(--ui-space-3); flex-wrap: wrap; border-bottom: 1px solid var(--ui-border); padding-bottom: var(--ui-space-2); }
 .workspace-result-tabs { display: flex; gap: var(--ui-space-6); }
@@ -100,10 +100,10 @@
 .workspace-result-tools .btn { font-size: 0.75rem; }
 .workspace-result-tools .btn.active { color: var(--ui-accent); background: var(--ui-accent-soft); border-color: var(--ui-border); }
 .workspace-mode-options { display: flex; gap: var(--ui-space-2); align-items: center; }
-.workspace-mode-options .btn { min-height: 2rem; font-size: 0.75rem; }
-.workspace-result-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-space-2); padding-block: var(--ui-space-2); color: var(--ui-muted); font-size: 0.75rem; }
+.workspace-mode-options .btn { min-height: var(--ui-control-height); font-size: 0.75rem; }
+.workspace-result-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-space-2); min-height: var(--ui-control-height); padding-block: 0; color: var(--ui-muted); font-size: 0.75rem; }
 .workspace-result-status #recommendation-profile-status { font-size: inherit; }
-.workspace-result-status form .btn { min-height: 2rem; padding: var(--ui-space-1) var(--ui-space-2); font-size: 0.75rem; }
+.workspace-result-status form .btn { min-height: var(--ui-control-height); padding: var(--ui-space-1) var(--ui-space-2); font-size: 0.75rem; }
 .workspace-result-status .result-count { color: var(--ui-text); font-size: 0.8125rem; }
 .workspace-applied-notes { display: flex; align-items: center; gap: var(--ui-space-2); flex-wrap: wrap; font-size: 0.75rem; }
 .workspace-applied-notes:empty { display: none; }
@@ -124,7 +124,7 @@
 .workspace-municipality { color: var(--ui-muted); font-size: 0.75rem; margin-top: var(--ui-space-1); }
 .workspace-property-facts { display: flex; flex-wrap: wrap; gap: var(--ui-space-1); margin-top: var(--ui-space-2); }
 .app-workspace .workspace-property-facts .badge,
-.app-workspace .workspace-data-table .recommendation-reference-line .badge { white-space: normal; text-align: left; padding: var(--ui-space-1) var(--ui-space-2); border-radius: var(--ui-radius-control); font-size: 0.6875rem; font-weight: 500; line-height: 1.4; }
+.app-workspace .workspace-data-table .recommendation-reference-line .badge { white-space: normal; text-align: left; padding: var(--ui-space-1) var(--ui-space-2); border-radius: var(--ui-radius-control); font-size: 0.75rem; font-weight: 500; line-height: 1.4; }
 .app-workspace .workspace-property-facts .bg-secondary,
 .app-workspace .workspace-property-facts .text-bg-secondary { background: var(--ui-canvas) !important; color: var(--ui-muted) !important; }
 .app-workspace .workspace-property-facts .bg-info,
@@ -149,17 +149,17 @@
 .app-workspace .workspace-data-table .recommendation-reference-line .text-bg-warning { background: var(--ui-warning-soft) !important; color: var(--ui-warning) !important; }
 .app-workspace .workspace-data-table .recommendation-reference-line .text-bg-primary { background: var(--ui-accent-soft) !important; color: var(--ui-accent) !important; }
 .app-workspace .workspace-data-table .recommendation-reference-line .text-bg-success { background: var(--ui-success-soft) !important; color: var(--ui-success) !important; }
-.workspace-data-table .recommendation-evidence .badge { font-size: 0.6875rem; }
+.workspace-data-table .recommendation-evidence .badge { font-size: 0.75rem; }
 .workspace-data-table .recommendation-details > summary { font-size: 0.75rem; }
 .workspace-secondary-scores { margin-top: var(--ui-space-3); font-size: 0.75rem; }
-.workspace-secondary-scores .badge { display: inline-flex !important; background: var(--ui-canvas) !important; color: var(--ui-muted) !important; }
+.workspace-secondary-scores .badge { font-size: 0.75rem !important; display: inline-flex !important; background: var(--ui-canvas) !important; color: var(--ui-muted) !important; }
 .workspace-owner-decision { text-align: right; font-size: 0.75rem; line-height: 1.5; color: var(--ui-muted); white-space: normal; overflow-wrap: anywhere; }
 .workspace-owner-decision .badge { font-size: inherit; white-space: normal; }
 .workspace-owner-actions { display: flex; justify-content: flex-end; gap: var(--ui-space-2); margin-bottom: var(--ui-space-2); }
 .workspace-owner-actions .btn { font-size: 0.75rem; }
 .property-favorite-btn { width: var(--ui-control-height); min-height: var(--ui-control-height); flex-shrink: 0; }
 .workspace-source-actions { display: flex; gap: var(--ui-space-2); flex-wrap: wrap; margin-top: var(--ui-space-2); }
-.workspace-source-actions .btn { min-height: 2rem; padding: var(--ui-space-1) var(--ui-space-2); font-size: 0.75rem; }
+.workspace-source-actions .btn { min-height: var(--ui-control-height); padding: var(--ui-space-1) var(--ui-space-2); font-size: 0.75rem; }
 .workspace-catalog-example { display: grid; gap: var(--ui-space-6); }
 @media (min-width: 1200px) {
     .workspace-sidebar { width: var(--ui-nav-width); position: fixed; inset: 0 auto 0 0; display: flex; flex-direction: column; z-index: 1030; background: var(--ui-surface) !important; }
@@ -185,6 +185,7 @@
     .workspace-owner-actions { flex-wrap: wrap; }
 }
 @media (max-width: 767.98px) {
+    .app-workspace { --ui-control-height: 2.75rem; }
     .app-workspace main.container { padding: var(--ui-space-4); }
     .workspace-topbar { padding-inline: var(--ui-space-4); }
     .workspace-utilities { gap: var(--ui-space-1); }
@@ -210,9 +211,6 @@
     .workspace-photo { flex-basis: 6rem; width: 6rem; }
     .workspace-photo .listing-thumb { width: 6rem; height: 5rem; }
     .workspace-owner-actions { flex-wrap: nowrap; }
-    .workspace-topbar .btn,
-    .workspace-owner-actions .btn,
-    .workspace-result-tools .btn { min-height: 2.75rem; }
 }
 @media (prefers-reduced-motion: reduce) {
     .app-workspace *, .app-workspace *::before, .app-workspace *::after { scroll-behavior: auto !important; transition-duration: 0s !important; }
@@ -239,3 +237,16 @@
     .workspace-advanced-filters > summary { position: static; margin-top: var(--ui-space-2); }
     .workspace-result-status .properties-coverage { width: 100%; }
 }
+
+/* Disclosures and dropdown labels share the same usable target as buttons. */
+.app-workspace .dropdown-item { min-height: var(--ui-control-height); display: flex; align-items: center; }
+.properties-subscription-menu .form-check { display: flex; align-items: center; gap: var(--ui-space-2); padding-left: 0; }
+.properties-subscription-menu .form-check-input { margin: 0; flex-shrink: 0; }
+.properties-subscription-menu .form-check-label { min-height: var(--ui-control-height); flex: 1; display: flex; align-items: center; gap: var(--ui-space-1); flex-wrap: wrap; cursor: pointer; }
+.workspace-row-details > summary,
+.app-workspace .properties-coverage > summary,
+.workspace-data-table .recommendation-details > summary,
+.workspace-secondary-scores > summary { min-height: var(--ui-control-height); padding-block: var(--ui-space-2); cursor: pointer; }
+.workspace-data-table small,
+.workspace-data-table .small { font-size: max(0.75rem, 0.875em); }
+.workspace-data-table .badge { font-size: 0.75rem; }
