@@ -49,7 +49,7 @@ from flask import template_rendered
 from app import create_app, db
 from models import Property, SearchProfile
 from tests import setup_test_environment
-from tests.listing_menu import subscription_options
+from tests.test_workspace_ui import subscription_options
 
 CRITERIA = {"min_house_m2": 150.0, "min_plot_m2": 700.0}
 

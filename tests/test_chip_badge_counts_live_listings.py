@@ -30,7 +30,7 @@ import pytest
 from app import create_app, db
 from models import Property, SearchProfile
 from tests import setup_test_environment
-from tests.listing_menu import subscription_options
+from tests.test_workspace_ui import subscription_options
 
 
 @pytest.fixture
