@@ -47,7 +47,7 @@
 .ui-state-danger { background: var(--ui-danger-soft); color: var(--ui-danger); }
 .workspace-sidebar { --bs-offcanvas-width: var(--ui-nav-width); background: var(--ui-surface); border-right: 1px solid var(--ui-border); }
 .workspace-sidebar .offcanvas-body { padding: var(--ui-space-6) var(--ui-space-4); flex-direction: column; }
-.workspace-brand { display: flex; align-items: center; gap: var(--ui-space-2); color: var(--ui-text) !important; font-weight: 700; font-size: 1rem; text-decoration: none; margin: 0 var(--ui-space-2) var(--ui-space-8); }
+.workspace-brand { min-height: var(--ui-control-height); display: flex; align-items: center; gap: var(--ui-space-2); color: var(--ui-text) !important; font-weight: 700; font-size: 1rem; text-decoration: none; margin: 0 var(--ui-space-2) var(--ui-space-8); }
 .workspace-brand-mark { display: grid; place-items: center; width: 2rem; height: 2rem; background: var(--ui-accent-soft); color: var(--ui-accent); border-radius: var(--ui-radius-panel); font-size: 0.75rem; }
 .workspace-nav-group { margin-bottom: var(--ui-space-6); }
 .workspace-nav-heading { margin: 0 var(--ui-space-3) var(--ui-space-2); text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.08em; color: var(--ui-muted); }
