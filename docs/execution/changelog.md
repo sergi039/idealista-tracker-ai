@@ -33,6 +33,26 @@
 - Apply the same recommendation exclusions and ordering to the page and its CSV
   export, including recommendation mode with an explicitly chosen sort.
 
+- Published `https://prop.cervantes50.com` through a dedicated Cloudflare
+  Tunnel and whole-host Access application restricted to the owner's
+  confirmed email (issue #579). The tunnel validates the Access JWT audience,
+  rejects other hostnames with 404, and retains the app origin on
+  `127.0.0.1:5001`. Access uses email PIN, HttpOnly/binding cookies and
+  SameSite=Lax; application writes separately require the session-bound
+  CSRF token introduced in #581.
+- At publication, verified the local listing page and health endpoint returned
+  200, the tunnel was healthy, and anonymous list/API/detail/attachment
+  requests plus forged JWT/email headers redirected to Access login (six
+  HTTP 302 responses). The single-email policy and proxied DNS target passed
+  readback. Owner PIN login, authenticated browser actions through the public
+  address and an interactive non-owner login have not been exercised.
+- Kept configuration, audit helper and proof private under
+  `~/.config/idealista-prop-tunnel/`. Independent review of the anonymized
+  infrastructure plan/helper returned `rx: provider=openai outcome=PASS`.
+  Rollback: stop only `com.cloudflare.cloudflared.idealista-prop` and remove
+  the DNS record identified in that directory's `deployment-state.json`;
+  the local app and its deployment watcher remain unchanged.
+
 ## 2026-09-08
 
 - Made recommendation rows compact: group repeated evidence labels per outcome,
