@@ -2107,31 +2107,33 @@
             const ids = ticked();
             return ids ? 'ids:' + ids : 'fallback:' + (fallback ? fallback.value : 'all');
         }
+        const appliedIds = ticked();
+        const appliedFallback = fallback ? fallback.value : 'all';
         const applied = selection();
 
-        function refresh() {
+        function refresh(requestAll = false) {
             const checked = options.filter(option => option.checked);
             if (fallback) {
                 // A disabled input is not submitted, so the fallback only
                 // travels when nothing is ticked -- which is exactly when it
                 // is needed.
                 fallback.disabled = checked.length > 0;
-                // The server may have rendered the impossible marker here for
-                // an explicitly empty selection. Once the user is working the
-                // dropdown, an empty tick list means "all".
-                fallback.value = 'all';
+                // Reversing checkbox edits restores the exact server fallback,
+                // including an explicitly empty or otherwise unrepresented scope.
+                // Only the All button overrides a matching initial checkbox set.
+                fallback.value = !requestAll && ticked() === appliedIds ? appliedFallback : 'all';
             }
             const draft = document.getElementById('subscription-draft-note');
             if (draft) draft.hidden = selection() === applied;
         }
 
-        options.forEach(option => option.addEventListener('change', refresh));
+        options.forEach(option => option.addEventListener('change', () => refresh()));
 
         const clear = document.getElementById('profile-select-clear');
         if (clear) {
             clear.addEventListener('click', function () {
                 options.forEach(option => { option.checked = false; });
-                refresh();
+                refresh(true);
             });
         }
 

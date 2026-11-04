@@ -83,6 +83,8 @@ links use the **applied** server state, not unsaved DOM values.
 The closed subscription label always names that applied scope. A pending scope
 change stays visibly disclosed outside the menu until Apply or reversal of the
 draft; an explicitly empty selection and All remain distinct.
+Reversing checkbox edits restores the original fallback, including an empty
+scope. Choosing the All button is an explicit widening action.
 
 Every applied additional condition stays visible outside the closed panel as
 a removable chip. Generate removal URLs from `base_args`, retaining `mode`,
