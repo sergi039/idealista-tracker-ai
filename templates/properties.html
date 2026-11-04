@@ -963,7 +963,7 @@
                        option and the badges it selects cannot disagree. #}
                     {% if advertisers|length > 1 %}
                     <label>{{ t('workspace_seller') }}<select class="form-select form-select-sm properties-filter-select" id="advertiser" name="advertiser"
-                            aria-label="{{ t('advertiser') }}">
+                            aria-label="{{ t('workspace_seller') }}">
                         <option value="">{{ t('advertiser_all') }}</option>
                         {% for seller in advertisers %}
                             <option value="{{ seller.value }}"
@@ -997,7 +997,7 @@
                        (services/owner_review.DECISION_ALL). #}
                     {% if verdicts|length > 1 or (verdicts and rejected_hidden_count) %}
                     <label>{{ t('workspace_verdict') }}<select class="form-select form-select-sm properties-filter-select" id="verdict" name="verdict"
-                            aria-label="{{ t('owner_verdict') }}">
+                            aria-label="{{ t('workspace_verdict') }}">
                         <option value="">{{ t('owner_verdict_default') }}</option>
                         <option value="all" {{ 'selected' if current_filters.verdict == 'all' }}>{{ t('owner_verdict_all') }}</option>
                         {% for choice in verdicts %}
@@ -1041,7 +1041,7 @@
                        a travel time. Sea view needs no paid API, which is why it
                        came back on its own. #}
                     <label>{{ t('workspace_sea') }}<select class="form-select form-select-sm properties-filter-select" id="sea_view" name="sea_view"
-                            aria-label="{{ t('sea_view') }}">
+                            aria-label="{{ t('workspace_sea') }}">
                         <option value="" {{ 'selected' if not current_filters.sea_view }}>{{ t('sea_view_any') }}</option>
                         <option value="yes" {{ 'selected' if current_filters.sea_view == 'yes' }}>{{ t('sea_view_confirmed') }}</option>
                         <option value="likely" {{ 'selected' if current_filters.sea_view in ('likely', 'on') }}>{{ t('sea_view_yes_or_likely') }}</option>
@@ -1052,7 +1052,7 @@
                        research sheets). A row nobody curated matches only
                        "all": absence is not a classification (#98). #}
                     <label>{{ t('workspace_build') }}<select class="form-select form-select-sm properties-filter-select" id="build" name="build"
-                            aria-label="{{ t('build_filter') }}">
+                            aria-label="{{ t('workspace_build') }}">
                         <option value="" {{ 'selected' if not current_filters.build }}>{{ t('build_any') }}</option>
                         <option value="solar" {{ 'selected' if current_filters.build == 'solar' }}>{{ t('build_solar') }}</option>
                         <option value="urbanizable" {{ 'selected' if current_filters.build == 'urbanizable' }}>{{ t('build_urbanizable') }}</option>
@@ -1067,7 +1067,7 @@
                        and the property page already show captioned. A row
                        nobody measured never matches a cut (#98). #}
                     <label>{{ t('workspace_distance') }}<select class="form-select form-select-sm properties-filter-select" id="sea_dist" name="sea_dist"
-                            aria-label="{{ t('sea_distance_filter') }}">
+                            aria-label="{{ t('workspace_distance') }}">
                         <option value="" {{ 'selected' if not current_filters.sea_dist }}>{{ t('sea_distance_any') }}</option>
                         <option value="400" {{ 'selected' if current_filters.sea_dist == '400' }}>{{ t('sea_distance_400') }}</option>
                         <option value="800" {{ 'selected' if current_filters.sea_dist == '800' }}>{{ t('sea_distance_800') }}</option>
@@ -1079,7 +1079,7 @@
                        them. "Fully measured" is coverage recorded at 100%; a row
                        scored before coverage was recorded is not full until rescored. #}
                     <label>{{ t('workspace_measured') }}<select class="form-select form-select-sm properties-filter-select" id="measured" name="measured"
-                            aria-label="{{ t('measured_filter') }}">
+                            aria-label="{{ t('workspace_measured') }}">
                         <option value="" {{ 'selected' if not current_filters.measured }}>{{ t('measured_any') }}</option>
                         <option value="full" {{ 'selected' if current_filters.measured == 'full' }}>{{ t('measured_full') }}</option>
                     </select></label>
@@ -1090,7 +1090,7 @@
                        row) and the disclosure beside the count says how many. #}
                     {% if criteria_enabled is defined and criteria_enabled %}
                     <label>{{ t('workspace_criteria') }}<select class="form-select form-select-sm properties-filter-select" id="criteria" name="criteria"
-                            aria-label="{{ t('criteria_filter') }}">
+                            aria-label="{{ t('workspace_criteria') }}">
                         <option value="" {{ 'selected' if not current_filters.criteria }}>{{ t('criteria_default') }}</option>
                         <option value="all" {{ 'selected' if current_filters.criteria == 'all' }}>{{ t('criteria_all') }}</option>
                         <option value="pass" {{ 'selected' if current_filters.criteria == 'pass' }}>{{ t('criteria_pass') }}</option>
@@ -1110,7 +1110,7 @@
                        input and narrows nothing. #}
                     {% if similarity_enabled is defined and similarity_enabled %}
                     <label>{{ t('workspace_similar') }}<select class="form-select form-select-sm properties-filter-select" id="similar" name="similar"
-                            aria-label="{{ t('similar_filter') }}"{% if not similarity_reference_count %} title="{{ t('similar_no_reference_hint') }}"{% endif %}>
+                            aria-label="{{ t('workspace_similar') }}"{% if not similarity_reference_count %} title="{{ t('similar_no_reference_hint') }}"{% endif %}>
                         <option value="" {{ 'selected' if not current_filters.similar }}>{{ t('similar_any') }}</option>
                         <option value="80" {{ 'selected' if current_filters.similar == '80' }}>{{ t('similar_80') }}</option>
                         <option value="70" {{ 'selected' if current_filters.similar == '70' }}>{{ t('similar_70') }}</option>
