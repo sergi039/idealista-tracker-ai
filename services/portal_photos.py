@@ -111,7 +111,7 @@ _SECRET_NAME_TOKENS = (
 
 # fotocasa serves a listing's photographs and its agency's logo from ONE host,
 # and the path segment is the only thing that separates them.
-_FOTOCASA_LISTING_PATH = "/images/ads/"
+_FOTOCASA_LISTING_PATHS = ("/images/ads/", "/images/anuncio/")
 
 # yaencontre's alert email is mostly chrome. Only this host carries the
 # listing's own photographs.
@@ -274,7 +274,9 @@ def from_fotocasa_payload(estate: Any, detail: Any) -> Dict[str, Any]:
         if not isinstance(item, dict):
             continue
         url = normalise_photo_url(item.get("src") or item.get("url"))
-        if url is None or _FOTOCASA_LISTING_PATH not in urlparse(url).path:
+        if url is None or not any(
+            path in urlparse(url).path for path in _FOTOCASA_LISTING_PATHS
+        ):
             # The agency logo lives at /images/client/ on the same host. On
             # the one fixture measured it sits OUTSIDE this block entirely
             # (`publisher.logo`, `agency.logo`, `promotionLogo`), so this

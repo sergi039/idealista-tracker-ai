@@ -2,6 +2,10 @@
 
 ## 2026-11-04
 
+- Accept Fotocasa's legacy listing-photo path `/images/anuncio/` alongside
+  `/images/ads/`; seven live listings published photos that the old path guard
+  discarded. Agency logos under `/images/client/` remain excluded.
+
 - Repair Milanuncios photo renditions for existing and new listings; capture
   Idealista photos from the matching listing anchor in alert emails.
 - Verify Fotocasa and Milanuncios against their listing payloads instead of
