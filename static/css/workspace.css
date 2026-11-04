@@ -11,6 +11,7 @@
     font-size: 0.875rem;
 }
 :where(.app-workspace) a { color: var(--ui-accent); }
+.workspace-skip:focus { position: fixed; top: var(--ui-space-2); left: var(--ui-space-2); z-index: 1100; min-height: var(--ui-control-height); padding: var(--ui-space-2) var(--ui-space-4); background: var(--ui-surface); border-radius: var(--ui-radius-control); }
 .app-workspace :focus-visible { outline: 3px solid var(--ui-accent); outline-offset: 3px; }
 .app-workspace .btn,
 .app-workspace .form-control,

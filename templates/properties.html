@@ -820,13 +820,13 @@
                filter form re-posts their state as hidden inputs so Apply
                cannot silently switch them off. #}
             <div class="scope-utilities">
-                <a class="btn btn-sm scope-switch btn-outline-secondary"
+                <a class="btn btn-sm scope-switch btn-outline-secondary" role="button"
                    href="{{ url_for('main.properties', **dict(base_args, favorites=none if current_filters.favorites else 'on', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}"
                    title="Show only the listings you starred"
                    aria-pressed="{{ 'true' if current_filters.favorites else 'false' }}">
                     <i class="fas fa-star me-1 {{ '' if current_filters.favorites else 'text-warning' }}"></i>{{ t('favorites') }}
                 </a>
-                <a class="btn btn-sm scope-switch btn-outline-secondary"
+                <a class="btn btn-sm scope-switch btn-outline-secondary" role="button"
                    href="{{ url_for('main.properties', **dict(base_args, hide_removed=none if current_filters.hide_removed else 'on', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}"
                    title="Hide listings that were removed or sold"
                    aria-pressed="{{ 'true' if current_filters.hide_removed else 'false' }}">
@@ -923,7 +923,7 @@
                         <summary>{{ icon('sliders') }}{{ t('workspace_filters') }}{% if applied.advanced %} · {{ applied.advanced }}{% endif %} {{ icon('chevron-down') }}</summary>
                         <div class="workspace-advanced-fields">
 
-                        <label>{{ t('workspace_subtype') }}<select class="form-select" id="subtype" name="subtype" aria-label="Subtype">
+                        <label>{{ t('workspace_subtype') }}<select class="form-select" id="subtype" name="subtype" aria-label="{{ t('workspace_subtype') }}">
                             <option value="">All subtypes</option>
                             {% if has_unclassified_subtype or current_filters.subtype == '__none__' %}
                                 <option value="__none__" {{ 'selected' if current_filters.subtype == '__none__' }}>Unclassified</option>
@@ -1121,7 +1121,7 @@
                     {% endif %}
 
                     <label>{{ t('workspace_investment') }}<select class="form-select form-select-sm properties-filter-select" id="inv_metr" name="inv_metr"
-                            aria-label="Investment metrics rating">
+                            aria-label="{{ t('workspace_investment') }}">
                         <option value="" {{ 'selected' if not current_filters.inv_metr }}>Inv. metr: all</option>
                         <option value="EXCELLENT" {{ 'selected' if current_filters.inv_metr == 'EXCELLENT' }}>Inv. metr: excellent</option>
                         <option value="GOOD" {{ 'selected' if current_filters.inv_metr == 'GOOD' }}>Inv. metr: good</option>
@@ -1157,7 +1157,7 @@
            change which rows they are. #}
         <section id="properties-results" aria-label="{{ t('properties') }}">
             <div class="workspace-result-controls">
-                <div class="workspace-result-tabs" aria-label="{{ t('workspace_assessment') }}">
+                <div class="workspace-result-tabs" role="group" aria-label="{{ t('workspace_collection') }}">
                     <a id="mode-all-btn" class="workspace-result-tab" aria-current="{{ 'true' if active_mode != 'recommendation' else 'false' }}"
                        href="{{ url_for('main.properties', **dict(base_args, mode='combined', sort='created_at', order='desc')) }}">{{ t('workspace_all') }}</a>
                     <a id="mode-recommendation-btn" class="workspace-result-tab" aria-describedby="recommendation-entry-help" aria-current="{{ 'true' if active_mode == 'recommendation' else 'false' }}"
@@ -1214,7 +1214,7 @@
                             <option value="similarity" {{ 'selected' if current_filters.sort_by == 'similarity' }}>{{ t('similarity_sort_label') }}</option>
                             {% endif %}
                         </select>
-                        <select class="form-select properties-filter-order" name="order" aria-label="Sort direction" form="filter-form">
+                        <select class="form-select properties-filter-order" name="order" aria-label="{{ t('workspace_sort_direction') }}" form="filter-form">
                             <option value="desc" {{ 'selected' if current_filters.order == 'desc' }}>↓</option>
                             <option value="asc" {{ 'selected' if current_filters.order == 'asc' }}>↑</option>
                         </select>
@@ -1223,7 +1223,7 @@
 <div class="dropdown">
                     <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">{{ t({'combined': 'workspace_rating_general', 'investment': 'workspace_rating_investment', 'lifestyle': 'workspace_rating_lifestyle', 'taste': 'workspace_rating_taste'}.get(active_mode, 'workspace_assessment')) }}</button>
                     <!-- Compact Mode Toggle Buttons -->
-                    <div class="dropdown-menu dropdown-menu-end" role="group" aria-label="Analysis mode">
+                    <div class="dropdown-menu dropdown-menu-end" role="group" aria-label="{{ t('workspace_assessment') }}">
                         <a id="mode-combined-btn"
                            class="dropdown-item"
                            href="{{ url_for('main.properties', **dict(base_args, mode='combined', sort='score_total', order='desc')) }}"
@@ -1242,7 +1242,7 @@
                            title="{{ t('taste_mode_title') }}">{{ t('workspace_rating_taste') }}</a>
                     </div>
 </div>
-                    <div class="btn-group btn-group-sm" role="group" aria-label="{{ t('workspace_assessment') }}">
+                    <div class="btn-group btn-group-sm" role="group" aria-label="{{ t('workspace_view') }}">
                         <a id="view-list-btn"
                            class="btn btn-outline-secondary {{ 'active' if view_type == 'list' else '' }}"
                            href="{{ url_for('main.properties', **dict(base_args, view_type='list', sort=current_filters.sort_by, order=current_filters.order)) }}"
@@ -1830,7 +1830,7 @@
                                     <div class="ms-2 d-flex align-items-center" style="flex-shrink: 0;">
                                         <button class="btn btn-link p-0 me-2 property-favorite-btn"
                                                 data-property-id="{{ p.id }}"
-                                                title="{{ 'Remove from favorites' if p.is_favorite else 'Add to favorites' }}">
+                                                title="{{ 'Remove from favorites' if p.is_favorite else 'Add to favorites' }}" aria-pressed="{{ 'true' if p.is_favorite else 'false' }}" aria-label="{{ t('favorites') }}: {{ p.title or p.id }}">
                                             <i class="fas fa-star {{ 'text-warning' if p.is_favorite else 'text-muted' }}"
                                                style="font-size: 1rem; cursor: pointer;"></i>
                                         </button>

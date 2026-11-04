@@ -344,6 +344,7 @@ window.IdealistaApp = {
 
             const related = document.querySelectorAll(`.property-favorite-btn[data-property-id="${propertyId}"]`);
             related.forEach(button => {
+                button.setAttribute('aria-pressed', data.is_favorite ? 'true' : 'false');
                 const icon = button.querySelector('i.fa-star');
                 if (!icon) return;
 

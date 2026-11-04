@@ -30,6 +30,12 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    document.querySelectorAll('a.scope-switch[role="button"]').forEach(link => {
+        link.addEventListener('keydown', event => {
+            if (event.key === ' ') { event.preventDefault(); link.click(); }
+        });
+    });
+
     const search = document.getElementById('subscription-search');
     if (search) {
         search.addEventListener('input', () => {

@@ -42,6 +42,10 @@ outline for secondary actions, and danger only for a meaningful destructive or
 high-impact action. Ordinary controls are at least 40px, primary touch targets
 44px. Familiar icon-only actions (favorite, close, theme) need accessible names;
 unfamiliar modes require visible text. Tooltip-only discovery is insufficient.
+Collection, assessment and representation groups have distinct translated
+accessible names. Toggle states update after the real response, and link-based
+buttons support Space as well as Enter. The focused skip link stays above the
+fixed navigation.
 
 Body text is 14–16px, supplementary text at least 12px. Table headers may be
 11px but never carry the only description of an action. Numeric comparisons
