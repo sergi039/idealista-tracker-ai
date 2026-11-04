@@ -1858,3 +1858,28 @@ def test_subscription_shortfalls_penalize_reviewed_rows_but_unknowns_do_not(app)
         ctx.readings[unknown.id]["needs_verification"][0]["aspect_id"] == "plot_area_m2"
     )
     assert ctx.readings[small.id]["eligibility"] == "eligible"
+
+
+def test_disagreeing_plot_sources_do_not_earn_a_minimum_area_match(app):
+    profile = _profile()
+    profile.criteria = {"min_house_m2": 150, "min_plot_m2": 700}
+    db.session.commit()
+    good = _property(profile, title="Consistent plot", area=200, plot_area=1000)
+    disputed = _property(
+        profile,
+        title="Disputed plot",
+        area=200,
+        plot_area=800,
+        attributes={"parcel_area_m2": 518},
+    )
+    ctx = taste_recommendation.build_context(
+        [good, disputed], _recommendation_profile([]), {"state": "current"}
+    )
+    reading = ctx.readings[disputed.id]
+    assert reading["rank_value"] < ctx.readings[good.id]["rank_value"]
+    assert "plot_area_m2" not in {f["aspect_id"] for f in reading["matches"]}
+    assert any(
+        f["aspect_id"] == "plot_area_m2" and f["status"] == "conflicting"
+        for f in reading["needs_verification"]
+    )
+    assert reading["eligibility"] == "eligible"

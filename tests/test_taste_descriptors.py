@@ -16,6 +16,8 @@ import pytest
         ("Aunque requiere algunas reformas menores.", "renovation_needed"),
         ("Se vende chalet forrado en piedra para terminar.", "unfinished"),
         ("La vivienda se encuentra para reforma integral.", "major_renovation"),
+        ("La vivienda esta para restaurar.", "renovation_needed"),
+        ("La casa necesita reformas.", "renovation_needed"),
     ],
 )
 def test_explicit_current_spanish_works_are_claimed_not_ignored(text, expected):

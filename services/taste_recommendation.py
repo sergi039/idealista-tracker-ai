@@ -518,8 +518,6 @@ def _reading(
     criteria_verdict = subscription_criteria.read_verdict(prop, criteria)
     for check, passed in criteria_verdict.get("checks", {}).items():
         relevant += 1
-        if passed is not None:
-            supported += 1
         aspect_id = {
             "house": "house_area_m2",
             "plot": "plot_area_m2",
@@ -535,6 +533,15 @@ def _reading(
             "evidence": f"{bound_key}={criteria[bound_key]}",
             "hard": False,
         }
+        # A typed figure and a conflicting source claim cannot establish a
+        # positive minimum-area match. Keep the disagreement visible without
+        # turning uncertainty into a measured failure or hard exclusion.
+        if _strongest_status(_rows(descriptor, aspect_id)) == "conflicting":
+            facet["status"] = "conflicting"
+            needs.append(facet)
+            continue
+        if passed is not None:
+            supported += 1
         if passed is False:
             conflicts.append(facet)
         elif passed is None:
