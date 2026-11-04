@@ -272,7 +272,7 @@ def gather_facts(prop: Property) -> List[str]:
     descriptor = taste_descriptors.build_descriptor(prop)
     sea_rows = taste_descriptors.aspect_values(descriptor, "sea_view")
     sea_supported = next(
-        (row for row in sea_rows if row.get("status") == "supported"), None
+        (row for row in sea_rows if row.get("status") in {"supported", "claimed"}), None
     )
     facts.append(
         f"SEA VIEW: {sea_supported.get('value')}"

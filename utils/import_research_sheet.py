@@ -377,7 +377,11 @@ def insert_rows(rows: List[Dict[str, Any]], *, profile_id: int, sheet: str) -> D
         prop.title = row["title"]
         prop.municipality = row["municipality"]
         prop.price = row["price"]
-        prop.area = row["area"]
+        # REQUIRED_COLUMNS names this number "Plot m²", even for a house.
+        # Keep the preview/key unchanged so re-imports still deduplicate, but
+        # never invent a built surface from the parcel column.
+        prop.plot_area = row["area"]
+        prop.area = row["area"] if row["area_type"] == "plot" else None
         prop.area_type = row["area_type"]
         prop.deal_type = "sale"
         prop.description = row["description"]

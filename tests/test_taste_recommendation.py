@@ -1518,8 +1518,10 @@ def test_sea_presence_matches_across_yes_and_likely_states(app):
     )
 
     reading = context.readings[candidate.id]
-    assert reading["group"] == "confident"
+    assert reading["group"] == "potential"
     assert reading["matches"][0]["aspect_id"] == "sea_view"
+    assert reading["matches"][0]["status"] == "claimed"
+    assert reading["coverage"]["supported"] == 0
 
 
 def test_supported_hard_violation_is_excluded_while_unknown_is_retained(app):
@@ -1752,6 +1754,7 @@ def test_compound_same_aspect_clause_stays_visible_and_cannot_hard_exclude(app):
     ).readings[candidate.id]
 
     assert reading["eligibility"] == "eligible"
+
     assert reading["matches"] == []
     assert reading["conflicts"] == []
     assert reading["needs_verification"] == []
@@ -1760,3 +1763,98 @@ def test_compound_same_aspect_clause_stays_visible_and_cannot_hard_exclude(app):
         reading["unapplied_clauses"][0]["reason"]
         == "multiple canonical values need an explicit relationship"
     )
+
+
+@pytest.mark.parametrize(
+    "condition", ["para reformar", "por reformar", "needs refurbishment"]
+)
+def test_stored_renovation_and_privacy_claims_lower_rank_without_hard_exclusion(
+    app, condition
+):
+    profile = _profile()
+    reference = _property(profile, is_favorite=True, owner_verdict="interested")
+    unknown = _property(profile, title="Unmeasured")
+    renovation = _property(
+        profile, title="Known repair", attributes={"condition": condition}
+    )
+    dense = _property(
+        profile,
+        title="Known neighbours",
+        enrichment={
+            "import": {
+                "source": "research_sheet",
+                "research": {
+                    "Key Positives": "Quiet house. " * 250,
+                    "Key Risks / Notes": "Measured isolation FAILS BADLY: 27 buildings within 100 m.",
+                },
+            }
+        },
+    )
+    attached = _property(profile, title="Casa adosada en venta")
+    clauses = taste_preferences.compile_signals(
+        [
+            {
+                "property_id": reference.id,
+                "profile_id": profile.id,
+                "verdict": "rejected",
+                "reason": "Никогда не хочу большую реконструкцию. Чужие дома близко — не подходит.",
+            }
+        ]
+    )
+    readings = taste_recommendation.build_context(
+        [unknown, renovation, dense, attached],
+        _recommendation_profile([reference.id], clauses=clauses),
+        {"state": "current"},
+    ).readings
+    for prop, aspect in (
+        (renovation, "house_condition"),
+        (dense, "neighbor_privacy"),
+        (attached, "neighbor_privacy"),
+    ):
+        reading = readings[prop.id]
+        assert reading["rank_value"] < readings[unknown.id]["rank_value"]
+        assert any(
+            f["aspect_id"] == aspect and f["status"] == "claimed"
+            for f in reading["conflicts"]
+        )
+        assert reading["eligibility"] == "eligible"
+        assert reading["hard_exclusions"] == []
+    assert (
+        readings[renovation.id]["conflicts"][0]["reason"] == "renovation_extent_unknown"
+    )
+    duplicated = taste_recommendation.build_context(
+        [renovation],
+        _recommendation_profile([reference.id], clauses=clauses + clauses),
+        {"state": "current"},
+    ).readings[renovation.id]
+    assert duplicated["rank_value"] == readings[renovation.id]["rank_value"]
+
+
+def test_subscription_shortfalls_penalize_reviewed_rows_but_unknowns_do_not(app):
+    profile = _profile()
+    profile.criteria = {"min_house_m2": 150, "min_plot_m2": 700}
+    db.session.commit()
+    good = _property(profile, title="Sufficient", area=200, plot_area=1000)
+    small = _property(
+        profile,
+        title="Reviewed small plot",
+        area=200,
+        plot_area=540,
+        owner_verdict="interested",
+    )
+    unknown = _property(profile, title="Unknown plot", area=200, plot_area=None)
+    ctx = taste_recommendation.build_context(
+        [good, small, unknown], _recommendation_profile([]), {"state": "current"}
+    )
+    assert ctx.readings[small.id]["rank_value"] < ctx.readings[good.id]["rank_value"]
+    assert ctx.readings[good.id]["rank_value"] > ctx.readings[unknown.id]["rank_value"]
+    assert {f["aspect_id"] for f in ctx.readings[good.id]["matches"]} == {
+        "house_area_m2",
+        "plot_area_m2",
+    }
+    assert ctx.readings[unknown.id]["group"] == "potential"
+    assert ctx.readings[unknown.id]["conflicts"] == []
+    assert (
+        ctx.readings[unknown.id]["needs_verification"][0]["aspect_id"] == "plot_area_m2"
+    )
+    assert ctx.readings[small.id]["eligibility"] == "eligible"

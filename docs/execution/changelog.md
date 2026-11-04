@@ -2,6 +2,16 @@
 
 ## 2026-11-04
 
+- Keep research-sheet parcel areas in `plot_area`, never in house area; add a
+  dry-run repair with original-import identity checks, rollback snapshots and
+  locked restore. Ambiguous house/outbuilding totals remain unmeasured.
+- Read stored renovation and privacy claims, including explicit attached-house
+  typology, for recommendation conflicts; preserve their provenance and avoid
+  hard exclusions from claims. Count repeated preferences once per aspect.
+- Reflect subscription area/budget shortfalls in recommendation rank even for
+  reviewed rows; support an explicit EUR budget with identical Python/SQL
+  criteria. A likely sea view remains potential evidence.
+
 - Accept Fotocasa's legacy listing-photo path `/images/anuncio/` alongside
   `/images/ads/`; seven live listings published photos that the old path guard
   discarded. Agency logos under `/images/client/` remain excluded.

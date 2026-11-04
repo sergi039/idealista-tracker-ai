@@ -702,6 +702,16 @@
                     {% endif %}
                 </p>
                 <ul class="list-unstyled small mb-0" id="subscription-criteria-bounds">
+                    {% if criteria_reading.bounds.max_price_eur %}
+                        <li>
+                            <strong>{{ t('criteria_bound_price')|format('%g'|format(criteria_reading.bounds.max_price_eur)) }}:</strong>
+                            {% if criteria_reading.verdict.checks.price is none %}
+                                {{ t('criteria_not_stated') }}
+                            {% else %}
+                                {{ '%g'|format(property.price) }} € — {{ t('criteria_price_meets') if criteria_reading.verdict.checks.price else t('criteria_price_exceeds') }}
+                            {% endif %}
+                        </li>
+                    {% endif %}
                     {% if criteria_reading.bounds.min_house_m2 %}
                         <li>
                             <strong>{{ t('criteria_bound_house')|format('%g'|format(criteria_reading.bounds.min_house_m2)) }}:</strong>

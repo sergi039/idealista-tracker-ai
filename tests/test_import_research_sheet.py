@@ -20,6 +20,7 @@ from models import Property, SearchProfile
 from services.coordinate_quality import portal_coordinate
 from tests import setup_test_environment
 from utils import import_research_sheet as sheet_import
+from utils import repair_research_areas
 
 SHEET = "Asturias research (Aug 2026)"
 
@@ -74,6 +75,30 @@ class TestReading:
         rows = sheet_import.read_rows(_csv(tmp_path, house), SHEET)
 
         assert rows[0]["area_type"] == "built"
+
+    def test_house_import_keeps_parcel_separate_and_reimport_identity(
+        self, app, tmp_path
+    ):
+        from services.subscription_criteria import effective_figures
+
+        with app.app_context():
+            profile = SearchProfile(name="House search", is_active=True)
+            db.session.add(profile)
+            db.session.commit()
+            rows = sheet_import.read_rows(
+                _csv(tmp_path, PLOT.replace(",Land,", ",House (reform),")), SHEET
+            )
+            source_id = sheet_import.source_email_id_for(rows[0])
+            result = sheet_import.insert_rows(rows, profile_id=profile.id, sheet=SHEET)
+            prop = db.session.get(Property, result["created"][0]["id"])
+            assert effective_figures(prop) == {
+                "house_m2": None,
+                "plot_m2": 1552,
+                "bare_land": False,
+            }
+            assert prop.source_email_id == source_id
+            sheet_import.mark_duplicates(rows)
+            assert rows[0]["status"] == sheet_import.STATUS_DUPLICATE
 
     def test_the_notes_say_they_are_notes(self, tmp_path):
         """`description` is read by the AI valuation as the advert's own words."""
@@ -383,3 +408,95 @@ class TestRowsThatShareALink:
 
             assert all(r["status"] == sheet_import.STATUS_DUPLICATE for r in again)
             assert Property.query.count() == 2
+
+
+def _legacy_house(
+    *, area=3500, positives="House 248 m2 plus two outbuildings of 123 and 129 m2"
+):
+    row = dict(
+        url="https://www.idealista.com/inmueble/12345678/",
+        title="House",
+        price=250000,
+        area=area,
+    )
+    prop = Property(
+        **row,
+        source_email_id=sheet_import.source_email_id_for(row),
+        area_type="built",
+        property_category="housing",
+        property_subtype="house",
+        enrichment={
+            "import": {
+                "source": "research_sheet",
+                "research": {"Key Positives": positives},
+            }
+        },
+    )
+    db.session.add(prop)
+    db.session.commit()
+    return prop
+
+
+def test_legacy_area_repair_is_dry_run_backed_up_idempotent_and_restorable(
+    app, tmp_path
+):
+    import json
+
+    with app.app_context():
+        prop = _legacy_house()
+        original = (prop.area, prop.plot_area)
+        assert repair_research_areas.repair()["count"] == 1
+        assert (prop.area, prop.plot_area) == original
+        snapshot = str(tmp_path / "areas.json")
+        result = repair_research_areas.repair(apply=True, snapshot_path=snapshot)
+        assert result["count"] == 1
+        assert (prop.area, prop.plot_area) == (248, 3500)
+        assert (
+            json.loads((tmp_path / "areas.json").read_text())["rows"][0]["before"][
+                "area"
+            ]
+            == 3500
+        )
+        assert repair_research_areas.repair()["count"] == 0
+        assert repair_research_areas.restore(snapshot, apply=True)["restored"] == [
+            prop.id
+        ]
+        assert (prop.area, prop.plot_area) == original
+
+
+@pytest.mark.parametrize(
+    "positives",
+    [
+        "317 m2 built but only 100 m2 usable - the rest is outbuildings.",
+        "Buildable 350 m2; outbuildings 123 m2.",
+        "House 248 m2; another house 270 m2.",
+    ],
+)
+def test_repair_does_not_invent_house_area_from_ambiguous_totals(
+    app, tmp_path, positives
+):
+    with app.app_context():
+        prop = _legacy_house(positives=positives)
+        repair_research_areas.repair(
+            apply=True, snapshot_path=str(tmp_path / "areas.json")
+        )
+        assert prop.area is None
+        assert prop.plot_area == 3500
+
+
+def test_area_repair_preserves_hand_edits_and_restore_refuses_newer_edit(app, tmp_path):
+    with app.app_context():
+        prop = _legacy_house()
+        prop.area = 270
+        db.session.commit()
+        assert repair_research_areas.repair()["count"] == 0
+        prop.area = 3500
+        db.session.commit()
+        snapshot = str(tmp_path / "areas.json")
+        repair_research_areas.repair(apply=True, snapshot_path=snapshot)
+        prop.plot_area = 3600
+        db.session.commit()
+        assert repair_research_areas.restore(snapshot, apply=True)["skipped"] == [
+            prop.id
+        ]
+        assert (prop.area, prop.plot_area) == (248, 3600)

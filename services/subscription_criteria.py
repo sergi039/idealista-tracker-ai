@@ -53,7 +53,7 @@ from services.property_classification_service import (
 
 logger = logging.getLogger(__name__)
 
-CRITERIA_KEYS = ("min_house_m2", "min_plot_m2")
+CRITERIA_KEYS = ("min_house_m2", "min_plot_m2", "max_price_eur")
 
 # A surface no parcel has. It is a NaN filter first and a sanity bound
 # second: PostgreSQL orders `NUMERIC 'NaN'` ABOVE every number, so
@@ -200,6 +200,9 @@ def read_verdict(prop: Any, criteria: Optional[Dict[str, float]]) -> Dict[str, A
     if "min_plot_m2" in criteria:
         value = figures["plot_m2"]
         checks["plot"] = None if value is None else value >= criteria["min_plot_m2"]
+    if "max_price_eur" in criteria:
+        value = _eur_price(prop)
+        checks["price"] = None if value is None else value <= criteria["max_price_eur"]
     if any(result is False for result in checks.values()):
         state = "fail"
     elif checks and all(result is True for result in checks.values()):
@@ -207,6 +210,28 @@ def read_verdict(prop: Any, criteria: Optional[Dict[str, float]]) -> Dict[str, A
     else:
         state = "unknown"
     return {"state": state, "checks": checks, "figures": figures}
+
+
+def _eur_price(prop: Any) -> Optional[float]:
+    if (getattr(prop, "currency", None) or "").strip(" ").upper() != "EUR":
+        return None
+    value = getattr(prop, "price", None)
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) and 0 < number < 1e9 else None
+
+
+def _credible_eur_price(model):
+    return and_(
+        func.upper(func.trim(func.coalesce(model.currency, ""))) == "EUR",
+        model.price.isnot(None),
+        model.price > 0,
+        model.price < 1e9,
+    )
 
 
 def _credible(column):
@@ -310,6 +335,10 @@ def failing_expression(model, criteria: Dict[str, float]):
             model.area < bound,
         )
         clauses.append(or_(plot_known_and_short, bare_land_short))
+    if "max_price_eur" in criteria:
+        clauses.append(
+            and_(_credible_eur_price(model), model.price > criteria["max_price_eur"])
+        )
     if not clauses:
         # No bounds means nothing can measurably fail.
         return and_(model.id.is_(None), model.id.isnot(None))
@@ -342,6 +371,10 @@ def passing_expression(model, criteria: Dict[str, float]):
                     model.area >= bound,
                 ),
             )
+        )
+    if "max_price_eur" in criteria:
+        clauses.append(
+            and_(_credible_eur_price(model), model.price <= criteria["max_price_eur"])
         )
     if not clauses:
         return and_(model.id.is_(None), model.id.isnot(None))
