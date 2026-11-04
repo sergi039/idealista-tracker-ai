@@ -225,3 +225,5 @@ not proof of major works on the main house. Negated condition phrases supply no
 positive condition claim. Legacy research area repair moves only the original
 source-key-proven plot figure and leaves house area unknown; explicit house
 measurements require a separately verified source, never prose inference.
+Conflicting exact areas still yield a claimed bound match or shortfall when
+every credible source agrees on that bound; the exact area remains a check.

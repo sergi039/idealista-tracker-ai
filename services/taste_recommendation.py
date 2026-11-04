@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import math
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Iterable
 
 from sqlalchemy import case, false
@@ -541,14 +542,30 @@ def _reading(
             "evidence": f"{bound_key}={criteria[bound_key]}",
             "hard": False,
         }
-        # A typed figure and a conflicting source claim cannot establish a
-        # positive minimum-area match. Keep the disagreement visible without
-        # turning uncertainty into a measured failure or hard exclusion.
+        # Disagreement about the exact surface is not necessarily disagreement
+        # about a bound. Reuse the criteria reader for each reported surface:
+        # all below still means a shortfall; straddling means unknown. Keep
+        # the source disagreement visible even when the bound is unanimous.
         if _strongest_status(_rows(descriptor, aspect_id)) == "conflicting":
-            facet["status"] = "conflicting"
-            needs.append(facet)
-            continue
-        if passed is not None:
+            needs.append({**facet, "status": "conflicting"})
+            if check not in {"house", "plot"}:
+                continue
+            verdicts = {
+                subscription_criteria.read_verdict(
+                    SimpleNamespace(
+                        area=row.get("value"),
+                        plot_area=row.get("value"),
+                        area_type="built",
+                    ),
+                    {bound_key: criteria[bound_key]},
+                )["checks"][check]
+                for row in _rows(descriptor, aspect_id)
+            }
+            if verdicts not in ({True}, {False}):
+                continue
+            passed = verdicts.pop()
+            facet["status"] = "claimed"
+        if passed is not None and facet["status"] == "supported":
             supported += 1
         if passed is False:
             conflicts.append(facet)

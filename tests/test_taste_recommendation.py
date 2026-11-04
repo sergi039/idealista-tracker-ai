@@ -1922,3 +1922,39 @@ def test_disagreeing_plot_sources_do_not_earn_a_minimum_area_match(app):
         for f in reading["needs_verification"]
     )
     assert reading["eligibility"] == "eligible"
+
+
+@pytest.mark.parametrize(
+    ("canonical", "claim", "outcome"),
+    [(400, 518, False), (1000, 800, True), (800, 518, None)],
+)
+def test_disagreeing_areas_preserve_unanimous_bound_verdict(
+    app, canonical, claim, outcome
+):
+    profile = _profile()
+    profile.criteria = {"min_house_m2": 150, "min_plot_m2": 700}
+    db.session.commit()
+    candidate = _property(
+        profile,
+        title="Reviewed disputed plot",
+        area=200,
+        plot_area=canonical,
+        owner_verdict="interested",
+        attributes={"parcel_area_m2": claim},
+    )
+    unknown = _property(profile, title="Unknown plot", area=200, plot_area=None)
+    ctx = taste_recommendation.build_context(
+        [candidate, unknown], _recommendation_profile([]), {"state": "current"}
+    )
+    reading = ctx.readings[candidate.id]
+    matches = [f for f in reading["matches"] if f["aspect_id"] == "plot_area_m2"]
+    conflicts = [f for f in reading["conflicts"] if f["aspect_id"] == "plot_area_m2"]
+    assert bool(matches) is (outcome is True)
+    assert bool(conflicts) is (outcome is False)
+    assert any(f["aspect_id"] == "plot_area_m2" for f in reading["needs_verification"])
+    assert reading["eligibility"] == "eligible"
+    if outcome is False:
+        assert reading["rank_value"] < ctx.readings[unknown.id]["rank_value"]
+        assert conflicts[0]["hard"] is False
+    elif outcome is True:
+        assert matches[0]["status"] == "claimed"
