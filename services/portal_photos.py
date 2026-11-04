@@ -51,6 +51,7 @@ property page could not make, because it had no data at all to make it from.
 
 import logging
 import re
+from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qsl, urlparse
 
@@ -158,7 +159,58 @@ def normalise_photo_url(value: Any) -> Optional[str]:
         return None
     if _has_credential(url):
         return None
+    parsed = urlparse(url)
+    # Milanuncios' bare media API returns 404; its published email rendition
+    # returns image/jpeg (measured 2026-11-04). Apply on read too for old rows.
+    if (
+        parsed.hostname in ("images.milanuncios.com", "images-re.milanuncios.com")
+        and parsed.path.startswith("/api/v1/ma-ad-media-pro/images/")
+        and not parsed.query
+        and not parsed.fragment
+    ):
+        return url + "?rule=hw396_70"
     return url
+
+
+class _IdealistaPhotos(HTMLParser):
+    """Bind a photo to the listing anchor wrapping it, never to the whole mail."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.listing_id = None
+        self.entries = {}
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == "a":
+            self.listing_id = None
+            try:
+                link = urlparse(attrs.get("href") or "")
+                match = re.fullmatch(r"/(?:[a-z]{2}/)?inmueble/(\d+)/?", link.path)
+                if link.hostname in ("idealista.com", "www.idealista.com") and match:
+                    self.listing_id = int(match.group(1))
+            except ValueError:
+                pass
+        elif tag == "img" and self.listing_id:
+            url = normalise_photo_url(attrs.get("src"))
+            if url:
+                parsed = urlparse(url)
+                if (
+                    re.fullmatch(r"img\d+\.idealista\.com", parsed.hostname or "")
+                    and "/id.pro.es.image.master/" in parsed.path
+                ):
+                    self.entries.setdefault(self.listing_id, []).append(_entry(url))
+
+    def handle_endtag(self, tag):
+        if tag == "a":
+            self.listing_id = None
+
+
+def from_idealista_email(markup: str) -> Dict[int, Dict[str, Any]]:
+    """Only observed listing photos; no photo in an email is not 'none published'."""
+    parser = _IdealistaPhotos()
+    parser.feed(markup or "")
+    return {key: _capture(items, len(items)) for key, items in parser.entries.items()}
 
 
 def _entry(url: Optional[str], kind: Any = None) -> Optional[Dict[str, Any]]:

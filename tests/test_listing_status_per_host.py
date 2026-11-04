@@ -17,6 +17,7 @@ would have been recorded as a live listing. That is the false confirmation of
 """
 
 from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 
@@ -85,7 +86,11 @@ class TestServiceUsesThem:
             calls.append(url)
             if "idealista" in url:
                 return SimpleNamespace(status_code=403, text="blocked", url=url)
-            return SimpleNamespace(status_code=200, text="a listing", url=url)
+            return SimpleNamespace(
+                status_code=200,
+                text=Path("tests/data/fotocasa_listing_190280914.html").read_text(),
+                url=url,
+            )
 
         monkeypatch.setattr(
             "services.listing_status_service.request_with_retries",

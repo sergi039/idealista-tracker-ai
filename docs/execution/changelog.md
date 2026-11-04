@@ -1,5 +1,15 @@
 # Execution changelog
 
+## 2026-11-04
+
+- Repair Milanuncios photo renditions for existing and new listings; capture
+  Idealista photos from the matching listing anchor in alert emails.
+- Verify Fotocasa and Milanuncios against their listing payloads instead of
+  translated page chrome. Recognise Fotocasa's explicit missing-property redirect.
+- Add a paced, refusal-aware availability audit with a separate snapshot-backed
+  apply and baseline checks under the existing row lock; add an idempotent
+  Idealista email-photo backfill without changing the ingestion cursor.
+
 ## 2026-11-03
 
 - Put Recommendations first in the result controls, alongside its status and
