@@ -478,11 +478,11 @@ def test_legacy_restore_preserves_frozen_urls_without_restoring_no(
     )
     if legacy_marker:
         for row in rows[:3]:
+            old_marker = copy.deepcopy(row.enrichment[feedback.EXPOSURE_KEY])
+            old_marker.pop("listing_identities")
             row.enrichment = {
                 **row.enrichment,
-                feedback.EXPOSURE_KEY: {
-                    "row_ids": row.enrichment[feedback.KEY]["row_ids"]
-                },
+                feedback.EXPOSURE_KEY: old_marker,
             }
     db.session.commit()
     original_url = rows[0].url
@@ -553,6 +553,33 @@ def test_recommendation_context_can_reserve_urls_without_an_application_or_datab
     )
     assert context.readings[rows[1].id]["eligibility"] == "excluded"
     assert context.readings[rows[2].id]["eligibility"] == "eligible"
+
+
+def test_new_import_cannot_claim_missing_legacy_url_history_was_recovered(
+    scope, tmp_path
+):
+    """A complete new receipt must not hide an older untraceable exposure."""
+    from services import taste_evaluation
+
+    _, profile, rows = scope
+    rows[0].enrichment = {
+        **rows[0].enrichment,
+        feedback.EXPOSURE_KEY: {"row_ids": [9999]},
+    }
+    db.session.commit()
+    manifest, answers = batch(profile, rows)
+    receipt = tmp_path / "new-with-legacy-gap.json"
+    feedback.import_batch(
+        manifest, answers, profile_id=profile.id, apply=True, snapshot_path=receipt
+    )
+    for restored in (False, True):
+        if restored:
+            feedback.restore_batch(json.loads(receipt.read_text()), apply=True)
+        result = taste_evaluation.build_manifest(
+            rows, learning_property_ids=set(), activity_property_ids=set()
+        )
+        assert result["incomplete_exposure_row_ids"] == [rows[0].id]
+        assert 9999 in feedback.exposed_alias_ids(rows[0])
 
 
 @pytest.mark.parametrize("new_reason", ["", "Хочу участок, а не дом."])

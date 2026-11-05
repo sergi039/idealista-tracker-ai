@@ -152,7 +152,12 @@ def exposure_report(props: Any) -> dict[str, Any]:
     incomplete = sorted(
         prop.id
         for prop in props
-        if has_recorded_feedback(prop) and not listing_reservations(prop)
+        if has_recorded_feedback(prop)
+        and (
+            not listing_reservations(prop)
+            or isinstance((prop.enrichment or {}).get(EXPOSURE_KEY), dict)
+            and prop.enrichment[EXPOSURE_KEY].get("url_history_incomplete") is True
+        )
     )
     return {"incomplete_exposure_row_ids": incomplete} if incomplete else {}
 
@@ -210,6 +215,15 @@ def _retain_exposure(base: dict, record: dict) -> dict:
         )
     }
     reservations = _record_reservations(previous) | _record_reservations(record)
+    incomplete = previous.get("url_history_incomplete") is True or (
+        base.get(EXPOSURE_KEY) is not None
+        and not _record_reservations(previous)
+        and not (
+            previous.get("source_sha256") == record["source_sha256"]
+            and previous.get("property_id") == record["property_id"]
+            and set(previous["row_ids"]) <= set(record["row_ids"])
+        )
+    )
     return {
         **previous,
         "row_ids": sorted(set(previous.get("row_ids", [])) | set(record["row_ids"])),
@@ -217,6 +231,7 @@ def _retain_exposure(base: dict, record: dict) -> dict:
             {"profile_id": profile_id, "url": url}
             for profile_id, url in sorted(reservations)
         ],
+        **({"url_history_incomplete": True} if incomplete else {}),
     }
 
 

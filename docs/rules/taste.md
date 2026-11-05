@@ -313,7 +313,9 @@ never restores a rolled-back answer. New imports union scoped URL identities
 into exposure; CAS restore also retains them before removing legacy feedback.
 Blind manifests report `incomplete_exposure_row_ids` when retained legacy
 markers lack URL history; they cannot reconstruct identities already lost with
-all retained rows. Existing conservative entity deduplication remains intact.
+all retained rows. A later complete import cannot erase an older unknown URL
+history; only a source-matched receipt can fill a legacy marker's gap.
+Existing conservative entity deduplication remains intact.
 
 Stored hard clauses exclude only current candidates (#602). A dirty snapshot
 can still explain its old conflicts but cannot hide a listing by a removed or
