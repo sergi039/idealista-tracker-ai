@@ -256,6 +256,7 @@
 /* Keep the closed disclosure beside the copy, rather than below the whole row.
    Opening it restores the full object column for unabridged evidence. */
 @media (min-width: 768px) {
+    .workspace-result-tools { flex: 1 1 auto; min-width: 0; justify-content: flex-end; }
     .workspace-page-heading h1 { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--ui-space-3); }
     .workspace-page-heading .properties-last-sync { margin: 0 !important; }
     .workspace-location-line { display: flex; flex-wrap: wrap; column-gap: var(--ui-space-2); }
