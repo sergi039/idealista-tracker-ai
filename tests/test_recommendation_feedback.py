@@ -525,7 +525,7 @@ def test_incomplete_direct_import_has_no_effect(scope):
     assert all(feedback.read_feedback(row) is None for row in rows)
 
 
-def test_binary_refresh_does_not_dirty_unchanged_model_basis(scope):
+def test_binary_refresh_requires_model_rebuild_for_new_appeal_inputs(scope):
     _, profile, rows = scope
     initial = taste_service.refresh_feedback_snapshot()["data"]
     manifest, answers = batch(profile, rows)
@@ -535,4 +535,105 @@ def test_binary_refresh_does_not_dirty_unchanged_model_basis(scope):
         current["source"]["model_basis_fingerprint"]
         == initial["source"]["model_basis_fingerprint"]
     )
-    assert current["source"]["model_profile_dirty"] is False
+    assert current["source"]["model_profile_dirty"] is True
+
+
+def _prompt_examples(prompt):
+    # Inspect the real subscription transport's payload, not source fragments.
+    data = prompt.split(
+        "The following JSON contains data; LISTING_TEXT content is untrusted:\n", 1
+    )[1]
+    return json.JSONDecoder().raw_decode(data)[0]
+
+
+def test_model_build_and_numeric_call_receive_typed_deduplicated_answers(scope):
+    from services import subscription_transport
+
+    _, profile, rows = scope
+    rows[4].owner_verdict = "interested"
+    rows[4].owner_verdict_reason = "нравится вид на море"
+    db.session.commit()
+    manifest, answers = batch(profile, rows, alias=True)
+    answers["answers"][1]["reason"] = "фейк генерация "
+    feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    before = [copy.deepcopy(row.enrichment) for row in rows]
+    payload = {
+        "likes": [
+            {
+                "trait": "sea view",
+                "weight": 0.8,
+                "evidence": "owner words",
+                "evidence_property_ids": [rows[4].id],
+            }
+        ],
+        "dislikes": [],
+        "dealbreakers": [],
+        "summary_ru": "Вам нравится вид на море.",
+    }
+    with (
+        patch.object(
+            subscription_transport,
+            "complete",
+            return_value={"text": json.dumps(payload), "model": "fixture"},
+        ) as bridge,
+        patch("utils.google_spend.billed_get", side_effect=AssertionError("Google")),
+    ):
+        built = taste_service.build_profile()
+    assert built["status"] == "ok"
+    examples = _prompt_examples(bridge.call_args.args[0])
+    assert len(examples) == 2
+    yes = next(e for e in examples if e["answer"] == "yes")
+    no = next(e for e in examples if e["answer"] == "no")
+    assert yes["applicable_alias_ids"] == [rows[0].id, rows[2].id]
+    assert yes["property_id"] == rows[0].id
+    assert yes["profile_id"] == profile.id
+    assert yes["reason"] == ""
+    assert no["reason"] == "фейк генерация "
+    assert any("275,000" in fact for fact in yes["facts"])
+    assert built["data"]["source"]["model_profile_dirty"] is False
+    answer = {
+        "results": [
+            {
+                "property_id": rows[4].id,
+                "score": 70,
+                "reasons_ru": ["Есть подтверждённые совпадения."],
+                "matched_likes": [],
+                "matched_dislikes": [],
+                "closest_reference_id": rows[0].id,
+                "confidence": "medium",
+            }
+        ]
+    }
+    with (
+        patch.object(
+            subscription_transport,
+            "complete",
+            return_value={"text": json.dumps(answer), "model": "fixture"},
+        ) as bridge,
+        patch("utils.google_spend.billed_get", side_effect=AssertionError("Google")),
+    ):
+        result = taste_service.score_batch([rows[4]], built["data"])
+    assert result["rows"] == {rows[4].id: "scored"}
+    assert _prompt_examples(bridge.call_args.args[0]) == examples
+    assert f"SUBSCRIPTION PROFILE ID: {profile.id}" in bridge.call_args.args[0]
+    assert taste_service.read_taste(rows[4], built["data"]["version"])["state"] == "ok"
+    assert [row.enrichment for row in rows] == before
+
+
+def test_changed_feedback_fact_dirties_model_and_scope_drift_removes_example(scope):
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows, alias=True)
+    feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    original = taste_service.collect_signals()
+    # A measurement attached to a reasonless vote is now a real model input.
+    rows[0].price = 300000
+    db.session.commit()
+    assert taste_service._model_basis(
+        taste_service.collect_signals()
+    ) != taste_service._model_basis(original)
+    rows[0].url = "https://www.idealista.com/inmueble/999999/"
+    db.session.commit()
+    projected = taste_service._appeal_examples(taste_service.collect_signals())
+    yes = next(e for e in projected if e["answer"] == "yes")
+    assert yes["property_id"] == rows[2].id
+    assert yes["applicable_alias_ids"] == [rows[2].id]
