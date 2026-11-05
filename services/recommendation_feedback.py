@@ -147,17 +147,45 @@ def listing_is_reserved(prop: Any, reservations: set[tuple[int, str]]) -> bool:
     ) in reservations
 
 
+def _covers_legacy_exposure(marker: dict, record: Any) -> bool:
+    """Only the same frozen card's receipt can recover an ID-only marker."""
+    if not isinstance(record, dict) or not _record_reservations(record):
+        return False
+    source = marker.get("source_sha256")
+    old_ids, record_ids = marker.get("row_ids"), record.get("row_ids")
+    return (
+        isinstance(source, str)
+        and re.fullmatch(r"[a-f0-9]{64}", source) is not None
+        and source == record.get("source_sha256")
+        and type(marker.get("property_id")) is int
+        and marker["property_id"] == record.get("property_id")
+        and isinstance(old_ids, list)
+        and bool(old_ids)
+        and isinstance(record_ids, list)
+        and all(type(i) is int and i > 0 for i in old_ids + record_ids)
+        and set(old_ids) <= set(record_ids)
+    )
+
+
+def _exposure_incomplete(block: dict, incoming: dict | None = None) -> bool:
+    marker = block.get(EXPOSURE_KEY)
+    if marker is None:
+        return block.get(KEY) is not None and not _record_reservations(block[KEY])
+    if not isinstance(marker, dict) or marker.get("url_history_incomplete") is True:
+        return True
+    if _record_reservations(marker):
+        return False
+    return not any(
+        _covers_legacy_exposure(marker, record) for record in (block.get(KEY), incoming)
+    )
+
+
 def exposure_report(props: Any) -> dict[str, Any]:
-    """Legacy ID-only markers cannot prove their deleted URL history complete."""
+    """Legacy history must match its source, not merely some current URL."""
     incomplete = sorted(
         prop.id
         for prop in props
-        if has_recorded_feedback(prop)
-        and (
-            not listing_reservations(prop)
-            or isinstance((prop.enrichment or {}).get(EXPOSURE_KEY), dict)
-            and prop.enrichment[EXPOSURE_KEY].get("url_history_incomplete") is True
-        )
+        if has_recorded_feedback(prop) and _exposure_incomplete(prop.enrichment)
     )
     return {"incomplete_exposure_row_ids": incomplete} if incomplete else {}
 
@@ -214,16 +242,12 @@ def _retain_exposure(base: dict, record: dict) -> dict:
             "source_sha256",
         )
     }
-    reservations = _record_reservations(previous) | _record_reservations(record)
-    incomplete = previous.get("url_history_incomplete") is True or (
-        base.get(EXPOSURE_KEY) is not None
-        and not _record_reservations(previous)
-        and not (
-            previous.get("source_sha256") == record["source_sha256"]
-            and previous.get("property_id") == record["property_id"]
-            and set(previous["row_ids"]) <= set(record["row_ids"])
-        )
+    reservations = (
+        _record_reservations(previous)
+        | _record_reservations(base.get(KEY))
+        | _record_reservations(record)
     )
+    incomplete = _exposure_incomplete(base, record)
     return {
         **previous,
         "row_ids": sorted(set(previous.get("row_ids", [])) | set(record["row_ids"])),

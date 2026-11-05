@@ -627,6 +627,67 @@ def test_dirty_snapshot_cannot_hide_by_removed_rule_but_current_no_still_hides(
     assert rows[4].id in final and rows[1].id not in final
 
 
+def test_another_receipt_cannot_replace_a_live_alias_rating(scope):
+    """Refute reviewer scenario: receipt B cannot overwrite a live receipt A."""
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows, alias=True)
+    feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    db.session.delete(rows[0])
+    db.session.commit()
+    before = copy.deepcopy(rows[2].enrichment)
+    second_manifest, second_answers = batch(profile, [rows[2], rows[3]])
+    with pytest.raises(ValueError, match="another rating"):
+        feedback.import_batch(
+            second_manifest, second_answers, profile_id=profile.id, apply=True
+        )
+    assert rows[2].enrichment == before
+
+
+def test_preupgrade_mixed_receipt_and_legacy_exposure_discloses_missing_history(
+    scope, tmp_path
+):
+    """A pre-upgrade A -> rollback -> B sequence has B URLs but no A URL history."""
+    from services import taste_evaluation
+
+    _, profile, rows = scope
+    first_manifest, first_answers = batch(profile, rows, alias=True)
+    first_receipt = tmp_path / "first.json"
+    feedback.import_batch(
+        first_manifest,
+        first_answers,
+        profile_id=profile.id,
+        apply=True,
+        snapshot_path=first_receipt,
+    )
+    old_marker = copy.deepcopy(rows[2].enrichment[feedback.EXPOSURE_KEY])
+    old_marker.pop("listing_identities")
+    feedback.restore_batch(json.loads(first_receipt.read_text()), apply=True)
+    db.session.delete(rows[0])
+    db.session.commit()
+    second_manifest, second_answers = batch(profile, [rows[2], rows[3]])
+    second_receipt = tmp_path / "second.json"
+    feedback.import_batch(
+        second_manifest,
+        second_answers,
+        profile_id=profile.id,
+        apply=True,
+        snapshot_path=second_receipt,
+    )
+    # Persisted by the pre-upgrade writer: it unions IDs but retains A's
+    # provenance; B's current receipt does not reconstruct A's deleted URL.
+    rows[2].enrichment = {**rows[2].enrichment, feedback.EXPOSURE_KEY: old_marker}
+    db.session.commit()
+    for restored in (False, True):
+        if restored:
+            feedback.restore_batch(json.loads(second_receipt.read_text()), apply=True)
+        result = taste_evaluation.build_manifest(
+            Property.query.all(),
+            learning_property_ids=set(),
+            activity_property_ids=set(),
+        )
+        assert result["incomplete_exposure_row_ids"] == [rows[2].id]
+
+
 def test_missing_primary_uses_only_verified_surviving_frozen_alias_once(scope):
     _, profile, rows = scope
     manifest, answers = batch(profile, rows, alias=True)

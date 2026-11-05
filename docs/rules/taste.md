@@ -330,6 +330,8 @@ Blind manifests report `incomplete_exposure_row_ids` when retained legacy
 markers lack URL history; they cannot reconstruct identities already lost with
 all retained rows. A later complete import cannot erase an older unknown URL
 history; only a source-matched receipt can fill a legacy marker's gap.
+This also applies to pre-upgrade mixed states: a current receipt's URLs do
+not prove a different old receipt's ID-only exposure history complete.
 Existing conservative entity deduplication remains intact.
 
 Stored hard clauses exclude only current candidates (#602). A dirty snapshot
