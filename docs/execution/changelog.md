@@ -13,6 +13,8 @@
   rubric scores; never infer residential neighbours from industrial scan counts.
   Reserve retained feedback from later blind evaluation; do not infer aversions
   from reasonless binary answers.
+- Apply the Werkzeug 3.1.9 and pyasn1 0.6.5 security fixes surfaced by
+  Dependabot after the initial pending dependency updates were integrated.
 
 - Integrate the pending anyio, urllib3, oauthlib, certifi and dnspython updates
   together against the current application. Retain the canonical project
