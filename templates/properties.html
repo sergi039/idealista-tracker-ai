@@ -1554,6 +1554,7 @@
                                             data-listing-status="{{ listing_verdict_for(p).state }}">
                                             <td class="lands-title-col col-title">
     {% set _row_photos = photos_for(p) %}
+    <div class="workspace-property-overview{{ ' workspace-with-photo' if _row_photos.state == 'captured' else '' }}">
     <div class="workspace-property-summary"><div class="workspace-photo"{% if _row_photos.state != 'captured' %} hidden{% endif %}>{% if _row_photos.state == 'captured' %}
                                                     <a href="{{ url_for('main.property_detail', property_id=p.id) }}"
                                                        title="{{ tn('photos_captured', _row_photos.count) }}">
@@ -1573,7 +1574,7 @@
                                                 {# The coords column is dropped on a portrait tablet, so the
                                                    municipality moves here rather than off the page; CSS shows
                                                    this line only in the width band where that happens. #}
-                                                {% if p.municipality %}
+                                                <div class="workspace-location-line">{% if p.municipality %}
                                                     <div class="workspace-municipality">
                                                         <i class="fas fa-map-marker-alt me-1"></i>{{ p.municipality }}
                                                     </div>
@@ -1581,7 +1582,7 @@
                                                 {% if p.location_lat is not none and p.location_lon is not none %}
                                                     {% if p.location_accuracy == 'approximate' %}<div class="workspace-location-warning">{{ t('approximate_origin_short') }}</div>
                                                     {% elif p.location_accuracy != 'precise' %}<div class="workspace-location-warning">{{ t('workspace_accuracy_unknown') }}</div>{% endif %}
-                                                {% else %}<div class="workspace-location-warning">{{ t('not_located_short') }}</div>{% endif %}
+                                                {% else %}<div class="workspace-location-warning">{{ t('not_located_short') }}</div>{% endif %}</div>
                                                 <div class="workspace-property-facts">
                                                     {% if show_subscription %}{{ subscription_badge(p, profile_names) }}{% endif %}
                                     {{ source_badge(p) }}
@@ -1640,7 +1641,7 @@
             {% if p.location_lat is not none and p.location_lon is not none %}<a class="btn btn-outline-secondary" href="{{ url_for('main.map_view', **dict(map_args, focus=p.id)) }}">{{ t('map') }}</a>{% endif %}
             {% if p.url %}<a class="btn btn-outline-secondary" href="{{ p.url }}" target="_blank" rel="noopener">{{ t('workspace_source') }}</a>{% endif %}
         </div>
-    </div></details>
+    </div></details></div>
 </td>
 <td class="col-price">{% if p.price %}
                                                     <div>

@@ -1,5 +1,11 @@
 # Execution changelog
 
+## 2026-11-05
+
+- Compact catalog rows and the heading: give titles more width, align numeric
+  and action columns to the top, and keep closed details below the photo.
+  Expanded evidence and missing-photo rows retain their full readable content.
+
 ## 2026-11-04
 
 - Keep research-sheet parcel areas in `plot_area`, never in house area; add a
