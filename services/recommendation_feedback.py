@@ -109,6 +109,156 @@ def read_feedback(prop: Any) -> dict[str, Any] | None:
     return copy.deepcopy(item)
 
 
+def _record_reservations(record: Any) -> set[tuple[int, str]]:
+    reservations = set()
+    if not isinstance(record, dict):
+        return reservations
+    profile_id = record.get("profile_id")
+    if type(profile_id) is int:
+        urls = record.get("frozen_alias_urls")
+        for url in urls if isinstance(urls, list) else []:
+            if identity := _listing_identity(url):
+                reservations.add((profile_id, identity))
+    history = record.get("listing_identities")
+    for entry in history if isinstance(history, list) else []:
+        if (
+            isinstance(entry, dict)
+            and type(entry.get("profile_id")) is int
+            and (identity := _listing_identity(entry.get("url")))
+        ):
+            reservations.add((entry["profile_id"], identity))
+    return reservations
+
+
+def listing_reservations(prop: Any) -> set[tuple[int, str]]:
+    """Exact frozen URLs, scoped to their original subscription, never fuzzy."""
+    block = getattr(prop, "enrichment", None)
+    if not isinstance(block, dict):
+        return set()
+    return _record_reservations(block.get(KEY)) | _record_reservations(
+        block.get(EXPOSURE_KEY)
+    )
+
+
+def listing_is_reserved(prop: Any, reservations: set[tuple[int, str]]) -> bool:
+    return (
+        getattr(prop, "search_profile_id", None),
+        _listing_identity(getattr(prop, "url", None)),
+    ) in reservations
+
+
+def _covers_legacy_exposure(marker: dict, record: Any) -> bool:
+    """Only the same frozen card's receipt can recover an ID-only marker."""
+    if not isinstance(record, dict) or not _record_reservations(record):
+        return False
+    source = marker.get("source_sha256")
+    old_ids, record_ids = marker.get("row_ids"), record.get("row_ids")
+    return (
+        isinstance(source, str)
+        and re.fullmatch(r"[a-f0-9]{64}", source) is not None
+        and source == record.get("source_sha256")
+        and type(marker.get("property_id")) is int
+        and marker["property_id"] == record.get("property_id")
+        and isinstance(old_ids, list)
+        and bool(old_ids)
+        and isinstance(record_ids, list)
+        and all(type(i) is int and i > 0 for i in old_ids + record_ids)
+        and set(old_ids) <= set(record_ids)
+    )
+
+
+def _exposure_incomplete(block: dict, incoming: dict | None = None) -> bool:
+    marker = block.get(EXPOSURE_KEY)
+    if marker is None:
+        return block.get(KEY) is not None and not _record_reservations(block[KEY])
+    if not isinstance(marker, dict) or marker.get("url_history_incomplete") is True:
+        return True
+    if _record_reservations(marker):
+        return False
+    return not any(
+        _covers_legacy_exposure(marker, record) for record in (block.get(KEY), incoming)
+    )
+
+
+def exposure_report(props: Any) -> dict[str, Any]:
+    """Legacy history must match its source, not merely some current URL."""
+    incomplete = sorted(
+        prop.id
+        for prop in props
+        if has_recorded_feedback(prop) and _exposure_incomplete(prop.enrichment)
+    )
+    return {"incomplete_exposure_row_ids": incomplete} if incomplete else {}
+
+
+def load_negative_listing_feedback(props: Any) -> dict[tuple[int, str], dict]:
+    """Load scoped current No receipts outside the catalog's other filters."""
+    profile_ids = {
+        prop.search_profile_id for prop in props if prop.search_profile_id is not None
+    }
+    if not profile_ids:
+        return {}
+    return negative_listing_feedback(
+        Property.query.filter(
+            Property.search_profile_id.in_(profile_ids),
+            Property.enrichment[KEY].as_string().isnot(None),
+        ).order_by(Property.id)
+    )
+
+
+def negative_listing_feedback(props: Any) -> dict[tuple[int, str], dict]:
+    """Index current No receipts without a query or application context.
+
+    A live, URL-validated carrier authorizes its exact frozen aliases only in
+    that subscription. Exposure alone never restores a rolled-back answer.
+    """
+    negatives = {}
+    for row in props:
+        record = read_feedback(row)
+        if record and record["answer"] == "no":
+            # Do not promote unrelated historical exposure into a No.
+            for reservation in _record_reservations(record):
+                negatives[reservation] = record
+    return negatives
+
+
+def feedback_for_listing(prop: Any, negatives: dict) -> dict[str, Any] | None:
+    return negatives.get(
+        (
+            getattr(prop, "search_profile_id", None),
+            _listing_identity(getattr(prop, "url", None)),
+        )
+    ) or read_feedback(prop)
+
+
+def _retain_exposure(base: dict, record: dict) -> dict:
+    """Union exposure under the import/restore row lock; rollback is monotonic."""
+    previous = base.get(EXPOSURE_KEY) or {
+        name: record[name]
+        for name in (
+            "schema_version",
+            "batch_id",
+            "property_id",
+            "row_ids",
+            "source_sha256",
+        )
+    }
+    reservations = (
+        _record_reservations(previous)
+        | _record_reservations(base.get(KEY))
+        | _record_reservations(record)
+    )
+    incomplete = _exposure_incomplete(base, record)
+    return {
+        **previous,
+        "row_ids": sorted(set(previous.get("row_ids", [])) | set(record["row_ids"])),
+        "listing_identities": [
+            {"profile_id": profile_id, "url": url}
+            for profile_id, url in sorted(reservations)
+        ],
+        **({"url_history_incomplete": True} if incomplete else {}),
+    }
+
+
 def validate_batch(
     manifest: Any, feedback: Any, profile_id: int
 ) -> list[dict[str, Any]]:
@@ -283,25 +433,7 @@ def import_batch(
                     # Rolling back the ranking signal cannot undo the fact
                     # that the owner has already seen this frozen card.
                     updated = {**base, KEY: item}
-                    if base.get(EXPOSURE_KEY) is None:
-                        updated[EXPOSURE_KEY] = {
-                            name: record[name]
-                            for name in (
-                                "schema_version",
-                                "batch_id",
-                                "property_id",
-                                "row_ids",
-                                "source_sha256",
-                            )
-                        }
-                    else:
-                        updated[EXPOSURE_KEY] = {
-                            **base[EXPOSURE_KEY],
-                            "row_ids": sorted(
-                                set(base[EXPOSURE_KEY]["row_ids"])
-                                | set(record["row_ids"])
-                            ),
-                        }
+                    updated[EXPOSURE_KEY] = _retain_exposure(base, item)
                     merge_json_object_changes_under_lock(
                         row, "enrichment", base=base, updated=updated
                     )
@@ -377,6 +509,9 @@ def restore_batch(snapshot: Any, *, apply: bool = False) -> dict[str, Any]:
                 row = by_id[item["id"]]
                 base = copy.deepcopy(row.enrichment or {})
                 updated = copy.deepcopy(base)
+                # Upgrade legacy ID-only exposure before removing its last
+                # frozen URL receipt; never resurrect the ranking signal.
+                updated[EXPOSURE_KEY] = _retain_exposure(base, item["after"]["value"])
                 if item["before"]["present"]:
                     updated[KEY] = item["before"]["value"]
                 else:

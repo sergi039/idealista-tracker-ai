@@ -61,6 +61,9 @@ def build_manifest(
         *(recommendation_feedback.exposed_alias_ids(prop) for prop in rows)
     )
     excluded_row_ids |= historical_aliases
+    reserved_listings = set().union(
+        *(recommendation_feedback.listing_reservations(prop) for prop in rows)
+    )
 
     def excluded(prop: Any) -> bool:
         return (
@@ -68,6 +71,7 @@ def build_manifest(
             or bool(getattr(prop, "is_favorite", False))
             or getattr(prop, "owner_verdict", None) is not None
             or recommendation_feedback.has_recorded_feedback(prop)
+            or recommendation_feedback.listing_is_reserved(prop, reserved_listings)
         )
 
     # Every known-label/activity row reserves its entity before candidate
@@ -107,4 +111,5 @@ def build_manifest(
         "basis_fingerprint": hashlib.sha256(basis.encode()).hexdigest(),
         "owner_labels_included": False,
         "utility_claim": "not_measured",
+        **recommendation_feedback.exposure_report(rows),
     }
