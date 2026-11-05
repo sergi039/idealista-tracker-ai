@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import json
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -534,6 +535,24 @@ def test_drifted_carrier_cannot_transfer_its_no_to_reimported_url(scope, change)
         Property.query.all(), learning_property_ids=set(), activity_property_ids=set()
     )
     assert new.id not in {item["property_id"] for item in result["candidates"]}
+
+
+def test_recommendation_context_can_reserve_urls_without_an_application_or_database():
+    """Keep the standalone descriptor/reranker contract found by the full suite."""
+    rows = [
+        Property(id=ident, search_profile_id=24, url=f"https://example.com/{ident}")
+        for ident in (1, 2, 3)
+    ]
+    manifest, answers = batch(SimpleNamespace(id=24), rows)
+    answers["answers"][0]["answer"] = "no"
+    record = feedback.validate_batch(manifest, answers, 24)[0]
+    rows[0].enrichment = {feedback.KEY: {**record, "listing_url": rows[0].url}}
+    rows[1].url = rows[0].url + "?utm_source=reimport"
+    context = taste_recommendation.build_context(
+        rows, {"source": {"signals": []}}, {"state": "current"}
+    )
+    assert context.readings[rows[1].id]["eligibility"] == "excluded"
+    assert context.readings[rows[2].id]["eligibility"] == "eligible"
 
 
 @pytest.mark.parametrize("new_reason", ["", "Хочу участок, а не дом."])

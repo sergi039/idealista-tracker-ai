@@ -44,6 +44,7 @@ from services.listing_attribute_filters import (
 )
 from services import taste_service
 from services import taste_recommendation
+from services import recommendation_feedback
 from services import favorite_similarity
 from services.coordinate_quality import shared_coordinate_peers
 from services import advertiser
@@ -345,11 +346,13 @@ def _criteria_context():
 
 def _recommendation_selection(query, profile_data, profile_summary, similarity_ctx):
     """One recommendation reading and hard-exclusion set for page and CSV."""
+    rows = query.all()
     context = taste_recommendation.build_context(
-        query.all(),
+        rows,
         profile_data,
         profile_summary,
         similarity_ctx=similarity_ctx,
+        negative_feedback=recommendation_feedback.load_negative_listing_feedback(rows),
     )
     excluded_ids = [
         property_id
@@ -2195,6 +2198,13 @@ def properties():
                 recommendation_profile_data,
                 recommendation_profile_summary,
                 similarity_ctx=similarity_ctx,
+                negative_feedback=(
+                    recommendation_feedback.load_negative_listing_feedback(
+                        pagination.items
+                    )
+                    if recommendation_profile_data
+                    else None
+                ),
             )
 
         # Nothing on screen: the two things the page used to get wrong about

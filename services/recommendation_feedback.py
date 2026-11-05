@@ -157,20 +157,29 @@ def exposure_report(props: Any) -> dict[str, Any]:
     return {"incomplete_exposure_row_ids": incomplete} if incomplete else {}
 
 
-def negative_listing_feedback(profile_ids: set[int]) -> dict[tuple[int, str], dict]:
-    """Read current No receipts outside page filters, once per recommendation read.
+def load_negative_listing_feedback(props: Any) -> dict[tuple[int, str], dict]:
+    """Load scoped current No receipts outside the catalog's other filters."""
+    profile_ids = {
+        prop.search_profile_id for prop in props if prop.search_profile_id is not None
+    }
+    if not profile_ids:
+        return {}
+    return negative_listing_feedback(
+        Property.query.filter(
+            Property.search_profile_id.in_(profile_ids),
+            Property.enrichment[KEY].as_string().isnot(None),
+        ).order_by(Property.id)
+    )
+
+
+def negative_listing_feedback(props: Any) -> dict[tuple[int, str], dict]:
+    """Index current No receipts without a query or application context.
 
     A live, URL-validated carrier authorizes its exact frozen aliases only in
     that subscription. Exposure alone never restores a rolled-back answer.
     """
-    if not profile_ids:
-        return {}
-    rows = Property.query.filter(
-        Property.search_profile_id.in_(profile_ids),
-        Property.enrichment[KEY].as_string().isnot(None),
-    ).order_by(Property.id)
     negatives = {}
-    for row in rows:
+    for row in props:
         record = read_feedback(row)
         if record and record["answer"] == "no":
             # Do not promote unrelated historical exposure into a No.

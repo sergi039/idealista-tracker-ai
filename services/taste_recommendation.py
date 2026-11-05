@@ -655,6 +655,7 @@ def build_context(
     profile_summary: dict[str, Any],
     *,
     similarity_ctx: Any = None,
+    negative_feedback: dict | None = None,
 ) -> RecommendationContext:
     """Build page-ready readings with no bridge/network calls."""
     rows = list(props)
@@ -713,8 +714,10 @@ def build_context(
     # Reuse Similar's fact loader/comparator while leaving its favorite-only
     # public meaning untouched. Restrict new references to the same subscription.
     feedback_numeric = {}
-    negatives = recommendation_feedback.negative_listing_feedback(
-        {prop.search_profile_id for prop in rows if prop.search_profile_id is not None}
+    negatives = (
+        negative_feedback
+        if negative_feedback is not None
+        else recommendation_feedback.negative_listing_feedback(rows)
     )
     if any(
         _dict(signal.get("batch_feedback")).get("answer") == "yes"
