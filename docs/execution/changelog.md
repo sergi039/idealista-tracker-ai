@@ -2,6 +2,14 @@
 
 ## 2026-11-05
 
+- Connect completed owner appeal reviews to recommendation references and exact
+  object exclusions, with atomic idempotent import, private rollback receipts
+  and scoped compare-and-swap restore. Preserve favorites and purchase state.
+- Read regional hazard uncertainty honestly in taste prompts and invalidate old
+  rubric scores; never infer residential neighbours from industrial scan counts.
+  Reserve retained feedback from later blind evaluation; do not infer aversions
+  from reasonless binary answers.
+
 - Integrate the pending anyio, urllib3, oauthlib, certifi and dnspython updates
   together against the current application. Retain the canonical project
   instruction entrypoint when reconciling the older Codex-entrypoint branch.

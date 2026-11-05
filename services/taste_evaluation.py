@@ -7,7 +7,7 @@ import json
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
-from services import taste_descriptors
+from services import recommendation_feedback, taste_descriptors
 
 SCHEMA_VERSION = 1
 
@@ -62,6 +62,7 @@ def build_manifest(
             prop.id in excluded_row_ids
             or bool(getattr(prop, "is_favorite", False))
             or getattr(prop, "owner_verdict", None) is not None
+            or recommendation_feedback.has_recorded_feedback(prop)
         )
 
     # Every known-label/activity row reserves its entity before candidate

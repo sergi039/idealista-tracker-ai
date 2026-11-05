@@ -39,6 +39,7 @@ import pytest
 from app import create_app, db
 from models import Property, SearchProfile
 from services import owner_review
+from services.taste_service import TASTE_SCORER_VERSION
 from tests import setup_test_environment
 from tests.test_workspace_ui import subscription_options
 
@@ -335,7 +336,7 @@ class TestTheTasteSortSaysWhenItCannotRank:
             "status": "ok",
             "score": 80,
             "profile_version": version,
-            "scorer_version": 1,
+            "scorer_version": TASTE_SCORER_VERSION,
             "facts_fingerprint": "x",
         }
         db.session.commit()

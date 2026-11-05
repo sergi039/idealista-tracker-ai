@@ -60,7 +60,12 @@ from sqlalchemy import case, false, or_
 from config import Config
 from models import BackgroundJob, Property, TasteProfile, db
 from services import subscription_transport
-from services import taste_descriptors, taste_preferences
+from services import (
+    hazard_service,
+    recommendation_feedback,
+    taste_descriptors,
+    taste_preferences,
+)
 from services.enrichment_write import check_writable, locked_write
 
 logger = logging.getLogger(__name__)
@@ -68,7 +73,7 @@ logger = logging.getLogger(__name__)
 # Bumped when the scoring prompt or rubric changes what a number MEANS, so a
 # 78 from last month is not silently compared with a 78 from a reworded
 # rubric. Read by `read_taste`, which presents a mismatch as stale.
-TASTE_SCORER_VERSION = 1
+TASTE_SCORER_VERSION = 2
 # Bumped whenever deterministic recommendation clauses change meaning. It is
 # part of both the source envelope and basis fingerprint, so a snapshot built
 # by an older compiler becomes dirty even when the owner's rows did not move.
@@ -316,24 +321,28 @@ def gather_facts(prop: Property) -> List[str]:
     else:
         facts.append("NEAREST BEACH: not measured")
 
-    hazards = enrichment.get("hazards")
-    if isinstance(hazards, dict) and isinstance(hazards.get("items"), list):
-        items = hazards["items"]
-        if items:
-            nearest = items[0] if isinstance(items[0], dict) else {}
-            distance = _fmt_number(nearest.get("distance_m"), " m")
+    hazards = hazard_service.read_verdict(prop)
+    if hazards.get("measured"):
+        facts.append(
+            f"REGIONAL HAZARD SCAN: {hazards['item_count']} facilities in a "
+            f"{_fmt_number(hazards.get('searched_m'), ' m')} search radius; "
+            f"coordinate slack {_fmt_number(hazards.get('slack_m'), ' m')}; "
+            f"complete={hazards.get('complete')}. This is NOT a count of adjacent "
+            "buildings or residential neighbours and cannot establish privacy."
+        )
+        for item in hazards.get("items", [])[:3]:
             facts.append(
-                f"INDUSTRIAL NEIGHBOURS: {len(items)} within the scan"
-                + (
-                    f", nearest {nearest.get('kind') or 'unknown'} at {distance}"
-                    if distance
-                    else ""
-                )
+                f"REGIONAL HAZARD: {_one_line(item.get('kind')) or 'unknown'}; "
+                f"distance bounds {_fmt_number(item.get('min_distance_m'), ' m')} to "
+                f"{_fmt_number(item.get('max_distance_m'), ' m')} (straight line)"
             )
-        else:
-            facts.append("INDUSTRIAL NEIGHBOURS: none found by the scan")
     else:
-        facts.append("INDUSTRIAL NEIGHBOURS: not scanned")
+        facts.append(
+            f"REGIONAL HAZARD SCAN: not measured for this property ({hazards['status']})"
+        )
+    facts.append(
+        "ADJACENT BUILDINGS / NEIGHBOUR PRIVACY: not measured by the regional hazard scan; use only separately attributed photo or parcel evidence."
+    )
 
     # The parcel, read where `services/cadastre_service.py` actually writes it.
     # This block asked for `cadastre["metrics"]["bbox_fill"]` and the writer
@@ -445,9 +454,22 @@ def _signals_from_rows(rows: List[Property]) -> List[Dict[str, Any]]:
     signals = []
     for prop in rows:
         reason = (prop.owner_verdict_reason or "").strip()
+        feedback = recommendation_feedback.read_feedback(prop)
         is_signal = prop.owner_verdict in SIGNAL_VERDICTS
-        is_anchor = bool(prop.is_favorite) and prop.owner_verdict != "rejected"
-        if not is_signal and not is_anchor:
+        is_anchor = (
+            (
+                bool(prop.is_favorite)
+                or bool(
+                    feedback
+                    and feedback["answer"] == "yes"
+                    and feedback.get("reference_property_id", feedback["property_id"])
+                    == prop.id
+                )
+            )
+            and prop.owner_verdict != "rejected"
+            and not (feedback and feedback["answer"] == "no")
+        )
+        if not is_signal and not is_anchor and not feedback:
             continue
         taste = prop.taste if isinstance(prop.taste, dict) else {}
         descriptor = taste_descriptors.build_descriptor(
@@ -466,6 +488,7 @@ def _signals_from_rows(rows: List[Property]) -> List[Dict[str, Any]]:
                 "facts": gather_facts(prop) if reason else [],
                 "descriptor": descriptor,
                 "usable": bool(reason) and is_signal,
+                "batch_feedback": feedback,
             }
         )
     return signals
@@ -484,6 +507,9 @@ def collect_signals() -> List[Dict[str, Any]]:
             or_(
                 Property.owner_verdict.in_(SIGNAL_VERDICTS),
                 Property.is_favorite.is_(True),
+                Property.enrichment[recommendation_feedback.KEY]
+                .as_string()
+                .isnot(None),
             )
         )
         .order_by(Property.id)
@@ -507,6 +533,7 @@ def signals_fingerprint(signals: List[Dict[str, Any]]) -> str:
                     "favorite": s.get("favorite", False),
                     "positive_anchor": s.get("positive_anchor", False),
                     "reason": s["reason"],
+                    "batch_feedback": s.get("batch_feedback"),
                     "facts": s["facts"],
                     "descriptor_fingerprint": s.get("descriptor", {}).get(
                         "input_fingerprint"
@@ -651,6 +678,40 @@ def _validate_profile_payload(payload: Any, valid_ids: List[int]) -> Optional[st
     return None
 
 
+def _recommendation_source(signals: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """One source snapshot for model builds and deterministic feedback refreshes."""
+    usable = [signal for signal in signals if signal["usable"]]
+    clauses = taste_preferences.compile_signals(signals)
+    return {
+        "recommendation_schema_version": RECOMMENDATION_SCHEMA_VERSION,
+        "preference_compiler_schema_version": taste_preferences.SCHEMA_VERSION,
+        "signals": [
+            {
+                "property_id": s["property_id"],
+                "profile_id": s.get("profile_id"),
+                "verdict": s["verdict"],
+                "favorite": s.get("favorite", False),
+                "positive_anchor": s.get("positive_anchor", False),
+                "reason": s["reason"],
+                "facts": s["facts"],
+                "batch_feedback": s.get("batch_feedback"),
+            }
+            for s in signals
+        ],
+        "descriptors": {str(s["property_id"]): s["descriptor"] for s in signals},
+        "clauses": clauses,
+        "positive_reference_ids": [
+            s["property_id"] for s in signals if s.get("positive_anchor")
+        ],
+        "skipped_reasonless": [s["property_id"] for s in signals if not s["usable"]],
+        "n_interested": sum(1 for s in usable if s["verdict"] == "interested"),
+        "n_rejected": sum(1 for s in usable if s["verdict"] == "rejected"),
+        # Two positive examples cannot establish aversions; say so where
+        # every reader of the profile will see it.
+        "provisional": len(usable) < 5,
+    }
+
+
 def build_profile(provider: str = "claude") -> Dict[str, Any]:
     """Distill the taste profile from the owner's comments and persist it.
 
@@ -692,34 +753,7 @@ def build_profile(provider: str = "claude") -> Dict[str, Any]:
     if problem:
         return {"status": "failed", "error": f"profile rejected: {problem}"}
 
-    clauses = taste_preferences.compile_signals(signals)
-    source = {
-        "recommendation_schema_version": RECOMMENDATION_SCHEMA_VERSION,
-        "preference_compiler_schema_version": taste_preferences.SCHEMA_VERSION,
-        "signals": [
-            {
-                "property_id": s["property_id"],
-                "profile_id": s.get("profile_id"),
-                "verdict": s["verdict"],
-                "favorite": s.get("favorite", False),
-                "positive_anchor": s.get("positive_anchor", False),
-                "reason": s["reason"],
-                "facts": s["facts"],
-            }
-            for s in signals
-        ],
-        "descriptors": {str(s["property_id"]): s["descriptor"] for s in signals},
-        "clauses": clauses,
-        "positive_reference_ids": [
-            s["property_id"] for s in signals if s.get("positive_anchor")
-        ],
-        "skipped_reasonless": [s["property_id"] for s in signals if not s["usable"]],
-        "n_interested": sum(1 for s in usable if s["verdict"] == "interested"),
-        "n_rejected": sum(1 for s in usable if s["verdict"] == "rejected"),
-        # Two positive examples cannot establish aversions; say so where
-        # every reader of the profile will see it.
-        "provisional": len(usable) < 5,
-    }
+    source = _recommendation_source(signals)
     # The owner may have edited a comment while the bridge call ran; a
     # profile published over that edit would wear a fingerprint its own
     # signals no longer produce. Re-read and refuse rather than publish an
@@ -760,6 +794,44 @@ def build_profile(provider: str = "claude") -> Dict[str, Any]:
         ", ".join(str(s["property_id"]) for s in usable),
     )
     return {"status": "ok", "data": load_current_profile()}
+
+
+def refresh_feedback_snapshot() -> Dict[str, Any]:
+    """Publish current prepared evidence without asking a model to invent taste.
+
+    The existing likes/dislikes are preserved. New binary ratings add anchors
+    and exact-object exclusions; only explicit owner reasons compile clauses.
+    """
+    db.session.rollback()
+    try:
+        rows = (
+            Property.query.order_by(Property.id)
+            .with_for_update()
+            .populate_existing()
+            .all()
+        )
+        current = load_current_profile()
+        if not current:
+            raise ValueError("an existing owner taste profile is required")
+        signals = _signals_from_rows(rows)
+        fingerprint = signals_fingerprint(signals)
+        if fingerprint == current["signals_fingerprint"]:
+            db.session.rollback()
+            return {"status": "ok", "changed": False, "data": current}
+        row = TasteProfile(
+            built_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            provider="owner-feedback",
+            model="deterministic-evidence-refresh",
+            signals_fingerprint=fingerprint,
+            source=_recommendation_source(signals),
+            profile=current["profile"],
+        )
+        db.session.add(row)
+        db.session.commit()
+        return {"status": "ok", "changed": True, "data": load_current_profile()}
+    except Exception:
+        db.session.rollback()
+        raise
 
 
 def recommendation_profile_state(
