@@ -2,6 +2,10 @@
 
 ## 2026-11-05
 
+- Integrate the pending anyio, urllib3, oauthlib, certifi and dnspython updates
+  together against the current application. Retain the canonical project
+  instruction entrypoint when reconciling the older Codex-entrypoint branch.
+
 - Compact catalog rows and the heading: give titles more width, align numeric
   and action columns to the top, and keep closed details below the photo.
   Expanded evidence and missing-photo rows retain their full readable content.
