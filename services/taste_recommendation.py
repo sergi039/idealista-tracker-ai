@@ -10,7 +10,13 @@ from typing import Any, Iterable
 
 from sqlalchemy import case, false
 
-from services import subscription_criteria, taste_descriptors, taste_preferences
+from services import (
+    favorite_similarity,
+    recommendation_feedback,
+    subscription_criteria,
+    taste_descriptors,
+    taste_preferences,
+)
 
 _VISUAL_RESEMBLANCE_ASPECTS = frozenset(
     {
@@ -279,7 +285,8 @@ def _numeric_similarity(
     reference_id = similarity_reading.get("reference_id")
     score = similarity_reading.get("score")
     if (
-        isinstance(reference_id, bool)
+        similarity_reading.get("state", "ok") not in {"ok", "reference"}
+        or isinstance(reference_id, bool)
         or not isinstance(reference_id, int)
         or reference_id not in reference_ids
         or isinstance(score, bool)
@@ -609,12 +616,23 @@ def _reading(
         + visual_match_count
     )
     hard_conflicts = [facet for facet in conflicts if facet.get("hard")]
+    feedback = recommendation_feedback.read_feedback(prop)
+    if feedback and feedback["answer"] == "no":
+        hard_conflicts.append(
+            {
+                "aspect_id": "owner_batch_feedback",
+                "hard": True,
+                "source_property_id": feedback["property_id"],
+                "batch_id": feedback["batch_id"],
+            }
+        )
     return {
         "state": state,
         "group": group if state in {"candidate", "stale"} else None,
         "eligibility": (
             "excluded"
-            if state == "candidate" and hard_conflicts
+            if (feedback and feedback["answer"] == "no")
+            or (hard_conflicts and state in {"candidate", "stale"})
             else "eligible"
             if state == "candidate"
             else None
@@ -692,6 +710,37 @@ def build_context(
         if profile_id is not None and not isinstance(profile_id, int):
             continue
         references_by_profile.setdefault(profile_id, []).append(reference_id)
+    # Reuse Similar's fact loader/comparator while leaving its favorite-only
+    # public meaning untouched. Restrict new references to the same subscription.
+    feedback_numeric = {}
+    if any(
+        _dict(signal.get("batch_feedback")).get("answer") == "yes"
+        for signal in source.get("signals", [])
+        if isinstance(signal, dict)
+    ):
+        profiles = {
+            prop.search_profile_id
+            for prop in rows
+            if prop.search_profile_id is not None
+        }
+        facts = favorite_similarity.load_facts(
+            profiles, [prop.id for prop in rows] + state_reference_ids
+        )
+        points = (
+            similarity_ctx.points
+            if similarity_ctx is not None
+            else favorite_similarity.municipality_points()
+        )
+        by_id = {fact.id: fact for fact in facts}
+        for fact in facts:
+            refs = [
+                by_id[ident]
+                for ident in references_by_profile.get(fact.profile_id, [])
+                if ident in by_id and not by_id[ident].is_rejected
+            ]
+            feedback_numeric[fact.id] = favorite_similarity.read_against(
+                fact, refs, points
+            )
     readings = {}
     for prop in rows:
         taste = _dict(getattr(prop, "taste", None))
@@ -712,7 +761,10 @@ def build_context(
             ),
             profile_state=profile_summary.get("state", "none"),
             similarity_reading=(
-                similarity_ctx.read(prop.id) if similarity_ctx is not None else None
+                feedback_numeric.get(prop.id)
+                or (
+                    similarity_ctx.read(prop.id) if similarity_ctx is not None else None
+                )
             ),
             criteria=subscription_criteria.read_criteria(
                 getattr(prop, "search_profile", None)

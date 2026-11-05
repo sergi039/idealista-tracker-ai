@@ -227,3 +227,65 @@ source-key-proven plot figure and leaves house area unknown; explicit house
 measurements require a separately verified source, never prose inference.
 Conflicting exact areas still yield a claimed bound match or shortfall when
 every credible source agrees on that bound; the exact area remains a check.
+
+## Completed appeal reviews (2026-11-05, #598)
+
+`services/recommendation_feedback.py` owns the `recommendation_feedback`
+enrichment block. A binary appeal answer is separate from a purchase verdict
+and from a favorite. Yes adds the primary card as a positive recommendation
+reference in its own subscription, using the existing numeric comparator.
+No excludes the known card and its frozen aliases from Recommendations only;
+they remain browsable in the ordinary catalog. Missing reasons do not produce
+new style, price, privacy or condition rules. Reasons are retained verbatim as
+receipt data; a photo-trust complaint is not generalized into a style aversion.
+Similar still compares against favorites only. No overall score is rewritten.
+
+A missing primary can use an explicitly frozen surviving alias, with its URL
+and subscription verified. The original card ID remains provenance, one
+current surviving representative prevents duplicate anchors, and missing IDs are
+disclosed. The representative is recomputed from validated live aliases, so
+removing the primary later does not strand the answer. No surviving alias
+refuses the entire import; no rows are created.
+
+The importer binds every answer to its manifest fingerprint, media revision,
+subscription, frozen aliases, baseline and current listing URLs. Only UTM
+tracking and fragments are ignored in identity checks. All rows are locked in
+ID order and validated before any write. Conflicting imports are refused;
+the same source is an idempotent no-op. Only the feedback signal and monotonic
+exposure marker change; other enrichment blocks are preserved.
+`utils.import_recommendation_feedback` accepts completed checkpoints only,
+reports without `--apply`, and requires a fresh `--snapshot` path to apply.
+The private, exclusively created and fsynced receipt records before and exact
+expected-after values before commit. `--restore RECEIPT --apply` validates
+all expected writes under locks before restoring only these blocks atomically;
+a later edit refuses the whole restore. Deleted rows are disclosed and never
+recreated; all surviving rows must still pass the same CAS guards. A receipt
+written before a failed commit is evidence of an attempt; its expected-after comparisons refuse restore.
+
+Use `--refresh-profile --apply` after import or restore. This deterministic
+refresh inserts a source snapshot into the existing profile ledger, preserving
+the model's likes/dislikes and compiling only explicit purchase-review reasons.
+It carries the original model basis separately: changed explicit reasons or
+facts keep `model_profile_dirty` true, disclose that in the UI, and refuse new
+numeric taste scoring until a real model rebuild. Prepared deterministic
+recommendations may still be current. New profile versions invalidate older
+numeric taste scores; no rescore is scheduled or called. It makes no model or
+network calls. Import and refresh are separate durable
+steps: if refresh fails, rerun refresh alone. This is not a mass taste rescore.
+
+`gather_facts` reads `hazard_service.read_verdict`, including search radius,
+coordinate slack, scan completeness and distance bounds. Facilities in a
+regional industrial scan never establish residential neighbour counts or
+privacy. Stale/missing measurements remain unknown. Scorer rubric v2 makes
+legacy numeric taste judgements stale so their misleading penalties cannot
+rank as current. Recommendation descriptions remain source typed.
+
+Retained feedback namespaces reserve rows/entities from future blind trials,
+even if URL/scope drift makes a previous answer inapplicable to current rank.
+A separate `recommendation_exposure` marker survives ranking rollback: undoing
+a signal cannot make an already-viewed object unseen. Frozen historical alias
+IDs are reserved as well. Incomplete cards are refused by the service itself.
+An existing favorite remains its independent positive reference even if that
+card receives No; the card itself is excluded from Recommendations.
+The next unlabeled twenty are not training data. These training ratings are
+not evidence of prospective recommendation accuracy.

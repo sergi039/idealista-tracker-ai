@@ -2,6 +2,21 @@
 
 ## 2026-11-05
 
+- Route project browser checks to the MacBook's isolated Chrome session over
+  SSH; refuse a Mac mini fallback so remote Codex chats do not open test
+  windows on the server desktop.
+
+- Preserve one validated live alias after a pilot primary disappears, retain
+  exposure history through feedback rollback, and disclose a stale model basis
+  independently from current prepared recommendations. Block numeric scoring
+  against changed model evidence; keep favorite references independent.
+- Connect completed owner appeal reviews to recommendation references and exact
+  object exclusions, with atomic idempotent import, private rollback receipts
+  and scoped compare-and-swap restore. Preserve favorites and purchase state.
+- Read regional hazard uncertainty honestly in taste prompts and invalidate old
+  rubric scores; never infer residential neighbours from industrial scan counts.
+  Reserve retained feedback from later blind evaluation; do not infer aversions
+  from reasonless binary answers.
 - Apply the Werkzeug 3.1.9 and pyasn1 0.6.5 security fixes surfaced by
   Dependabot after the initial pending dependency updates were integrated.
 
