@@ -232,6 +232,21 @@ every credible source agrees on that bound; the exact area remains a check.
 
 ### Numeric rebuilds (#603)
 
+The first live eight-row probe of rubric v3 still used regional facilities as
+an aesthetic concern and assigned low fit where it named only missing facts.
+Do not scale a mechanically successful batch before inspecting its reasons.
+Rubric v4 defines 50 as neutral unknown fit: move only on observed matches,
+conflicts or an exact-card owner appeal. Unknown traits/weights affect only
+confidence. Exact Yes remains observed appeal even without an explanatory
+reason; it cannot establish a general trait. A per-square-metre price is not
+above-market evidence without a supplied market comparison.
+
+Regional hazard lines are omitted from numeric candidate and appeal-exemplar
+inputs, so they cannot be reinterpreted as neighbours, privacy, aesthetics or
+air quality. They remain available in independent hazard checks, full canonical
+facts, profile-build provenance and the conservative freshness fingerprint.
+The stored evidence is never deleted. Prior v3 numeric results read as stale.
+
 Both model prompts now receive one typed appeal example per applicable frozen
 card, with subscription, live aliases, answer, original reason and stored facts.
 Duplicate portal rows are not extra votes. Binary votes cannot establish new
