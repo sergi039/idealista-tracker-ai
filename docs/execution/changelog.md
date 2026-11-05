@@ -2,6 +2,9 @@
 
 ## 2026-11-05
 
+- Apply the Werkzeug 3.1.9 and pyasn1 0.6.5 security fixes surfaced by
+  Dependabot after the initial pending dependency updates were integrated.
+
 - Integrate the pending anyio, urllib3, oauthlib, certifi and dnspython updates
   together against the current application. Retain the canonical project
   instruction entrypoint when reconciling the older Codex-entrypoint branch.
