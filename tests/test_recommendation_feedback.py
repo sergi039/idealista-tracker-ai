@@ -380,6 +380,10 @@ def test_binary_no_is_hidden_only_from_recommendation_page_and_csv(scope):
         client, mode="recommendation", profile_id=profile.id
     )
     assert set(recommended) == set(exported)
+    text = client.get(
+        f"/properties?profile_id={profile.id}&mode=recommendation&remember=off"
+    ).get_data(as_text=True)
+    assert "by your answers or confirmed requirements" in text
     for row in (rows[1], rows[4]):
         assert row.id in normal and row.id in normal_csv
         assert row.id not in recommended and row.id not in exported

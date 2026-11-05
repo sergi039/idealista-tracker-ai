@@ -2,6 +2,10 @@
 
 ## 2026-11-05
 
+- Route project browser checks to the MacBook's isolated Chrome session over
+  SSH; refuse a Mac mini fallback so remote Codex chats do not open test
+  windows on the server desktop.
+
 - Connect completed owner appeal reviews to recommendation references and exact
   object exclusions, with atomic idempotent import, private rollback receipts
   and scoped compare-and-swap restore. Preserve favorites and purchase state.

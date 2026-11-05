@@ -29,6 +29,40 @@ pytest tests/ --cov=app --cov-report=html    # coverage report
 Building by hand on the mini is the deploy watcher's job, not yours — see
 "Keeping the container current" below before you type the first line.
 
+### Browser checks on the MacBook
+
+Owner decision, 2026-11-05: visible browser checks for this project belong on
+`MacBook-Pro007.local`, including checks started by a Codex chat whose shell
+runs on the mini. The desktop window's location does not determine where a
+shell-launched Chrome runs. Do not launch Chrome, Chromium or a headed
+Playwright process on the mini for this project.
+
+Use the project launcher from either machine:
+
+```bash
+bash tools/browser.sh --check-route
+bash tools/browser.sh open http://127.0.0.1:5001/properties
+bash tools/browser.sh snapshot
+bash tools/browser.sh screenshot
+bash tools/browser.sh close
+```
+
+The launcher runs the MacBook's installed Playwright CLI over the existing
+SSH route (`ss@100.127.248.71`) and verifies the remote hostname before
+launching. `open` selects headed Google Chrome in its own test profile, with
+a ten-minute idle timeout. The app remains on the mini; the MacBook's existing
+loopback tunnel supplies port 5001. No new app stack, browser debug port or
+network binding is needed. If SSH, Playwright or the tunnel is unavailable,
+report that failure; never substitute a mini browser.
+
+Sessions default to `idealista-$CODEX_THREAD_ID`, or `idealista-manual` outside
+Codex. Set `IDEALISTA_BROWSER_SESSION=idealista-<task>` consistently for a
+different task. Use only your own session and close it when finished;
+`close-all` and `kill-all` are refused. Do not attach to or close the owner's
+ordinary Chrome windows. Snapshots and screenshots are written on the MacBook
+under `/Users/ss/Library/Caches/IdealistaRank/browser`; copy the specific
+reported artifact back over SSH when it is needed in the mini-hosted chat.
+
 ### Local CI gate
 
 `tools/ci/local_ci.sh` runs the same checks as `.github/workflows/ci.yml`
