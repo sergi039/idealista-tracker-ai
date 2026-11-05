@@ -390,6 +390,197 @@ def test_binary_no_is_hidden_only_from_recommendation_page_and_csv(scope):
         assert row.owner_verdict is None and not row.is_favorite
 
 
+@pytest.mark.parametrize("delete_before_import", [False, True])
+def test_reimported_frozen_url_keeps_no_and_blind_exposure_across_new_ids(
+    scope, delete_before_import
+):
+    """#601: frozen primary URL returning as a new row must not become unseen.
+
+    The surviving cross-portal carrier is outside the page's municipality
+    filter. Ordinary unseen URLs and the same URL in another subscription
+    remain recommendation candidates; meaningful query changes are not
+    tracking aliases. Blind trials retain their broader entity deduplication.
+    """
+    from services import taste_evaluation
+    from tests.test_recommendation_export_agrees import _page_and_export
+
+    app, profile, rows = scope
+    rows[2].url = "https://www.fotocasa.es/es/comprar/vivienda/laxe/102/d"
+    rows[2].municipality = "Navia"
+    db.session.commit()
+    manifest, answers = batch(profile, rows, alias=True)
+    answers["answers"][0]["answer"] = "no"
+    original_url = rows[0].url
+    old_id = rows[0].id
+    if delete_before_import:
+        db.session.delete(rows[0])
+        db.session.commit()
+    feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    taste_service.refresh_feedback_snapshot()
+    if not delete_before_import:
+        db.session.delete(rows[0])
+        db.session.commit()
+    replacements = []
+    for index, (url, subscription) in enumerate(
+        [
+            (original_url + "?utm_source=mail#photos", profile.id),
+            (rows[2].url + "/?utm_source=mail", profile.id),
+            (original_url + "?id=999", profile.id),
+            (original_url, rows[5].search_profile_id),
+            ("https://www.idealista.com/inmueble/789/", profile.id),
+        ]
+    ):
+        row = Property(
+            title="Reimport",
+            source_email_id=f"reimport:{index}",
+            url=url,
+            municipality="Laxe",
+            search_profile_id=subscription,
+        )
+        db.session.add(row)
+        replacements.append(row)
+    db.session.commit()
+    assert replacements[0].id != old_id
+    client = app.test_client()
+    page, exported = _page_and_export(client, mode="recommendation", profile_id="all")
+    assert page == exported
+    assert not {row.id for row in replacements[:2]} & set(page)
+    assert {row.id for row in replacements[2:]} <= set(page)
+    normal, normal_csv = _page_and_export(client, mode="combined", profile_id="all")
+    assert normal == normal_csv
+    assert {row.id for row in replacements} <= set(normal)
+    held_out = taste_evaluation.build_manifest(
+        Property.query.all(), learning_property_ids=set(), activity_property_ids=set()
+    )
+    candidates = {item["property_id"] for item in held_out["candidates"]}
+    assert not {row.id for row in replacements[:2]} & candidates
+    assert replacements[4].id in candidates and rows[3].id in candidates
+    assert rows[2].enrichment["unrelated"] == {"keep": True}
+    assert all(
+        row.owner_verdict is None and not row.is_favorite for row in replacements
+    )
+
+
+@pytest.mark.parametrize("legacy_marker", [False, True])
+def test_legacy_restore_preserves_frozen_urls_without_restoring_no(
+    scope, tmp_path, legacy_marker
+):
+    """#601: old ID-only markers must retain URLs before CAS removes the receipt."""
+    from services import taste_evaluation
+
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows, alias=True)
+    answers["answers"][0]["answer"] = "no"
+    receipt = tmp_path / "legacy-exposure.json"
+    feedback.import_batch(
+        manifest, answers, profile_id=profile.id, apply=True, snapshot_path=receipt
+    )
+    if legacy_marker:
+        for row in rows[:3]:
+            row.enrichment = {
+                **row.enrichment,
+                feedback.EXPOSURE_KEY: {
+                    "row_ids": row.enrichment[feedback.KEY]["row_ids"]
+                },
+            }
+    db.session.commit()
+    original_url = rows[0].url
+    feedback.restore_batch(json.loads(receipt.read_text()), apply=True)
+    db.session.delete(rows[0])
+    new = Property(
+        source_email_id="after-restore", url=original_url, search_profile_id=profile.id
+    )
+    db.session.add(new)
+    db.session.commit()
+    current = taste_service.refresh_feedback_snapshot()["data"]
+    ctx = taste_recommendation.build_context(
+        [new], current, taste_service.recommendation_profile_state(current)
+    )
+    assert ctx.readings[new.id]["eligibility"] == "eligible"
+    held_out = taste_evaluation.build_manifest(
+        Property.query.all(), learning_property_ids=set(), activity_property_ids=set()
+    )
+    assert new.id not in {item["property_id"] for item in held_out["candidates"]}
+    assert "incomplete_exposure_row_ids" not in held_out
+    assert rows[2].enrichment["unrelated"] == {"keep": True}
+
+
+@pytest.mark.parametrize("change", ["url", "subscription"])
+def test_drifted_carrier_cannot_transfer_its_no_to_reimported_url(scope, change):
+    """A historical URL is exposure, not authority for a current binary No."""
+    from services import taste_evaluation
+
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows, alias=True)
+    answers["answers"][0]["answer"] = "no"
+    feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    old_url = rows[0].url
+    db.session.delete(rows[0])
+    if change == "url":
+        rows[2].url = "https://www.idealista.com/inmueble/888/"
+    else:
+        rows[2].search_profile_id = rows[5].search_profile_id
+    new = Property(
+        source_email_id="drifted-reimport", url=old_url, search_profile_id=profile.id
+    )
+    db.session.add(new)
+    db.session.commit()
+    current = taste_service.refresh_feedback_snapshot()["data"]
+    ctx = taste_recommendation.build_context(
+        [new], current, taste_service.recommendation_profile_state(current)
+    )
+    assert ctx.readings[new.id]["eligibility"] == "eligible"
+    result = taste_evaluation.build_manifest(
+        Property.query.all(), learning_property_ids=set(), activity_property_ids=set()
+    )
+    assert new.id not in {item["property_id"] for item in result["candidates"]}
+
+
+@pytest.mark.parametrize("new_reason", ["", "Хочу участок, а не дом."])
+def test_dirty_snapshot_cannot_hide_by_removed_rule_but_current_no_still_hides(
+    scope, new_reason
+):
+    """#602: actual page/CSV selection must stop enforcing an old hard clause."""
+    from tests.test_recommendation_export_agrees import _page_and_export
+
+    app, profile, rows = scope
+    rows[3].is_favorite = True
+    rows[3].owner_verdict = "interested"
+    rows[3].owner_verdict_reason = "Никогда не хочу участок, а не дом."
+    rows[4].property_category = "land"
+    db.session.commit()
+    manifest, answers = batch(profile, rows)
+    feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    current = taste_service.refresh_feedback_snapshot()["data"]
+    assert taste_service.recommendation_profile_state(current)["state"] == "current"
+    client = app.test_client()
+    before, before_csv = _page_and_export(
+        client, mode="recommendation", profile_id=profile.id
+    )
+    assert before == before_csv
+    assert rows[4].id not in before and rows[1].id not in before
+    rows[3].owner_verdict_reason = new_reason
+    db.session.commit()
+    assert taste_service.recommendation_profile_state(current)["state"] == "dirty"
+    after, after_csv = _page_and_export(
+        client, mode="recommendation", profile_id=profile.id
+    )
+    assert after == after_csv
+    assert rows[4].id in after and rows[1].id not in after
+    ordinary, ordinary_csv = _page_and_export(
+        client, mode="combined", profile_id=profile.id
+    )
+    assert ordinary == ordinary_csv
+    assert rows[4].id in ordinary and rows[1].id in ordinary
+    refreshed = taste_service.refresh_feedback_snapshot()["data"]
+    assert taste_service.recommendation_profile_state(refreshed)["state"] == "current"
+    final, final_csv = _page_and_export(
+        client, mode="recommendation", profile_id=profile.id
+    )
+    assert final == final_csv
+    assert rows[4].id in final and rows[1].id not in final
+
+
 def test_missing_primary_uses_only_verified_surviving_frozen_alias_once(scope):
     _, profile, rows = scope
     manifest, answers = batch(profile, rows, alias=True)

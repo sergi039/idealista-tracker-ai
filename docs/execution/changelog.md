@@ -2,6 +2,12 @@
 
 ## 2026-11-05
 
+- Reserve rated primary/alias listing URLs across deletion and reimport with a
+  new row ID, scoped to the original subscription. Retain URL exposure through
+  feedback rollback and disclose legacy markers with missing history (#601).
+  Stop stale hard clauses from hiding candidates after owner-rule changes,
+  while preserving current binary No exclusions and list/CSV parity (#602).
+
 - Include completed appeal answers and their stored evidence in both numeric
   taste prompts, deduplicated by frozen card and scoped to subscription. Keep
   reasonless votes from inventing preferences and trust complaints local;

@@ -379,6 +379,7 @@ def _reading(
     state_reference_ids: list[int],
     reference_ids: list[int],
     profile_state: str,
+    feedback: dict[str, Any] | None = None,
     similarity_reading: dict[str, Any] | None = None,
     criteria: dict[str, float] | None = None,
 ) -> dict[str, Any]:
@@ -616,7 +617,6 @@ def _reading(
         + visual_match_count
     )
     hard_conflicts = [facet for facet in conflicts if facet.get("hard")]
-    feedback = recommendation_feedback.read_feedback(prop)
     if feedback and feedback["answer"] == "no":
         hard_conflicts.append(
             {
@@ -632,7 +632,7 @@ def _reading(
         "eligibility": (
             "excluded"
             if (feedback and feedback["answer"] == "no")
-            or (hard_conflicts and state in {"candidate", "stale"})
+            or (hard_conflicts and state == "candidate")
             else "eligible"
             if state == "candidate"
             else None
@@ -713,6 +713,9 @@ def build_context(
     # Reuse Similar's fact loader/comparator while leaving its favorite-only
     # public meaning untouched. Restrict new references to the same subscription.
     feedback_numeric = {}
+    negatives = recommendation_feedback.negative_listing_feedback(
+        {prop.search_profile_id for prop in rows if prop.search_profile_id is not None}
+    )
     if any(
         _dict(signal.get("batch_feedback")).get("answer") == "yes"
         for signal in source.get("signals", [])
@@ -760,6 +763,7 @@ def build_context(
                 getattr(prop, "search_profile_id", None), []
             ),
             profile_state=profile_summary.get("state", "none"),
+            feedback=recommendation_feedback.feedback_for_listing(prop, negatives),
             similarity_reading=(
                 feedback_numeric.get(prop.id)
                 or (

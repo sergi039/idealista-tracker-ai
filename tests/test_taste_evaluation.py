@@ -81,6 +81,7 @@ def test_retained_feedback_excludes_row_and_known_entity(monkeypatch):
         activity_property_ids=set(),
     )
     assert [item["property_id"] for item in result["candidates"]] == [3]
+    assert result["incomplete_exposure_row_ids"] == [1]
     assert result["utility_claim"] == "not_measured"
 
 

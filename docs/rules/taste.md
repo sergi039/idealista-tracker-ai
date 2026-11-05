@@ -305,6 +305,20 @@ even if URL/scope drift makes a previous answer inapplicable to current rank.
 A separate `recommendation_exposure` marker survives ranking rollback: undoing
 a signal cannot make an already-viewed object unseen. Frozen historical alias
 IDs are reserved as well. Incomplete cards are refused by the service itself.
+Exact frozen primary/alias URLs also reserve reimported rows with new IDs
+(#601), using the importer's identity normalizer and original subscription.
+Current No receipts are read outside page filters, but only a live URL/scope-
+validated carrier can enforce No on those aliases. Historical exposure alone
+never restores a rolled-back answer. New imports union scoped URL identities
+into exposure; CAS restore also retains them before removing legacy feedback.
+Blind manifests report `incomplete_exposure_row_ids` when retained legacy
+markers lack URL history; they cannot reconstruct identities already lost with
+all retained rows. Existing conservative entity deduplication remains intact.
+
+Stored hard clauses exclude only current candidates (#602). A dirty snapshot
+can still explain its old conflicts but cannot hide a listing by a removed or
+reversed owner rule; current direct No remains independent and still excludes.
+The shared recommendation context preserves identical page/CSV selection.
 An existing favorite remains its independent positive reference even if that
 card receives No; the card itself is excluded from Recommendations.
 The next unlabeled twenty are not training data. These training ratings are
