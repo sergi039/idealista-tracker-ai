@@ -789,6 +789,28 @@ def test_model_build_and_numeric_call_receive_typed_deduplicated_answers(scope):
     _, profile, rows = scope
     rows[4].owner_verdict = "interested"
     rows[4].owner_verdict_reason = "нравится вид на море"
+    for row in (rows[0], rows[4]):
+        row.location_accuracy = "approximate"
+        row.enrichment = {
+            **row.enrichment,
+            "hazards": {
+                "status": "ok",
+                "origin": {
+                    "lat": float(row.location_lat),
+                    "lon": float(row.location_lon),
+                },
+                "searched_m": 5984,
+                "item_count": 1,
+                "truncated": False,
+                "items": [
+                    {
+                        "kind": "quarry",
+                        "severity": "moderate",
+                        "origin_distance_m": 3000,
+                    }
+                ],
+            },
+        }
     db.session.commit()
     manifest, answers = batch(profile, rows, alias=True)
     answers["answers"][1]["reason"] = "фейк генерация "
@@ -827,6 +849,7 @@ def test_model_build_and_numeric_call_receive_typed_deduplicated_answers(scope):
     assert yes["reason"] == ""
     assert no["reason"] == "фейк генерация "
     assert any("275,000" in fact for fact in yes["facts"])
+    assert any("quarry" in fact for fact in yes["facts"])
     assert built["data"]["source"]["model_profile_dirty"] is False
     answer = {
         "results": [
@@ -851,10 +874,31 @@ def test_model_build_and_numeric_call_receive_typed_deduplicated_answers(scope):
     ):
         result = taste_service.score_batch([rows[4]], built["data"])
     assert result["rows"] == {rows[4].id: "scored"}
-    assert _prompt_examples(bridge.call_args.args[0]) == examples
+    scored_examples = _prompt_examples(bridge.call_args.args[0])
+    assert [{k: v for k, v in e.items() if k != "facts"} for e in scored_examples] == [
+        {k: v for k, v in e.items() if k != "facts"} for e in examples
+    ]
+    assert any("275,000" in fact for fact in scored_examples[0]["facts"])
+    assert not any(
+        fact.startswith("REGIONAL HAZARD")
+        for example in scored_examples
+        for fact in example["facts"]
+    )
+    # Regional data stays stored and reaches model-profile provenance, but
+    # cannot be reinterpreted as an aesthetic/privacy penalty by the scorer.
+    assert "quarry" not in bridge.call_args.args[0]
+    assert "REGIONAL HAZARD:" not in bridge.call_args.args[0]
+    # The emitted model contract must distinguish unknown fit from low fit.
+    assert "Start at 50 (neutral)." in bridge.call_args.args[0]
+    assert "exact YES must raise the score above neutral" in bridge.call_args.args[0]
     assert f"SUBSCRIPTION PROFILE ID: {profile.id}" in bridge.call_args.args[0]
     assert taste_service.read_taste(rows[4], built["data"]["version"])["state"] == "ok"
     assert [row.enrichment for row in rows] == before
+    rows[4].taste = {**rows[4].taste, "scorer_version": 3}
+    db.session.commit()
+    assert (
+        taste_service.read_taste(rows[4], built["data"]["version"])["state"] == "stale"
+    )
 
 
 def test_changed_feedback_fact_dirties_model_and_scope_drift_removes_example(scope):

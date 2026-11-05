@@ -8,6 +8,12 @@
   Stop stale hard clauses from hiding candidates after owner-rule changes,
   while preserving current binary No exclusions and list/CSV parity (#602).
 
+- Correct numeric taste calibration after the live eight-row probe: unknown
+  compatibility starts neutral, exact owner appeal remains observed evidence,
+  and missing facts only lower confidence. Omit regional hazard scans from
+  numeric candidate and exemplar inputs to prevent speculative privacy/aesthetic
+  penalties; retain the stored scans and freshness provenance.
+
 - Include completed appeal answers and their stored evidence in both numeric
   taste prompts, deduplicated by frozen card and scoped to subscription. Keep
   reasonless votes from inventing preferences and trust complaints local;
