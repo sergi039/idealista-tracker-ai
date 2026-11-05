@@ -115,6 +115,13 @@ Four groups: object/photo/municipality and important facts; price/area; reason
 or existing assessment; owner decision and next action. Keep the real decision
 and action independent. No new persistence entity is introduced by layout.
 
+Use compact rows by default: align price, assessment and actions to the top,
+give the object the largest column, and place the closed facts disclosure under
+its photo on desktop/tablet. Opening the disclosure uses the full object column.
+Missing-photo rows keep their details in normal flow. Do not reserve a blank
+full-width row for a closed disclosure, truncate important warnings or reduce
+the established control targets to meet a density budget.
+
 Secondary measurements, coordinates, source links, dates and investment
 information remain in row details and the property page. Significant conflicts,
 approximate location and unknown measurements cannot disappear to meet a height
