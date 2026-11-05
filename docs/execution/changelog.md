@@ -2,6 +2,12 @@
 
 ## 2026-11-05
 
+- Include completed appeal answers and their stored evidence in both numeric
+  taste prompts, deduplicated by frozen card and scoped to subscription. Keep
+  reasonless votes from inventing preferences and trust complaints local;
+  invalidate prior numeric rubric scores and require a real model rebuild when
+  these inputs change. Record accurate job arguments for safe production runs.
+
 - Route project browser checks to the MacBook's isolated Chrome session over
   SSH; refuse a Mac mini fallback so remote Codex chats do not open test
   windows on the server desktop.

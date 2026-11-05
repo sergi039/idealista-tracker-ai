@@ -157,9 +157,6 @@ def main() -> None:
         with inflight(
             "utils.backfill_taste",
             resumable=not args.force,
-            argv=[
-                "--profiles" if args.profiles else ("--ids" if args.ids else "--all"),
-            ],
         ):
             for start in range(0, len(rows), args.batch):
                 batch = rows[start : start + args.batch]

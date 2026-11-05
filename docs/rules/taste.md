@@ -230,6 +230,26 @@ every credible source agrees on that bound; the exact area remains a check.
 
 ## Completed appeal reviews (2026-11-05, #598)
 
+### Numeric rebuilds (#603)
+
+Both model prompts now receive one typed appeal example per applicable frozen
+card, with subscription, live aliases, answer, original reason and stored facts.
+Duplicate portal rows are not extra votes. Binary votes cannot establish new
+traits, weights, budget thresholds or dealbreakers: profile traits still cite
+explicit purchase-review comments only. Yes supplies a scoped exemplar; No
+cannot penalize other objects for resemblance. Photo-trust concerns stay local.
+Candidate subscription IDs are explicit in the scoring request. These inputs
+participate in the model-basis fingerprint, so new votes or changed exemplar
+facts require a model rebuild before numeric scoring. Rubric v3 invalidates
+older numeric scores. No overall score, purchase verdict or favorite changes.
+
+`build_taste_profile` marks its one-call operation non-resumable; the backfill
+marker records the complete real argv. Freeze the exact existing stale numeric
+IDs before an authorized production run, back up their taste blocks/numbers and
+the profile ledger, rebuild once, then use `backfill_taste --ids ... --apply`
+without force. Finished rows leave the scope. A failed call writes nothing;
+report any remaining stale rows rather than declaring a partial run complete.
+
 `services/recommendation_feedback.py` owns the `recommendation_feedback`
 enrichment block. A binary appeal answer is separate from a purchase verdict
 and from a favorite. Yes adds the primary card as a positive recommendation
