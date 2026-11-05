@@ -77,7 +77,7 @@ TASTE_SCORER_VERSION = 2
 # Bumped whenever deterministic recommendation clauses change meaning. It is
 # part of both the source envelope and basis fingerprint, so a snapshot built
 # by an older compiler becomes dirty even when the owner's rows did not move.
-RECOMMENDATION_SCHEMA_VERSION = 2
+RECOMMENDATION_SCHEMA_VERSION = 3
 
 # Verdicts that carry a taste signal. `waiting` is deliberately absent — see
 # the module docstring.
@@ -452,23 +452,38 @@ def facts_fingerprint(facts: List[str]) -> str:
 
 def _signals_from_rows(rows: List[Property]) -> List[Dict[str, Any]]:
     signals = []
+    feedback_by_id = {
+        prop.id: recommendation_feedback.read_feedback(prop) for prop in rows
+    }
+    groups = {}
+
+    def card_key(feedback):
+        return (
+            feedback["source_sha256"],
+            feedback["batch_id"],
+            feedback["property_id"],
+            feedback["profile_id"],
+        )
+
+    for prop in rows:
+        feedback = feedback_by_id[prop.id]
+        if feedback and feedback["answer"] == "yes":
+            groups.setdefault(card_key(feedback), []).append(prop.id)
+    representatives = {
+        key: key[2] if key[2] in ids else min(ids) for key, ids in groups.items()
+    }
     for prop in rows:
         reason = (prop.owner_verdict_reason or "").strip()
-        feedback = recommendation_feedback.read_feedback(prop)
+        feedback = feedback_by_id[prop.id]
         is_signal = prop.owner_verdict in SIGNAL_VERDICTS
         is_anchor = (
-            (
-                bool(prop.is_favorite)
-                or bool(
-                    feedback
-                    and feedback["answer"] == "yes"
-                    and feedback.get("reference_property_id", feedback["property_id"])
-                    == prop.id
-                )
+            bool(prop.is_favorite)
+            or bool(
+                feedback
+                and feedback["answer"] == "yes"
+                and representatives.get(card_key(feedback)) == prop.id
             )
-            and prop.owner_verdict != "rejected"
-            and not (feedback and feedback["answer"] == "no")
-        )
+        ) and prop.owner_verdict != "rejected"
         if not is_signal and not is_anchor and not feedback:
             continue
         taste = prop.taste if isinstance(prop.taste, dict) else {}
@@ -678,12 +693,29 @@ def _validate_profile_payload(payload: Any, valid_ids: List[int]) -> Optional[st
     return None
 
 
+def _model_basis(signals: List[Dict[str, Any]]) -> str:
+    projection = [
+        {
+            key: signal.get(key)
+            for key in ("property_id", "profile_id", "verdict", "reason", "facts")
+        }
+        for signal in signals
+        if signal.get("verdict") in SIGNAL_VERDICTS
+        and (signal.get("reason") or "").strip()
+    ]
+    return hashlib.sha256(
+        json.dumps(projection, sort_keys=True, ensure_ascii=False).encode()
+    ).hexdigest()
+
+
 def _recommendation_source(signals: List[Dict[str, Any]]) -> Dict[str, Any]:
     """One source snapshot for model builds and deterministic feedback refreshes."""
     usable = [signal for signal in signals if signal["usable"]]
     clauses = taste_preferences.compile_signals(signals)
     return {
         "recommendation_schema_version": RECOMMENDATION_SCHEMA_VERSION,
+        "model_basis_fingerprint": _model_basis(signals),
+        "model_profile_dirty": False,
         "preference_compiler_schema_version": taste_preferences.SCHEMA_VERSION,
         "signals": [
             {
@@ -815,15 +847,23 @@ def refresh_feedback_snapshot() -> Dict[str, Any]:
             raise ValueError("an existing owner taste profile is required")
         signals = _signals_from_rows(rows)
         fingerprint = signals_fingerprint(signals)
-        if fingerprint == current["signals_fingerprint"]:
+        if fingerprint == current["signals_fingerprint"] and current["source"].get(
+            "model_basis_fingerprint"
+        ):
             db.session.rollback()
             return {"status": "ok", "changed": False, "data": current}
+        source = _recommendation_source(signals)
+        original_model_basis = current["source"].get(
+            "model_basis_fingerprint"
+        ) or _model_basis(current["source"].get("signals", []))
+        source["model_basis_fingerprint"] = original_model_basis
+        source["model_profile_dirty"] = original_model_basis != _model_basis(signals)
         row = TasteProfile(
             built_at=datetime.now(timezone.utc).replace(tzinfo=None),
             provider="owner-feedback",
             model="deterministic-evidence-refresh",
             signals_fingerprint=fingerprint,
-            source=_recommendation_source(signals),
+            source=source,
             profile=current["profile"],
         )
         db.session.add(row)
@@ -934,6 +974,7 @@ def recommendation_profile_state(
         "state": state,
         "version": profile_data.get("version"),
         "built_at": profile_data.get("built_at"),
+        "model_profile_dirty": bool(source.get("model_profile_dirty")),
         "signal_count": len(source.get("signals") or []),
         "usable_signal_count": sum(
             1 for signal in current_signals if signal.get("usable")
@@ -1083,6 +1124,13 @@ def score_batch(
             "status": "failed",
             "error": "no taste profile",
             "failure_kind": "no_profile",
+            "bridge_called": False,
+        }
+    if profile_data.get("source", {}).get("model_profile_dirty"):
+        return {
+            "status": "failed",
+            "error": "Rebuild the model taste profile before scoring newer review evidence.",
+            "failure_kind": "model_profile_dirty",
             "bridge_called": False,
         }
     for prop in props:

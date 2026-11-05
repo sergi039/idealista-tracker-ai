@@ -631,7 +631,8 @@ def _reading(
         "group": group if state in {"candidate", "stale"} else None,
         "eligibility": (
             "excluded"
-            if hard_conflicts and state in {"candidate", "stale"}
+            if (feedback and feedback["answer"] == "no")
+            or (hard_conflicts and state in {"candidate", "stale"})
             else "eligible"
             if state == "candidate"
             else None

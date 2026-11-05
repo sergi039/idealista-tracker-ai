@@ -21,7 +21,7 @@ def read_json(path):
 
 
 def completed_feedback(checkpoint):
-    """Incomplete or QA forms must never be silently treated as owner ratings."""
+    """Require the saved completion checkpoint, rather than an in-progress export."""
     if (
         not isinstance(checkpoint, dict)
         or checkpoint.get("ok") is not True

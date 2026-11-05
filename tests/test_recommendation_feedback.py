@@ -400,10 +400,7 @@ def test_missing_primary_uses_only_verified_surviving_frozen_alias_once(scope):
     assert report["ratings"] == 2 and report["aliases"] == 2
     assert report["missing_alias_ids"] == [missing]
     stored = feedback.read_feedback(rows[2])
-    assert (
-        stored["property_id"] == missing
-        and stored["reference_property_id"] == rows[2].id
-    )
+    assert stored["property_id"] == missing
     current = taste_service.refresh_feedback_snapshot()["data"]
     assert current["source"]["positive_reference_ids"] == [rows[2].id]
     assert (
@@ -426,3 +423,116 @@ def test_card_without_any_surviving_alias_refuses_whole_batch(scope):
     with pytest.raises(ValueError, match="no surviving"):
         feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
     assert feedback.read_feedback(rows[1]) is None
+
+
+def test_claude_primary_removed_after_import_keeps_one_anchor_and_restores_survivors(
+    scope, tmp_path
+):
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows, alias=True)
+    receipt = tmp_path / "deleted-primary.json"
+    feedback.import_batch(
+        manifest, answers, profile_id=profile.id, apply=True, snapshot_path=receipt
+    )
+    missing = rows[0].id
+    db.session.delete(rows[0])
+    db.session.commit()
+    current = taste_service.refresh_feedback_snapshot()["data"]
+    assert current["source"]["positive_reference_ids"] == [rows[2].id]
+    assert (
+        feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)[
+            "changed"
+        ]
+        == 0
+    )
+    report = feedback.restore_batch(json.loads(receipt.read_text()), apply=True)
+    assert report["restored"] == 2 and report["missing_alias_ids"] == [missing]
+    assert feedback.read_feedback(rows[2]) is None
+
+
+def test_claude_no_does_not_change_existing_favorite_reference(scope):
+    _, profile, rows = scope
+    rows[1].is_favorite = True
+    db.session.commit()
+    manifest, answers = batch(profile, rows)
+    feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    current = taste_service.refresh_feedback_snapshot()["data"]
+    assert rows[1].id in current["source"]["positive_reference_ids"]
+    ctx = taste_recommendation.build_context(
+        rows, current, taste_service.recommendation_profile_state(current)
+    )
+    assert ctx.readings[rows[1].id]["eligibility"] == "excluded"
+    assert rows[1].is_favorite and rows[1].owner_verdict is None
+
+
+def test_claude_new_purchase_reason_does_not_masquerade_as_rebuilt_model(scope):
+    app, profile, rows = scope
+    taste_service.refresh_feedback_snapshot()
+    rows[3].owner_verdict = "rejected"
+    rows[3].owner_verdict_reason = "carretera ruidosa"
+    db.session.commit()
+    current = taste_service.refresh_feedback_snapshot()["data"]
+    assert current["source"].get("model_profile_dirty") is True
+    assert (
+        taste_service.recommendation_profile_state(current)["model_profile_dirty"]
+        is True
+    )
+    body = (
+        app.test_client()
+        .get(f"/properties?profile_id={profile.id}&mode=recommendation&remember=off")
+        .get_data(as_text=True)
+    )
+    assert (
+        'id="model-profile-dirty"' in body
+        and 'id="recommendation-refresh-button"' in body
+    )
+    with patch(
+        "services.subscription_transport.complete",
+        side_effect=AssertionError("stale model cannot be scored"),
+    ):
+        result = taste_service.score_batch([rows[4]], current)
+    assert (
+        result["failure_kind"] == "model_profile_dirty"
+        and result["bridge_called"] is False
+    )
+
+
+def test_claude_restore_retains_exposure_for_blind_evaluation(scope, tmp_path):
+    from services import taste_evaluation
+
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows, alias=True)
+    receipt = tmp_path / "exposure.json"
+    feedback.import_batch(
+        manifest, answers, profile_id=profile.id, apply=True, snapshot_path=receipt
+    )
+    feedback.restore_batch(json.loads(receipt.read_text()), apply=True)
+    assert feedback.has_recorded_feedback(rows[0])
+    result = taste_evaluation.build_manifest(
+        rows, learning_property_ids=set(), activity_property_ids=set()
+    )
+    assert not {rows[0].id, rows[1].id, rows[2].id} & {
+        item["property_id"] for item in result["candidates"]
+    }
+
+
+def test_incomplete_direct_import_has_no_effect(scope):
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows)
+    answers["answers"][1]["answer"] = None
+    with pytest.raises(ValueError):
+        feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    assert all(feedback.read_feedback(row) is None for row in rows)
+
+
+def test_binary_refresh_does_not_dirty_unchanged_model_basis(scope):
+    _, profile, rows = scope
+    initial = taste_service.refresh_feedback_snapshot()["data"]
+    manifest, answers = batch(profile, rows)
+    feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    current = taste_service.refresh_feedback_snapshot()["data"]
+    assert (
+        current["source"]["model_basis_fingerprint"]
+        == initial["source"]["model_basis_fingerprint"]
+    )
+    assert current["source"]["model_profile_dirty"] is False

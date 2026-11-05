@@ -57,6 +57,11 @@ def build_manifest(
             + ", ".join(str(value) for value in sorted(missing_excluded_ids))
         )
 
+    historical_aliases = set().union(
+        *(recommendation_feedback.exposed_alias_ids(prop) for prop in rows)
+    )
+    excluded_row_ids |= historical_aliases
+
     def excluded(prop: Any) -> bool:
         return (
             prop.id in excluded_row_ids

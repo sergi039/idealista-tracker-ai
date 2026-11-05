@@ -6,6 +6,10 @@
   SSH; refuse a Mac mini fallback so remote Codex chats do not open test
   windows on the server desktop.
 
+- Preserve one validated live alias after a pilot primary disappears, retain
+  exposure history through feedback rollback, and disclose a stale model basis
+  independently from current prepared recommendations. Block numeric scoring
+  against changed model evidence; keep favorite references independent.
 - Connect completed owner appeal reviews to recommendation references and exact
   object exclusions, with atomic idempotent import, private rollback receipts
   and scoped compare-and-swap restore. Preserve favorites and purchase state.

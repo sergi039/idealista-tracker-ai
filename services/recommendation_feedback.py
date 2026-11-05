@@ -23,6 +23,7 @@ from services.enrichment_write import merge_json_object_changes_under_lock
 from utils.review_json import canonical, valid_reason, valid_timestamp
 
 KEY = "recommendation_feedback"
+EXPOSURE_KEY = "recommendation_exposure"
 MEANING = "recommendation_appeal_not_purchase_verdict"
 
 
@@ -64,7 +65,22 @@ def has_recorded_feedback(prop: Any) -> bool:
     this row. This does not make that feedback valid for current ranking.
     """
     enrichment = getattr(prop, "enrichment", None)
-    return isinstance(enrichment, dict) and enrichment.get(KEY) is not None
+    return isinstance(enrichment, dict) and (
+        enrichment.get(KEY) is not None or enrichment.get(EXPOSURE_KEY) is not None
+    )
+
+
+def exposed_alias_ids(prop: Any) -> set[int]:
+    """Frozen identities stay seen even after an algorithmic feedback rollback."""
+    enrichment = getattr(prop, "enrichment", None)
+    if not isinstance(enrichment, dict):
+        return set()
+    ids = set()
+    for key in (KEY, EXPOSURE_KEY):
+        record = enrichment.get(key)
+        if isinstance(record, dict) and isinstance(record.get("row_ids"), list):
+            ids.update(i for i in record["row_ids"] if type(i) is int and i > 0)
+    return ids
 
 
 def read_feedback(prop: Any) -> dict[str, Any] | None:
@@ -117,7 +133,7 @@ def validate_batch(
     if not isinstance(candidates, list) or not 1 <= len(candidates) <= 100:
         raise ValueError("a pilot must contain 1..100 cards")
     if not isinstance(answers, list) or len(answers) != len(candidates):
-        raise ValueError("one answer or explicit skip is required for every card")
+        raise ValueError("one completed answer is required for every card")
     if any(not isinstance(c, dict) or type(c.get("id")) is not int for c in candidates):
         raise ValueError("invalid frozen cards")
     cards = {c["id"]: c for c in candidates}
@@ -157,7 +173,7 @@ def validate_batch(
             or answer.get("row_ids") != row_ids
             or answer.get("baseline")
             != {"similarity": card.get("similarity"), "rank": card.get("rank")}
-            or answer.get("answer") not in {None, "yes", "no"}
+            or answer.get("answer") not in {"yes", "no"}
             or not valid_reason(answer.get("reason"))
         ):
             raise ValueError("answer aliases/baseline/value do not match its card")
@@ -165,8 +181,6 @@ def validate_batch(
         stamp = answer.get("updated_at")
         if not valid_timestamp(stamp):
             raise ValueError("invalid answer timestamp")
-        if answer["answer"] is None:
-            continue
         records.append(
             {
                 "schema_version": 1,
@@ -212,7 +226,6 @@ def import_batch(
                 raise ValueError(
                     f"#{record['property_id']} has no surviving frozen alias"
                 )
-            previous_references = set()
             for ident in surviving:
                 row = by_id[ident]
                 allowed = (
@@ -225,11 +238,14 @@ def import_batch(
                         f"#{ident} listing URL changed since the frozen pilot"
                     )
                 previous = read_feedback(row)
-                if previous:
-                    previous_references.add(
-                        previous.get("reference_property_id", previous["property_id"])
-                    )
                 stored = (row.enrichment or {}).get(KEY)
+                exposure = (row.enrichment or {}).get(EXPOSURE_KEY)
+                if exposure is not None and (
+                    not isinstance(exposure, dict)
+                    or not isinstance(exposure.get("row_ids"), list)
+                    or any(type(i) is not int or i < 1 for i in exposure["row_ids"])
+                ):
+                    raise ValueError(f"#{ident} has unreadable exposure history")
                 if stored is not None and (
                     previous is None
                     or previous["source_sha256"] != record["source_sha256"]
@@ -237,19 +253,6 @@ def import_batch(
                     raise ValueError(
                         f"#{ident} already has another rating; preserve its history before replacement"
                     )
-            if len(previous_references) > 1 or (
-                previous_references and not previous_references <= set(surviving)
-            ):
-                raise ValueError(
-                    "the previous reference alias no longer survives consistently"
-                )
-            record["reference_property_id"] = (
-                next(iter(previous_references))
-                if previous_references
-                else record["property_id"]
-                if record["property_id"] in surviving
-                else surviving[0]
-            )
         changed = 0
         changes = []
         if apply:
@@ -277,8 +280,30 @@ def import_batch(
                             "after": {"present": True, "value": item},
                         }
                     )
+                    # Rolling back the ranking signal cannot undo the fact
+                    # that the owner has already seen this frozen card.
+                    updated = {**base, KEY: item}
+                    if base.get(EXPOSURE_KEY) is None:
+                        updated[EXPOSURE_KEY] = {
+                            name: record[name]
+                            for name in (
+                                "schema_version",
+                                "batch_id",
+                                "property_id",
+                                "row_ids",
+                                "source_sha256",
+                            )
+                        }
+                    else:
+                        updated[EXPOSURE_KEY] = {
+                            **base[EXPOSURE_KEY],
+                            "row_ids": sorted(
+                                set(base[EXPOSURE_KEY]["row_ids"])
+                                | set(record["row_ids"])
+                            ),
+                        }
                     merge_json_object_changes_under_lock(
-                        row, "enrichment", base=base, updated={**base, KEY: item}
+                        row, "enrichment", base=base, updated=updated
                     )
                     changed += 1
             _write_snapshot(
@@ -334,9 +359,9 @@ def restore_batch(snapshot: Any, *, apply: bool = False) -> dict[str, Any]:
             query.with_for_update().populate_existing().all() if apply else query.all()
         )
         by_id = {row.id: row for row in rows}
-        if set(ids) != set(by_id):
-            raise ValueError("rollback rows missing")
         for item in changes:
+            if item["id"] not in by_id:
+                continue
             row = by_id[item["id"]]
             block = row.enrichment or {}
             if (
@@ -347,6 +372,8 @@ def restore_batch(snapshot: Any, *, apply: bool = False) -> dict[str, Any]:
                 raise ValueError(f"#{row.id} changed since import; rollback refused")
         if apply:
             for item in changes:
+                if item["id"] not in by_id:
+                    continue
                 row = by_id[item["id"]]
                 base = copy.deepcopy(row.enrichment or {})
                 updated = copy.deepcopy(base)
@@ -359,9 +386,14 @@ def restore_batch(snapshot: Any, *, apply: bool = False) -> dict[str, Any]:
                 )
             db.session.commit()
         return {
-            "restored": len(changes) if apply else 0,
-            "rows": len(changes),
+            "restored": len(rows) if apply else 0,
+            "rows": len(rows),
             "applied": apply,
+            **(
+                {"missing_alias_ids": sorted(set(ids) - by_id.keys())}
+                if set(ids) != set(by_id)
+                else {}
+            ),
         }
     except Exception:
         db.session.rollback()
