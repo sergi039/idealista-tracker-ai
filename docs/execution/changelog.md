@@ -157,3 +157,10 @@
   with its flat structured-output subset and added the exact image identity
   manifest to the extraction prompt. Strict aspect, unknown, parcel-outline
   and provenance validation still runs before persistence.
+
+## 2026-11-06
+
+- Added My searches and the complete Technical subscriptions inventory, explicit
+  promotion, atomic previewed merges and deletion with retained data. Ingestion
+  no longer invents owner searches for every new label. Moved feedback remains
+  bound through an explicit transfer trail while original receipts stay intact.

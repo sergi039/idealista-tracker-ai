@@ -2658,6 +2658,7 @@ def profiles():
     """
     try:
         from services.search_profile_service import SearchProfileService
+        from services import search_management as management
 
         profiles = SearchProfileService.list_profiles(active_only=False)
         # Ensure at least one profile exists.
@@ -2681,13 +2682,76 @@ def profiles():
             profiles=profiles,
             property_counts=counts,
             unassigned_count=unassigned_count,
+            technical=request.args.get("view") == "technical",
+            management=management,
+            names={p.id: p.name for p in profiles},
         )
     except Exception:
         logger.error("Failed to load profiles page", exc_info=True)
-        flash("An error occurred while loading profiles. Check server logs.", "error")
-        return render_template(
-            "profiles.html", profiles=[], property_counts={}, unassigned_count=0
+        abort(500)
+
+
+@main_bp.route("/profiles/manage", methods=["GET", "POST"])
+def manage_searches():
+    """A session-bound, expiring preview; the service rechecks it under locks."""
+    from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+    from services import search_management as management
+
+    serializer = URLSafeTimedSerializer(
+        current_app.secret_key, salt="search-management-v1"
+    )
+    try:
+        if request.method == "POST":
+            payload = serializer.loads(
+                request.form.get("preview_token", ""), max_age=1800
+            )
+            if payload.get("session") != session.get("search_management_nonce"):
+                raise ValueError("stale_preview")
+            management.apply(
+                payload["sources"],
+                payload["target"],
+                payload["action"],
+                payload["fingerprint"],
+                acknowledge=request.form.get("acknowledge") == "on",
+            )
+            flash(t("search_management_done"), "success")
+            return redirect(url_for("main.profiles"))
+        source_ids = [int(value) for value in request.args.getlist("source_id")]
+        action = request.args.get("action", "merge")
+        target_id = (
+            request.args.get("target_id", type=int) if action == "merge" else None
         )
+        report = management.preview(source_ids, target_id, action)
+        nonce = session.setdefault("search_management_nonce", uuid.uuid4().hex)
+        token = serializer.dumps(
+            {
+                "sources": source_ids,
+                "target": target_id,
+                "action": action,
+                "fingerprint": report["fingerprint"],
+                "session": nonce,
+            }
+        )
+        return render_template(
+            "search_management_preview.html", report=report, preview_token=token
+        )
+    except (BadSignature, SignatureExpired, ValueError, KeyError, TypeError) as exc:
+        db.session.rollback()
+        reason = (
+            str(exc)
+            if str(exc)
+            in {
+                "stale_preview",
+                "acknowledge_conflicts",
+                "source_carries_a_pattern",
+                "source_is_a_route_target",
+                "protected_profile",
+                "invalid_target",
+            }
+            else "invalid_selection"
+        )
+        flash(t("search_management_error_" + reason), "error")
+        return redirect(url_for("main.profiles", view="technical"))
 
 
 @main_bp.route("/profiles/<int:profile_id>/visibility", methods=["POST"])
@@ -2706,6 +2770,11 @@ def set_profile_visibility(profile_id):
     """
     profile = db.get_or_404(SearchProfile, profile_id)
     hidden = request.form.get("hidden") == "on"
+    from services.search_management import owner_search
+
+    if not hidden and not owner_search(profile):
+        flash(t("search_management_error_protected_profile"), "error")
+        return redirect(url_for("main.profiles", view="technical"))
 
     if hidden and profile.is_default:
         flash(t("profile_default_cannot_hide"), "error")
@@ -2786,6 +2855,12 @@ def edit_profile(profile_id):
     from services.settings_service import SettingsService
 
     profile = db.get_or_404(SearchProfile, profile_id)
+
+    from services.search_management import owner_search
+
+    if request.method == "POST" and not owner_search(profile):
+        flash(t("search_management_error_protected_profile"), "error")
+        return redirect(url_for("main.profiles", view="technical"))
 
     if request.method == "POST":
         action = (request.form.get("action") or "").strip()

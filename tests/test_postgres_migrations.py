@@ -3406,3 +3406,103 @@ def test_028_a_judged_row_that_fails_the_criteria_is_still_shown_on_postgres(
         ).get_json()
         assert {p["id"] for p in only_fails["properties"]} == fails
         _db.session.remove()
+
+
+def test_management_merge_serializes_ingestion_and_preserves_enrichment(
+    postgres_url, monkeypatch
+):
+    """A row held by an enrichment writer delays merge; a later insert follows its stub."""
+    import threading
+    from app import create_app
+    from migrations.runner import run_migrations
+    from models import Property, SearchProfile
+    from services import search_management
+    from tests import setup_test_environment
+
+    engine = create_engine(postgres_url)
+    run_migrations(engine)
+    setup_test_environment()
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    app = create_app()
+    with app.app_context():
+        source, target = SearchProfile(name="City"), SearchProfile(name="Region")
+        db.session.add_all([source, target])
+        db.session.flush()
+        row = Property(
+            source_email_id="management-concurrent",
+            search_profile_id=source.id,
+            enrichment={"original": True},
+        )
+        db.session.add(row)
+        db.session.commit()
+        source_id, target_id, row_id = source.id, target.id, row.id
+
+    started, done = threading.Event(), threading.Event()
+    errors = []
+
+    def merge():
+        try:
+            with app.app_context():
+                started.set()
+                report = search_management.preview([source_id], target_id, lock=True)
+                search_management.apply(
+                    [source_id], target_id, "merge", report["fingerprint"]
+                )
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            done.set()
+
+    try:
+        with engine.begin() as writer:
+            writer.execute(
+                text("SELECT id FROM properties WHERE id=:id FOR UPDATE"),
+                {"id": row_id},
+            )
+            thread = threading.Thread(target=merge, daemon=True)
+            thread.start()
+            assert started.wait(10)
+            # Observe actual pg_locks rather than treating a sleeping thread as proof.
+            deadline = time.monotonic() + 10
+            blocked = False
+            while time.monotonic() < deadline and not done.is_set():
+                with engine.connect() as observer:
+                    blocked = observer.execute(
+                        text(
+                            "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT%%properties%%')"
+                        )
+                    ).scalar()
+                if blocked:
+                    break
+                time.sleep(0.02)
+            assert blocked, errors
+            writer.execute(
+                text(
+                    "UPDATE properties SET enrichment='{"
+                    + '"original": true, "concurrent": true'
+                    + "}'::json WHERE id=:id"
+                ),
+                {"id": row_id},
+            )
+        thread.join(15)
+        assert done.is_set() and not errors
+        with app.app_context():
+            row = db.session.get(Property, row_id)
+            assert row.search_profile_id == target_id
+            assert (
+                row.enrichment["concurrent"] is True
+                and row.enrichment["original"] is True
+            )
+            assert row.enrichment["profile_transfers"] == [
+                {"from_profile_id": source_id, "to_profile_id": target_id}
+            ]
+            # Stale raw ingestion identity is canonicalized by the production trigger.
+            incoming = Property(
+                source_email_id="after-management-merge", search_profile_id=source_id
+            )
+            db.session.add(incoming)
+            db.session.commit()
+            db.session.refresh(incoming)
+            assert incoming.search_profile_id == target_id
+    finally:
+        engine.dispose()

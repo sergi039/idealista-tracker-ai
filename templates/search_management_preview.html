@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}{{ t('search_management_preview') }}{% endblock %}
+{% block content %}
+<h2>{{ t('search_management_preview') }}</h2>
+<div class="card card-body mb-3">
+    <h3 class="h5">{{ t('search_action_' ~ report.action) }}</h3>
+    <ul>{% for p in report.sources %}<li>#{{ p.id }} · {{ p.name }}</li>{% endfor %}</ul>
+    {% if report.target %}
+    <p><strong>{{ t('search_destination') }}:</strong> #{{ report.target.id }} · {{ report.target.name }}</p>
+    <p>{{ t('search_target_settings_kept') }}</p>
+    <pre class="text-wrap text-break">{{ report.target.criteria | tojson(indent=2) }}</pre>
+    {% endif %}
+    <p>{{ t('column_properties') }}: {{ report.properties }} · {{ t('favorites') }}: {{ report.favorites }} · {{ t('search_reviews') }}: {{ report.reviews }}</p>
+    <p>{{ t('search_retention_note') }}</p>
+    {% if report.action == 'remove' %}<p class="fw-semibold">{{ t('search_remove_note') }}</p>{% endif %}
+    {% if report.action == 'promote' %}<p>{{ t('search_promote_note') }}</p>{% endif %}
+    {% if report.conflicts %}
+    <h4 class="h6">{{ t('search_configuration_conflicts') }}</h4>
+    {% for difference in report.conflicts %}
+    <details class="mb-2"><summary>{{ difference.source }} · {{ difference.field }}</summary>
+        <p>{{ t('search_original_settings') }}</p><pre class="text-wrap text-break">{{ difference.source_value | tojson(indent=2) }}</pre>
+        <p>{{ t('search_destination') }}</p><pre class="text-wrap text-break">{{ difference.target_value | tojson(indent=2) }}</pre>
+    </details>
+    {% endfor %}
+    {% endif %}
+</div>
+<form method="post" class="d-flex flex-wrap gap-3 align-items-center">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="preview_token" value="{{ preview_token }}">
+    {% if report.conflicts %}
+    <label class="form-check"><input class="form-check-input" type="checkbox" name="acknowledge" required> {{ t('search_conflicts_acknowledge') }}</label>
+    {% endif %}
+    <button class="btn btn-danger" type="submit">{{ t('search_confirm') }}</button>
+    <a class="btn btn-outline-secondary" href="{{ url_for('main.profiles') }}">{{ t('cancel') }}</a>
+</form>
+{% endblock %}
