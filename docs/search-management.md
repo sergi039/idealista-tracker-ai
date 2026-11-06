@@ -20,7 +20,8 @@ Routes remain one hop. Catch-all, already-routed sources, pattern carriers and
 sources with inbound routes cannot be merged. The last two can instead be removed
 without transfer; their objects and inbound ingestion remain accessible technically.
 
-Delete from My searches is a retained technical tombstone, not physical deletion
+Delete from My searches leaves the original ingestion activity unchanged (including
+matcher-only alert routing). It is a retained technical tombstone, not physical deletion
 or a portal unsubscribe. No properties, profiles, favorites, review history or
 attachments are deleted. Restore uses Make an independent search. Routed stubs
 cannot be restored or shown independently. Ordinary settings saves cannot revive

@@ -155,7 +155,9 @@ def apply(source_ids, target_id, action, fingerprint, *, acknowledge=False):
             elif action == "remove":
                 set_state(source, "deleted")
                 source.is_hidden = True
-                source.is_active = False
+                # Activity controls matcher-based ingestion too. Removing an
+                # owner search must retain its previous routing behavior.
+                # An already archived source must likewise stay archived.
             else:
                 set_state(source, "owner")
                 source.is_hidden = False

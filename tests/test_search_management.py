@@ -148,11 +148,7 @@ def test_remove_keeps_inbound_routes_and_restore_is_explicit(scope):
     original_count = Property.query.count()
     report = management.preview([source.id], action="remove")
     management.apply([source.id], None, "remove", report["fingerprint"])
-    assert (
-        not management.owner_search(source)
-        and source.is_hidden
-        and not source.is_active
-    )
+    assert not management.owner_search(source) and source.is_hidden and source.is_active
     assert Property.query.count() == original_count
     assert (
         SearchProfileService.resolve_profile(
@@ -294,3 +290,20 @@ def test_cli_requires_exact_preview_and_exclusive_private_receipt(
     saved = json.loads(receipt.read_text())
     assert saved["properties"][0]["search_profile_id"] == source.id
     assert receipt.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("was_active", [True, False])
+def test_remove_preserves_matcher_only_ingestion_and_activity(scope, was_active):
+    """No saved-search URL or name: removal used to send this mail to Default."""
+    _, source, _ = scope
+    source.email_matchers = [{"pattern": "portal-marker-only", "priority": 10}]
+    source.is_active = was_active
+    db.session.commit()
+    before = SearchProfileService.resolve_profile("portal-marker-only", "").id
+    report = management.preview([source.id], action="remove")
+    management.apply([source.id], None, "remove", report["fingerprint"])
+    after = SearchProfileService.resolve_profile("portal-marker-only", "").id
+    assert source.is_active is was_active
+    assert before == after
+    if was_active:
+        assert after == source.id
