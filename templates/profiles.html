@@ -2,7 +2,7 @@
 {% block title %}{{ t('search_profiles') }}{% endblock %}
 {% macro profile_table(items, unassigned=false) %}
 <table class="table table-hover align-middle search-management-table">
-    <thead><tr>{% for key in ['column_id', 'column_name', 'column_properties', 'column_active', 'column_visible', 'column_updated', 'search_actions'] %}<th>{{ t(key) }}</th>{% endfor %}</tr></thead>
+    <thead class="lands-table-head"><tr>{% for key in ['column_id', 'column_name', 'column_properties', 'column_active', 'column_visible', 'column_updated', 'search_actions'] %}<th>{{ t(key) }}</th>{% endfor %}</tr></thead>
     <tbody>
     {% for p in items %}
     <tr data-profile-id="{{ p.id }}">
@@ -39,7 +39,7 @@
         </div></td>
     </tr>
     {% endfor %}
-    {% if unassigned %}<tr id="profiles-unassigned-row"><td>—</td><td>{{ t('no_subscription') }}</td><td><a class="small text-decoration-none" href="{{ url_for('main.properties', profile_id='unassigned', hide_removed='off', criteria='all') }}">{{ unassigned_count }}</a></td><td colspan="4">{{ t('unassigned_row_help') }}</td></tr>{% endif %}
+    {% if unassigned %}<tr id="profiles-unassigned-row" class="table-row-muted"><td>—</td><td>{{ t('no_subscription') }}</td><td><a class="small text-decoration-none" href="{{ url_for('main.properties', profile_id='unassigned', hide_removed='off', criteria='all') }}">{{ unassigned_count }}</a></td><td colspan="4">{{ t('unassigned_row_help') }}</td></tr>{% endif %}
     </tbody>
 </table>
 {% endmacro %}
