@@ -24,7 +24,7 @@
     {% endfor %}
     {% endif %}
 </div>
-<form method="post" class="d-flex flex-wrap gap-3 align-items-center">
+<form method="post" class="search-management-confirm d-flex flex-wrap gap-3 align-items-center">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="preview_token" value="{{ preview_token }}">
     {% if report.conflicts %}
