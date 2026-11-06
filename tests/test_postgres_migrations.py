@@ -3506,3 +3506,104 @@ def test_management_merge_serializes_ingestion_and_preserves_enrichment(
             assert incoming.search_profile_id == target_id
     finally:
         engine.dispose()
+
+
+def test_show_cannot_revive_a_concurrently_technical_subscription(
+    postgres_url, monkeypatch
+):
+    """Pause Show after its role check: Move to technical must wait for its row lock."""
+    import threading
+    from app import create_app
+    from migrations.runner import run_migrations
+    from models import SearchProfile
+    from services import search_management
+    from tests import setup_test_environment
+
+    engine = create_engine(postgres_url)
+    run_migrations(engine)
+    setup_test_environment()
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    app = create_app(testing=True)
+    with app.app_context():
+        source = SearchProfile(
+            name="Hidden owner search", is_hidden=True, is_active=True
+        )
+        db.session.add(source)
+        db.session.commit()
+        source_id = source.id
+
+    checked, release_show, move_started, move_done = [
+        threading.Event() for _ in range(4)
+    ]
+    errors = []
+    original = search_management.owner_search
+
+    def paused_owner_search(profile):
+        result = original(profile)
+        if threading.current_thread().name == "show-owner-search":
+            checked.set()
+            assert release_show.wait(15), "Show was never released"
+        return result
+
+    monkeypatch.setattr(search_management, "owner_search", paused_owner_search)
+
+    def show():
+        try:
+            with app.test_client() as client:
+                assert (
+                    client.post(
+                        f"/profiles/{source_id}/visibility", data={"hidden": "off"}
+                    ).status_code
+                    == 302
+                )
+        except BaseException as exc:
+            errors.append(exc)
+
+    def move():
+        try:
+            with app.app_context():
+                move_started.set()
+                report = search_management.preview(
+                    [source_id], action="technical", lock=True
+                )
+                search_management.apply(
+                    [source_id], None, "technical", report["fingerprint"]
+                )
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            move_done.set()
+
+    shower = threading.Thread(target=show, name="show-owner-search", daemon=True)
+    mover = threading.Thread(target=move, daemon=True)
+    try:
+        shower.start()
+        assert checked.wait(10)
+        mover.start()
+        assert move_started.wait(10)
+        deadline = time.monotonic() + 10
+        blocked = False
+        while time.monotonic() < deadline and not move_done.is_set():
+            with engine.connect() as observer:
+                blocked = observer.execute(
+                    text(
+                        "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT%%search_profiles%%')"
+                    )
+                ).scalar()
+            if blocked:
+                break
+            time.sleep(0.02)
+        assert blocked, (
+            "Move did not wait: Show's eligibility check and update are not atomic"
+        )
+    finally:
+        release_show.set()
+        shower.join(15)
+        if mover.ident:
+            mover.join(15)
+        engine.dispose()
+    assert not shower.is_alive() and not mover.is_alive() and not errors
+    with app.app_context():
+        source = db.session.get(SearchProfile, source_id)
+        assert source.is_hidden is True
+        assert search_management.state(source) == "technical"

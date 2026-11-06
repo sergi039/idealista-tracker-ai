@@ -2768,7 +2768,15 @@ def set_profile_visibility(profile_id):
     arrive, with nothing on screen saying where they went -- the same reason
     `edit_profile` forces the default profile active.
     """
-    profile = db.get_or_404(SearchProfile, profile_id)
+    # Serialize Show/Hide with merge, retirement and explicit promotion.
+    # Re-read under the same row lock used by search management before
+    # checking ownership; a stale Show must not unhide a technical stub.
+    profile = (
+        SearchProfile.query.filter_by(id=profile_id)
+        .populate_existing()
+        .with_for_update()
+        .first_or_404()
+    )
     hidden = request.form.get("hidden") == "on"
     from services.search_management import owner_search
 
