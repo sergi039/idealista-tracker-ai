@@ -491,7 +491,17 @@ def read_native(url, nonce):
         except BlockingIOError:
             return {"nonce": nonce, "refusal": "browser_busy"}
 
+        cleaning_up = False
+        deferred_signals = set()
+
         def expired(signum, frame):
+            nonlocal cleaning_up
+            # A process-directed signal can reach an unblocked background
+            # thread, then Python dispatches it on this main thread anyway.
+            if cleaning_up:
+                deferred_signals.add(signum)
+                return
+            cleaning_up = True
             raise ReaderFailure("browser_unavailable")
 
         old_handlers = {
@@ -501,6 +511,8 @@ def read_native(url, nonce):
         masks = []
 
         def block_cleanup_signals():
+            nonlocal cleaning_up
+            cleaning_up = True
             masks.append(signal.pthread_sigmask(signal.SIG_BLOCK, old_handlers))
 
         def restore_signals():
@@ -508,6 +520,8 @@ def read_native(url, nonce):
                 signal.signal(sig, handler)
             if masks:
                 signal.pthread_sigmask(signal.SIG_SETMASK, masks[0])
+            for sig in tuple(deferred_signals):
+                signal.raise_signal(sig)
 
         def close_owned_tab():
             try:
@@ -524,53 +538,57 @@ def read_native(url, nonce):
             cleanup.callback(close_owned_tab)
             cleanup.callback(signal.setitimer, signal.ITIMER_REAL, 0)
             cleanup.callback(block_cleanup_signals)
-            for sig in old_handlers:
-                signal.signal(sig, expired)
-            signal.setitimer(signal.ITIMER_REAL, REMOTE_SECONDS)
-            path = Path(temporary) / "listing.mhtml"
-            tab.open()
-            tab.navigate(wanted)
-            while time.monotonic() < deadline:
-                location = tab.location()
-                if (
-                    location == wanted
-                    and tab.command("return loading of auditTab") == "false"
-                ):
-                    if tab.archive(wanted, path):
-                        break
-                elif (
-                    location not in ("about:blank", "chrome://newtab/", wanted)
-                    and location != tab.initial_url
-                ):
-                    raise ReaderFailure("not_the_listing_page")
-                time.sleep(0.2)
-            else:
+            try:
+                for sig in old_handlers:
+                    signal.signal(sig, expired)
+                signal.setitimer(signal.ITIMER_REAL, REMOTE_SECONDS)
+                path = Path(temporary) / "listing.mhtml"
+                tab.open()
+                tab.navigate(wanted)
+                while time.monotonic() < deadline:
+                    location = tab.location()
+                    if (
+                        location == wanted
+                        and tab.command("return loading of auditTab") == "false"
+                    ):
+                        if tab.archive(wanted, path):
+                            break
+                    elif (
+                        location not in ("about:blank", "chrome://newtab/", wanted)
+                        and location != tab.initial_url
+                    ):
+                        raise ReaderFailure("not_the_listing_page")
+                    time.sleep(0.2)
+                else:
+                    raise ReaderFailure("browser_unavailable")
+                previous = None
+                while time.monotonic() < deadline:
+                    if tab.location() != wanted:
+                        raise ReaderFailure("not_the_listing_page")
+                    size = path.stat().st_size if path.exists() else 0
+                    if size > MAX_ARCHIVE_BYTES:
+                        raise ReaderFailure("not_the_listing_page")
+                    if size and size == previous:
+                        try:
+                            page = read_archive(path, wanted)
+                            return dict(
+                                page,
+                                nonce=nonce,
+                                url=wanted,
+                                ready="complete",
+                                reader_elapsed_ms=(time.monotonic() - started) * 1000,
+                            )
+                        except ArchiveIncomplete:
+                            # Only unfinished MIME can become valid by waiting.
+                            pass
+                        except (ValueError, UnicodeError, LookupError):
+                            raise ReaderFailure("not_the_listing_page") from None
+                    previous = size
+                    time.sleep(0.2)
                 raise ReaderFailure("browser_unavailable")
-            previous = None
-            while time.monotonic() < deadline:
-                if tab.location() != wanted:
-                    raise ReaderFailure("not_the_listing_page")
-                size = path.stat().st_size if path.exists() else 0
-                if size > MAX_ARCHIVE_BYTES:
-                    raise ReaderFailure("not_the_listing_page")
-                if size and size == previous:
-                    try:
-                        page = read_archive(path, wanted)
-                        return dict(
-                            page,
-                            nonce=nonce,
-                            url=wanted,
-                            ready="complete",
-                            reader_elapsed_ms=(time.monotonic() - started) * 1000,
-                        )
-                    except ArchiveIncomplete:
-                        # Only unfinished MIME can become valid by waiting.
-                        pass
-                    except (ValueError, UnicodeError, LookupError):
-                        raise ReaderFailure("not_the_listing_page") from None
-                previous = size
-                time.sleep(0.2)
-            raise ReaderFailure("browser_unavailable")
+            finally:
+                # Protect ExitStack's own bookkeeping as well as callbacks.
+                cleaning_up = True
 
 
 def main(payload):

@@ -521,13 +521,12 @@ def test_missing_or_ambiguous_marker_never_closes_an_owner_window(monkeypatch):
 
 
 def test_watchdog_signal_cannot_interrupt_archive_deletion(tmp_path, monkeypatch):
-    import os
     import signal
+    import threading
 
     monkeypatch.setattr(reader.socket, "gethostname", lambda: reader.MACBOOK)
     monkeypatch.setattr(reader.subprocess, "run", lambda *a, **kw: Mock(returncode=0))
     monkeypatch.setattr(reader.Path, "home", lambda: tmp_path)
-    monkeypatch.setattr(reader, "REMOTE_SECONDS", 2)
     events = []
 
     class Tab:
@@ -558,7 +557,8 @@ def test_watchdog_signal_cannot_interrupt_archive_deletion(tmp_path, monkeypatch
 
     def interrupted_rmtree(cls, path, *args, **kwargs):
         events.append(("timer-disarmed", signal.getitimer(signal.ITIMER_REAL)[0] == 0))
-        os.kill(os.getpid(), signal.SIGALRM)
+        fire.set()
+        assert sent.wait(timeout=2)
         original_rmtree(path, *args, **kwargs)
         events.append("archive-deleted")
 
@@ -567,9 +567,26 @@ def test_watchdog_signal_cannot_interrupt_archive_deletion(tmp_path, monkeypatch
     )
     previous = signal.getsignal(signal.SIGALRM)
     signal.signal(signal.SIGALRM, lambda *args: events.append("signal-delivered"))
+    stop = threading.Event()
+    fire = threading.Event()
+    sent = threading.Event()
+
+    def send_from_unblocked_worker():
+        fire.wait()
+        if stop.is_set():
+            return
+        signal.raise_signal(signal.SIGALRM)
+        sent.set()
+        stop.wait()
+
+    worker = threading.Thread(target=send_from_unblocked_worker)
+    worker.start()
     try:
         page = reader.read_native(URL, NONCE)
     finally:
+        stop.set()
+        fire.set()
+        worker.join(timeout=2)
         signal.signal(signal.SIGALRM, previous)
     assert page["saved"] is True
     assert ("timer-disarmed", True) in events

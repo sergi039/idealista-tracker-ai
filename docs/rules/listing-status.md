@@ -124,3 +124,8 @@ Cleanup uses `ExitStack` in this order: block handled signals, disarm the
 watchdog, close the owned tab, delete the private archive, then restore signal
 handlers and the prior signal mask. The watchdog cannot interrupt archive
 deletion; pending cancellation is delivered only after mandatory cleanup.
+
+Process-directed signals delivered through a background thread are also deferred
+by the Python handler while cleanup is active, then re-delivered to the restored
+handler after deletion. A pthread mask alone cannot protect Python's main-thread
+signal dispatch in that case.
