@@ -79,7 +79,10 @@ def test_non_portal_retry_contract_is_unchanged(monkeypatch):
     assert "proxies" not in transport.call_args.kwargs
 
 
-@pytest.mark.parametrize("route_override", ["none", "session_host", "environment_host"])
+@pytest.mark.parametrize(
+    "route_override",
+    ["none", "session_host", "environment_host", "partial_keyword", "unbound_keyword"],
+)
 def test_dead_proxy_cannot_fall_back_to_direct_loopback_target(
     monkeypatch, route_override
 ):
@@ -110,20 +113,30 @@ def test_dead_proxy_cannot_fall_back_to_direct_loopback_target(
         )
         monkeypatch.setenv("NO_PROXY", "*")
         session = requests.Session()
-        if route_override == "session_host":
+        if route_override in {"session_host", "partial_keyword", "unbound_keyword"}:
             session.proxies["http://127.0.0.1"] = ""
         elif route_override == "environment_host":
             monkeypatch.setenv("NO_PROXY", "")
             monkeypatch.setenv(
                 "http://127.0.0.1_proxy", f"http://127.0.0.1:{target.server_port}"
             )
+        transport = session.get
+        call_kwargs = {}
+        if route_override in {"partial_keyword", "unbound_keyword"}:
+            session.trust_env = False
+            if route_override == "partial_keyword":
+                transport = partial(requests.Session.get, self=session)
+            else:
+                transport = requests.Session.get
+                call_kwargs["self"] = session
         try:
             with pytest.raises(requests.exceptions.ProxyError):
                 request_with_retries(
-                    session.get,
-                    f"http://127.0.0.1:{target.server_port}/listing",
+                    transport,
+                    url=f"http://127.0.0.1:{target.server_port}/listing",
                     portal_egress=True,
                     timeout=(0.2, 0.2),
+                    **call_kwargs,
                 )
             assert direct_hits == []
         finally:
@@ -133,7 +146,10 @@ def test_dead_proxy_cannot_fall_back_to_direct_loopback_target(
             thread.join(timeout=2)
 
 
-@pytest.mark.parametrize("call_kind", ["bound", "partial_bound", "partial_unbound"])
+@pytest.mark.parametrize(
+    "call_kind",
+    ["bound", "partial_bound", "partial_unbound", "partial_keyword", "unbound_keyword"],
+)
 def test_retrying_adapter_is_refused_before_it_can_repeat_a_portal_request(
     monkeypatch, call_kind
 ):
@@ -172,14 +188,18 @@ def test_retrying_adapter_is_refused_before_it_can_repeat_a_portal_request(
         "bound": session.get,
         "partial_bound": partial(session.get),
         "partial_unbound": partial(requests.Session.get, session),
+        "partial_keyword": partial(requests.Session.get, self=session),
+        "unbound_keyword": requests.Session.get,
     }[call_kind]
+    call_kwargs = {"self": session} if call_kind == "unbound_keyword" else {}
     try:
         try:
             request_with_retries(
                 transport,
-                "http://portal.example/listing",
+                url="http://portal.example/listing",
                 portal_egress=True,
                 timeout=1,
+                **call_kwargs,
             )
         except PortalEgressUnavailable:
             pass

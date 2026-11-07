@@ -538,10 +538,14 @@ def request_with_retries(
         # The first refusal is the answer. Never retry 429/5xx from a portal
         # or spend a second request trying a different network route.
         owner = request_fn
-        session = None
+        # Unbound methods can receive self by keyword, including a partial's
+        # defaults. Call-time keywords override those defaults.
+        session = kwargs.get("self")
         while isinstance(owner, partial):
             if owner.args and isinstance(owner.args[0], Session):
                 session = owner.args[0]
+            if session is None:
+                session = owner.keywords.get("self")
             owner = owner.func
         session = getattr(owner, "__self__", session)
         if session is None and args and isinstance(args[0], Session):
