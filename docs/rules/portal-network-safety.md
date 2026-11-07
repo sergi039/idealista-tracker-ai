@@ -1,8 +1,9 @@
 # Portal automation and the owner's network
 
-Owner incident, 2026-11-07: a Yaencontre restriction page named public IP
-185.158.127.131. Read-only IP checks on both Mac mini and MacBook returned that
-same address. A separate machine or browser profile did not isolate traffic.
+Owner incident, 2026-11-07: a Yaencontre restriction page named the owner's
+public IP. Read-only IP checks on both Mac mini and MacBook returned that same
+address. A separate machine or browser profile did not isolate traffic. Exact
+addresses remain in private incident evidence, not in this public repository.
 
 The retained `data/macbook-browser-evidence-20261105-closeout-checkpoint.jsonl`
 contains 802 Yaencontre navigations between 06:45:33 and 07:59:39 Europe/Madrid
