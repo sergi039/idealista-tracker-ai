@@ -1,5 +1,11 @@
 # Execution changelog
 
+## 2026-11-07
+
+- Show saved portal search links for subscriptions, including routed and removed
+  records, so the original search remains reachable when local edit controls are
+  unavailable. Keep search filters, remove tracking, and disclose missing links.
+
 ## 2026-11-05
 
 - Reserve rated primary/alias listing URLs across deletion and reimport with a

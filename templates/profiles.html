@@ -22,10 +22,16 @@
             {# All stored rows, with both filtering axes stated in the link. #}
             <a class="small text-decoration-none" href="{{ url_for('main.properties', profile_id=p.id, hide_removed='off', criteria='all') }}">{{ property_counts.get(p.id, 0) }}</a>
         </td>
-        <td data-label="{{ t('column_active') }}">{{ t('yes') if p.is_active else t('archive') }}</td>
-        <td data-label="{{ t('column_visible') }}"><span data-role="visibility-state">{{ t('hidden_badge') if p.is_hidden else t('yes') }}</span></td>
-        <td data-label="{{ t('column_updated') }}">{{ p.updated_at.strftime('%Y-%m-%d') if p.updated_at else '—' }}</td>
+        <td class="text-nowrap" data-label="{{ t('column_active') }}">{{ t('yes') if p.is_active else t('archive') }}</td>
+        <td class="text-nowrap" data-label="{{ t('column_visible') }}"><span data-role="visibility-state">{{ t('hidden_badge') if p.is_hidden else t('yes') }}</span></td>
+        <td class="text-nowrap" data-label="{{ t('column_updated') }}">{{ p.updated_at.strftime('%Y-%m-%d') if p.updated_at else '—' }}</td>
         <td data-label="{{ t('search_actions') }}"><div class="d-flex flex-wrap gap-2">
+            {% set portal_url = management.portal_search_url(p) %}
+            {% if portal_url %}
+                <a class="btn btn-sm btn-outline-secondary" href="{{ portal_url }}" target="_blank" rel="noopener noreferrer" data-role="portal-search-link">{{ t('search_open_portal') }} <i class="fas fa-arrow-up-right-from-square" aria-hidden="true"></i></a>
+            {% elif not p.is_default %}
+                <span class="small text-body-secondary align-self-center" data-role="portal-search-unavailable">{{ t('search_portal_unavailable') }}</span>
+            {% endif %}
             {% if management.owner_search(p) %}
                 {% if not p.is_default %}<form method="post" action="{{ url_for('main.set_profile_visibility', profile_id=p.id) }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="hidden" value="{{ 'off' if p.is_hidden else 'on' }}">

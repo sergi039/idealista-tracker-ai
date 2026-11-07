@@ -6,6 +6,13 @@ saved-search identity where known, stored-object count and destination. A routed
 stub has zero direct objects; its destination link opens the shared collection.
 Counts link to all stored objects (`hide_removed=off&criteria=all`).
 
+Rows with a recognized saved-search URL offer Open search on Idealista in both
+views, including routed, technical and removed subscriptions. The link uses the
+existing search-identity canonicalizer to retain filters and polygon while
+dropping email tracking and account parameters. Missing or unsupported URLs are
+disclosed as unavailable; no portal URL is guessed from a subscription name.
+This opens the search results, not an unsubscribe or alert-settings endpoint.
+
 New ingestion-created profiles are technical and hidden until the owner assigns
 them or promotes them. Unbound ones are disclosed as Needs attention on My searches
 and through the catalog's existing hidden-data disclosure. There is no inferred

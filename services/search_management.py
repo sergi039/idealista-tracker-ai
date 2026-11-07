@@ -6,6 +6,7 @@ import json
 from app import db
 from models import Property, SearchProfile
 from services.search_profile_service import SearchProfileService
+from services.search_subscription_identity import canonicalize_search_url
 
 CONFIG_FIELDS = (
     "criteria",
@@ -32,6 +33,12 @@ def set_state(profile, value):
 
 def owner_search(profile):
     return profile.routed_to is None and state(profile) == "owner"
+
+
+def portal_search_url(profile):
+    """Open the identified search without email tracking or account tokens."""
+    canonical = canonicalize_search_url(profile.source_search_url)
+    return f"https://{canonical}" if canonical else None
 
 
 def _selection(source_ids, target_id, action, *, lock=False):
