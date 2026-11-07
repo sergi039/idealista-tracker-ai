@@ -2765,7 +2765,7 @@
 // not a Jinja comment: naming that shape here with its real braces made Jinja
 // evaluate them and cost the page a second time.)
 window.LISTING_SITE = {{ _site|tojson }};
-window.LISTING_VERIFICATION_LABELS = {{ dict(blocked=t('listing_verification_blocked'), failed=t('listing_verification_failed'), confirmed=t('listing_attempt_confirmed'), attempt=t('listing_last_attempt'), active=t('listing_state_active'))|tojson }};
+window.LISTING_VERIFICATION_LABELS = {{ dict(blocked=t('listing_verification_blocked'), failed=t('listing_verification_failed'), confirmed=t('listing_attempt_confirmed'), attempt=t('listing_last_attempt'), active=t('listing_state_active'), unavailable=t('listing_browser_unavailable'), busy=t('listing_browser_busy'))|tojson }};
 
 // Record a status the owner decided, which is not the same thing as one the
 // scraper observed: the endpoint marks it `manual` and leaves
@@ -2873,7 +2873,11 @@ async function checkPropertyListingStatus(propertyId) {
                 ? new Date(breaker.blocked_until).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
                 : null;
             let message;
-            if (result.refusal === 'backing_off') {
+            if (['missing_configuration', 'browser_unavailable'].includes(result.refusal)) {
+                message = window.LISTING_VERIFICATION_LABELS.unavailable;
+            } else if (result.refusal === 'browser_busy') {
+                message = window.LISTING_VERIFICATION_LABELS.busy;
+            } else if (result.refusal === 'backing_off') {
                 message = `Not checked: ${window.LISTING_SITE} has refused the last ${breaker.consecutive_refusals} checks from this machine, so the checker is paused${until ? ` until ${until}` : ''}. Set the status by hand if you have looked at the listing yourself.`;
             } else if (result.refusal === 'blocked' || result.refusal === 'not_the_listing_page') {
                 message = `Could not verify: ${window.LISTING_SITE} answered with bot protection instead of the listing page. Status left unchanged.`;

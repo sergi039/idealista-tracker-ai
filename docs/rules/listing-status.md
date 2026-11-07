@@ -66,6 +66,40 @@ sources never fetch or confirm. Status badges distinguish stale confirmations
 availability; the detail shows the attempt separately with a Madrid timestamp.
 
 Live evidence, 2026-11-07: both requested Idealista checks returned `blocked`;
-ordinary Chrome on the approved MacBook also returned HTTP 403. These attempts
+the isolated automated Chrome profile on the approved MacBook also returned HTTP 403. The owner’s ordinary Chrome profile opened both pages. These attempts
 are evidence of a verification failure, never evidence that either house is
 available or removed.
+
+
+## Browser publication checks after an HTTP refusal (#610)
+
+`LISTING_BROWSER_FALLBACK_ENABLED=true` enables the existing `Property` writer’s
+second reader for Idealista only, including the daily favorites job. HTTP and
+browser refusals have independent host breakers. Browser failure/busy or missing
+configuration preserves the previous confirmation and does not arm a portal
+breaker. The attempt records `method=browser_archive` and the original HTTP
+refusal. Other portals retain their existing readers.
+
+The authenticated host bridge’s `/v1/listing-status` route calls
+`tools/browser.sh --read-listing-status URL NONCE` on the fixed MacBook. It uses
+an already running normal Chrome and a new owned window/tab. No JavaScript
+permission, login, profile, clipboard or existing tab changes. Chrome saves the
+loaded page as MHTML to its own private temporary directory; only primary public
+fields leave the MacBook, and the archive is deleted. Both the archive snapshot
+URL and its main HTML URL must match the freshly generated nonce URL. The
+canonical listing ID, primary title and positive price must agree; a challenge,
+redirect, duplicate primary field or ambiguous page confirms nothing. No HTTP
+code or transfer size is invented. This confirms that the advert is published
+on the source; only the advertiser can confirm a sale has not happened privately.
+
+The remote reader has a 30-second watchdog plus at most 4 seconds to close only
+its own tab; the host bridge has a 50-second limit and the client a 75-second
+socket allowance. A repurposed tab or additional owner tabs are preserved. The
+MacBook must be awake, reachable and have Chrome running; there is no mini
+browser fallback. The route works with JavaScript through Apple Events disabled.
+
+Real pre-deployment reads on 2026-11-07 matched Idealista 93478124 at €285,000 and
+108812772 at €295,000 through this actual helper. Rollback: disable the flag and
+let the watcher redeploy; HTTP checking and failed-attempt disclosure remain.
+Host bridge code updates require restarting its existing LaunchAgent only while
+idle; Docker deployment remains owned by the watcher.

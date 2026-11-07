@@ -2,6 +2,12 @@
 
 ## 2026-11-07
 
+- After an Idealista HTTP refusal, verify publication through an owned normal
+  Chrome tab on the MacBook; validate its nonce-scoped archive locally and keep
+  previous status on any uncertainty. This gives the daily favorites job and
+  status button a working second reader without changing browser permissions
+  (#610).
+
 - Check current Property favorites in the existing daily job and favorites API.
   Persist failed verification attempts separately from successful confirmations,
   disclose blocked/stale availability, and protect concurrent owner changes (#608).
