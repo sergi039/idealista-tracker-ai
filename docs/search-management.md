@@ -33,6 +33,8 @@ or a portal unsubscribe. No properties, profiles, favorites, review history or
 attachments are deleted. Restore uses Make an independent search. Routed stubs
 cannot be restored or shown independently. Ordinary settings saves cannot revive
 technical/deleted/routed rows.
+Settings POSTs re-read ownership under the same profile row lock before saving.
+Making a default acquires profile locks in ID order before its multi-row update.
 
 `ui_config.search_management.state` stores owner/technical/deleted without changing
 other UI configuration. Existing profiles without the namespace remain owner

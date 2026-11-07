@@ -2,6 +2,10 @@
 
 ## 2026-11-07
 
+- Serialize settings eligibility and writes with search removal, so a stale form
+  cannot reactivate a retained technical subscription. Lock default changes in ID
+  order to preserve management's lock ordering.
+
 - Show saved portal search links for subscriptions, including routed and removed
   records, so the original search remains reachable when local edit controls are
   unavailable. Keep search filters, remove tracking, and disclose missing links.
