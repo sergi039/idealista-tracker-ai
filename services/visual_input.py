@@ -198,7 +198,7 @@ def dossier_photo_sources(
             stream=True,
             allow_redirects=False,
             timeout=(_CONNECT_TIMEOUT_S, _READ_TIMEOUT_S),
-            proxies=portal_proxies(),
+            proxies=portal_proxies(session=http),
         )
         if response.status_code != 200:
             return []
@@ -363,7 +363,7 @@ def download_photo_source(
             allow_redirects=False,
             timeout=(_CONNECT_TIMEOUT_S, _READ_TIMEOUT_S),
             headers={"User-Agent": "IdealistaRank visual descriptor input"},
-            proxies=portal_proxies(),
+            proxies=portal_proxies(session=http),
         )
         if response.status_code != 200:
             raise VisualInputError(f"photo source returned HTTP {response.status_code}")

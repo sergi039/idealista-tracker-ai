@@ -5,8 +5,10 @@ import socket
 import subprocess
 import sys
 import threading
+from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import Mock, patch
+from urllib3.util.retry import Retry
 
 import pytest
 import requests
@@ -57,7 +59,9 @@ def test_explicit_route_overrides_ambient_and_caller_routes_without_retry(monkey
     )
     assert result is refused
     transport.assert_called_once()
-    assert transport.call_args.kwargs["proxies"] == {"http": proxy, "https": proxy}
+    routing = transport.call_args.kwargs["proxies"]
+    assert routing["http"] == routing["https"] == proxy
+    assert set(routing.values()) == {proxy}
 
 
 def test_non_portal_retry_contract_is_unchanged(monkeypatch):
@@ -75,7 +79,10 @@ def test_non_portal_retry_contract_is_unchanged(monkeypatch):
     assert "proxies" not in transport.call_args.kwargs
 
 
-def test_dead_proxy_cannot_fall_back_to_direct_loopback_target(monkeypatch):
+@pytest.mark.parametrize("route_override", ["none", "session_host", "environment_host"])
+def test_dead_proxy_cannot_fall_back_to_direct_loopback_target(
+    monkeypatch, route_override
+):
     direct_hits = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -102,19 +109,88 @@ def test_dead_proxy_cannot_fall_back_to_direct_loopback_target(monkeypatch):
             f"http://127.0.0.1:{dead_proxy.getsockname()[1]}",
         )
         monkeypatch.setenv("NO_PROXY", "*")
+        session = requests.Session()
+        if route_override == "session_host":
+            session.proxies["http://127.0.0.1"] = ""
+        elif route_override == "environment_host":
+            monkeypatch.setenv("NO_PROXY", "")
+            monkeypatch.setenv(
+                "http://127.0.0.1_proxy", f"http://127.0.0.1:{target.server_port}"
+            )
         try:
             with pytest.raises(requests.exceptions.ProxyError):
                 request_with_retries(
-                    requests.get,
+                    session.get,
                     f"http://127.0.0.1:{target.server_port}/listing",
                     portal_egress=True,
                     timeout=(0.2, 0.2),
                 )
             assert direct_hits == []
         finally:
+            session.close()
             target.shutdown()
             target.server_close()
             thread.join(timeout=2)
+
+
+@pytest.mark.parametrize("call_kind", ["bound", "partial_bound", "partial_unbound"])
+def test_retrying_adapter_is_refused_before_it_can_repeat_a_portal_request(
+    monkeypatch, call_kind
+):
+    hits = []
+
+    class ProxyHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits.append(self.path)
+            self.send_response(429)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    proxy = ThreadingHTTPServer(("127.0.0.1", 0), ProxyHandler)
+    thread = threading.Thread(
+        target=proxy.serve_forever, kwargs={"poll_interval": 0.01}
+    )
+    thread.start()
+    session = requests.Session()
+    session.mount(
+        "http://",
+        requests.adapters.HTTPAdapter(
+            max_retries=Retry(
+                total=1,
+                status_forcelist=[429],
+                raise_on_status=False,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        Config, "PORTAL_HTTP_PROXY_URL", f"http://127.0.0.1:{proxy.server_port}"
+    )
+    transport = {
+        "bound": session.get,
+        "partial_bound": partial(session.get),
+        "partial_unbound": partial(requests.Session.get, session),
+    }[call_kind]
+    try:
+        try:
+            request_with_retries(
+                transport,
+                "http://portal.example/listing",
+                portal_egress=True,
+                timeout=1,
+            )
+        except PortalEgressUnavailable:
+            pass
+        else:
+            pytest.fail(f"unsafe adapter used {len(hits)} HTTP attempts")
+        assert hits == []
+    finally:
+        session.close()
+        proxy.shutdown()
+        proxy.server_close()
+        thread.join(timeout=2)
 
 
 @pytest.mark.parametrize(

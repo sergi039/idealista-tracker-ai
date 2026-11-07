@@ -1,4 +1,6 @@
 import contextvars
+from collections.abc import Mapping
+from functools import partial
 import logging
 import random
 import threading
@@ -9,6 +11,8 @@ from typing import Callable, Dict, Iterable, Optional, Tuple, Union
 from urllib.parse import urlsplit
 
 import requests
+from requests.adapters import HTTPAdapter
+from requests.sessions import Session
 
 # What a caller may hand to `timeout=`. `requests` accepts a scalar, which
 # urllib3 expands to `connect=read=value` -- so a 60 s read allowance for an
@@ -34,7 +38,7 @@ class PortalEgressUnavailable(requests.RequestException):
     """The explicitly isolated portal route is absent or invalid."""
 
 
-def portal_proxies() -> Dict[str, str]:
+def portal_proxies(*, session=None) -> Dict[str, str]:
     """Force both URL schemes through the configured route, with no fallback.
 
     Do not inherit HTTP_PROXY/HTTPS_PROXY/NO_PROXY or accept a caller's direct
@@ -63,7 +67,32 @@ def portal_proxies() -> Dict[str, str]:
         raise PortalEgressUnavailable(
             "Portal HTTP requires a configured non-credential isolated proxy"
         ) from None
-    return {"http": raw, "https": raw}
+    if isinstance(session, Session):
+        # A retry adapter can spend several requests below our one-attempt
+        # loop. Unknown adapters may also ignore the proxy argument entirely.
+        # Reject them without modifying a caller's shared session.
+        if any(
+            type(adapter) is not HTTPAdapter
+            or getattr(adapter.max_retries, "total", None) != 0
+            for adapter in session.adapters.values()
+        ):
+            raise PortalEgressUnavailable(
+                "Portal HTTP requires standard adapters without retries"
+            )
+
+    # requests merges session/environment proxy keys with per-call settings.
+    # Host-specific keys win over scheme keys, even when their value is empty
+    # (direct). Replace every routing key, including keys relevant to a later
+    # redirect, rather than merely supplying http/https defaults.
+    keys = set(requests.utils.getproxies()) | {"http", "https"}
+    configured = getattr(session, "proxies", None)
+    if isinstance(configured, Mapping):
+        keys.update(configured)
+    return {
+        key: raw
+        for key in keys
+        if isinstance(key, str) and key not in {"no", "no_proxy"}
+    }
 
 
 # overpass-api.de grants two query slots per IP, answers 504 while both are
@@ -508,7 +537,16 @@ def request_with_retries(
     if portal_egress:
         # The first refusal is the answer. Never retry 429/5xx from a portal
         # or spend a second request trying a different network route.
-        kwargs["proxies"] = portal_proxies()
+        owner = request_fn
+        session = None
+        while isinstance(owner, partial):
+            if owner.args and isinstance(owner.args[0], Session):
+                session = owner.args[0]
+            owner = owner.func
+        session = getattr(owner, "__self__", session)
+        if session is None and args and isinstance(args[0], Session):
+            session = args[0]
+        kwargs["proxies"] = portal_proxies(session=session)
         max_attempts = 1
 
     if max_attempts < 1:

@@ -50,6 +50,9 @@ overriding ambient/caller routes, with exactly one attempt, including on 429
 or 5xx. A dead proxy raises; there is no direct-network fallback. Server-side
 visual image and dossier reads use the same policy. Google/OSM transports,
 attachments and the owner's ordinary browser image display are unaffected.
+All host-specific session/environment routing keys are replaced as well:
+Requests gives those precedence over scheme settings. Nonstandard or retrying
+adapters are refused before I/O, without modifying the caller's session.
 
 Before enabling the configured route, verify the exit from the actual
 collector runtime against the owner's exit using a neutral IP service. An
