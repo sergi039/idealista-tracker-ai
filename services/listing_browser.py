@@ -6,6 +6,7 @@ not need JavaScript through Apple Events. Archives never leave the MacBook.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from email import policy
 from email.parser import BytesParser
 import fcntl
@@ -361,7 +362,10 @@ class OwnedTab:
     def __init__(self, deadline):
         self.deadline = deadline
         self.window = self.tab = None
+        self.creation_attempted = False
         self.last_url = "about:blank"
+        self.marker = "IdealistaRank status " + os.urandom(16).hex()
+        self.initial_url = "about:blank#" + self.marker.replace(" ", "-")
 
     def command(self, body, *, deadline=None):
         prefix = f'''tell application "Google Chrome"
@@ -377,10 +381,11 @@ if auditTab is missing value then error "Owned tab absent"
         )
 
     def open(self):
+        self.creation_attempted = True
         raw = apple(
-            """tell application "Google Chrome"
-set auditWindow to make new window
-set URL of active tab of auditWindow to "about:blank"
+            f"""tell application "Google Chrome"
+set auditWindow to make new window with properties {{given name: {json.dumps(self.marker)}, mode: "normal"}}
+set URL of active tab of auditWindow to {json.dumps(self.initial_url)}
 return (id of auditWindow as string) & ":" & (id of active tab of auditWindow as string)
 end tell""",
             self.deadline,
@@ -389,6 +394,30 @@ end tell""",
         if not window.isdigit() or not tab.isdigit():
             raise ReaderFailure("browser_unavailable")
         self.window, self.tab = int(window), int(tab)
+
+    def recover_initial_tab(self, deadline):
+        # Creation can commit while its reply is lost. Query only the window
+        # bearing our unpredictable creation marker, never owner window URLs.
+        raw = apple(
+            f"""tell application "Google Chrome"
+set ownedWindows to every window whose given name is {json.dumps(self.marker)}
+if (count of ownedWindows) is not 1 then return ""
+set auditWindow to item 1 of ownedWindows
+set ownedTabs to every tab of auditWindow whose URL is {json.dumps(self.initial_url)}
+if (count of ownedTabs) is 1 then
+set auditTab to item 1 of ownedTabs
+else if (count of tabs of auditWindow) is 1 then
+set auditTab to active tab of auditWindow
+if {{"about:blank", "chrome://newtab/"}} does not contain (URL of auditTab) then return ""
+else
+return ""
+end if
+return (id of auditWindow as string) & ":" & (id of auditTab as string)
+end tell""",
+            deadline,
+        )
+        if re.fullmatch(r"[0-9]+:[0-9]+", raw):
+            self.window, self.tab = map(int, raw.split(":"))
 
     def navigate(self, url):
         # Bind intent before the AppleEvent: it can apply and then time out.
@@ -414,8 +443,18 @@ end tell""",
         return True
 
     def close(self):
+        deadline = time.monotonic() + CLEANUP_SECONDS
+        if self.tab is None:
+            if not self.creation_attempted:
+                return
+            self.recover_initial_tab(deadline)
         if self.tab is not None:
-            allowed = {"about:blank", self.last_url}
+            allowed = {
+                "about:blank",
+                "chrome://newtab/",
+                self.initial_url,
+                self.last_url,
+            }
             # A query-stripping redirect stays on the requested listing.
             base = self.last_url.partition("?")[0]
             try:
@@ -429,7 +468,7 @@ end tell""",
                 "if {"
                 + ", ".join(json.dumps(url) for url in sorted(allowed))
                 + "} contains (URL of auditTab) then close auditTab",
-                deadline=time.monotonic() + CLEANUP_SECONDS,
+                deadline=deadline,
             )
 
 
@@ -459,61 +498,79 @@ def read_native(url, nonce):
             sig: signal.getsignal(sig)
             for sig in (signal.SIGALRM, signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
         }
-        for sig in old_handlers:
-            signal.signal(sig, expired)
-        signal.setitimer(signal.ITIMER_REAL, REMOTE_SECONDS)
-        try:
-            with tempfile.TemporaryDirectory(dir=folder) as temporary:
-                path = Path(temporary) / "listing.mhtml"
-                tab.open()
-                tab.navigate(wanted)
-                while time.monotonic() < deadline:
-                    location = tab.location()
-                    if (
-                        location == wanted
-                        and tab.command("return loading of auditTab") == "false"
-                    ):
-                        if tab.archive(wanted, path):
-                            break
-                    elif location != "about:blank" and location != wanted:
-                        raise ReaderFailure("not_the_listing_page")
-                    time.sleep(0.2)
-                else:
-                    raise ReaderFailure("browser_unavailable")
-                previous = None
-                while time.monotonic() < deadline:
-                    if tab.location() != wanted:
-                        raise ReaderFailure("not_the_listing_page")
-                    size = path.stat().st_size if path.exists() else 0
-                    if size > MAX_ARCHIVE_BYTES:
-                        raise ReaderFailure("not_the_listing_page")
-                    if size and size == previous:
-                        try:
-                            page = read_archive(path, wanted)
-                            return dict(
-                                page,
-                                nonce=nonce,
-                                url=wanted,
-                                ready="complete",
-                                reader_elapsed_ms=(time.monotonic() - started) * 1000,
-                            )
-                        except ArchiveIncomplete:
-                            # Only unfinished MIME can become valid by waiting.
-                            pass
-                        except (ValueError, UnicodeError, LookupError):
-                            raise ReaderFailure("not_the_listing_page") from None
-                    previous = size
-                    time.sleep(0.2)
-                raise ReaderFailure("browser_unavailable")
-        finally:
-            signal.setitimer(signal.ITIMER_REAL, 0)
+        masks = []
+
+        def block_cleanup_signals():
+            masks.append(signal.pthread_sigmask(signal.SIG_BLOCK, old_handlers))
+
+        def restore_signals():
+            for sig, handler in old_handlers.items():
+                signal.signal(sig, handler)
+            if masks:
+                signal.pthread_sigmask(signal.SIG_SETMASK, masks[0])
+
+        def close_owned_tab():
             try:
                 tab.close()
             except (ReaderFailure, subprocess.SubprocessError, ValueError):
                 pass
-            finally:
-                for sig, handler in old_handlers.items():
-                    signal.signal(sig, handler)
+
+        # LIFO: block signals, disarm timer, close our tab, delete archive,
+        # restore handlers/mask. ExitStack runs remaining cleanup callbacks
+        # even if an earlier one is interrupted or fails.
+        with ExitStack() as cleanup:
+            cleanup.callback(restore_signals)
+            temporary = cleanup.enter_context(tempfile.TemporaryDirectory(dir=folder))
+            cleanup.callback(close_owned_tab)
+            cleanup.callback(signal.setitimer, signal.ITIMER_REAL, 0)
+            cleanup.callback(block_cleanup_signals)
+            for sig in old_handlers:
+                signal.signal(sig, expired)
+            signal.setitimer(signal.ITIMER_REAL, REMOTE_SECONDS)
+            path = Path(temporary) / "listing.mhtml"
+            tab.open()
+            tab.navigate(wanted)
+            while time.monotonic() < deadline:
+                location = tab.location()
+                if (
+                    location == wanted
+                    and tab.command("return loading of auditTab") == "false"
+                ):
+                    if tab.archive(wanted, path):
+                        break
+                elif (
+                    location not in ("about:blank", "chrome://newtab/", wanted)
+                    and location != tab.initial_url
+                ):
+                    raise ReaderFailure("not_the_listing_page")
+                time.sleep(0.2)
+            else:
+                raise ReaderFailure("browser_unavailable")
+            previous = None
+            while time.monotonic() < deadline:
+                if tab.location() != wanted:
+                    raise ReaderFailure("not_the_listing_page")
+                size = path.stat().st_size if path.exists() else 0
+                if size > MAX_ARCHIVE_BYTES:
+                    raise ReaderFailure("not_the_listing_page")
+                if size and size == previous:
+                    try:
+                        page = read_archive(path, wanted)
+                        return dict(
+                            page,
+                            nonce=nonce,
+                            url=wanted,
+                            ready="complete",
+                            reader_elapsed_ms=(time.monotonic() - started) * 1000,
+                        )
+                    except ArchiveIncomplete:
+                        # Only unfinished MIME can become valid by waiting.
+                        pass
+                    except (ValueError, UnicodeError, LookupError):
+                        raise ReaderFailure("not_the_listing_page") from None
+                previous = size
+                time.sleep(0.2)
+            raise ReaderFailure("browser_unavailable")
 
 
 def main(payload):

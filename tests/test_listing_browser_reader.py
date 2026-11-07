@@ -477,3 +477,113 @@ def test_protocol_relative_technical_challenge_is_detected(tmp_path):
     html = '<iframe src="//geo.captcha-delivery.com/captcha/"></iframe>'
     with pytest.raises(reader.ReaderFailure, match="^blocked$"):
         reader.read_archive(write_archive(tmp_path / "relative.mhtml", html), WANTED)
+
+
+def test_creation_reply_timeout_recovers_only_its_marked_initial_tab(monkeypatch):
+    scripts = []
+
+    def apple(script, deadline):
+        scripts.append(script)
+        if len(scripts) == 1:
+            raise subprocess.TimeoutExpired("osascript", 4)
+        if len(scripts) == 2:
+            return "12:34"
+        return ""
+
+    monkeypatch.setattr(reader, "apple", apple)
+    tab = reader.OwnedTab(reader.time.monotonic() + 30)
+    with pytest.raises(subprocess.TimeoutExpired):
+        tab.open()
+    assert tab.tab is None
+    tab.close()
+    assert len(scripts) == 3 and (tab.window, tab.tab) == (12, 34)
+    assert "given name: " + json.dumps(tab.marker) in scripts[0]
+    assert "every window whose given name is " + json.dumps(tab.marker) in scripts[1]
+    assert (
+        "every tab of auditWindow whose URL is " + json.dumps(tab.initial_url)
+        in scripts[1]
+    )
+    assert "window id 12" in scripts[2] and 'is "34"' in scripts[2]
+    assert "then close auditTab" in scripts[2] and "close window" not in scripts[2]
+
+
+def test_missing_or_ambiguous_marker_never_closes_an_owner_window(monkeypatch):
+    scripts = []
+    monkeypatch.setattr(
+        reader, "apple", lambda script, deadline: scripts.append(script) or ""
+    )
+    tab = reader.OwnedTab(100)
+    tab.creation_attempted = True
+    tab.close()
+    assert tab.tab is None and len(scripts) == 1
+    assert '(count of ownedWindows) is not 1 then return ""' in scripts[0]
+    assert "close" not in scripts[0]
+
+
+def test_watchdog_signal_cannot_interrupt_archive_deletion(tmp_path, monkeypatch):
+    import os
+    import signal
+
+    monkeypatch.setattr(reader.socket, "gethostname", lambda: reader.MACBOOK)
+    monkeypatch.setattr(reader.subprocess, "run", lambda *a, **kw: Mock(returncode=0))
+    monkeypatch.setattr(reader.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(reader, "REMOTE_SECONDS", 2)
+    events = []
+
+    class Tab:
+        def __init__(self, deadline):
+            pass
+
+        def open(self):
+            pass
+
+        def navigate(self, url):
+            pass
+
+        def location(self):
+            return WANTED
+
+        def command(self, body):
+            return "false"
+
+        def archive(self, url, path):
+            write_archive(path)
+            return True
+
+        def close(self):
+            events.append("tab-closed")
+
+    monkeypatch.setattr(reader, "OwnedTab", Tab)
+    original_rmtree = reader.tempfile.TemporaryDirectory._rmtree
+
+    def interrupted_rmtree(cls, path, *args, **kwargs):
+        events.append(("timer-disarmed", signal.getitimer(signal.ITIMER_REAL)[0] == 0))
+        os.kill(os.getpid(), signal.SIGALRM)
+        original_rmtree(path, *args, **kwargs)
+        events.append("archive-deleted")
+
+    monkeypatch.setattr(
+        reader.tempfile.TemporaryDirectory, "_rmtree", classmethod(interrupted_rmtree)
+    )
+    previous = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, lambda *args: events.append("signal-delivered"))
+    try:
+        page = reader.read_native(URL, NONCE)
+    finally:
+        signal.signal(signal.SIGALRM, previous)
+    assert page["saved"] is True
+    assert ("timer-disarmed", True) in events
+    assert (
+        events.index("tab-closed")
+        < events.index("archive-deleted")
+        < events.index("signal-delivered")
+    )
+    folder = tmp_path / "Library/Caches/IdealistaRank/native-status"
+    assert list(folder.iterdir()) == [folder / "reader.lock"]
+
+
+def test_unopened_reader_never_queries_chrome_during_cleanup(monkeypatch):
+    apple = Mock()
+    monkeypatch.setattr(reader, "apple", apple)
+    reader.OwnedTab(100).close()
+    apple.assert_not_called()

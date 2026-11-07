@@ -111,3 +111,16 @@ Real pre-deployment reads on 2026-11-07 matched Idealista 93478124 at €285,000
 let the watcher redeploy; HTTP checking and failed-attempt disclosure remain.
 Host bridge code updates require restarting its existing LaunchAgent only while
 idle; Docker deployment remains owned by the watcher.
+
+
+Each new Chrome window receives an unpredictable `given name` in the creation
+command. If the creation reply is lost, cleanup queries only that marker and
+recovers the uniquely tagged initial tab; a sole blank/new-tab fallback is
+allowed, while other destinations and ambiguous matches are preserved. No
+owner window URLs are enumerated. Creation is never recovered unless it was
+actually attempted.
+
+Cleanup uses `ExitStack` in this order: block handled signals, disarm the
+watchdog, close the owned tab, delete the private archive, then restore signal
+handlers and the prior signal mask. The watchdog cannot interrupt archive
+deletion; pending cancellation is delivered only after mandatory cleanup.
