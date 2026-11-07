@@ -2,6 +2,12 @@
 
 ## 2026-11-07
 
+- After an Idealista HTTP refusal, verify publication through an owned normal
+  Chrome tab on the MacBook; validate its nonce-scoped archive locally and keep
+  previous status on any uncertainty. This gives the daily favorites job and
+  status button a working second reader without changing browser permissions
+  (#610).
+
 - Serialize settings eligibility and writes with search removal, so a stale form
   cannot reactivate a retained technical subscription. Lock default changes in ID
   order to preserve management's lock ordering.
@@ -9,6 +15,7 @@
 - Show saved portal search links for subscriptions, including routed and removed
   records, so the original search remains reachable when local edit controls are
   unavailable. Keep search filters, remove tracking, and disclose missing links.
+
 - Check current Property favorites in the existing daily job and favorites API.
   Persist failed verification attempts separately from successful confirmations,
   disclose blocked/stale availability, and protect concurrent owner changes (#608).

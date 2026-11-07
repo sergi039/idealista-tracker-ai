@@ -23,7 +23,12 @@ done
 # Quote every argument before passing it through SSH's remote shell.
 # shellcheck disable=SC2016 # The hostname must be evaluated on the remote Mac.
 remote='set -eu; test "$(/bin/hostname)" = MacBook-Pro007.local || { echo "Wrong browser host; refusing launch" >&2; exit 1; }; '
-if [[ "$1" == --check-route ]]; then
+reader_source=""
+if [[ "$1" == --read-listing-status ]]; then
+  [[ $# -eq 3 ]] || { echo "Expected URL and nonce" >&2; exit 2; }
+  reader_source="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/services/listing_browser.py"
+  remote+='exec /usr/bin/python3 -'
+elif [[ "$1" == --check-route ]]; then
   remote+='hostname; /usr/bin/curl --fail --silent --show-error --max-time 8 -o /dev/null -w "idealista_tunnel_http=%{http_code}\n" http://127.0.0.1:5001/properties'
 else
   remote+='mkdir -p /Users/ss/Library/Caches/IdealistaRank/browser; cd /Users/ss/Library/Caches/IdealistaRank/browser; exec '
@@ -35,6 +40,18 @@ else
   fi
   printf -v quoted '%q ' "${command[@]}"
   remote+="$quoted"
+fi
+
+if [[ -n "$reader_source" ]]; then
+  if [[ "$(/bin/hostname)" == MacBook-Pro007.local ]]; then
+    exec /usr/bin/python3 "$reader_source" --read "$2" "$3"
+  fi
+  # Only validated Python/JSON goes over stdin. SSH argv is constant: never
+  # interpolate a requested URL into the remote shell's command line.
+  /usr/bin/python3 "$reader_source" --emit "$2" "$3" | \
+    /usr/bin/ssh -T -o BatchMode=yes -o ConnectTimeout=8 \
+      -o ServerAliveInterval=15 -o ServerAliveCountMax=2 ss@100.127.248.71 "$remote"
+  exit $?
 fi
 
 if [[ "$(/bin/hostname)" == MacBook-Pro007.local ]]; then
