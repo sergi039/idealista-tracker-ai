@@ -53,6 +53,20 @@ from tests import network_guard, skip_guard
 from utils.cache import cache as flask_cache
 
 
+@pytest.fixture(autouse=True)
+def isolated_portal_test_route(monkeypatch):
+    """Legacy parser/refusal tests use mocked transports on an explicit route.
+
+    Production defaults are exercised in a clean subprocess by the portal
+    egress tests, outside these substitutions. The socket guard still refuses
+    any actual external connection from ordinary tests.
+    """
+    from services.listing_status_service import ListingStatusService
+
+    monkeypatch.setattr(Config, "PORTAL_HTTP_PROXY_URL", "http://127.0.0.1:9")
+    monkeypatch.setattr(ListingStatusService, "REFUSED_SOURCES", frozenset())
+
+
 def pytest_runtest_setup(item) -> None:
     """Close every refusal breaker before every test.
 

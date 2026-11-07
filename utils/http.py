@@ -29,6 +29,43 @@ _DEFAULT_RETRY_STATUSES = (429, 500, 502, 503, 504)
 # product token is served. Keep this a plain token.
 HTTP_USER_AGENT = "IdealistaRank/1.0"
 
+
+class PortalEgressUnavailable(requests.RequestException):
+    """The explicitly isolated portal route is absent or invalid."""
+
+
+def portal_proxies() -> Dict[str, str]:
+    """Force both URL schemes through the configured route, with no fallback.
+
+    Do not inherit HTTP_PROXY/HTTPS_PROXY/NO_PROXY or accept a caller's direct
+    route. Credentials are deliberately unsupported and never echoed in errors.
+    The operator verifies this proxy's exit IP before enabling collection.
+    """
+    from config import Config
+
+    raw = Config.PORTAL_HTTP_PROXY_URL
+    try:
+        if not isinstance(raw, str) or not raw or any(c.isspace() for c in raw):
+            raise ValueError
+        parsed = urlsplit(raw)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+            or parsed.port == 0
+        ):
+            raise ValueError
+    except ValueError:
+        raise PortalEgressUnavailable(
+            "Portal HTTP requires a configured non-credential isolated proxy"
+        ) from None
+    return {"http": raw, "https": raw}
+
+
 # overpass-api.de grants two query slots per IP, answers 504 while both are
 # busy, and answers 429 when the *rate* is too high for the slots it is willing
 # to hand out.
@@ -414,6 +451,7 @@ def request_with_retries(
     deadline: Optional[float] = None,
     logger: Optional[logging.Logger] = None,
     gate: Optional[RateGate] = None,
+    portal_egress: bool = False,
     **kwargs,
 ) -> requests.Response:
     """Issue a request, retrying the statuses the server retries on.
@@ -467,6 +505,12 @@ def request_with_retries(
     watched refuse three times, and needs those three refusals to learn it.
     The deadline bounds what the very first of them costs.
     """
+    if portal_egress:
+        # The first refusal is the answer. Never retry 429/5xx from a portal
+        # or spend a second request trying a different network route.
+        kwargs["proxies"] = portal_proxies()
+        max_attempts = 1
+
     if max_attempts < 1:
         max_attempts = 1
 

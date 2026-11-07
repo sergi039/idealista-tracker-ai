@@ -76,3 +76,6 @@ covers the legacy Land path and direct callers as well as the Property
 source filter. A temporary-access restriction body is `blocked`, including
 when delivered with HTTP 200; it cannot establish availability. The archived
 MacBook bulk reader remains paused and is not a fallback for failed checks.
+Known-refused Idealista is also stopped before I/O. Other supported sources
+need an explicitly configured isolated portal proxy; missing or failed routing
+cannot send a check over the owner's ordinary network.

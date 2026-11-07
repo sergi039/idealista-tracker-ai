@@ -519,6 +519,7 @@ def fetch_listing(
             allow_redirects=True,
             logger=logger,
             gate=FOTOCASA_GATE,
+            portal_egress=True,
         )
     except requests.Timeout:
         return FotocasaListing(url=url, refusal=REFUSAL_TIMEOUT)

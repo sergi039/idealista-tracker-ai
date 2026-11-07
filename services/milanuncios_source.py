@@ -218,6 +218,7 @@ def resolve_tracker(
             allow_redirects=False,
             logger=logger,
             gate=MILANUNCIOS_GATE,
+            portal_egress=True,
         )
     except requests.RequestException:
         return None
@@ -411,6 +412,7 @@ def fetch_listing(
             allow_redirects=True,
             logger=logger,
             gate=MILANUNCIOS_GATE,
+            portal_egress=True,
         )
     except requests.Timeout:
         return _refusal_row(url, REFUSAL_TIMEOUT, asked_id)

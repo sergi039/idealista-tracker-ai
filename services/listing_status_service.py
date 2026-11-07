@@ -79,6 +79,8 @@ class ListingStatusService:
     ]
 
     USER_AGENT = HTTP_USER_AGENT
+    # Known source refusals are not healed by a fresh process or alternate IP.
+    REFUSED_SOURCES = frozenset({"idealista"})
 
     # When idealista refuses this machine it refuses everything: measured
     # 2026-08-10, the home page answers 403 with the same DataDome block page a
@@ -150,6 +152,11 @@ class ListingStatusService:
         if yaencontre_source.is_yaencontre_url(url):
             return Observation("error", None, "blocked")
 
+        from utils.listing_source import source_of_url
+
+        if source_of_url(url) in self.REFUSED_SOURCES:
+            return Observation("error", None, "blocked")
+
         # Resolved once, from this URL: the wall belongs to one host, and the
         # rest of this method must not reach for a different one.
         breaker = self.breakers.for_url(url)
@@ -181,6 +188,7 @@ class ListingStatusService:
                 allow_redirects=True,
                 logger=logger,
                 gate=gate,
+                portal_egress=True,
             )
 
             # Check response content

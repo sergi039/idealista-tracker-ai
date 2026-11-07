@@ -7,6 +7,12 @@
   the shared-IP browser-audit incident and require isolated egress before any
   future portal collection, without restarting the paused audit.
 
+- Require an explicitly configured isolated proxy for portal pages, tracker
+  resolution and server-side visual sources; refuse before I/O when missing
+  or invalid, never fall back to the direct route, and make only one portal
+  attempt. Keep known-refused Idealista checks offline too. Other API clients
+  and email-only Yaencontre ingestion retain their existing behavior.
+
 - Serialize settings eligibility and writes with search removal, so a stale form
   cannot reactivate a retained technical subscription. Lock default changes in ID
   order to preserve management's lock ordering.

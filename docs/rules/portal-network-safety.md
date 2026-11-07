@@ -24,7 +24,8 @@ Do not remove that marker or resume the archived queue.
 - The collector must fail closed when that route is unavailable. An HTTP
   client must not fall back to its ordinary session/environment route; a
   browser must not silently launch without its proxy. Verify that failure
-  locally before enabling a job. Do not reuse the Codex app's own proxy.
+  locally before enabling a job. Do not change a shared proxy's profile or
+  lifecycle for a collector.
 - Keep one reader per portal, reuse completed observations and pace every
   request. Stop the source on the first challenge, 401, 403 or 429. Persist the
   stop across jobs and restarts. Do not automatically probe a refused source,
@@ -36,11 +37,32 @@ enabled against a refused portal merely because an alternate exit is available.
 
 ## Current supported path
 
+`PORTAL_HTTP_PROXY_URL` supplies a non-credential HTTP(S) proxy. Its default
+is empty: portal HTTP refuses before I/O until the operator supplies a verified
+isolated route. URLs with credentials, paths, queries, fragments or invalid
+ports are refused without echoing their value. Set the value only in the
+mini's ignored environment, never globally for the owner's browser.
+
+`utils.http.portal_proxies` is the one proxy-policy reader. Portal page and
+Milanuncios card-tracker callers pass `portal_egress=True` into the existing
+`request_with_retries` transport: both HTTP and HTTPS use the explicit proxy,
+overriding ambient/caller routes, with exactly one attempt, including on 429
+or 5xx. A dead proxy raises; there is no direct-network fallback. Server-side
+visual image and dossier reads use the same policy. Google/OSM transports,
+attachments and the owner's ordinary browser image display are unaffected.
+
+Before enabling the configured route, verify the exit from the actual
+collector runtime against the owner's exit using a neutral IP service. An
+explicit proxy URL alone is not evidence that its exit is distinct. Recheck
+after changes to the proxy, VPN profile or network; do not resume collection
+on an unverified route.
+
 Yaencontre ingestion reads alert-email cards, including their captured photo
 URLs, without fetching listing pages. Property availability already excludes
-this source. `ListingStatusService.observe` now refuses Yaencontre before any
+this source. `ListingStatusService.observe` now refuses Yaencontre and the
+already-refused Idealista source before any
 HTTP operation, covering direct and legacy Land callers as well. A new service,
-reset breaker or process restart does not remove that stop. This does not block
+reset breaker, alternate proxy or process restart does not remove that stop. This does not block
 the owner's manual browsing or rewrite stored listing status, photos or votes.
 
 Restriction-page text is a failed check even if delivered with HTTP 200. It
