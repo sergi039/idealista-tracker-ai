@@ -273,3 +273,17 @@
 @media (min-width: 768px) and (max-width: 1199.98px) {
     .workspace-with-photo { grid-template-columns: 4.5rem minmax(0, 1fr); column-gap: var(--ui-space-2); }
 }
+
+/* Subscription management keeps the same rows and controls at narrow widths. */
+.search-management-table { table-layout: auto; width: 100%; }
+.search-management-table td { overflow-wrap: anywhere; }
+.search-management-table summary,
+.search-management-table label,
+.search-management-confirm .form-check { min-height: var(--ui-control-height); }
+@media (max-width: 991.98px) {
+    .search-management-table, .search-management-table tbody,
+    .search-management-table tr, .search-management-table td { display: block; width: 100%; }
+    .search-management-table thead { display: none; }
+    .search-management-table tr { margin-bottom: var(--ui-space-4); border: 1px solid var(--bs-border-color); }
+    .search-management-table td::before { content: attr(data-label); display: block; font-size: .75rem; color: var(--bs-secondary-color); }
+}

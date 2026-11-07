@@ -83,6 +83,37 @@ def exposed_alias_ids(prop: Any) -> set[int]:
     return ids
 
 
+def transferred_scope(prop: Any, profile_id: Any) -> Any:
+    """Project an original receipt only through explicit service transfers.
+
+    A manual reassignment still invalidates feedback. The signed import
+    receipt stays unchanged, including its original subscription and digest.
+    """
+    block = getattr(prop, "enrichment", None)
+    trail = block.get("profile_transfers") if isinstance(block, dict) else None
+    if not isinstance(trail, list) or type(profile_id) is not int:
+        return profile_id
+    current = profile_id
+    for step in trail:
+        if not isinstance(step, dict):
+            return profile_id
+        source, target = step.get("from_profile_id"), step.get("to_profile_id")
+        if type(source) is not int or type(target) is not int or source == target:
+            return profile_id
+        if source == current:
+            current = target
+    return current
+
+
+def _current_reservations(prop: Any, record: Any) -> set[tuple[int, str]]:
+    current = getattr(prop, "search_profile_id", None)
+    return {
+        (current, identity)
+        for scope, identity in _record_reservations(record)
+        if transferred_scope(prop, scope) == current
+    }
+
+
 def read_feedback(prop: Any) -> dict[str, Any] | None:
     enrichment = getattr(prop, "enrichment", None)
     item = enrichment.get(KEY) if isinstance(enrichment, dict) else None
@@ -92,7 +123,8 @@ def read_feedback(prop: Any) -> dict[str, Any] | None:
         item.get("schema_version") != 1
         or item.get("answer_meaning") != MEANING
         or item.get("answer") not in ("yes", "no")
-        or item.get("profile_id") != getattr(prop, "search_profile_id", None)
+        or transferred_scope(prop, item.get("profile_id"))
+        != getattr(prop, "search_profile_id", None)
         or not isinstance(item.get("row_ids"), list)
         or getattr(prop, "id", None) not in item["row_ids"]
         or not _listing_identity(item.get("listing_url"))
@@ -135,8 +167,11 @@ def listing_reservations(prop: Any) -> set[tuple[int, str]]:
     block = getattr(prop, "enrichment", None)
     if not isinstance(block, dict):
         return set()
-    return _record_reservations(block.get(KEY)) | _record_reservations(
-        block.get(EXPOSURE_KEY)
+    return (
+        _record_reservations(block.get(KEY))
+        | _record_reservations(block.get(EXPOSURE_KEY))
+        | _current_reservations(prop, block.get(KEY))
+        | _current_reservations(prop, block.get(EXPOSURE_KEY))
     )
 
 
@@ -216,7 +251,7 @@ def negative_listing_feedback(props: Any) -> dict[tuple[int, str], dict]:
         record = read_feedback(row)
         if record and record["answer"] == "no":
             # Do not promote unrelated historical exposure into a No.
-            for reservation in _record_reservations(record):
+            for reservation in _current_reservations(row, record):
                 negatives[reservation] = record
     return negatives
 

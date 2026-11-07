@@ -1900,6 +1900,88 @@ TRANSLATIONS["es"].update(
 )
 
 
+TRANSLATIONS["en"].update(
+    {
+        "my_searches": "My searches",
+        "technical_subscriptions": "Technical subscriptions",
+        "search_management_help": "One search groups its portal subscriptions, properties and owner feedback.",
+        "search_actions": "Actions",
+        "search_select": "Select",
+        "search_needs_attention": "Needs attention · choose a search",
+        "search_deleted": "Removed from My searches · data retained",
+        "search_identity": "Saved-search identity",
+        "search_action": "Action for selected rows",
+        "search_action_merge": "Merge into a search",
+        "search_action_remove": "Delete from My searches",
+        "search_action_promote": "Make an independent search",
+        "search_destination": "Destination search",
+        "search_choose_destination": "Choose for merge",
+        "search_management_preview": "Preview changes",
+        "search_selection_help": "Select rows below. Nothing changes until you confirm the preview. The destination is used only for merging.",
+        "search_target_settings_kept": "The destination keeps its criteria and settings. Favorites and feedback become part of this search.",
+        "search_reviews": "Owner decisions",
+        "search_retention_note": "Properties, favorites, decisions, feedback and history are retained. Original subscriptions stay in Technical subscriptions. This does not unsubscribe from a portal.",
+        "search_remove_note": "This search leaves the catalog selection. Its objects remain accessible in Technical subscriptions. Future alerts still arrive there. Use Make an independent search to restore it.",
+        "search_promote_note": "This subscription will appear as an independent search in the catalog.",
+        "search_configuration_conflicts": "Different settings · retained on the original subscription",
+        "search_original_settings": "Original settings",
+        "search_conflicts_acknowledge": "I accept using the destination settings for the combined search.",
+        "search_confirm": "Confirm changes",
+        "search_management_done": "Changes saved. All objects and owner feedback were retained.",
+        "search_management_error_invalid_selection": "Choose eligible subscriptions and a different destination for merging.",
+        "search_management_error_stale_preview": "Data changed or the preview expired. Review a new preview before confirming.",
+        "search_management_error_acknowledge_conflicts": "Review and accept the settings differences first.",
+        "search_management_error_protected_profile": "The catch-all and routed subscriptions cannot be changed this way. Restore an unbound technical subscription explicitly.",
+        "search_management_error_invalid_target": "The destination must be an active, visible independent search.",
+        "search_management_error_source_carries_a_pattern": "This search owns an automatic routing rule. You can remove it from My searches while retaining its objects and incoming routes.",
+        "search_management_error_source_is_a_route_target": "Other subscriptions already route here. You can remove this search without transfer; its objects and routes will remain in Technical subscriptions.",
+        "workspace_manage_subscriptions": "My searches",
+    }
+)
+TRANSLATIONS["es"].update(
+    {
+        "my_searches": "Mis búsquedas",
+        "technical_subscriptions": "Suscripciones técnicas",
+        "search_management_help": "Una búsqueda agrupa sus suscripciones de portales, inmuebles y valoraciones.",
+        "search_actions": "Acciones",
+        "search_select": "Seleccionar",
+        "search_needs_attention": "Pendiente · elige una búsqueda",
+        "search_deleted": "Eliminada de Mis búsquedas · datos conservados",
+        "search_identity": "Identidad de la suscripción",
+        "search_action": "Acción para las filas seleccionadas",
+        "search_action_merge": "Unir a una búsqueda",
+        "search_action_remove": "Eliminar de Mis búsquedas",
+        "search_action_promote": "Crear una búsqueda independiente",
+        "search_destination": "Búsqueda de destino",
+        "search_choose_destination": "Elegir para unir",
+        "search_management_preview": "Revisar cambios",
+        "search_selection_help": "Selecciona filas abajo. No cambia nada hasta confirmar. El destino solo se usa al unir.",
+        "search_target_settings_kept": "El destino conserva sus criterios y configuración. Favoritos y valoraciones pasan a formar parte de esta búsqueda.",
+        "search_reviews": "Decisiones del propietario",
+        "search_retention_note": "Se conservan inmuebles, favoritos, decisiones, valoraciones e historial. Las suscripciones originales permanecen en Suscripciones técnicas. No cancela alertas del portal.",
+        "search_remove_note": "La búsqueda sale del selector del catálogo. Sus inmuebles siguen accesibles en Suscripciones técnicas y las alertas siguen llegando allí. Crear una búsqueda independiente permite restaurarla.",
+        "search_promote_note": "Esta suscripción aparecerá como búsqueda independiente en el catálogo.",
+        "search_configuration_conflicts": "Configuración diferente · conservada en la suscripción original",
+        "search_original_settings": "Configuración original",
+        "search_conflicts_acknowledge": "Acepto usar la configuración del destino para la búsqueda conjunta.",
+        "search_confirm": "Confirmar cambios",
+        "search_management_done": "Cambios guardados. Se conservaron todos los inmuebles y las valoraciones.",
+        "search_management_error_invalid_selection": "Elige suscripciones disponibles y otro destino para unir.",
+        "search_management_error_stale_preview": "Los datos cambiaron o la revisión caducó. Revisa los cambios de nuevo.",
+        "search_management_error_acknowledge_conflicts": "Revisa y acepta las diferencias de configuración.",
+        "search_management_error_protected_profile": "El perfil predeterminado y las suscripciones redirigidas están protegidos. Restaura explícitamente una suscripción técnica sin destino.",
+        "search_management_error_invalid_target": "El destino debe ser una búsqueda independiente, activa y visible.",
+        "search_management_error_source_carries_a_pattern": "Esta búsqueda tiene una regla de redirección. Puedes eliminarla de Mis búsquedas conservando sus inmuebles y rutas.",
+        "search_management_error_source_is_a_route_target": "Otras suscripciones ya apuntan aquí. Puedes eliminar esta búsqueda sin traslado; sus inmuebles y rutas seguirán en Suscripciones técnicas.",
+        "workspace_manage_subscriptions": "Mis búsquedas",
+    }
+)
+
+
+TRANSLATIONS["en"]["search_action_technical"] = "Move to Technical subscriptions"
+TRANSLATIONS["es"]["search_action_technical"] = "Mover a Suscripciones técnicas"
+
+
 def get_current_language():
     """Get current language from session"""
     return session.get("language", "en")
