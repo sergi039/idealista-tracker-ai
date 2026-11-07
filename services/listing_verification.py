@@ -38,6 +38,7 @@ with no coverage count.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Optional
 
 from sqlalchemy import and_, func, or_
@@ -152,6 +153,48 @@ def read_verdict(record, now: Optional[datetime] = None) -> dict:
         and age_days > STALE_AFTER_DAYS
     )
 
+    # An attempted fetch and a successful confirmation are different facts.
+    # Keep the old status as history when a portal refuses the latest request.
+    enrichment = getattr(record, "enrichment", None)
+    attempt = (
+        enrichment.get("listing_status_check") if isinstance(enrichment, dict) else None
+    )
+    attempt = (
+        attempt
+        if isinstance(attempt, dict)
+        and attempt.get("url") == getattr(record, "url", None)
+        else {}
+    )
+    attempted_at = attempted_local = None
+    try:
+        raw = attempt.get("attempted_at")
+        if isinstance(raw, str):
+            attempted_at = _as_utc(datetime.fromisoformat(raw))
+            attempted_local = attempted_at.astimezone(
+                ZoneInfo("Europe/Madrid")
+            ).strftime("%Y-%m-%d %H:%M")
+    except (ValueError, OverflowError):
+        attempted_at = attempted_local = None
+    refusal = (
+        attempt.get("refusal")
+        if attempted_at and attempt.get("observed") == "error"
+        else None
+    )
+    refusal = refusal if isinstance(refusal, str) else None
+    # A newer site confirmation supersedes an older failed attempt.
+    if attempted_at and checked_at and attempted_at < checked_at:
+        refusal = None
+    availability_key = "listing_state_" + state
+    if state not in TERMINAL_STATUSES:
+        if refusal:
+            availability_key = (
+                "listing_verification_blocked"
+                if refusal in {"blocked", "backing_off", "not_the_listing_page"}
+                else "listing_verification_failed"
+            )
+        elif stale:
+            availability_key = "listing_needs_recheck"
+
     return {
         "state": state,
         "verified": verified,
@@ -160,6 +203,10 @@ def read_verdict(record, now: Optional[datetime] = None) -> dict:
         "age_days": age_days,
         "stale": stale,
         "note": note,
+        "availability_key": availability_key,
+        "attempted_at": attempted_at,
+        "attempted_local": attempted_local,
+        "attempt_refusal": refusal,
     }
 
 

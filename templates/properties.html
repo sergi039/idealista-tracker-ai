@@ -414,19 +414,15 @@
     {% set verdict = listing_verdict_for(p) %}
     {% if verdict.state in ('removed', 'sold') %}
         <span class="badge bg-secondary" title="{{ verdict.note }}">{{ verdict.state }}</span>
+    {% elif verdict.attempt_refusal %}
+        <span class="badge bg-warning-subtle text-warning-emphasis border" title="{{ verdict.attempted_local }}">{{ t(verdict.availability_key) }}</span>
     {% elif verdict.state == 'active' %}
-        {# The age carries as colour and tooltip, never as extra words: measured
-           on the rendered page at 800px, "Live checked 140 d ago" wraps to
-           three lines in the Type column and doubles the row height. A check
-           older than STALE_AFTER_DAYS still verified something -- the listing
-           was up when it was read -- so it keeps the badge and loses the green:
-           "confirmed in March" is not the same claim about today as "confirmed
-           yesterday", and the list has room to say that in weight but not in
-           words. The exact date is on the property page. #}
+        {# Historical confirmation remains available in the tooltip; an old
+           confirmation needs a recheck rather than a current Live claim. #}
         {% set age_note = (' — ' ~ t('listing_checked_ago')|format(verdict.age_days)) if verdict.age_days is not none else '' %}
         <span class="badge fw-normal {{ 'bg-body-tertiary text-body-secondary border' if verdict.stale else 'bg-success-subtle text-success-emphasis border border-success-subtle' }}"
               title="{{ t('listing_verified_tooltip') }}{{ age_note }} — {{ verdict.note }}">
-            <i class="fas {{ 'fa-clock-rotate-left' if verdict.stale else 'fa-circle-check' }} me-1"></i>{{ t('listing_state_active') }}
+            <i class="fas {{ 'fa-clock-rotate-left' if verdict.stale else 'fa-circle-check' }} me-1"></i>{{ t(verdict.availability_key) }}
         </span>
     {% endif %}
 {%- endmacro %}

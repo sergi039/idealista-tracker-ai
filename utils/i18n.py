@@ -176,6 +176,13 @@ TRANSLATIONS = {
         # the default a row is ingested with, so the surfaces say when nobody
         # ever verified it (services/listing_verification.py).
         "listing_state_active": "Live",
+        "listing_state_removed": "Removed",
+        "listing_state_sold": "Sold",
+        "listing_verification_blocked": "Verification blocked",
+        "listing_verification_failed": "Could not verify",
+        "listing_needs_recheck": "Needs recheck",
+        "listing_last_attempt": "Last verification attempt (Madrid)",
+        "listing_attempt_confirmed": "Verified on source",
         "listing_state_unchecked": "Unverified",
         "listing_verified_tooltip": "Confirmed against Idealista",
         "listing_unchecked_tooltip": "Never verified on the source site — the default a new listing carries",
@@ -1061,6 +1068,13 @@ TRANSLATIONS = {
         "sea_view_target_link": "ver el punto medido",
         # Ver services/listing_verification.py.
         "listing_state_active": "Activo",
+        "listing_state_removed": "Retirado",
+        "listing_state_sold": "Vendido",
+        "listing_verification_blocked": "Verificación bloqueada",
+        "listing_verification_failed": "No se pudo verificar",
+        "listing_needs_recheck": "Requiere comprobación",
+        "listing_last_attempt": "Último intento de verificación (Madrid)",
+        "listing_attempt_confirmed": "Verificado en origen",
         "listing_state_unchecked": "Sin verificar",
         "listing_verified_tooltip": "Confirmado en Idealista",
         "listing_unchecked_tooltip": "Nunca verificado en el sitio de origen — es el valor por defecto de un anuncio nuevo",
