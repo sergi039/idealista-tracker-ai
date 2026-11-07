@@ -70,15 +70,24 @@ the isolated automated Chrome profile on the approved MacBook also returned HTTP
 are evidence of a verification failure, never evidence that either house is
 available or removed.
 
+The separate [shared-IP incident](portal-network-safety.md) keeps Yaencontre
+offline in `observe` itself, before the transport or in-memory breaker. This
+covers the legacy Land path and direct callers as well as the Property
+source filter. A temporary-access restriction body is `blocked`, including
+when delivered with HTTP 200; it cannot establish availability. The archived
+MacBook bulk reader remains paused and is not a fallback for failed checks.
+Known-refused Idealista HTTP is also stopped before I/O. Other supported sources
+need an explicitly configured isolated portal proxy; missing or failed routing
+cannot send a check over the owner's ordinary network.
 
 ## Browser publication checks after an HTTP refusal (#610)
 
 `LISTING_BROWSER_FALLBACK_ENABLED=true` enables the existing `Property` writer’s
-second reader for Idealista only, including the daily favorites job. HTTP and
-browser refusals have independent host breakers. Only a technical challenge
+second reader for Idealista only when the owner checks a single property.
+The favorites batch (scheduled or requested) never opens owner Chrome. HTTP
+and browser refusals have independent host breakers. Only a technical challenge
 frame/script or an exact document challenge title arms browser backoff; seller
-prose never does. A browser page-parse failure stays with that listing and does
-not pause other favorites. Browser failure/busy or missing
+prose never does. A browser page-parse failure stays with that listing. Browser failure/busy or missing
 configuration preserves the previous confirmation and does not arm a portal
 breaker. The attempt records `method=browser_archive` and the original HTTP
 refusal. Other portals retain their existing readers.

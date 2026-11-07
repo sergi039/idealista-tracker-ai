@@ -74,9 +74,11 @@ def test_http_refusal_then_browser_success_confirms_and_survives_reload(app):
             side_effect=browser_page,
         ) as browser,
     ):
-        result = ListingStatusService().check_property_status(p)
+        response = app.test_client().post(f"/api/property/{pid}/check-status")
+    assert response.status_code == 200
     assert browser.call_count == 1
-    assert result["new_status"] == "active" and result["refusal"] is None
+    result = response.get_json()
+    assert result["observed"] == "active" and result["refusal"] is None
     db.session.remove()
     p = db.session.get(Property, pid)
     assert p.listing_status_source == "check" and p.listing_last_checked > datetime(
@@ -123,7 +125,9 @@ def test_browser_cannot_turn_unproven_page_into_confirmation(app, changes):
             side_effect=answer,
         ),
     ):
-        result = ListingStatusService().check_property_status(p)
+        result = ListingStatusService().check_property_status(
+            p, allow_browser_fallback=True
+        )
     assert result["new_status"] == "error"
     assert p.listing_last_checked == old and p.listing_status_source == "manual"
 
@@ -151,7 +155,9 @@ def test_wall_clock_offset_does_not_reject_a_fresh_network_navigation(app, remot
             side_effect=answer,
         ),
     ):
-        result = ListingStatusService().check_property_status(p)
+        result = ListingStatusService().check_property_status(
+            p, allow_browser_fallback=True
+        )
     assert result["new_status"] == "active"
 
 
@@ -229,7 +235,9 @@ def test_owner_edit_during_browser_fetch_supersedes_observation(app):
             "services.subscription_transport.read_listing_status", side_effect=answer
         ),
     ):
-        result = ListingStatusService().check_property_status(p)
+        result = ListingStatusService().check_property_status(
+            p, allow_browser_fallback=True
+        )
     assert result["refusal"] == "superseded"
     db.session.expire_all()
     assert p.listing_status == "removed" and p.listing_status_source == "manual"
@@ -254,7 +262,9 @@ def test_conflicting_browser_notice_cannot_hide_a_live_property(app):
             "services.subscription_transport.read_listing_status", side_effect=answer
         ),
     ):
-        result = ListingStatusService().check_property_status(p)
+        result = ListingStatusService().check_property_status(
+            p, allow_browser_fallback=True
+        )
     assert (
         result["new_status"] == "error"
         and result["refusal"] == "availability_ambiguous"
@@ -290,7 +300,11 @@ def test_unreadable_listing_does_not_pause_healthy_browser_host(app):
     )
 
 
-def test_unreadable_browser_listing_does_not_skip_other_favorites(app):
+def test_favorite_batch_keeps_refused_idealista_off_both_transports(app, monkeypatch):
+    # Merging #613 initially re-enabled owner Chrome for a refused batch row.
+    monkeypatch.setattr(
+        ListingStatusService, "REFUSED_SOURCES", frozenset({"idealista"})
+    )
     from models import SearchProfile
 
     profile = SearchProfile(name="Browser favorites", is_active=True, is_hidden=False)
@@ -311,28 +325,19 @@ def test_unreadable_browser_listing_does_not_skip_other_favorites(app):
     db.session.add(second)
     db.session.commit()
 
-    def answer(url, nonce):
-        if url.endswith("/12345/"):
-            return {"nonce": nonce, "refusal": "not_the_listing_page"}
-        return browser_page(url, nonce)
-
     with (
-        patch.object(
-            ListingStatusService,
-            "observe",
-            return_value=Observation("error", None, "blocked"),
-        ),
+        patch("services.listing_status_service.request_with_retries") as http,
         patch(
-            "services.subscription_transport.read_listing_status", side_effect=answer
+            "services.subscription_transport.read_listing_status",
+            side_effect=browser_page,
         ) as browser,
         patch("services.listing_status_service.time.sleep"),
     ):
         result = ListingStatusService().check_property_favorites_status()
-    assert [call.args[0] for call in browser.call_args_list] == [first.url, second.url]
-    assert (
-        result["checked"] == 2
-        and result["active"] == 1
-        and result["errors"] == 1
-        and result["unchecked"] == 0
-    )
-    assert not result["stopped_early"]
+    http.assert_not_called()
+    browser.assert_not_called()
+    assert result["checked"] == result["errors"] == result["unchecked"] == 1
+    assert result["stopped_early"]
+    assert result["details"][0]["refusal"] == "blocked"
+    assert first.listing_status_source == "manual"
+    assert first.listing_last_checked is None

@@ -39,6 +39,10 @@ def _compose_database_url():
 class Config:
     DEV_MODE = os.environ.get("DEV_MODE", "").lower() == "true"
 
+    # Portal collectors never borrow the owner's direct network route. This
+    # accepts a non-credential HTTP(S) proxy; blank means no portal HTTP.
+    PORTAL_HTTP_PROXY_URL = os.environ.get("PORTAL_HTTP_PROXY_URL", "")
+
     # Browser/session isolation (important when running legacy + universal on localhost).
     # Cookies do not isolate by port, so use a different cookie name than the legacy app.
     SESSION_COOKIE_NAME = (

@@ -29,6 +29,7 @@ imapclient · anthropic SDK · Google API clients · uv (`uv.lock`) · pytest.
 
 - **The stack runs in Docker on the Mac mini, and nowhere else** (owner, 2026-08-31): a MacBook writes code and opens the mini's app through the ssh tunnel on `127.0.0.1:5001`; never bring a second stack up on a laptop, and there is no local PostgreSQL for this project. → docs/rules/run-and-deploy.md
 - **Browser/UI checks run Chrome on the MacBook, never on the Mac mini** (owner, 2026-11-05): use `bash tools/browser.sh`, even when this chat's shell runs on the mini; an unavailable MacBook stops the check with no mini-browser fallback. → docs/rules/run-and-deploy.md#browser-checks-on-the-macbook
+- **Portal automation must not use the owner's ordinary Chrome profile or shared public IP** (owner incident, 2026-11-07): no bulk portal navigation through the app QA browser launcher; keep the archived MacBook audit paused. A future collector needs its own profile and a verified separate egress, with no direct-network fallback; a portal refusal stops that source, never triggers IP rotation or a browser fallback. Yaencontre remains email-only. → docs/rules/portal-network-safety.md
 
 ```bash
 docker compose up -d --build                 # the mini; app on 127.0.0.1:5001

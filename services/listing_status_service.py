@@ -15,7 +15,7 @@ from urllib.parse import urlsplit, parse_qs
 
 from models import Land, LandHistory, Property, SyncHistory
 from app import db
-from services import fotocasa_source, milanuncios_source
+from services import fotocasa_source, milanuncios_source, yaencontre_source
 from services.enrichment_write import check_writable, locked_write
 
 #  moved to utils/http.py with  (#399) and is
@@ -68,6 +68,8 @@ class ListingStatusService:
         "checking your browser",
         "just a moment",
         "ddos-guard",
+        "access is temporarily restricted",
+        "we detected unusual activity from your device or network",
     ]
 
     # Patterns that indicate listing was sold
@@ -78,6 +80,8 @@ class ListingStatusService:
     ]
 
     USER_AGENT = HTTP_USER_AGENT
+    # Known source refusals are not healed by a fresh process or alternate IP.
+    REFUSED_SOURCES = frozenset({"idealista"})
 
     # When idealista refuses this machine it refuses everything: measured
     # 2026-08-10, the home page answers 403 with the same DataDome block page a
@@ -145,6 +149,19 @@ class ListingStatusService:
         if not url:
             return Observation("error", None, "no_url")
 
+        # The archived MacBook bulk audit reached Yaencontre's restriction on
+        # the owner's shared public IP. Ingestion already uses email only and
+        # Property checks exclude this source; enforce the same stop for Land
+        # and direct observe callers, before even consulting a process-local
+        # breaker. Restarting a worker must not buy another probe here.
+        if yaencontre_source.is_yaencontre_url(url):
+            return Observation("error", None, "blocked")
+
+        from utils.listing_source import source_of_url
+
+        if source_of_url(url) in self.REFUSED_SOURCES:
+            return Observation("error", None, "blocked")
+
         # Resolved once, from this URL: the wall belongs to one host, and the
         # rest of this method must not reach for a different one.
         breaker = self.breakers.for_url(url)
@@ -176,6 +193,7 @@ class ListingStatusService:
                 allow_redirects=True,
                 logger=logger,
                 gate=gate,
+                portal_egress=True,
             )
 
             # Check response content
@@ -544,13 +562,16 @@ class ListingStatusService:
             breaker.record_success()
         return Observation(status, None, refusal), {"method": "browser_archive"}
 
-    def check_property_status(self, prop: Property) -> Dict:
+    def check_property_status(
+        self, prop: Property, *, allow_browser_fallback: bool = False
+    ) -> Dict:
         """
         Check the listing status for a single universal Property row.
 
         Properties have no history table, so unlike Land there is no snapshot
         side effect here -- the row itself carries status, removal date and
-        last-checked time.
+        last-checked time. Only the explicit single-property action may opt
+        into the owner Chrome reader; batch checks must stay on isolated HTTP.
         """
         if not prop.url:
             return {
@@ -583,7 +604,9 @@ class ListingStatusService:
 
         http_refusal = refusal
         browser, browser_meta = (
-            self._browser_fallback(url) if status == "error" else (None, None)
+            self._browser_fallback(url)
+            if allow_browser_fallback and status == "error"
+            else (None, None)
         )
         if browser is not None:
             status, removed_date_str, refusal = browser
@@ -696,10 +719,11 @@ class ListingStatusService:
             results[
                 status if status in ("active", "removed", "sold") else "errors"
             ] += 1
-            if result.get("refusal") in {"blocked", "backing_off"} or (
-                result.get("refusal") == "not_the_listing_page"
-                and (result.get("attempt") or {}).get("method") != "browser_archive"
-            ):
+            if result.get("refusal") in {
+                "blocked",
+                "backing_off",
+                "not_the_listing_page",
+            }:
                 blocked_hosts.add(host)
             results["details"].append(
                 {
