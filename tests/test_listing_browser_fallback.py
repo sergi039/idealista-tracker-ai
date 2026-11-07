@@ -299,6 +299,7 @@ def test_unreadable_browser_listing_does_not_skip_other_favorites(app):
     db.session.flush()
     first.search_profile_id = profile.id
     first.is_favorite = True
+    first.listing_last_checked = None  # both NULL: ID order puts the bad row first
     second = Property(
         source_email_id="browser-second",
         url="https://www.idealista.com/inmueble/23456/",
@@ -323,10 +324,11 @@ def test_unreadable_browser_listing_does_not_skip_other_favorites(app):
         ),
         patch(
             "services.subscription_transport.read_listing_status", side_effect=answer
-        ),
+        ) as browser,
         patch("services.listing_status_service.time.sleep"),
     ):
         result = ListingStatusService().check_property_favorites_status()
+    assert [call.args[0] for call in browser.call_args_list] == [first.url, second.url]
     assert (
         result["checked"] == 2
         and result["active"] == 1
