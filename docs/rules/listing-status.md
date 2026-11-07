@@ -75,7 +75,10 @@ available or removed.
 
 `LISTING_BROWSER_FALLBACK_ENABLED=true` enables the existing `Property` writer’s
 second reader for Idealista only, including the daily favorites job. HTTP and
-browser refusals have independent host breakers. Browser failure/busy or missing
+browser refusals have independent host breakers. Only a technical challenge
+frame/script or an exact document challenge title arms browser backoff; seller
+prose never does. A browser page-parse failure stays with that listing and does
+not pause other favorites. Browser failure/busy or missing
 configuration preserves the previous confirmation and does not arm a portal
 breaker. The attempt records `method=browser_archive` and the original HTTP
 refusal. Other portals retain their existing readers.

@@ -538,7 +538,7 @@ class ListingStatusService:
                 "error",
                 "browser_busy" if exc.status == 503 else "browser_unavailable",
             )
-        if refusal in {"blocked", "not_the_listing_page"}:
+        if refusal == "blocked":
             breaker.record_refusal(refusal)
         elif status != "error":
             breaker.record_success()
@@ -696,11 +696,10 @@ class ListingStatusService:
             results[
                 status if status in ("active", "removed", "sold") else "errors"
             ] += 1
-            if result.get("refusal") in {
-                "blocked",
-                "backing_off",
-                "not_the_listing_page",
-            }:
+            if result.get("refusal") in {"blocked", "backing_off"} or (
+                result.get("refusal") == "not_the_listing_page"
+                and (result.get("attempt") or {}).get("method") != "browser_archive"
+            ):
                 blocked_hosts.add(host)
             results["details"].append(
                 {

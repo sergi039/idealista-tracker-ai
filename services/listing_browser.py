@@ -35,6 +35,10 @@ SOLD_NOTICE = re.compile(
     r"(?:this (?:property|listing) has been sold|este inmueble se ha vendido)[.!]?",
     re.I,
 )
+CHALLENGE_TITLE = re.compile(
+    r"(?:just a moment|checking your browser|verify you are human|please enable js|ddos-guard)[\s.!…]*",
+    re.I,
+)
 
 
 def identity(url):
@@ -192,16 +196,14 @@ class PublicFields(HTMLParser):
         self.public_size = 0
         self.overflow = False
         self.challenge = False
+        self.page_title = []
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
-        if any(
-            re.search(
-                r"https?://(?:[a-z0-9-]+\.)?captcha-delivery\.com/",
-                attrs.get(key, ""),
-                re.I,
-            )
-            for key in ("src", "href")
+        if tag in {"script", "iframe"} and re.search(
+            r"https?://(?:[a-z0-9-]+\.)?captcha-delivery\.com/",
+            attrs.get("src") or "",
+            re.I,
         ):
             self.challenge = True
         skip = (
@@ -236,6 +238,10 @@ class PublicFields(HTMLParser):
     def handle_data(self, value):
         if self.stack and self.stack[-1][1]:
             return
+        if any(tag == "head" for tag, *_ in self.stack) and any(
+            tag == "title" for tag, *_ in self.stack
+        ):
+            self.page_title.append(value)
         self.public_size += len(value)
         if self.public_size > 100000:
             self.overflow = True
@@ -250,9 +256,8 @@ class PublicFields(HTMLParser):
     def result(self):
         text = " ".join(self.public)
         low = text.lower()
-        if self.challenge or re.search(
-            r"checking your browser|please enable js|just a moment|verify you are human|captcha-delivery|ddos-guard",
-            low,
+        if self.challenge or CHALLENGE_TITLE.fullmatch(
+            "".join(self.page_title).strip()
         ):
             raise ReaderFailure("blocked")
         if (
@@ -270,12 +275,7 @@ class PublicFields(HTMLParser):
             "h1": "".join(self.headings[0]).strip() if self.headings else "",
             "price": "".join(self.prices[0]).strip() if self.prices else "",
             "reference": reference.group(1) if reference else None,
-            "blocked": bool(
-                re.search(
-                    r"checking your browser|please enable js|just a moment|verify you are human|captcha-delivery|ddos-guard",
-                    low,
-                )
-            ),
+            "blocked": False,
             "removed_notice": bool(REMOVED_NOTICE.search(text)),
             "sold_notice": bool(SOLD_NOTICE.search(text)),
             "reserved_notice": bool(

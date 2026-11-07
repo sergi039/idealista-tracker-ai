@@ -2879,7 +2879,9 @@ async function checkPropertyListingStatus(propertyId) {
                 message = window.LISTING_VERIFICATION_LABELS.busy;
             } else if (result.refusal === 'backing_off') {
                 message = `Not checked: ${window.LISTING_SITE} has refused the last ${breaker.consecutive_refusals} checks from this machine, so the checker is paused${until ? ` until ${until}` : ''}. Set the status by hand if you have looked at the listing yourself.`;
-            } else if (result.refusal === 'blocked' || result.refusal === 'not_the_listing_page') {
+            } else if (result.refusal === 'not_the_listing_page') {
+                message = window.LISTING_VERIFICATION_LABELS.failed;
+            } else if (result.refusal === 'blocked') {
                 message = `Could not verify: ${window.LISTING_SITE} answered with bot protection instead of the listing page. Status left unchanged.`;
             } else if (result.refusal === 'timeout') {
                 message = `Could not verify: ${window.LISTING_SITE} did not answer in time. Status left unchanged — worth retrying.`;

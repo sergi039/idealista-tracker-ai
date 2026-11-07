@@ -265,3 +265,72 @@ def test_conflicting_browser_notice_cannot_hide_a_live_property(app):
         and p.listing_status_source == "manual"
         and p.listing_last_checked == old
     )
+
+
+def test_unreadable_listing_does_not_pause_healthy_browser_host(app):
+    url = "https://www.idealista.com/inmueble/12345/"
+
+    def answer(url, nonce):
+        return {"nonce": nonce, "refusal": "not_the_listing_page"}
+
+    with patch(
+        "services.subscription_transport.read_listing_status", side_effect=answer
+    ) as browser:
+        for _ in range(4):
+            assert (
+                ListingStatusService()._browser_fallback(url)[0].refusal
+                == "not_the_listing_page"
+            )
+    assert browser.call_count == 4
+    assert (
+        ListingStatusService.browser_breakers.for_url(url).state()[
+            "consecutive_refusals"
+        ]
+        == 0
+    )
+
+
+def test_unreadable_browser_listing_does_not_skip_other_favorites(app):
+    from models import SearchProfile
+
+    profile = SearchProfile(name="Browser favorites", is_active=True, is_hidden=False)
+    first = property_row()
+    db.session.add(profile)
+    db.session.flush()
+    first.search_profile_id = profile.id
+    first.is_favorite = True
+    second = Property(
+        source_email_id="browser-second",
+        url="https://www.idealista.com/inmueble/23456/",
+        title="Second",
+        search_profile_id=profile.id,
+        is_favorite=True,
+        listing_status="active",
+    )
+    db.session.add(second)
+    db.session.commit()
+
+    def answer(url, nonce):
+        if url.endswith("/12345/"):
+            return {"nonce": nonce, "refusal": "not_the_listing_page"}
+        return browser_page(url, nonce)
+
+    with (
+        patch.object(
+            ListingStatusService,
+            "observe",
+            return_value=Observation("error", None, "blocked"),
+        ),
+        patch(
+            "services.subscription_transport.read_listing_status", side_effect=answer
+        ),
+        patch("services.listing_status_service.time.sleep"),
+    ):
+        result = ListingStatusService().check_property_favorites_status()
+    assert (
+        result["checked"] == 2
+        and result["active"] == 1
+        and result["errors"] == 1
+        and result["unchecked"] == 0
+    )
+    assert not result["stopped_early"]
