@@ -463,3 +463,17 @@ def test_challenge_phrase_inside_listing_document_title_is_not_a_challenge(tmp_p
         "<head>", "<head><title>Casa Just a moment from the beach — idealista</title>"
     )
     assert classified(tmp_path / "listing-title.mhtml", html) == ("active", None)
+
+
+def test_nested_captcha_url_parameter_does_not_make_a_tour_a_challenge(tmp_path):
+    html = HTML.replace(
+        "</body>",
+        '<iframe src="https://tour.example/view?url=https://geo.captcha-delivery.com/info/"></iframe></body>',
+    )
+    assert classified(tmp_path / "tour.mhtml", html) == ("active", None)
+
+
+def test_protocol_relative_technical_challenge_is_detected(tmp_path):
+    html = '<iframe src="//geo.captcha-delivery.com/captcha/"></iframe>'
+    with pytest.raises(reader.ReaderFailure, match="^blocked$"):
+        reader.read_archive(write_archive(tmp_path / "relative.mhtml", html), WANTED)

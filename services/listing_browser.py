@@ -200,9 +200,9 @@ class PublicFields(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
-        if tag in {"script", "iframe"} and re.search(
-            r"https?://(?:[a-z0-9-]+\.)?captcha-delivery\.com/",
-            attrs.get("src") or "",
+        if tag in {"script", "iframe"} and re.match(
+            r"(?:https?:)?//(?:[a-z0-9-]+\.)?captcha-delivery\.com/",
+            (attrs.get("src") or "").strip(),
             re.I,
         ):
             self.challenge = True
