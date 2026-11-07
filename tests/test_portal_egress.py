@@ -214,6 +214,86 @@ def test_retrying_adapter_is_refused_before_it_can_repeat_a_portal_request(
 
 
 @pytest.mark.parametrize(
+    "replay",
+    [
+        "session_auth",
+        "request_auth",
+        "partial_auth",
+        "positional_auth",
+        "session_hook",
+        "request_hook",
+        "partial_hook",
+    ],
+)
+def test_auth_and_response_hooks_cannot_replay_first_portal_refusal(
+    monkeypatch, replay
+):
+    """Digest auth and response hooks run below the application retry loop."""
+    hits = []
+
+    class ProxyHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits.append(self.path)
+            self.send_response(401 if len(hits) == 1 else 200)
+            if len(hits) == 1:
+                self.send_header(
+                    "WWW-Authenticate", 'Digest realm="x", nonce="n", qop="auth"'
+                )
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    def resend(response, **kwargs):
+        if response.status_code == 401:
+            response.close()
+            return response.connection.send(response.request, **kwargs)
+        return response
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), ProxyHandler) as proxy:
+        thread = threading.Thread(
+            target=proxy.serve_forever, kwargs={"poll_interval": 0.01}
+        )
+        thread.start()
+        monkeypatch.setattr(
+            Config, "PORTAL_HTTP_PROXY_URL", f"http://127.0.0.1:{proxy.server_port}"
+        )
+        try:
+            with requests.Session() as session:
+                url = "http://portal.example/listing"
+                digest = requests.auth.HTTPDigestAuth("fixture", "fixture")
+                transport, args, kwargs = session.get, (url,), {}
+                if replay == "session_auth":
+                    session.auth = digest
+                elif replay == "request_auth":
+                    kwargs["auth"] = digest
+                elif replay == "partial_auth":
+                    transport = partial(session.get, auth=digest)
+                elif replay == "positional_auth":
+                    transport = session.request
+                    args = ("GET", url, None, None, None, None, None, digest)
+                elif replay == "session_hook":
+                    session.hooks["response"].append(resend)
+                elif replay == "request_hook":
+                    kwargs["hooks"] = {"response": [resend]}
+                else:
+                    transport = partial(session.get, hooks={"response": [resend]})
+                try:
+                    request_with_retries(
+                        transport, *args, portal_egress=True, timeout=2, **kwargs
+                    )
+                except PortalEgressUnavailable:
+                    pass
+                else:
+                    pytest.fail(f"{replay} sent {len(hits)} HTTP requests")
+                assert hits == []
+        finally:
+            proxy.shutdown()
+            thread.join(timeout=2)
+
+
+@pytest.mark.parametrize(
     "reader,url",
     [
         (

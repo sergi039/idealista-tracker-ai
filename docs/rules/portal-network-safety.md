@@ -53,7 +53,9 @@ visual image and dossier reads use the same policy. Google/OSM transports,
 attachments and the owner's ordinary browser image display are unaffected.
 All host-specific session/environment routing keys are replaced as well:
 Requests gives those precedence over scheme settings. Nonstandard or retrying
-adapters are refused before I/O, without modifying the caller's session.
+adapters, authentication and nonempty response hooks are refused before I/O,
+without modifying the caller's session. Digest authentication can otherwise
+replay a 401 below the retry loop.
 
 Before enabling the configured route, verify the exit from the actual
 collector runtime against the owner's exit using a neutral IP service. An

@@ -1,6 +1,7 @@
 import contextvars
 from collections.abc import Mapping
 from functools import partial
+from inspect import signature
 import logging
 import random
 import threading
@@ -38,7 +39,11 @@ class PortalEgressUnavailable(requests.RequestException):
     """The explicitly isolated portal route is absent or invalid."""
 
 
-def portal_proxies(*, session=None) -> Dict[str, str]:
+def _has_portal_hooks(hooks):
+    return hooks is not None and (not isinstance(hooks, Mapping) or any(hooks.values()))
+
+
+def portal_proxies(*, session=None, auth=None, hooks=None) -> Dict[str, str]:
     """Force both URL schemes through the configured route, with no fallback.
 
     Do not inherit HTTP_PROXY/HTTPS_PROXY/NO_PROXY or accept a caller's direct
@@ -67,6 +72,20 @@ def portal_proxies(*, session=None) -> Dict[str, str]:
         raise PortalEgressUnavailable(
             "Portal HTTP requires a configured non-credential isolated proxy"
         ) from None
+    # Digest auth registers a response hook that can resend a 401 directly
+    # through its adapter; caller hooks can do the same. These public portal
+    # reads do not need authentication or hooks at either Requests layer.
+    if (
+        auth is not None
+        or _has_portal_hooks(hooks)
+        or (
+            isinstance(session, Session)
+            and (session.auth is not None or _has_portal_hooks(session.hooks))
+        )
+    ):
+        raise PortalEgressUnavailable(
+            "Portal HTTP does not allow authentication or response hooks"
+        )
     if isinstance(session, Session):
         # A retry adapter can spend several requests below our one-attempt
         # loop. Unknown adapters may also ignore the proxy argument entirely.
@@ -538,19 +557,33 @@ def request_with_retries(
         # The first refusal is the answer. Never retry 429/5xx from a portal
         # or spend a second request trying a different network route.
         owner = request_fn
-        # Unbound methods can receive self by keyword, including a partial's
-        # defaults. Call-time keywords override those defaults.
-        session = kwargs.get("self")
+        # Resolve partial defaults without changing the call. Call-time
+        # keywords take precedence, just as they do for functools.partial.
+        transport_args, transport_kwargs = args, kwargs
         while isinstance(owner, partial):
-            if owner.args and isinstance(owner.args[0], Session):
-                session = owner.args[0]
-            if session is None:
-                session = owner.keywords.get("self")
+            transport_args = owner.args + transport_args
+            transport_kwargs = {**owner.keywords, **transport_kwargs}
             owner = owner.func
-        session = getattr(owner, "__self__", session)
-        if session is None and args and isinstance(args[0], Session):
-            session = args[0]
-        kwargs["proxies"] = portal_proxies(session=session)
+        session = getattr(owner, "__self__", None)
+        if session is None:
+            session = transport_kwargs.get("self")
+        if (
+            session is None
+            and transport_args
+            and isinstance(transport_args[0], Session)
+        ):
+            session = transport_args[0]
+        auth, hooks = transport_kwargs.get("auth"), transport_kwargs.get("hooks")
+        if getattr(owner, "__func__", owner) is Session.request:
+            # Session.request (unlike get/post) also accepts auth and hooks
+            # positionally. Refuse them before Requests can install a replay.
+            bound = (
+                signature(owner)
+                .bind_partial(*transport_args, **transport_kwargs)
+                .arguments
+            )
+            auth, hooks = bound.get("auth"), bound.get("hooks")
+        kwargs["proxies"] = portal_proxies(session=session, auth=auth, hooks=hooks)
         max_attempts = 1
 
     if max_attempts < 1:

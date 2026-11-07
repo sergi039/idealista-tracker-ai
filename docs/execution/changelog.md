@@ -10,8 +10,9 @@
 - Require an explicitly configured isolated proxy for portal pages, tracker
   resolution and server-side visual sources; refuse before I/O when missing
   or invalid, never fall back to the direct route, and make only one portal
-  attempt. Keep known-refused Idealista HTTP and batch checks offline too. Other API clients
-  and email-only Yaencontre ingestion retain their existing behavior.
+  attempt. Refuse authentication and response hooks that can replay a 401.
+  Keep known-refused Idealista HTTP and batch checks offline too. Other API
+  clients and email-only Yaencontre ingestion retain their existing behavior.
 
 - After an Idealista HTTP refusal, verify publication through an owned normal
   Chrome tab on the MacBook; validate its nonce-scoped archive locally and keep
