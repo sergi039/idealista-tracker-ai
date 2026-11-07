@@ -61,6 +61,9 @@ class Config:
         os.environ.get("AI_BRIDGE_URL") or "http://host.docker.internal:5061"
     )
     AI_BRIDGE_TOKEN = os.environ.get("AI_BRIDGE_TOKEN")
+    LISTING_BROWSER_FALLBACK_ENABLED = (
+        os.environ.get("LISTING_BROWSER_FALLBACK_ENABLED", "false").lower() == "true"
+    )
 
     # The one exception to "no API key anywhere", and it is deliberately
     # narrow (owner, 2026-09-19): TypeSafe's Jev answers the sea-view *text

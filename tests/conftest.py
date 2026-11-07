@@ -93,6 +93,7 @@ def pytest_runtest_setup(item) -> None:
     from utils.http import OVERPASS_BREAKERS
 
     ListingStatusService.breakers.reset()
+    ListingStatusService.browser_breakers.reset()
     # And the Overpass one (#399), for exactly the reason above and with the
     # same measured consequence: it is process-global, three refusals in a row
     # open it, and every later test that expects a measured answer then gets a

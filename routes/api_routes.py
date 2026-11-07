@@ -2967,9 +2967,8 @@ def check_land_status(land_id):
 def check_property_status(property_id):
     """Check whether a universal Property listing is still live on Idealista.
 
-    Rate-limited on purpose: every call spends one outbound request
-    on idealista. Without a cap, a page left in a loop would drive the scraper
-    straight past the throttle the lands sweep is careful to respect.
+    Rate-limited on purpose: the single-property action may open the configured
+    browser reader after HTTP refuses. Batch checks cannot use that reader.
 
     It also refuses `?sync=1`. The fetch can hold a worker for its full 15s
     timeout, and the per-IP limit bounds the rate but not the concurrency: five
@@ -2992,7 +2991,9 @@ def check_property_status(property_id):
                 return {"success": False, "error": "No URL available for this listing"}
 
             service = ListingStatusService()
-            result = service.check_property_status(prop_local)
+            result = service.check_property_status(
+                prop_local, allow_browser_fallback=True
+            )
 
             return {
                 "success": True,

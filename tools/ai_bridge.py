@@ -992,6 +992,70 @@ PROVIDERS = {
 }
 
 
+_BROWSER_SLOT = threading.Lock()
+BROWSER_TIMEOUT = 50
+BROWSER_LAUNCHER = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "browser.sh"
+)
+
+
+def _browser_contract():
+    import importlib.util
+
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "..",
+        "services",
+        "listing_browser.py",
+    )
+    spec = importlib.util.spec_from_file_location("listing_browser_contract", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def check_listing_in_browser(url, nonce):
+    _browser_contract().validate_request(url, nonce)
+    if not _BROWSER_SLOT.acquire(blocking=False):
+        raise BridgeBusy("browser checker is busy")
+    try:
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key in {"HOME", "USER", "PATH", "LANG", "LC_ALL", "SSH_AUTH_SOCK"}
+        }
+        proc = subprocess.Popen(
+            ["/bin/bash", BROWSER_LAUNCHER, "--read-listing-status", url, nonce],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            cwd=workdir(),
+            start_new_session=True,
+        )
+        _track_run(proc)
+        try:
+            try:
+                output, _ = proc.communicate(timeout=BROWSER_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                _kill_process_group(proc, KILL_GRACE_SECONDS)
+                proc.communicate(timeout=KILL_GRACE_SECONDS)
+                raise BridgeTimeout("browser checker timed out") from None
+        finally:
+            _untrack_run(proc)
+        if proc.returncode or len(output) > 32768:
+            raise BridgeError("browser checker unavailable")
+        try:
+            page = json.loads(output)
+        except ValueError:
+            raise BridgeError("invalid browser response") from None
+        if not isinstance(page, dict) or page.get("nonce") != nonce:
+            raise BridgeError("unrelated browser response")
+        return page
+    finally:
+        _BROWSER_SLOT.release()
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "ai-bridge/1.0"
 
@@ -1027,7 +1091,43 @@ class Handler(BaseHTTPRequestHandler):
             },
         )
 
+    def _listing_status(self):
+        if not self._authorized():
+            self._reply(401, {"error": "unauthorized"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self._reply(400, {"error": "invalid content length"})
+            return
+        if not 0 < length <= 4096:
+            self._reply(413, {"error": "body missing or too large"})
+            return
+        try:
+            body = json.loads(self.rfile.read(length))
+            if not isinstance(body, dict) or set(body) != {"url", "nonce"}:
+                raise ValueError("expected only url and nonce")
+            _browser_contract().validate_request(body["url"], body["nonce"])
+        except (ValueError, TypeError):
+            self._reply(400, {"error": "invalid public listing request"})
+            return
+        try:
+            page = check_listing_in_browser(body["url"], body["nonce"])
+        except BridgeBusy:
+            self._reply(503, {"error": "browser checker busy"})
+            return
+        except BridgeTimeout:
+            self._reply(504, {"error": "browser checker timed out"})
+            return
+        except (BridgeError, OSError):
+            self._reply(502, {"error": "browser checker unavailable"})
+            return
+        self._reply(200, page)
+
     def do_POST(self) -> None:  # noqa: N802 - stdlib hook
+        if self.path.rstrip("/") == "/v1/listing-status":
+            self._listing_status()
+            return
         if self.path.rstrip("/") != "/v1/complete":
             self._reply(404, {"error": "not found"})
             return

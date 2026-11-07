@@ -281,3 +281,9 @@ class SubscriptionClient:
     def __init__(self, provider: str = "claude", default_model: str = "") -> None:
         self.provider = provider
         self.messages = _Messages(provider, default_model)
+
+
+def read_listing_status(url: str, nonce: str) -> Dict[str, Any]:
+    """Read one public listing through the host browser; no model invocation."""
+    # _post adds the existing socket cleanup margin: 50 + 25 = 75s by default.
+    return _post("/v1/listing-status", {"url": url, "nonce": nonce}, 50)

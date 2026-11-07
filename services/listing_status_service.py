@@ -8,6 +8,7 @@ import re
 import requests
 import time
 import random
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple, Optional, Dict, Tuple
 from urllib.parse import urlsplit, parse_qs
@@ -102,6 +103,10 @@ class ListingStatusService:
     # breaker per host -- see `HostBreakers` for why a single one silently
     # forbade every non-idealista check.
     breakers = HostBreakers(
+        threshold=REFUSAL_BREAKER_THRESHOLD, cooldown_s=REFUSAL_COOLDOWN_S
+    )
+
+    browser_breakers = HostBreakers(
         threshold=REFUSAL_BREAKER_THRESHOLD, cooldown_s=REFUSAL_COOLDOWN_S
     )
 
@@ -520,13 +525,53 @@ class ListingStatusService:
             "refusal": refusal,
         }
 
-    def check_property_status(self, prop: Property) -> Dict:
+    def _browser_fallback(self, url):
+        from config import Config
+        from services.listing_browser import classify_page, identity
+        from services.subscription_transport import (
+            read_listing_status,
+            SubscriptionTransportError,
+        )
+
+        if not Config.LISTING_BROWSER_FALLBACK_ENABLED:
+            return None, None
+        try:
+            identity(url)
+        except ValueError:
+            return None, None
+        breaker = self.browser_breakers.for_url(url)
+        if breaker.should_skip():
+            return Observation("error", None, "backing_off"), {
+                "method": "browser_archive"
+            }
+        nonce = uuid.uuid4().hex
+        started = time.monotonic()
+        try:
+            page = read_listing_status(url, nonce)
+            status, refusal = classify_page(
+                url, nonce, page, (time.monotonic() - started) * 1000
+            )
+        except SubscriptionTransportError as exc:
+            status, refusal = (
+                "error",
+                "browser_busy" if exc.status == 503 else "browser_unavailable",
+            )
+        if refusal == "blocked":
+            breaker.record_refusal(refusal)
+        elif status != "error":
+            breaker.record_success()
+        return Observation(status, None, refusal), {"method": "browser_archive"}
+
+    def check_property_status(
+        self, prop: Property, *, allow_browser_fallback: bool = False
+    ) -> Dict:
         """
         Check the listing status for a single universal Property row.
 
         Properties have no history table, so unlike Land there is no snapshot
         side effect here -- the row itself carries status, removal date and
-        last-checked time.
+        last-checked time. Only the explicit single-property action may opt
+        into the owner Chrome reader; batch checks must stay on isolated HTTP.
         """
         if not prop.url:
             return {
@@ -557,6 +602,15 @@ class ListingStatusService:
                 "error", None, "unsupported_source"
             )
 
+        http_refusal = refusal
+        browser, browser_meta = (
+            self._browser_fallback(url)
+            if allow_browser_fallback and status == "error"
+            else (None, None)
+        )
+        if browser is not None:
+            status, removed_date_str, refusal = browser
+
         with locked_write(prop, locked=locked, commit=True):
             previous_status = prop.listing_status
             if (
@@ -577,6 +631,8 @@ class ListingStatusService:
                     "observed": status,
                     "refusal": refusal,
                 }
+                if browser_meta:
+                    attempt.update(browser_meta, http_refusal=http_refusal)
                 enrichment["listing_status_check"] = attempt
                 prop.enrichment = enrichment
                 changed, _ = self._apply_observed_status(prop, status, removed_date_str)
@@ -602,7 +658,9 @@ class ListingStatusService:
             "refusal": refusal,
             # This listing's host, not every host: a reader looking at one
             # fotocasa listing is not helped by idealista's wall.
-            "breaker": self.breakers.for_url(prop.url).state(),
+            "breaker": (self.browser_breakers if browser_meta else self.breakers)
+            .for_url(prop.url)
+            .state(),
         }
 
     def check_property_favorites_status(self, limit: int = 30) -> Dict:

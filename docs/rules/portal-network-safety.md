@@ -66,8 +66,11 @@ URLs, without fetching listing pages. Property availability already excludes
 this source. `ListingStatusService.observe` now refuses Yaencontre and the
 already-refused Idealista source before any
 HTTP operation, covering direct and legacy Land callers as well. A new service,
-reset breaker, alternate proxy or process restart does not remove that stop. This does not block
-the owner's manual browsing or rewrite stored listing status, photos or votes.
+reset breaker, alternate proxy or process restart does not remove that stop. The explicit
+single-property status action may use the separately approved Idealista browser
+reader (#610); neither the scheduled nor requested favorites batch can use it.
+This does not block the owner's manual browsing or rewrite stored listing
+status, photos or votes.
 
 Restriction-page text is a failed check even if delivered with HTTP 200. It
 must never confirm that a listing is active or removed.

@@ -10,8 +10,14 @@
 - Require an explicitly configured isolated proxy for portal pages, tracker
   resolution and server-side visual sources; refuse before I/O when missing
   or invalid, never fall back to the direct route, and make only one portal
-  attempt. Keep known-refused Idealista checks offline too. Other API clients
+  attempt. Keep known-refused Idealista HTTP and batch checks offline too. Other API clients
   and email-only Yaencontre ingestion retain their existing behavior.
+
+- After an Idealista HTTP refusal, verify publication through an owned normal
+  Chrome tab on the MacBook; validate its nonce-scoped archive locally and keep
+  previous status on any uncertainty. This gives the single-property status
+  button a second reader without changing browser permissions. Favorites
+  batches stay off owner Chrome (#610).
 
 - Serialize settings eligibility and writes with search removal, so a stale form
   cannot reactivate a retained technical subscription. Lock default changes in ID
