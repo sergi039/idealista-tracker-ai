@@ -301,34 +301,18 @@ def run_listing_status_check():
             from config import Config
 
             target = getattr(Config, "INGESTION_TARGET", "properties")
-            if target != "lands":
-                # Not "email-driven" -- nothing checks Property statuses on a
-                # schedule at all, and there is no bulk Property sweep to run:
-                # `check_favorites_status` and `check_all_active_listings` both
-                # select on `Land`. (This comment used to name a
-                # `check_all_active_properties` that has never existed, which
-                # read as a deliberate opt-out from a working sweep.) Writing
-                # one would only burn requests against a host that answers 403
-                # plus a DataDome captcha to this machine -- measured again
-                # 2026-08-15, 76 properties, zero listing pages reached. So
-                # /properties/<id> keeps its per-listing button, the pages say
-                # plainly that an unchecked status was never verified
-                # (services/listing_verification.py), and the owner sets a
-                # status by hand when they have looked themselves.
-                logger.info(
-                    "Skipping scheduled listing status check: target=%s has no "
-                    "scheduled sweep, use the per-listing check on /properties/<id>",
-                    target,
-                )
+            if target not in {"lands", "properties"}:
+                logger.warning("Unknown listing check target: %s", target)
                 return
-
-            logger.info("Starting scheduled listing status check (lands)")
+            logger.info("Starting scheduled listing status check (%s)", target)
             from services.listing_status_service import ListingStatusService
 
             service = ListingStatusService()
-
-            # Check favorites first (they get priority)
-            results = service.check_favorites_status(limit=30)
+            results = (
+                service.check_property_favorites_status(limit=30)
+                if target == "properties"
+                else service.check_favorites_status(limit=30)
+            )
 
             logger.info(
                 "Listing status check completed. Checked %s favorites: %s removed, %s sold",
@@ -341,8 +325,8 @@ def run_listing_status_check():
             if results.get("details"):
                 for detail in results["details"]:
                     logger.info(
-                        "Status change: Land %s (%s) - %s -> %s",
-                        detail["land_id"],
+                        "Status check: %s (%s) - %s -> %s",
+                        detail.get("property_id", detail.get("land_id")),
                         detail["title"],
                         detail["old_status"],
                         detail["new_status"],
