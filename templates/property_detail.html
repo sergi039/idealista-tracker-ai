@@ -2765,6 +2765,7 @@
 // not a Jinja comment: naming that shape here with its real braces made Jinja
 // evaluate them and cost the page a second time.)
 window.LISTING_SITE = {{ _site|tojson }};
+window.LISTING_VERIFICATION_LABELS = {{ dict(blocked=t('listing_verification_blocked'), failed=t('listing_verification_failed'), confirmed=t('listing_attempt_confirmed'), attempt=t('listing_last_attempt'), active=t('listing_state_active'))|tojson }};
 
 // Record a status the owner decided, which is not the same thing as one the
 // scraper observed: the endpoint marks it `manual` and leaves
@@ -2847,14 +2848,14 @@ async function checkPropertyListingStatus(propertyId) {
         if (attemptSlot && result.attempt) {
             const blocked = ['blocked', 'backing_off', 'not_the_listing_page'].includes(result.attempt.refusal);
             const outcome = result.observed === 'error'
-                ? (blocked ? {{ t('listing_verification_blocked')|tojson }} : {{ t('listing_verification_failed')|tojson }})
-                : {{ t('listing_attempt_confirmed')|tojson }};
+                ? (blocked ? window.LISTING_VERIFICATION_LABELS.blocked : window.LISTING_VERIFICATION_LABELS.failed)
+                : window.LISTING_VERIFICATION_LABELS.confirmed;
             const date = new Date(result.attempt.attempted_at).toLocaleString([], {timeZone: 'Europe/Madrid'});
-            attemptSlot.textContent = {{ t('listing_last_attempt')|tojson }} + ': ' + date + ' · ' + outcome;
+            attemptSlot.textContent = window.LISTING_VERIFICATION_LABELS.attempt + ': ' + date + ' · ' + outcome;
             attemptSlot.classList.remove('d-none');
             const badge = document.querySelector('[data-listing-status-badge]');
             if (badge && !['removed', 'sold'].includes(result.status)) {
-                badge.textContent = result.observed === 'error' ? outcome : {{ t('listing_state_active')|tojson }};
+                badge.textContent = result.observed === 'error' ? outcome : window.LISTING_VERIFICATION_LABELS.active;
                 badge.className = result.observed === 'error'
                     ? 'badge bg-warning-subtle text-warning-emphasis border'
                     : 'badge bg-success-subtle text-success-emphasis border';
