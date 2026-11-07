@@ -2,6 +2,11 @@
 
 ## 2026-11-07
 
+- Keep Yaencontre status checks offline even through direct and legacy callers.
+  Recognise the temporary-access restriction body even with HTTP 200. Record
+  the shared-IP browser-audit incident and require isolated egress before any
+  future portal collection, without restarting the paused audit.
+
 - Check current Property favorites in the existing daily job and favorites API.
   Persist failed verification attempts separately from successful confirmations,
   disclose blocked/stale availability, and protect concurrent owner changes (#608).

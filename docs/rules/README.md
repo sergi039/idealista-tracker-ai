@@ -20,6 +20,7 @@ here. Nothing in these files was rewritten in the move.
 | [hazards.md](hazards.md) | Hazards | 912–1053 |
 | [municipalities-agencies-search.md](municipalities-agencies-search.md) | /municipalities, /agencies, municipality grouping and search | 1054–1149 |
 | [portals.md](portals.md) | Portals: fotocasa, milanuncios, yaencontre; pins and hand-set locations | 1150–1355 |
+| [portal-network-safety.md](portal-network-safety.md) | Shared-IP incident; paused browser audit; collector egress isolation | 2026-11-07 |
 | [advertiser.md](advertiser.md) | Who is selling | 1356–1436 |
 | [owner-review.md](owner-review.md) | The owner's review, timeline, cadastre and attachments | 1437–1630 |
 | [taste.md](taste.md) | The taste profile | 1631–1700 |

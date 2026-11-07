@@ -14,7 +14,7 @@ from urllib.parse import urlsplit, parse_qs
 
 from models import Land, LandHistory, Property, SyncHistory
 from app import db
-from services import fotocasa_source, milanuncios_source
+from services import fotocasa_source, milanuncios_source, yaencontre_source
 from services.enrichment_write import check_writable, locked_write
 
 #  moved to utils/http.py with  (#399) and is
@@ -67,6 +67,8 @@ class ListingStatusService:
         "checking your browser",
         "just a moment",
         "ddos-guard",
+        "access is temporarily restricted",
+        "we detected unusual activity from your device or network",
     ]
 
     # Patterns that indicate listing was sold
@@ -139,6 +141,14 @@ class ListingStatusService:
         self.captured_photos = None
         if not url:
             return Observation("error", None, "no_url")
+
+        # The archived MacBook bulk audit reached Yaencontre's restriction on
+        # the owner's shared public IP. Ingestion already uses email only and
+        # Property checks exclude this source; enforce the same stop for Land
+        # and direct observe callers, before even consulting a process-local
+        # breaker. Restarting a worker must not buy another probe here.
+        if yaencontre_source.is_yaencontre_url(url):
+            return Observation("error", None, "blocked")
 
         # Resolved once, from this URL: the wall belongs to one host, and the
         # rest of this method must not reach for a different one.

@@ -69,3 +69,10 @@ Live evidence, 2026-11-07: both requested Idealista checks returned `blocked`;
 ordinary Chrome on the approved MacBook also returned HTTP 403. These attempts
 are evidence of a verification failure, never evidence that either house is
 available or removed.
+
+The separate [shared-IP incident](portal-network-safety.md) keeps Yaencontre
+offline in `observe` itself, before the transport or in-memory breaker. This
+covers the legacy Land path and direct callers as well as the Property
+source filter. A temporary-access restriction body is `blocked`, including
+when delivered with HTTP 200; it cannot establish availability. The archived
+MacBook bulk reader remains paused and is not a fallback for failed checks.
