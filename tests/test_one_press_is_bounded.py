@@ -355,6 +355,12 @@ class TestTheBudgetIsAWallClockCeiling:
         import threading
         import time as real_time
 
+        # The response still drips for at least 0.66 s. Leave enough margin
+        # between bytes for a loaded pre-push runner without changing the
+        # behavior under test: an individual read succeeds after the overall
+        # deadline, and a new attempt may not start.
+        budget = 0.35
+
         class _Drip(http.server.BaseHTTPRequestHandler):
             def do_POST(self):
                 body = b'{"elements": [' + b" " * 6 + b"]}"
@@ -385,11 +391,11 @@ class TestTheBudgetIsAWallClockCeiling:
                 max_attempts=1,
                 timeout=(3.0, 60.0),
                 silence_max_attempts=1,
-                deadline=real_time.monotonic() + 0.1,
+                deadline=real_time.monotonic() + budget,
             )
             elapsed = real_time.monotonic() - started
             assert response.status_code == 200
-            assert elapsed > 0.1, "the drip did not outlive the deadline"
+            assert elapsed > budget, "the drip did not outlive the deadline"
 
             # A *retrying* caller does not get a second attempt after one that
             # overran: the deadline is checked before the next one starts.
@@ -407,7 +413,7 @@ class TestTheBudgetIsAWallClockCeiling:
                 backoff_base=0.01,
                 retryable_statuses=(200,),
                 timeout=(3.0, 60.0),
-                deadline=real_time.monotonic() + 0.1,
+                deadline=real_time.monotonic() + budget,
             )
             assert len(attempts) == 1, attempts
             # And what comes back is what the server said, not a budget error:
