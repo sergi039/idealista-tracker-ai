@@ -3607,3 +3607,105 @@ def test_show_cannot_revive_a_concurrently_technical_subscription(
         source = db.session.get(SearchProfile, source_id)
         assert source.is_hidden is True
         assert search_management.state(source) == "technical"
+
+
+def test_stale_settings_save_cannot_reactivate_a_removed_subscription(
+    postgres_url, monkeypatch
+):
+    """Before the fix, a POST reads owner state before removal, then saves over it."""
+    import threading
+    from app import create_app
+    from migrations.runner import run_migrations
+    from models import SearchProfile
+    from services import search_management
+    from tests import setup_test_environment
+
+    engine = create_engine(postgres_url)
+    run_migrations(engine)
+    setup_test_environment()
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    app = create_app(testing=True)
+    with app.app_context():
+        source = SearchProfile(
+            name="Archived matcher search", is_active=False, description="Retained"
+        )
+        db.session.add(source)
+        db.session.commit()
+        source_id = source.id
+
+    removal_pending, release_removal, edit_started = [
+        threading.Event() for _ in range(3)
+    ]
+    errors, responses = [], []
+    original = search_management.set_state
+
+    def paused_removal(profile, value):
+        original(profile, value)
+        if threading.current_thread().name == "remove-owner-search":
+            removal_pending.set()
+            assert release_removal.wait(15), "Removal was never released"
+
+    monkeypatch.setattr(search_management, "set_state", paused_removal)
+
+    def remove():
+        try:
+            with app.app_context():
+                report = search_management.preview(
+                    [source_id], action="remove", lock=True
+                )
+                search_management.apply(
+                    [source_id], None, "remove", report["fingerprint"]
+                )
+        except BaseException as exc:
+            errors.append(exc)
+
+    def edit():
+        try:
+            with app.test_client() as client:
+                edit_started.set()
+                response = client.post(
+                    f"/profiles/{source_id}/edit",
+                    data={
+                        "action": "save_profile_settings",
+                        "is_active": "on",
+                        "description": "Stale settings",
+                    },
+                )
+                responses.append((response.status_code, response.location))
+        except BaseException as exc:
+            errors.append(exc)
+
+    remover = threading.Thread(target=remove, name="remove-owner-search", daemon=True)
+    editor = threading.Thread(target=edit, daemon=True)
+    try:
+        remover.start()
+        assert removal_pending.wait(10)
+        editor.start()
+        assert edit_started.wait(10)
+        deadline = time.monotonic() + 10
+        waiting = False
+        while time.monotonic() < deadline:
+            with engine.connect() as observer:
+                waiting = observer.execute(
+                    text(
+                        "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%%search_profiles%%')"
+                    )
+                ).scalar()
+            if waiting:
+                break
+            time.sleep(0.02)
+        assert waiting, "Settings request never reached the locked subscription"
+    finally:
+        release_removal.set()
+        remover.join(15)
+        if editor.ident:
+            editor.join(15)
+        engine.dispose()
+    assert not remover.is_alive() and not editor.is_alive() and not errors
+    with app.app_context():
+        source = db.session.get(SearchProfile, source_id)
+        assert search_management.state(source) == "deleted"
+        assert source.is_hidden is True
+        assert source.is_active is False, "Stale settings reactivated a removed search"
+        assert source.description == "Retained"
+    assert responses == [(302, "/profiles?view=technical")]

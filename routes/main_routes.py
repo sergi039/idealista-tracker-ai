@@ -2862,7 +2862,22 @@ def edit_profile(profile_id):
     )
     from services.settings_service import SettingsService
 
-    profile = db.get_or_404(SearchProfile, profile_id)
+    if request.method == "POST":
+        # Eligibility and the settings write must share management's row lock.
+        # Making a default also updates other profiles: acquire those locks in
+        # id order first, matching route_profile's order rather than inverting it.
+        if (
+            request.form.get("action") or ""
+        ).strip() == "save_profile_settings" and request.form.get("is_default") == "on":
+            SearchProfile.query.order_by(SearchProfile.id).with_for_update().all()
+        profile = (
+            SearchProfile.query.filter_by(id=profile_id)
+            .populate_existing()
+            .with_for_update()
+            .first_or_404()
+        )
+    else:
+        profile = db.get_or_404(SearchProfile, profile_id)
 
     from services.search_management import owner_search
 
