@@ -165,13 +165,16 @@ def read_verdict(record, now: Optional[datetime] = None) -> dict:
         and attempt.get("url") == getattr(record, "url", None)
         else {}
     )
-    attempted_at = None
+    attempted_at = attempted_local = None
     try:
         raw = attempt.get("attempted_at")
         if isinstance(raw, str):
             attempted_at = _as_utc(datetime.fromisoformat(raw))
+            attempted_local = attempted_at.astimezone(
+                ZoneInfo("Europe/Madrid")
+            ).strftime("%Y-%m-%d %H:%M")
     except (ValueError, OverflowError):
-        pass
+        attempted_at = attempted_local = None
     refusal = (
         attempt.get("refusal")
         if attempted_at and attempt.get("observed") == "error"
@@ -202,11 +205,7 @@ def read_verdict(record, now: Optional[datetime] = None) -> dict:
         "note": note,
         "availability_key": availability_key,
         "attempted_at": attempted_at,
-        "attempted_local": attempted_at.astimezone(ZoneInfo("Europe/Madrid")).strftime(
-            "%Y-%m-%d %H:%M"
-        )
-        if attempted_at
-        else None,
+        "attempted_local": attempted_local,
         "attempt_refusal": refusal,
     }
 

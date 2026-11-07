@@ -231,3 +231,27 @@ def test_favorites_cannot_force_synchronous_portal_work(app):
     assert queue.call_args.kwargs["meta"]["limit"] == 50
     assert queue.call_args.kwargs["dedupe_key"] == "listings_check_favorites:properties"
     observe.assert_not_called()
+
+
+@pytest.mark.parametrize("raw", ["9999-12-31T23:30:00+00:00", "9999-12-31T23:30:00"])
+def test_unrepresentable_local_attempt_is_ignored_without_breaking_pages(app, raw):
+    p = listing()
+    p.enrichment = {
+        "listing_status_check": {
+            "url": p.url,
+            "attempted_at": raw,
+            "observed": "error",
+            "refusal": "blocked",
+        }
+    }
+    db.session.commit()
+    verdict = read_verdict(p)
+    assert verdict["attempted_at"] is None
+    assert verdict["attempted_local"] is None
+    assert verdict["attempt_refusal"] is None
+    assert p.to_dict()["listing_status_verdict"] == "unchecked"
+    assert app.test_client().get(f"/properties/{p.id}").status_code == 200
+    assert (
+        app.test_client().get("/properties?profile_id=all&view_type=list").status_code
+        == 200
+    )
