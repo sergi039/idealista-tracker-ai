@@ -27,6 +27,14 @@ REMOTE_SECONDS = 30
 CLEANUP_SECONDS = 4
 MAX_ARCHIVE_BYTES = 20 * 1024 * 1024
 OSASCRIPT = "/usr/bin/osascript"
+REMOVED_NOTICE = re.compile(
+    r"(?:this listing is no longer (?:published|available)|este (?:inmueble|anuncio) ya no está (?:disponible|publicado)|the advertiser removed it|el anunciante lo ha eliminado)[.!]?",
+    re.I,
+)
+SOLD_NOTICE = re.compile(
+    r"(?:this (?:property|listing) has been sold|este inmueble se ha vendido)[.!]?",
+    re.I,
+)
 
 
 def identity(url):
@@ -109,14 +117,29 @@ def classify_page(url, nonce, page, elapsed_ms):
             return "error", "blocked"
         if identity(page.get("canonical")) != identity(url):
             return bad
-        # A removed listing can have neither a title nor price.
+        h1, price = page.get("h1"), page.get("price")
+        if (
+            not isinstance(h1, str)
+            or not isinstance(price, str)
+            or len(h1) > 1000
+            or len(price) > 100
+        ):
+            return bad
+        # A seller's description is not a status banner. Retained live title
+        # or price contradicts a terminal notice; never hide that listing.
         if page.get("removed_notice") or page.get("sold_notice"):
+            notice = REMOVED_NOTICE if page.get("removed_notice") else SOLD_NOTICE
+            if (
+                price.strip()
+                or (h1.strip() and not notice.fullmatch(h1.strip()))
+                or (page.get("removed_notice") and page.get("sold_notice"))
+            ):
+                return "error", "availability_ambiguous"
             if page.get("reference") == identifier:
                 return ("removed" if page.get("removed_notice") else "sold"), None
             return "error", "availability_ambiguous"
         if page.get("reserved_notice"):
             return "error", "availability_ambiguous"
-        h1, price = page.get("h1"), page.get("price")
         if not isinstance(h1, str) or not h1.strip() or len(h1) > 1000:
             return bad
         if (
@@ -253,18 +276,8 @@ class PublicFields(HTMLParser):
                     low,
                 )
             ),
-            "removed_notice": bool(
-                re.search(
-                    r"this listing is no longer published|listing is no longer available|ya no está (?:disponible|publicado)|the advertiser removed it|el anunciante lo ha eliminado",
-                    low,
-                )
-            ),
-            "sold_notice": bool(
-                re.search(
-                    r"this (?:property|listing) has been sold|este inmueble se ha vendido",
-                    low,
-                )
-            ),
+            "removed_notice": bool(REMOVED_NOTICE.search(text)),
+            "sold_notice": bool(SOLD_NOTICE.search(text)),
             "reserved_notice": bool(
                 re.search(r"este inmueble (?:está|esta) reservado", low)
             ),

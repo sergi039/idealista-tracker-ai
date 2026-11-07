@@ -233,3 +233,35 @@ def test_owner_edit_during_browser_fetch_supersedes_observation(app):
     assert result["refusal"] == "superseded"
     db.session.expire_all()
     assert p.listing_status == "removed" and p.listing_status_source == "manual"
+
+
+def test_conflicting_browser_notice_cannot_hide_a_live_property(app):
+    p = property_row()
+    old = p.listing_last_checked
+
+    def answer(url, nonce):
+        page = browser_page(url, nonce)
+        page.update(removed_notice=True, reference="12345")
+        return page
+
+    with (
+        patch.object(
+            ListingStatusService,
+            "observe",
+            return_value=Observation("error", None, "blocked"),
+        ),
+        patch(
+            "services.subscription_transport.read_listing_status", side_effect=answer
+        ),
+    ):
+        result = ListingStatusService().check_property_status(p)
+    assert (
+        result["new_status"] == "error"
+        and result["refusal"] == "availability_ambiguous"
+    )
+    db.session.expire_all()
+    assert (
+        p.listing_status == "active"
+        and p.listing_status_source == "manual"
+        and p.listing_last_checked == old
+    )

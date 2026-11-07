@@ -377,3 +377,44 @@ def test_browser_transport_socket_timeout_includes_existing_cleanup_margin(monke
     transport.read_listing_status(URL, NONCE)
     assert urlopen.call_args.kwargs["timeout"] == 75
     assert json.loads(urlopen.call_args.args[0].data) == {"url": URL, "nonce": NONCE}
+
+
+def test_unavailable_neighbor_in_seller_description_is_not_a_removed_listing(tmp_path):
+    html = HTML.replace(
+        "</body>", "<p>La parcela contigua ya no está disponible.</p></body>"
+    )
+    assert classified(tmp_path / "neighbor.mhtml", html) == ("active", None)
+
+
+@pytest.mark.parametrize(
+    "notice",
+    [
+        "Este inmueble ya no está disponible",
+        "Este inmueble se ha vendido",
+        "This listing is no longer published",
+    ],
+)
+def test_live_title_or_price_conflicting_with_terminal_notice_is_ambiguous(
+    tmp_path, notice
+):
+    html = HTML.replace("</body>", "<p>" + notice + "</p></body>")
+    assert classified(tmp_path / "conflict.mhtml", html) == (
+        "error",
+        "availability_ambiguous",
+    )
+    # Even an unpriced live title is not a terminal-status banner.
+    html = html.replace(
+        '<span class="info-data-price">285.000 <span>€</span></span>', ""
+    )
+    assert classified(tmp_path / "unpriced.mhtml", html) == (
+        "error",
+        "availability_ambiguous",
+    )
+
+
+def test_explicit_removed_heading_without_live_fields_can_confirm_removal(tmp_path):
+    html = (
+        '<link rel="canonical" href="%s"><h1>This listing is no longer published</h1><p>Referencia del anuncio: 12345</p>'
+        % URL
+    )
+    assert classified(tmp_path / "banner.mhtml", html) == ("removed", None)
