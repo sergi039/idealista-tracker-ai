@@ -1,8 +1,7 @@
 # Listing status and the checker
 
 Moved verbatim from `CLAUDE.md` (lines 683–729 at commit 8697ff7,
-2026-09-03): the long form of the one-line rules `CLAUDE.md` keeps. Nothing
-below was rewritten. "Above", "below" and "this file" refer to the order the
+2026-09-03): the long form of the one-line rules `CLAUDE.md` keeps. Historical text is amended below for the owner-requested availability checks (#608). "Above", "below" and "this file" refer to the order the
 text had in `CLAUDE.md`; `docs/rules/README.md` lists the files in that order.
 
 **`listing_status` is `active` by default, so `active` is only shown when
@@ -43,11 +42,30 @@ probe, and a refusal re-arms it, because it heals on evidence and not on a
 timer. Each refusal carries a reason — `blocked`, `backing_off`,
 `not_the_listing_page`, `http_error`, `timeout` — so the page can say "idealista
 is refusing this machine" rather than reporting 76 unrelated failures. None of
-this changes the #136 storage contract: an `error` still writes nothing, not
-even `listing_last_checked`. The breaker is process-local and shared by every
+this changes the #136 storage contract: an `error` never changes status, its source, removal date or
+`listing_last_checked`. A separate `enrichment.listing_status_check` records the
+URL, start/completion timestamps, observed answer and refusal; readers disclose
+the latest failed attempt instead of presenting an old Live badge as current. The breaker is process-local and shared by every
 instance (each caller builds its own service), which makes it exactly the kind
 of state `tests/conftest.py` resets between tests — it is reset there, and
 skipping that reset makes 21 tests in three other files fail with no reference
-to the file that armed it. There is still **no scheduled sweep for
-`Property`** and no `check_all_active_properties` to run — the bulk paths select
-on `Land` — so the per-listing button and the hand-set status are the way in.
+to the file that armed it. As of #608, the existing daily job checks **up to 30 visible, active-subscription
+`Property` favorites** with active/unknown status. The favorites API uses the
+configured catalog (up to 50), always queues in production, and coalesces
+identical jobs. Oldest attempts go first; a refused host stops for this run,
+while other hosts remain eligible. Removed/sold favorites remain reference
+examples, never automatically resurrected. The legacy check-all path still
+selects `Land`; this change does not sweep the full Property catalog.
+
+The single-property writer validates a clean attached session before fetching,
+then uses the existing `locked_write` primitive after fetching to preserve
+concurrent enrichment. A changed URL, status provenance, confirmation date or
+attempt supersedes the in-flight result. No lock spans network I/O. Unsupported
+sources never fetch or confirm. Status badges distinguish stale confirmations
+(older than the existing 30-day threshold), blocked attempts and confirmed
+availability; the detail shows the attempt separately with a Madrid timestamp.
+
+Live evidence, 2026-11-07: both requested Idealista checks returned `blocked`;
+ordinary Chrome on the approved MacBook also returned HTTP 403. These attempts
+are evidence of a verification failure, never evidence that either house is
+available or removed.

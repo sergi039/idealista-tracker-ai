@@ -85,7 +85,7 @@ pytest tests/ --cov=app --cov-report=html    # coverage report
 ### Listing status → docs/rules/listing-status.md
 
 - **`listing_status` is `active` by default, so `active` is only shown when somebody established it**: `services/listing_verification.py` is the only reader; `active` shows only with source `check` or `manual`, everything else presents as `unchecked` (a presentation state, not a database value); CSV and `to_dict` carry the verdict.
-- **Idealista blocks the checker from this machine, and the app says so instead of retrying into the wall**: `RefusalBreaker` in `services/listing_status_service.py`, a reason per refusal, an `error` still writes nothing; defeating DataDome is not on the table; `tests/conftest.py` resets the breaker; there is no scheduled sweep for `Property`.
+- **Idealista blocks the checker from this machine, and the app says so instead of retrying into the wall**: `RefusalBreaker` in `services/listing_status_service.py`, a reason per refusal, an `error` never confirms status or advances `listing_last_checked`, but persists a separate attempt; defeating DataDome is not on the table; `tests/conftest.py` resets the breaker; the daily job checks up to 30 visible active/unknown `Property` favorites, stopping each refused host.
 
 ### Sea distance and the cache → docs/rules/sea-distance-and-cache.md
 

@@ -1,5 +1,11 @@
 # Execution changelog
 
+## 2026-11-07
+
+- Check current Property favorites in the existing daily job and favorites API.
+  Persist failed verification attempts separately from successful confirmations,
+  disclose blocked/stale availability, and protect concurrent owner changes (#608).
+
 ## 2026-11-05
 
 - Reserve rated primary/alias listing URLs across deletion and reimport with a
