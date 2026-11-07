@@ -213,6 +213,44 @@ def test_retrying_adapter_is_refused_before_it_can_repeat_a_portal_request(
         thread.join(timeout=2)
 
 
+def test_portal_silence_never_spends_a_second_proxy_attempt(monkeypatch):
+    hits = []
+    release = threading.Event()
+
+    class SilentProxy(BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits.append(self.path)
+            release.wait(timeout=3)
+
+        def log_message(self, *_args):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), SilentProxy) as proxy:
+        thread = threading.Thread(
+            target=proxy.serve_forever, kwargs={"poll_interval": 0.01}
+        )
+        thread.start()
+        monkeypatch.setattr(
+            Config, "PORTAL_HTTP_PROXY_URL", f"http://127.0.0.1:{proxy.server_port}"
+        )
+        try:
+            with requests.Session() as session, pytest.raises(requests.Timeout):
+                request_with_retries(
+                    session.get,
+                    "http://portal.example/listing",
+                    portal_egress=True,
+                    timeout=(1, 0.25),
+                    max_attempts=3,
+                    silence_max_attempts=8,
+                    backoff_base=0.001,
+                )
+            assert hits == ["http://portal.example/listing"]
+        finally:
+            release.set()
+            proxy.shutdown()
+            thread.join(timeout=2)
+
+
 @pytest.mark.parametrize(
     "replay",
     [
@@ -316,6 +354,28 @@ def test_real_portal_readers_refuse_before_fetch_without_route(
     session.get.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://media.yaencontre.com/img/photo/1.jpg",
+        "https://img4.idealista.com/img/photo/1.jpg",
+    ],
+)
+def test_configured_proxy_does_not_resume_refused_portal_photos(monkeypatch, url):
+    monkeypatch.setattr(Config, "PORTAL_HTTP_PROXY_URL", "http://127.0.0.1:9")
+    session = Mock()
+    with pytest.raises(visual_input.VisualInputError, match="approved direct HTTPS"):
+        visual_input.download_photo_source(
+            {
+                "source_kind": "portal_photo",
+                "source_id": "property:1:photo:0",
+                "url": url,
+            },
+            session=session,
+        )
+    session.get.assert_not_called()
+
+
 def test_photo_reader_refuses_before_fetch_without_route(monkeypatch):
     monkeypatch.setattr(Config, "PORTAL_HTTP_PROXY_URL", "")
     session = Mock()
@@ -324,7 +384,7 @@ def test_photo_reader_refuses_before_fetch_without_route(monkeypatch):
             {
                 "source_kind": "portal_photo",
                 "source_id": "property:1:photo:0",
-                "url": "https://media.yaencontre.com/img/photo/1.jpg",
+                "url": "https://static.fotocasa.es/img/photo/1.jpg",
             },
             session=session,
         )

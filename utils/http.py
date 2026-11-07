@@ -584,7 +584,7 @@ def request_with_retries(
             )
             auth, hooks = bound.get("auth"), bound.get("hooks")
         kwargs["proxies"] = portal_proxies(session=session, auth=auth, hooks=hooks)
-        max_attempts = 1
+        max_attempts = silence_max_attempts = 1
 
     if max_attempts < 1:
         max_attempts = 1

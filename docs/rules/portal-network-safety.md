@@ -47,10 +47,12 @@ mini's ignored environment, never globally for the owner's browser.
 `utils.http.portal_proxies` is the one proxy-policy reader. Portal page and
 Milanuncios card-tracker callers pass `portal_egress=True` into the existing
 `request_with_retries` transport: both HTTP and HTTPS use the explicit proxy,
-overriding ambient/caller routes, with exactly one attempt, including on 429
-or 5xx. A dead proxy raises; there is no direct-network fallback. Server-side
-visual image and dossier reads use the same policy. Google/OSM transports,
-attachments and the owner's ordinary browser image display are unaffected.
+overriding ambient/caller routes, with exactly one attempt, including after
+a timeout or a 429/5xx response. A dead proxy raises; there is no direct-network fallback. Server-side
+visual image and dossier reads use the same proxy policy. The server-fetch
+image allowlist excludes Idealista and Yaencontre; dossier HTML and images
+remain confined to the exact property-specific dossier host, without redirects.
+Captured display URLs, Google/OSM transports and attachments are unaffected.
 All host-specific session/environment routing keys are replaced as well:
 Requests gives those precedence over scheme settings. Nonstandard or retrying
 adapters, authentication and nonempty response hooks are refused before I/O,
