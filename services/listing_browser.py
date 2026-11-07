@@ -168,9 +168,19 @@ class PublicFields(HTMLParser):
         self.canonicals, self.headings, self.prices, self.public = [], [], [], []
         self.public_size = 0
         self.overflow = False
+        self.challenge = False
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
+        if any(
+            re.search(
+                r"https?://(?:[a-z0-9-]+\.)?captcha-delivery\.com/",
+                attrs.get(key, ""),
+                re.I,
+            )
+            for key in ("src", "href")
+        ):
+            self.challenge = True
         skip = (
             bool(self.stack and self.stack[-1][1])
             or tag in self.EXCLUDED
@@ -215,6 +225,13 @@ class PublicFields(HTMLParser):
                 price.append(value)
 
     def result(self):
+        text = " ".join(self.public)
+        low = text.lower()
+        if self.challenge or re.search(
+            r"checking your browser|please enable js|just a moment|verify you are human|captcha-delivery|ddos-guard",
+            low,
+        ):
+            raise ReaderFailure("blocked")
         if (
             self.overflow
             or len(self.canonicals) != 1
@@ -222,8 +239,6 @@ class PublicFields(HTMLParser):
             or len(self.prices) > 1
         ):
             raise ReaderFailure("not_the_listing_page")
-        text = " ".join(self.public)
-        low = text.lower()
         reference = re.search(
             r"(?:Listing reference|Referencia del anuncio)\s*:?\s*([0-9]+)", text, re.I
         )
@@ -265,7 +280,7 @@ def read_archive(path, expected):
         raise ReaderFailure("not_the_listing_page")
     message = BytesParser(policy=policy.default).parsebytes(raw)
     if any(part.defects for part in message.walk()):
-        raise ReaderFailure("not_the_listing_page")
+        raise ArchiveIncomplete("archive_incomplete")
     if message.get("Snapshot-Content-Location") != expected:
         raise ReaderFailure("not_the_listing_page")
     parts = [
@@ -286,6 +301,10 @@ def read_archive(path, expected):
 
 
 class ReaderFailure(RuntimeError):
+    pass
+
+
+class ArchiveIncomplete(ReaderFailure):
     pass
 
 
@@ -359,8 +378,9 @@ end tell""",
         self.window, self.tab = int(window), int(tab)
 
     def navigate(self, url):
-        self.command("set URL of auditTab to " + json.dumps(url))
+        # Bind intent before the AppleEvent: it can apply and then time out.
         self.last_url = url
+        self.command("set URL of auditTab to " + json.dumps(url))
 
     def location(self):
         return self.command("return URL of auditTab")
@@ -382,11 +402,20 @@ end tell""",
 
     def close(self):
         if self.tab is not None:
-            # Closing this tab preserves every extra tab the owner may add.
+            allowed = {"about:blank", self.last_url}
+            # A query-stripping redirect stays on the requested listing.
+            base = self.last_url.partition("?")[0]
+            try:
+                identity(base)
+                allowed.add(base)
+            except ValueError:
+                pass
+            # Unknown destinations could be the owner's navigation; preserve
+            # them along with every additional tab in this created window.
             self.command(
-                "if (URL of auditTab) is "
-                + json.dumps(self.last_url)
-                + " then close auditTab",
+                "if {"
+                + ", ".join(json.dumps(url) for url in sorted(allowed))
+                + "} contains (URL of auditTab) then close auditTab",
                 deadline=time.monotonic() + CLEANUP_SECONDS,
             )
 
@@ -455,9 +484,11 @@ def read_native(url, nonce):
                                 ready="complete",
                                 reader_elapsed_ms=(time.monotonic() - started) * 1000,
                             )
-                        except (ValueError, UnicodeError, LookupError, ReaderFailure):
-                            # Chrome may still be writing the MIME end boundary.
+                        except ArchiveIncomplete:
+                            # Only unfinished MIME can become valid by waiting.
                             pass
+                        except (ValueError, UnicodeError, LookupError):
+                            raise ReaderFailure("not_the_listing_page") from None
                     previous = size
                     time.sleep(0.2)
                 raise ReaderFailure("browser_unavailable")

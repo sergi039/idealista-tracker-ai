@@ -94,7 +94,12 @@ on the source; only the advertiser can confirm a sale has not happened privately
 
 The remote reader has a 30-second watchdog plus at most 4 seconds to close only
 its own tab; the host bridge has a 50-second limit and the client a 75-second
-socket allowance. A repurposed tab or additional owner tabs are preserved. The
+socket allowance. Cleanup accepts only the initial blank, the requested nonce URL or its exact
+same-listing canonical URL (query-stripping redirect). A different destination
+is left alone because it could be an owner navigation; additional tabs are
+preserved. A timed-out navigation still records its intended URL before sending
+the AppleEvent. Complete invalid archives return their actual refusal immediately;
+only unfinished MIME is polled again. The
 MacBook must be awake, reachable and have Chrome running; there is no mini
 browser fallback. The route works with JavaScript through Apple Events disabled.
 

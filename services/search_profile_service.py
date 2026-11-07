@@ -748,7 +748,8 @@ class SearchProfileService:
                 is_auto_created=True,
                 travel_targets=default_travel_targets_config(),
                 routed_to=route_target.id if route_target else None,
-                is_hidden=bool(route_target),
+                is_hidden=True,
+                ui_config={"search_management": {"state": "technical"}},
             )
             db.session.add(profile)
             db.session.commit()
@@ -1270,7 +1271,8 @@ class SearchProfileService:
                 source_search_url=identity.url,
                 travel_targets=default_travel_targets_config(),
                 routed_to=route_target.id if route_target else None,
-                is_hidden=bool(route_target),
+                is_hidden=True,
+                ui_config={"search_management": {"state": "technical"}},
             )
             db.session.add(profile)
             db.session.commit()
@@ -1448,9 +1450,25 @@ class SearchProfileService:
             # Off the screens the way is_hidden means it: no chip, no menu
             # entry — and unlike a merely hidden profile, nothing stays here.
             source.is_hidden = True
-            moved = Property.query.filter_by(search_profile_id=source_id).update(
-                {"search_profile_id": target_id}, synchronize_session=False
+            # Refresh under the row lock before modifying the JSON column;
+            # concurrent enrichment/owner writers must not lose their values.
+            rows = (
+                Property.query.filter_by(search_profile_id=source_id)
+                .order_by(Property.id)
+                .populate_existing()
+                .with_for_update()
+                .all()
             )
+            for row in rows:
+                enrichment = dict(row.enrichment or {})
+                transfers = list(enrichment.get("profile_transfers") or [])
+                transfers.append(
+                    {"from_profile_id": source_id, "to_profile_id": target_id}
+                )
+                enrichment["profile_transfers"] = transfers
+                row.enrichment = enrichment
+                row.search_profile_id = target_id
+            moved = len(rows)
             if commit:
                 db.session.commit()
             logger.info(

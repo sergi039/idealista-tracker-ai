@@ -177,10 +177,9 @@ def test_owned_tab_cleanup_targets_only_created_id_and_preserves_repurposed_tab(
     tab.window, tab.tab, tab.last_url = 12, 34, WANTED
     tab.close()
     assert "window id 12" in scripts[0] and 'is "34"' in scripts[0]
-    assert (
-        "if (URL of auditTab) is " + json.dumps(WANTED) + " then close auditTab"
-        in scripts[0]
-    )
+    assert json.dumps(WANTED) in scripts[0] and json.dumps(URL) in scripts[0]
+    assert '"about:blank"' in scripts[0]
+    assert "contains (URL of auditTab) then close auditTab" in scripts[0]
     assert "close window" not in scripts[0] and "execute" not in scripts[0]
 
 
@@ -286,3 +285,95 @@ def test_browser_shell_sends_validated_source_over_stdin_with_constant_ssh_argv(
         timeout=10,
     )
     assert result.returncode != 0 and json.loads(output.read_text())["stdin"] == ""
+
+
+@pytest.mark.parametrize(
+    "html,reason",
+    [
+        (
+            HTML.replace("</body>", "<h1>Another primary title</h1></body>"),
+            "not_the_listing_page",
+        ),
+        (
+            '<html><script src="https://geo.captcha-delivery.com/captcha/"></script></html>',
+            "blocked",
+        ),
+    ],
+)
+def test_completed_refusal_propagates_instead_of_becoming_browser_timeout(
+    tmp_path, monkeypatch, html, reason
+):
+    monkeypatch.setattr(reader.socket, "gethostname", lambda: reader.MACBOOK)
+    monkeypatch.setattr(reader.subprocess, "run", lambda *a, **kw: Mock(returncode=0))
+    monkeypatch.setattr(reader.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(reader, "REMOTE_SECONDS", 2)
+    closed = []
+
+    class Tab:
+        def __init__(self, deadline):
+            pass
+
+        def open(self):
+            pass
+
+        def navigate(self, url):
+            pass
+
+        def location(self):
+            return WANTED
+
+        def command(self, command):
+            return "false"
+
+        def archive(self, url, path):
+            write_archive(path, html)
+            return True
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(reader, "OwnedTab", Tab)
+    started = reader.time.monotonic()
+    with pytest.raises(reader.ReaderFailure, match="^" + reason + "$"):
+        reader.read_native(URL, NONCE)
+    assert reader.time.monotonic() - started < 1.5
+    assert closed == [True]
+
+
+def test_navigate_timeout_keeps_the_requested_url_for_own_tab_cleanup(monkeypatch):
+    tab = reader.OwnedTab(100)
+    tab.window, tab.tab = 12, 34
+
+    def command(body, **kwargs):
+        raise subprocess.TimeoutExpired("osascript", 4)
+
+    monkeypatch.setattr(tab, "command", command)
+    with pytest.raises(subprocess.TimeoutExpired):
+        tab.navigate(WANTED)
+    assert tab.last_url == WANTED
+    scripts = []
+    monkeypatch.setattr(
+        reader, "apple", lambda script, deadline: scripts.append(script)
+    )
+    monkeypatch.delattr(tab, "command")
+    tab.close()
+    assert json.dumps(WANTED) in scripts[0] and json.dumps(URL) in scripts[0]
+    assert '"about:blank"' in scripts[0]
+
+
+def test_browser_transport_socket_timeout_includes_existing_cleanup_margin(monkeypatch):
+    from config import Config
+    from services import subscription_transport as transport
+
+    monkeypatch.setattr(Config, "AI_BRIDGE_URL", "http://127.0.0.1:5061")
+    monkeypatch.setattr(Config, "AI_BRIDGE_TOKEN", "test-only-token")
+    monkeypatch.setattr(Config, "AI_BRIDGE_SOCKET_MARGIN_SECONDS", 25)
+    response = Mock()
+    response.__enter__ = Mock(return_value=response)
+    response.__exit__ = Mock(return_value=False)
+    response.read.return_value = json.dumps({"nonce": NONCE}).encode()
+    urlopen = Mock(return_value=response)
+    monkeypatch.setattr(transport.urllib.request, "urlopen", urlopen)
+    transport.read_listing_status(URL, NONCE)
+    assert urlopen.call_args.kwargs["timeout"] == 75
+    assert json.loads(urlopen.call_args.args[0].data) == {"url": URL, "nonce": NONCE}
