@@ -3013,6 +3013,7 @@ def check_property_status(property_id):
                 # the button on the tenth listing should learn that the wall is
                 # the site, not this listing.
                 "breaker": result.get("breaker"),
+                "attempt": result.get("attempt"),
                 "previous_status": result.get("previous_status"),
                 "changed": result.get("changed", False),
                 "last_checked": prop_local.listing_last_checked.isoformat()
@@ -3027,7 +3028,10 @@ def check_property_status(property_id):
             return jsonify(_run())
 
         job_id = _enqueue(
-            _run, job_type="property_check_status", meta={"property_id": prop.id}
+            _run,
+            job_type="property_check_status",
+            meta={"property_id": prop.id},
+            dedupe_key=f"property_check_status:{prop.id}",
         )
         return jsonify(
             {
@@ -3055,23 +3059,34 @@ def check_property_status(property_id):
 
 
 @api_bp.route("/listings/check-favorites", methods=["POST"])
+@limiter.limit("5 per minute")
 def check_favorites_status():
     """Check status of all favorite listings"""
     try:
         from services.listing_status_service import ListingStatusService
 
-        limit = request.args.get("limit", 50, type=int)
+        limit = max(1, min(request.args.get("limit", 50, type=int), 50))
+        target = current_app.config.get("INGESTION_TARGET", "properties")
+        if target not in {"lands", "properties"}:
+            return jsonify({"success": False, "error": "Unknown listing catalog"}), 400
 
         def _run():
             service = ListingStatusService()
-            results = service.check_favorites_status(limit=limit)
+            results = (
+                service.check_property_favorites_status(limit=limit)
+                if target == "properties"
+                else service.check_favorites_status(limit=limit)
+            )
             return {"success": True, **results}
 
-        if _should_run_sync():
+        if _should_run_sync(allow_request_override=False):
             return jsonify(_run())
 
         job_id = _enqueue(
-            _run, job_type="listings_check_favorites", meta={"limit": limit}
+            _run,
+            job_type="listings_check_favorites",
+            meta={"limit": limit},
+            dedupe_key=f"listings_check_favorites:{target}",
         )
         return jsonify(
             {

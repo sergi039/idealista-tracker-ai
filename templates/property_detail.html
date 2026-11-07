@@ -186,13 +186,15 @@
                     {% set _status_note = _verdict.note %}
                     <div class="d-flex flex-wrap align-items-center gap-2 text-body-secondary small">
                         {% if _verdict.state == 'removed' %}
-                            <span class="badge bg-danger" title="{{ _status_note }}">
+                            <span data-listing-status-badge class="badge bg-danger" title="{{ _status_note }}">
                                 <i class="fas fa-times-circle me-1"></i>REMOVED
                             </span>
                         {% elif _verdict.state == 'sold' %}
-                            <span class="badge bg-secondary" title="{{ _status_note }}">
+                            <span data-listing-status-badge class="badge bg-secondary" title="{{ _status_note }}">
                                 <i class="fas fa-check-circle me-1"></i>SOLD
                             </span>
+                        {% elif _verdict.attempt_refusal or _verdict.stale %}
+                            <span data-listing-status-badge class="badge bg-warning-subtle text-warning-emphasis border">{{ t(_verdict.availability_key) }}</span>
                         {% elif _verdict.state == 'active' %}
                             {# Shown because somebody established it. The header
                                deliberately said nothing for an active listing
@@ -200,7 +202,7 @@
                                default; now that "live" is a claim with a source
                                behind it, it is worth the badge -- and the reader
                                can tell it apart from the unverified rows. #}
-                            <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle fw-normal"
+                            <span data-listing-status-badge class="badge bg-success-subtle text-success-emphasis border border-success-subtle fw-normal"
                                   title="{{ t('listing_verified_tooltip') }} — {{ _status_note }}">
                                 <i class="fas fa-circle-check me-1"></i>{{ t('listing_state_active') }}
                             </span>
@@ -209,7 +211,7 @@
                                used to render exactly like a confirmed one: no
                                badge, no banner, nothing to distinguish "we read
                                the page" from "nobody ever looked". #}
-                            <span class="badge bg-body-tertiary text-body-secondary border fw-normal"
+                            <span data-listing-status-badge class="badge bg-body-tertiary text-body-secondary border fw-normal"
                                   id="listing-unverified-badge"
                                   title="{{ _status_note }}">
                                 <i class="fas fa-circle-question me-1"></i>{{ t('listing_state_unchecked') }}
@@ -359,6 +361,9 @@
                                       title="Nobody has read this listing off {{ _site }} yet">Checked: never</span>
                             {%- endif %}
                             </span>
+                        </span>
+                        <span id="listing-last-attempt" class="{{ '' if _verdict.attempted_at else 'd-none' }}">
+                            {% if _verdict.attempted_at %}{{ t('listing_last_attempt') }}: {{ _verdict.attempted_local }} · {{ t(_verdict.availability_key) }}{% endif %}
                         </span>
                     </div>
                 </div>
@@ -2838,6 +2843,24 @@ async function checkPropertyListingStatus(propertyId) {
             return;
         }
         paintLastChecked(result.last_checked);
+        const attemptSlot = document.getElementById('listing-last-attempt');
+        if (attemptSlot && result.attempt) {
+            const blocked = ['blocked', 'backing_off', 'not_the_listing_page'].includes(result.attempt.refusal);
+            const outcome = result.observed === 'error'
+                ? (blocked ? {{ t('listing_verification_blocked')|tojson }} : {{ t('listing_verification_failed')|tojson }})
+                : {{ t('listing_attempt_confirmed')|tojson }};
+            const date = new Date(result.attempt.attempted_at).toLocaleString([], {timeZone: 'Europe/Madrid'});
+            attemptSlot.textContent = {{ t('listing_last_attempt')|tojson }} + ': ' + date + ' · ' + outcome;
+            attemptSlot.classList.remove('d-none');
+            const badge = document.querySelector('[data-listing-status-badge]');
+            if (badge && !['removed', 'sold'].includes(result.status)) {
+                badge.textContent = result.observed === 'error' ? outcome : {{ t('listing_state_active')|tojson }};
+                badge.className = result.observed === 'error'
+                    ? 'badge bg-warning-subtle text-warning-emphasis border'
+                    : 'badge bg-success-subtle text-success-emphasis border';
+                badge.removeAttribute('title');
+            }
+        }
         if (result.observed === 'error') {
             // Name the wall. A refusal by idealista is a standing condition —
             // it will answer the next press the same way, and the service has

@@ -15,6 +15,7 @@ from urllib.parse import urlsplit, parse_qs
 from models import Land, LandHistory, Property, SyncHistory
 from app import db
 from services import fotocasa_source, milanuncios_source
+from services.enrichment_write import check_writable, locked_write
 
 #  moved to utils/http.py with  (#399) and is
 # re-exported here: it was this module's for months, and
@@ -516,10 +517,51 @@ class ListingStatusService:
                 "property_id": prop.id,
             }
 
-        status, removed_date_str, refusal = self.observe(prop.url)
-        previous_status = prop.listing_status
+        from utils.listing_source import IDEALISTA, FOTOCASA, MILANUNCIOS, source_of_url
 
-        changed, _ = self._apply_observed_status(prop, status, removed_date_str)
+        locked = check_writable(prop, True)
+        columns = (
+            "url",
+            "listing_status",
+            "listing_status_source",
+            "listing_last_checked",
+            "listing_removed_date",
+        )
+        baseline = tuple(getattr(prop, key) for key in columns)
+        baseline_attempt = (prop.enrichment or {}).get("listing_status_check")
+        attempt = None
+        url = prop.url
+        started = datetime.now(timezone.utc).isoformat()
+        if source_of_url(url) in {IDEALISTA, FOTOCASA, MILANUNCIOS}:
+            status, removed_date_str, refusal = self.observe(url)
+        else:
+            status, removed_date_str, refusal = Observation(
+                "error", None, "unsupported_source"
+            )
+
+        with locked_write(prop, locked=locked, commit=True):
+            previous_status = prop.listing_status
+            if (
+                tuple(getattr(prop, key) for key in columns) != baseline
+                or (prop.enrichment or {}).get("listing_status_check")
+                != baseline_attempt
+            ):
+                # A result for an old URL or a superseded manual decision is
+                # not evidence about the current row. No lock spans the fetch.
+                status, refusal = "error", "superseded"
+                changed = False
+            else:
+                enrichment = dict(prop.enrichment or {})
+                attempt = {
+                    "url": url,
+                    "started_at": started,
+                    "attempted_at": datetime.now(timezone.utc).isoformat(),
+                    "observed": status,
+                    "refusal": refusal,
+                }
+                enrichment["listing_status_check"] = attempt
+                prop.enrichment = enrichment
+                changed, _ = self._apply_observed_status(prop, status, removed_date_str)
 
         if changed:
             logger.info(
@@ -529,10 +571,10 @@ class ListingStatusService:
                 prop.listing_status,
             )
 
-        db.session.commit()
         return {
             "success": True,
             "property_id": prop.id,
+            "attempt": attempt,
             "previous_status": previous_status,
             "new_status": status,
             "changed": changed,
@@ -544,6 +586,80 @@ class ListingStatusService:
             # fotocasa listing is not helped by idealista's wall.
             "breaker": self.breakers.for_url(prop.url).state(),
         }
+
+    def check_property_favorites_status(self, limit: int = 30) -> Dict:
+        """Bounded daily checks for the visible universal catalog, oldest first.
+
+        Attempts, not only successful confirmations, rotate the queue. A host
+        that blocks one favorite is not dialled again for its siblings in this
+        run; other portals remain eligible. Removed favorites stay references,
+        not candidates for automatic resurrection.
+        """
+        from models import SearchProfile
+        from services.search_profile_service import SearchProfileService
+
+        limit = max(1, min(int(limit), 50))
+        last_attempt = Property.enrichment["listing_status_check"][
+            "attempted_at"
+        ].as_string()
+        favorites = (
+            Property.query.join(SearchProfile)
+            .filter(
+                Property.is_favorite,
+                Property.listing_status.in_(("active", "unknown")),
+                Property.url.isnot(None),
+                SearchProfile.is_active,
+                SearchProfileService.visible_clause(),
+            )
+            .order_by(
+                last_attempt.asc().nullsfirst(),
+                Property.listing_last_checked.asc().nullsfirst(),
+                Property.id.asc(),
+            )
+            .limit(limit)
+            .all()
+        )
+        results = {
+            "checked": 0,
+            "active": 0,
+            "removed": 0,
+            "sold": 0,
+            "errors": 0,
+            "stopped_early": False,
+            "unchecked": 0,
+            "details": [],
+        }
+        blocked_hosts = set()
+        for prop in favorites:
+            host = self.breakers.host_of(prop.url)
+            if host in blocked_hosts:
+                results["unchecked"] += 1
+                results["stopped_early"] = True
+                continue
+            time.sleep(random.uniform(1, 3))
+            result = self.check_property_status(prop)
+            results["checked"] += 1
+            status = result.get("new_status", "error")
+            results[
+                status if status in ("active", "removed", "sold") else "errors"
+            ] += 1
+            if result.get("refusal") in {
+                "blocked",
+                "backing_off",
+                "not_the_listing_page",
+            }:
+                blocked_hosts.add(host)
+            results["details"].append(
+                {
+                    "property_id": prop.id,
+                    "title": (prop.title or "Unknown")[:50],
+                    "old_status": result.get("previous_status"),
+                    "new_status": status,
+                    "refusal": result.get("refusal"),
+                }
+            )
+        results["breaker"] = self.breakers.state()
+        return results
 
     @staticmethod
     def _was_refused(result: Dict) -> bool:
