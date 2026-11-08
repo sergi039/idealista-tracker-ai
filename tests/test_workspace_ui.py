@@ -95,12 +95,27 @@ def test_remove_applied_filter_stays_removed_after_session_recall(client):
 
 
 def test_explicit_form_and_external_sort_keep_one_owner(client):
-    tags = Tags(client.get("/properties").text).tags
+    tags = Tags(
+        client.get(
+            "/properties?mode=recommendation&view_type=list&municipality=Arteixo&sort=price"
+        ).text
+    ).tags
     form = next(a for tag, a in tags if tag == "form" and a.get("id") == "filter-form")
     assert form["method"] == "GET" and form["data-submit"] == "explicit"
-    for name in ("sort", "order"):
-        fields = [a for tag, a in tags if tag == "select" and a.get("name") == name]
-        assert len(fields) == 1 and fields[0]["form"] == "filter-form"
+    sorts = [a for tag, a in tags if tag == "select" and a.get("name") == "sort"]
+    assert len(sorts) == 1 and sorts[0]["form"] == "filter-form"
+    orders = [a for _, a in tags if a.get("name") == "order"]
+    assert len(orders) == 1 and orders[0]["type"] == "hidden"
+    assert orders[0]["value"] == "desc"
+    direction = next(
+        a["href"]
+        for tag, a in tags
+        if tag == "a" and "properties-sort-direction" in a.get("class", "").split()
+    )
+    params = parse_qs(urlparse(direction).query)
+    assert params["order"] == ["asc"] and params["sort"] == ["price"]
+    assert params["mode"] == ["recommendation"] and params["view_type"] == ["list"]
+    assert params["municipality"] == ["Arteixo"]
     ids = [a["id"] for _, a in tags if "id" in a]
     assert len(ids) == len(set(ids)), (
         "duplicate IDs make controls target the wrong node"
