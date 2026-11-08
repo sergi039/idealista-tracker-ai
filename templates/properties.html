@@ -48,19 +48,17 @@
 } %}
 {# The table is the default view (owner decision, 2026-08-09): it is the one
    that shows price, area, travel and date side by side. #}
-{# The three links to /map carry the filters, and used to name them one by
-   one -- a fourth copy of the list, and by #445 it was stale by `measured`.
-   Derived from `base_args` instead, so a filter added there reaches the map
-   without anyone remembering this file. What is removed is the view state:
-   /map has no pages, no modes and no cards/list choice, and it excludes
-   delisted listings unconditionally rather than reading `hide_removed`.
-   That is the safe direction to be wrong in -- a view key that slipped
-   through would be ignored at the far end, never applied as a filter. #}
+{# The map draws located, live rows. For Recommendations it also keeps
+   the collection and the originating view for the return link. #}
 {% set map_args = {} %}
 {% for key, value in base_args.items()
    if key not in ('hide_removed', 'mode', 'view_type', 'per_page') %}
     {% set _ = map_args.update({key: value}) %}
 {% endfor %}
+{% if current_filters.mode == 'recommendation' or current_filters.sort_by == 'recommendation' %}
+    {% set _ = map_args.update(dict(base_args, sort=current_filters.sort_by, order=current_filters.order,
+                                    hide_removed='on' if current_filters.hide_removed else 'off')) %}
+{% endif %}
 {% set view_type = current_filters.view_type or 'list' %}
 {% set active_mode = current_filters.active_mode or 'combined' %}
 {# With several subscriptions on screen the rows have to say which one they
@@ -2024,6 +2022,12 @@
             <div class="text-center py-5" id="properties-empty-state">
                 <i class="fas fa-search fa-3x text-muted mb-3"></i>
                 <h4>No properties found</h4>
+                {% if current_filters.criteria == 'pass' and criteria_enabled %}
+                <p class="text-muted" id="empty-state-strict-criteria">
+                    {{ t('empty_state_strict_criteria') }}
+                    <a href="{{ url_for('main.properties', **dict(base_args, criteria='unknown', sort=current_filters.sort_by, order=current_filters.order)) }}">{{ t('empty_state_unmeasured_link') }}</a>
+                </p>
+                {% endif %}
                 {# The one remedy this state used to name was "run a manual
                    sync to fetch new listings", for rows that are already in
                    the table: measured on production 2026-08-31,
@@ -2037,11 +2041,11 @@
                    (utils/listing_filters.CLEARED_NOT_ABSENT). #}
                 {% if empty_state_scope_total is defined and empty_state_scope_total %}
                 <p class="text-muted" id="empty-state-filters-note">
-                    {{ t('empty_state_filters_hide_all')|format(tn('listings_count', empty_state_scope_total)) }}
-                    (<a id="empty-state-clear-link" href="{{ empty_state_clear_url }}">{{ t('empty_state_clear_link') }}</a>)
+                    {{ t('empty_state_clear_recommendations' if empty_state_clear_recommendations else 'empty_state_filters_hide_all')|format(tn('listings_count', empty_state_scope_total)) }}
+                    (<a id="empty-state-clear-link" href="{{ empty_state_clear_url }}">{{ t('workspace_all' if active_mode == 'recommendation' and not empty_state_clear_recommendations else 'empty_state_clear_link') }}</a>)
                 </p>
                 {% endif %}
-                {% if machine_is_ingester() %}
+                {% if not empty_state_scope_total and machine_is_ingester() %}
                 <p class="text-muted">
                     {{ t('empty_state_sync_note') }}
                     <a href="{{ url_for('main.property_settings') }}" class="link-secondary">Full Sync</a>.
@@ -2053,7 +2057,7 @@
                     <i class="fas fa-sync-alt me-1"></i>
                     {{ t('manual_sync') }}
                 </button>
-                {% else %}
+                {% elif not empty_state_scope_total %}
                 {# No sync control here, and the copy must not promise one: this
                    machine does not ingest (services/ingest_policy.py). Offering
                    the button would mean offering a second machine on the same

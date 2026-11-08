@@ -716,6 +716,8 @@ def _map_focus_link(profile_id, keep_filters=True):
         # (`utils/listing_filters.CLEARED_NOT_ABSENT`). Without this the
         # notice for a criteria-hidden listing linked to itself.
         args.update(CLEARED_NOT_ABSENT)
+        if "recommendation" in (request.args.get("mode"), request.args.get("sort")):
+            args.update(mode="combined", sort=DEFAULT_PROPERTY_SORT)
     return url_for("main.map_view", profile_id=profile_id, **args)
 
 
@@ -905,7 +907,13 @@ def _search_reveal_notice(read, shown_total, profile_selection):
     }
 
 
-def _empty_state_scope(profile_selection, criteria_ctx):
+def _empty_state_scope(
+    profile_selection,
+    criteria_ctx,
+    recommendation_profile_data,
+    recommendation_profile_summary,
+    similarity_ctx,
+):
     """What the reader's subscription selection holds with nothing narrowing.
 
     The empty state named one remedy -- ingest more listings -- for a page
@@ -916,7 +924,7 @@ def _empty_state_scope(profile_selection, criteria_ctx):
     a real offer. Counted on the zero-result path alone, where an extra
     COUNT(*) costs nothing anybody is waiting for.
 
-    Returns (total, url). The count is taken under `criteria=all` and with
+    Returns (total, url, recommendations). The count is taken under `criteria=all` and with
     both toolbar switches off, which is exactly what the link states.
     """
     query = apply_profile_filter(
@@ -930,7 +938,18 @@ def _empty_state_scope(profile_selection, criteria_ctx):
     # mean the switches too or the count and the page it lands on disagree.
     args["hide_removed"] = "off"
     args["page"] = 1
-    return query.count(), url_for("main.properties", **args)
+    if "recommendation" in (request.args.get("mode"), request.args.get("sort")):
+        recommended, _, _ = _recommendation_selection(
+            query,
+            recommendation_profile_data,
+            recommendation_profile_summary,
+            similarity_ctx,
+        )
+        total = recommended.count()
+        if total:
+            return total, url_for("main.properties", **args), True
+        args.update(mode="combined", sort=DEFAULT_PROPERTY_SORT)
+    return query.count(), url_for("main.properties", **args), False
 
 
 class ProfileListingCount(NamedTuple):
@@ -2216,9 +2235,18 @@ def properties():
         )
         empty_state_scope_total = None
         empty_state_clear_url = None
+        empty_state_clear_recommendations = False
         if not pagination.total:
-            empty_state_scope_total, empty_state_clear_url = _empty_state_scope(
-                profile_selection, criteria_ctx
+            (
+                empty_state_scope_total,
+                empty_state_clear_url,
+                empty_state_clear_recommendations,
+            ) = _empty_state_scope(
+                profile_selection,
+                criteria_ctx,
+                recommendation_profile_data,
+                recommendation_profile_summary,
+                similarity_ctx,
             )
 
         # Travel columns for whatever subscriptions are on screen: presets for
@@ -2347,6 +2375,7 @@ def properties():
             # genuine and no recovery is offered for it.
             empty_state_scope_total=empty_state_scope_total,
             empty_state_clear_url=empty_state_clear_url,
+            empty_state_clear_recommendations=empty_state_clear_recommendations,
             # The page's one date. Every badge that asks whether an action is
             # late is handed this value; a template calling `date.today()` per
             # row would disagree with the query that selected the rows.
@@ -4911,6 +4940,23 @@ def map_view():
         query, rejected_hidden_count = owner_review.apply_rejected_hide(
             query, Property, verdict_filter, count_hidden=True
         )
+        recommendation_map = "recommendation" in (
+            request.args.get("mode"),
+            request.args.get("sort"),
+        )
+        if recommendation_map:
+            profile_data = taste_service.load_current_profile()
+            profile_summary = taste_service.recommendation_profile_state(profile_data)
+            query, _, _ = _recommendation_selection(
+                query, profile_data, profile_summary, None
+            )
+            if focus_property is not None:
+                query_without_profile, _, _ = _recommendation_selection(
+                    query_without_profile.filter(Property.id == focus_id),
+                    profile_data,
+                    profile_summary,
+                    None,
+                )
         props = query.all()
 
         # The lift, in the only control this page has — a link. Same URL,
@@ -5001,41 +5047,29 @@ def map_view():
                     }
                 )
 
-        # "List View" has to land on the set this map is drawing. It carried
-        # `profile_id` alone until #444, so a map of the 52 listings sold by
-        # their owners had a button that opened a list of 144.
-        #
-        # It is no longer a list of keys. #444 wrote one, and it was stale
-        # within the hour -- `verdict` and `action` (#430) had reached
-        # /properties that same morning -- which is why the filters are now
-        # read through `FilterArgs` above and handed straight back here. What
-        # this page reads is what this link carries, and there is nothing to
-        # keep in step (utils/listing_filters.py).
-        #
-        # `hide_removed` is the one key that is *not* the record of a read, and
-        # it is stated rather than copied: the map excludes delisted listings
-        # unconditionally (the `notin_` above) whatever the caller asked, so
-        # 'on' is what this map is really showing, and reading the parameter
-        # would send the reader to a list holding rows the map refused to plot.
-        # Stating it also follows `utils/listing_status_scope.py` (#439) -- a
-        # link should say what it means rather than rely on the reading at the
-        # far end. Note what it is no longer: before #439 the value was load
-        # bearing, because an absent `hide_removed` beside any other filter
-        # read as an unticked box and widened the list. That mechanism is gone,
-        # and measured today the far end agrees either way. Keep the statement;
-        # do not restore the old reasoning for it.
-        #
-        # `measured` used to be excluded here, deliberately, because this page
-        # did not apply it -- and a link carrying a filter its origin ignored
-        # opens a list narrower than the map it came from. #445 removed the
-        # premise by applying it above, so it now rides the link like any other
-        # filter. If a future filter is again read by /properties and not by
-        # this page, the answer is the same as it was: do not carry it.
+        # Standalone maps return to a list with the map's own filters and
+        # withdrawn listings hidden. A Recommendations map returns to the
+        # originating collection and display state, which can also show rows
+        # the map cannot plot.
         list_view_args = {
             "profile_id": list(profile_selection.link_values),
             **filters.link_args(),
             "hide_removed": "on",
         }
+        if recommendation_map:
+            list_view_args.update(
+                rebuilt_from(
+                    request.args,
+                    keep={
+                        "mode",
+                        "sort",
+                        "order",
+                        "view_type",
+                        "per_page",
+                        "hide_removed",
+                    },
+                )
+            )
 
         markers = []
         for prop in props:
@@ -5071,6 +5105,7 @@ def map_view():
             selected_profile_id=selected_profile_id,
             profile_selection=profile_selection,
             list_view_args=list_view_args,
+            recommendation_map=recommendation_map,
             travel_display_targets=travel_display_targets,
             focus_notice=focus_notice,
             # The map drops a hidden subscription's markers exactly as the

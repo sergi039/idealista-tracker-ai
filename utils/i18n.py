@@ -516,6 +516,10 @@ TRANSLATIONS = {
         # really clears them (including `criteria`, whose absence is its
         # default hide).
         "empty_state_filters_hide_all": "Nothing here matches the filters on this page. Your subscription selection holds %s.",
+        "empty_state_clear_recommendations": "Clearing these filters shows %s in Recommendations.",
+        "empty_state_strict_criteria": "Matching only requires every subscription criterion to be confirmed. A listing with missing measurements stays unverified.",
+        "empty_state_unmeasured_link": "Show unmeasured listings",
+        "recommendation_map_scope": "The map shows recommendations with coordinates. Sold and removed listings are left off the map.",
         "empty_state_clear_link": "Clear every filter",
         "empty_state_sync_note": "A manual sync fetches new listings. If this is a fresh database but the ingestion cursor already advanced, run",
         "empty_state_not_ingester": "Listings arrive on the machine that ingests, and this is not it — a second machine reading the same mailbox would build a database of its own.",
@@ -1384,6 +1388,10 @@ TRANSLATIONS = {
         "criteria_measured_meets": "%s m² — cumple el mínimo",
         "criteria_not_stated": "sin indicar, así que este límite no se puede comprobar",
         "empty_state_filters_hide_all": "Nada de aquí coincide con los filtros de esta página. Su selección de suscripciones tiene %s.",
+        "empty_state_clear_recommendations": "Al quitar estos filtros se muestran %s en Recomendaciones.",
+        "empty_state_strict_criteria": "Esta opción exige confirmar todos los criterios de la suscripción. Los anuncios con medidas pendientes quedan sin verificar.",
+        "empty_state_unmeasured_link": "Mostrar anuncios sin medir",
+        "recommendation_map_scope": "El mapa muestra recomendaciones con coordenadas. Los anuncios vendidos o retirados quedan fuera del mapa.",
         "empty_state_clear_link": "Quitar todos los filtros",
         "empty_state_sync_note": "Una sincronización manual trae anuncios nuevos. Si esta base de datos es nueva pero el cursor de ingesta ya avanzó, use",
         "empty_state_not_ingester": "Los anuncios llegan a la máquina que hace la ingesta, y esta no lo es — una segunda máquina leyendo el mismo buzón construiría una base de datos propia.",

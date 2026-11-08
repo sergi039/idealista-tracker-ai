@@ -20,12 +20,18 @@ _TITLE_LOCATION_SPLIT = re.compile(r"\s+(?:in|en)\s+", re.IGNORECASE)
 LAND_SUBTYPES = ("plot", "developed")
 KIND_LAND = "land"
 KIND_HOUSE = "house"
+# Python's str.strip() whitespace set, shared with the SQL kind reader.
+LISTING_KIND_WHITESPACE = (
+    "\t\n\v\f\r\x1c\x1d\x1e\x1f \x85\xa0\u1680"
+    "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+    "\u2028\u2029\u202f\u205f\u3000"
+)
 
 
 def listing_kind(category: Any, subtype: Any) -> Optional[str]:
     """One word for what the listing is, or None when nothing says."""
-    category_word = str(category or "").strip().lower()
-    subtype_word = str(subtype or "").strip().lower()
+    category_word = str(category or "").strip(LISTING_KIND_WHITESPACE).lower()
+    subtype_word = str(subtype or "").strip(LISTING_KIND_WHITESPACE).lower()
     if category_word == "land" or subtype_word in LAND_SUBTYPES:
         return KIND_LAND
     if subtype_word == KIND_HOUSE:
