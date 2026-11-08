@@ -833,20 +833,18 @@
 
 
         {% set applied_filter_keys = [('search', 'search'), ('category', 'type'), ('municipality', 'municipality'), ('subtype', 'workspace_subtype'), ('source', 'source'), ('advertiser', 'workspace_seller'), ('verdict', 'workspace_verdict'), ('action', 'next_action'), ('sea_view', 'workspace_sea'), ('build', 'workspace_build'), ('sea_dist', 'workspace_distance'), ('measured', 'workspace_measured'), ('criteria', 'workspace_criteria'), ('similar', 'workspace_similar'), ('inv_metr', 'workspace_investment')] %}
-        {% set applied = namespace(count=0, advanced=0) %}
-        {% for key, label_key in applied_filter_keys %}{% if base_args.get(key) %}{% set applied.count = applied.count + 1 %}{% if key not in ('search', 'category', 'municipality') %}{% set applied.advanced = applied.advanced + 1 %}{% endif %}{% endif %}{% endfor %}
+        {% set applied = namespace(count=0) %}
+        {% for key, label_key in applied_filter_keys if key != 'search' and base_args.get(key) %}
+            {% set applied.count = applied.count + 1 %}
+        {% endfor %}
         <!-- Filters -->
         <div class="card mb-3 filters-card" id="filters-card">
             <div class="card-body p-2">
-                {# One bar, no captions above the controls: every control
-                   names itself in its own first option ("All Types", "All
-                   Municipalities", "Inv. metr: all"), which is what let the
-                   panel shrink from five rows to one. Search leads it, on its
-                   own, because it is the control that is reached for first. #}
                 <form method="GET" id="filter-form" class="workspace-filter-form" data-submit="explicit">
                     <!-- Hidden inputs to preserve state -->
                     <input type="hidden" name="mode" value="{{ current_filters.mode or 'combined' }}">
                     <input type="hidden" name="view_type" value="{{ view_type }}">
+                    <input type="hidden" name="order" value="{{ current_filters.order }}">
                     {# The two switches above are links, so their state has to
                        travel with the form or pressing Apply would turn them
                        off behind the owner's back. #}
@@ -857,18 +855,20 @@
                         <input type="hidden" name="hide_removed" value="on">
                     {% endif %}
 
-<div class="workspace-filter-primary">
-                    <div class="input-group input-group-sm properties-filter-search">
-                        <span class="input-group-text" aria-hidden="true"><i class="fas fa-search"></i></span>
-                        <input type="text" class="form-control" id="search" name="search"
-                               value="{{ current_filters.search or '' }}"
-                               aria-label="{{ t('search') }}"
-                               placeholder="{{ t('search_properties') }}">
+                    <div class="workspace-filter-primary">
+                        <div class="input-group input-group-sm properties-filter-search">
+                            <span class="input-group-text" aria-hidden="true"><i class="fas fa-search"></i></span>
+                            <input type="text" class="form-control" id="search" name="search"
+                                   value="{{ current_filters.search or '' }}"
+                                   aria-label="{{ t('search') }}"
+                                   placeholder="{{ t('search_properties') }}">
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-sm">{{ t('apply') }}</button>
                     </div>
-
-
-
-                    <div class="input-group input-group-sm properties-filter-type">
+                    <details class="workspace-advanced-filters" id="additional-filters">
+                        <summary>{{ icon('sliders') }}{{ t('workspace_filters') }}{% if applied.count %} · {{ applied.count }}{% endif %} {{ icon('chevron-down') }}</summary>
+                        <div class="workspace-advanced-fields">
+                    <label>{{ t('type')|title }}
                         {# The choices come from the subscriptions on screen, not from
                            the whole table, so a saved search for land stops offering
                            `apartment`. "Unclassified" follows the "No subscription"
@@ -883,9 +883,9 @@
                                 <option value="{{ c }}" {{ 'selected' if current_filters.category == c }}>{{ c }}</option>
                             {% endfor %}
                         </select>
-                    </div>
+                    </label>
 
-                    <select class="form-select workspace-filter-municipality" id="municipality" name="municipality"
+                    <label>{{ t('municipality') }}<select class="form-select" id="municipality" name="municipality"
                             aria-label="{{ t('municipality') }}">
                         <option value="">{{ t('all_municipalities') }}</option>
                         {# One option per real municipality, not per stored spelling:
@@ -901,23 +901,7 @@
                                 {{ municipality.label }}{% if municipality.count %} ({{ municipality.count }}){% endif %}
                             </option>
                         {% endfor %}
-                    </select>
-                    <div class="d-flex align-items-center gap-2">
-                        <button type="submit" class="btn btn-primary btn-sm">
-                            <i class="fas fa-search me-1"></i>{{ t('apply') }}
-                        </button>
-                        {# `remember=forget`: the bare page returns to the last
-                           state chosen here (utils/listing_filter_memory.py),
-                           so clearing has to drop that memory first. #}
-                        <a href="{{ url_for('main.properties', remember='forget') }}" class="btn btn-outline-secondary btn-sm"
-                           title="Clear every filter">
-                            <i class="fas fa-times me-1"></i>{{ t('clear') }}
-                        </a>
-                    </div>
-</div>
-                    <details class="workspace-advanced-filters" id="additional-filters">
-                        <summary>{{ icon('sliders') }}{{ t('workspace_filters') }}{% if applied.advanced %} · {{ applied.advanced }}{% endif %} {{ icon('chevron-down') }}</summary>
-                        <div class="workspace-advanced-fields">
+                    </select></label>
 
                         <label>{{ t('workspace_subtype') }}<select class="form-select" id="subtype" name="subtype" aria-label="{{ t('workspace_subtype') }}">
                             <option value="">All subtypes</option>
@@ -1126,10 +1110,11 @@
                     </select></label>
 
 </div>
-                        <p class="small text-body-secondary mt-2 mb-0">{{ t('workspace_apply_hint') }}</p>
-                        {% set additional_clear = dict(base_args, page=1, sort=current_filters.sort_by, order=current_filters.order) %}
-                        {% for key, label_key in applied_filter_keys if key not in ('search', 'category', 'municipality') %}{% set _ = additional_clear.update({key: none}) %}{% endfor %}
-                        <a class="btn btn-link mt-2" id="clear-additional-filters" href="{{ url_for('main.properties', **additional_clear) }}">{{ t('workspace_clear_advanced') }}</a>
+                        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-2">
+                            <p class="small text-body-secondary mb-0">{{ t('workspace_apply_hint') }}</p>
+                            <a href="{{ url_for('main.properties', remember='forget') }}" class="btn btn-link btn-sm"
+                               title="Clear every filter">{{ t('clear_filters') }}</a>
+                        </div>
                     </details>
                 </form>
                 <div class="workspace-filter-meta" id="active-filter-chips">
@@ -1161,10 +1146,9 @@
                 </div>
                 <div class="workspace-result-tools">
                     <div class="input-group input-group-sm properties-filter-sort">
-                        <span class="input-group-text" title="{{ t('sort_by') }}" aria-hidden="true">
-                            <i class="fas fa-arrow-down-wide-short"></i>
-                        </span>
-                        <select class="form-select" id="sort" name="sort" aria-label="{{ t('sort_by') }}" form="filter-form">
+                        <label for="sort" class="input-group-text">{{ t('sort_by') }}</label>
+                        <select class="form-select" id="sort" name="sort" form="filter-form"
+                                data-sort-url="{{ url_for('main.properties', **dict(base_args, order=current_filters.order)) }}">
                             {% if current_filters.mode == 'investment' %}
                                 <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>Investment Score</option>
                                 <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>Lifestyle Score</option>
@@ -1210,10 +1194,12 @@
                             <option value="similarity" {{ 'selected' if current_filters.sort_by == 'similarity' }}>{{ t('similarity_sort_label') }}</option>
                             {% endif %}
                         </select>
-                        <select class="form-select properties-filter-order" name="order" aria-label="{{ t('workspace_sort_direction') }}" form="filter-form">
-                            <option value="desc" {{ 'selected' if current_filters.order == 'desc' }}>↓</option>
-                            <option value="asc" {{ 'selected' if current_filters.order == 'asc' }}>↑</option>
-                        </select>
+                        <a class="btn btn-outline-secondary properties-sort-direction"
+                           href="{{ url_for('main.properties', **dict(base_args, sort=current_filters.sort_by, order='asc' if current_filters.order == 'desc' else 'desc')) }}"
+                           aria-label="{{ t('workspace_sort_direction') }}: {{ t('workspace_sort_' ~ current_filters.order) }}"
+                           title="{{ t('workspace_sort_direction') }}: {{ t('workspace_sort_' ~ current_filters.order) }}">
+                            <span aria-hidden="true">{{ '↓' if current_filters.order == 'desc' else '↑' }}</span>
+                        </a>
                     </div>
 
 <div class="dropdown">
@@ -2147,6 +2133,13 @@
         });
     })();
 
+    // Sort the applied results without submitting drafts in the filter form.
+    document.getElementById('sort').addEventListener('change', ({target}) => {
+        const url = new URL(target.dataset.sortUrl, window.location.origin);
+        url.searchParams.set('sort', target.value);
+        window.location.assign(url);
+    });
+
     // Picking a similarity cut asks for the most alike rows, so the sort
     // follows -- the form always submits its sort select, and "similar to
     // the favorites, in date order" is not what the control says. Only the
@@ -2156,7 +2149,7 @@
     (function () {
         const similar = document.getElementById('similar');
         const sort = document.getElementById('sort');
-        const order = document.querySelector('select[name="order"]');
+        const order = document.querySelector('#filter-form input[name="order"]');
         if (!similar || !sort) {
             return;
         }

@@ -79,8 +79,6 @@
 .app-workspace #filters-card > .card-body { padding: 0 !important; }
 .workspace-filter-primary { display: flex; align-items: center; gap: var(--ui-space-2); flex-wrap: wrap; width: 100%; }
 .app-workspace .properties-filter-search { flex: 1 1 15rem; min-width: 10rem; max-width: none; }
-.app-workspace .properties-filter-type { flex: 0 1 10rem; min-width: 8rem; }
-.workspace-filter-municipality { flex: 0 1 13rem; width: 13rem; min-width: 10rem; }
 .workspace-advanced-filters { width: 100%; }
 .workspace-advanced-filters > summary { cursor: pointer; color: var(--ui-muted); padding: var(--ui-space-2) 0; min-height: var(--ui-control-height); display: inline-flex; align-items: center; gap: var(--ui-space-2); }
 .workspace-advanced-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: var(--ui-space-3); background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); padding: var(--ui-space-4); }
@@ -96,8 +94,9 @@
 .workspace-result-tab[aria-current="true"] { color: var(--ui-accent) !important; font-weight: 600; }
 .workspace-result-tab[aria-current="true"]::after { content: ""; position: absolute; left: 0; right: 0; bottom: calc(-1 * var(--ui-space-2) - 1px); height: 2px; background: var(--ui-accent); }
 .workspace-result-tools { display: flex; align-items: center; gap: var(--ui-space-2); flex-wrap: wrap; }
-.workspace-result-tools .properties-filter-sort { flex: 0 1 15rem; min-width: 11rem; }
-.workspace-result-tools .properties-filter-sort > .input-group-text { display: none; }
+.workspace-result-tools .properties-filter-sort { flex: 0 1 18rem; min-width: 15rem; }
+.workspace-result-tools .properties-filter-sort > label { font-size: 0.75rem; }
+.workspace-result-tools .properties-sort-direction { min-width: var(--ui-control-height); display: grid; place-items: center; }
 .workspace-result-tools .form-select { font-size: 0.75rem; }
 .workspace-result-tools .btn { font-size: 0.75rem; }
 .workspace-result-tools .btn.active { color: var(--ui-accent); background: var(--ui-accent-soft); border-color: var(--ui-border); }
@@ -195,7 +194,6 @@
     .scope-utilities { margin-left: 0; }
     .app-workspace #profile-select-dropdown { max-width: 100%; }
     .workspace-filter-primary .properties-filter-search { flex-basis: 100%; }
-    .workspace-filter-municipality { flex: 1 1 12rem; width: auto; }
     .workspace-result-controls { align-items: flex-start; }
     .workspace-result-tools { width: 100%; }
     .workspace-result-tabs { gap: var(--ui-space-4); }
@@ -220,8 +218,8 @@
 
 /* The disclosure trigger shares the first filter row; no second empty row. */
 .workspace-filter-form { position: relative; }
-.workspace-filter-primary { padding-right: 12rem; }
-.workspace-advanced-filters > summary { position: absolute; top: 0; right: 0; max-width: calc(12rem - var(--ui-space-2)); border: 1px solid var(--ui-border); padding: var(--ui-space-2); border-radius: var(--ui-radius-control); }
+.workspace-filter-primary { padding-right: 9rem; }
+.workspace-advanced-filters > summary { position: absolute; top: 0; right: 0; max-width: calc(9rem - var(--ui-space-2)); border: 1px solid var(--ui-border); padding: var(--ui-space-2); border-radius: var(--ui-radius-control); }
 .workspace-advanced-filters[open] .workspace-advanced-fields { margin-top: var(--ui-space-3); }
 .app-workspace main.container { padding-top: var(--ui-space-4); }
 .workspace-page-heading { margin-bottom: var(--ui-space-2); }

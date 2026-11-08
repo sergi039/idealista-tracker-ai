@@ -2165,9 +2165,11 @@ def properties():
                     sort_column.desc().nullslast(), Property.id.asc()
                 )
 
-        # Derive the highlighted mode from the sort actually applied, the same
-        # way /lands does, so the buttons cannot disagree with the ordering.
-        if sort_by == "score_investment":
+        # Keep the recommendation collection and its explanations visible
+        # when the owner changes the order of that collection.
+        if mode == "recommendation" or sort_by == "recommendation":
+            active_mode = "recommendation"
+        elif sort_by == "score_investment":
             active_mode = "investment"
         elif sort_by == "score_lifestyle":
             active_mode = "lifestyle"
@@ -2175,8 +2177,6 @@ def properties():
             active_mode = "combined"
         elif sort_by == "taste_score":
             active_mode = "taste"
-        elif sort_by == "recommendation":
-            active_mode = "recommendation"
         else:
             active_mode = mode
 
