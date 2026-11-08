@@ -546,6 +546,8 @@ KIND_MATRIX = [
     # The defect itself: land by category, `built` by area_type.
     (12240, "built", "land", "plot", "fail"),
     (300, "built", "land", "plot", "fail"),
+    (300, "built", "land\t", None, "fail"),
+    (300, "built", None, "\xa0plot\n", "fail"),
     # The legacy subtype `developed` is land too — the rule
     # `favorite_similarity` already states ("land whatever the legacy
     # `developed` subtype says"), read from the one shared function.

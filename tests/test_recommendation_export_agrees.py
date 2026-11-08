@@ -9,7 +9,9 @@ descriptors, hard rules, ranking, page rendering and CSV all run normally.
 import csv
 import io
 import json
+import re
 from datetime import datetime
+from html import unescape
 from html.parser import HTMLParser
 from urllib.parse import urlencode
 from unittest.mock import patch
@@ -66,6 +68,8 @@ def selection():
                 "area": 180,
                 "price": price,
                 "municipality": "Laxe",
+                "location_lat": None if name == "unknown" else 43.2,
+                "location_lon": None if name == "unknown" else -8.9,
                 "created_at": datetime(2020 + index, 1, 1),
             }
             values.update(extra)
@@ -173,3 +177,58 @@ def test_ordinary_export_keeps_hard_conflicts_and_existing_order(selection, quer
     expected = [rows[name] for name in names]
     assert page_ids == expected
     assert csv_ids == expected
+
+
+def _href(body, element_id):
+    return unescape(re.search(rf'id="{element_id}"[^>]*href="([^"]+)"', body)[1])
+
+
+@pytest.mark.parametrize(
+    "ranking", ["mode=recommendation&sort=price", "sort=recommendation"]
+)
+def test_recommendation_map_keeps_the_collection_and_returns_to_it(selection, ranking):
+    client, rows = selection
+    start = f"/properties?profile_id=all&municipality=Laxe&view_type=list&order=asc&{ranking}"
+    page = client.get(start)
+    map_page = client.get(_href(page.text, "view-map-btn"))
+    markers = json.loads(re.search(r"const markers = (\[.*?\]);", map_page.text)[1])
+    assert {marker["id"] for marker in markers} == {rows["reference"], rows["matching"]}
+    returned = client.get(_href(map_page.text, "map-list-view-link"))
+    parsed = _SelectionPage()
+    parsed.feed(returned.text)
+    assert set(parsed.property_ids) == {
+        rows[name] for name in ("reference", "matching", "unknown")
+    }
+    assert 'id="mode-recommendation-btn"' in returned.text
+    assert (
+        'aria-current="true"'
+        in re.search(r'<a id="mode-recommendation-btn"[^>]+>', returned.text)[0]
+    )
+
+
+def test_strict_empty_state_links_to_unmeasured_and_counts_its_clear_target(selection):
+    client, rows = selection
+    reference = db.session.get(Property, rows["reference"])
+    reference.search_profile.criteria = {"min_house_m2": 150, "min_plot_m2": 700}
+    db.session.commit()
+    page = client.get(
+        "/properties?profile_id=all&mode=recommendation&view_type=list"
+        "&favorites=on&criteria=pass"
+    )
+    assert "0 properties found" in page.text
+    explanation = re.search(
+        r'<p[^>]*id="empty-state-strict-criteria".*?</p>', page.text, re.S
+    )[0]
+    href = unescape(re.search(r'href="([^"]+)"', explanation)[1])
+    unmeasured = _SelectionPage()
+    unmeasured.feed(client.get(href).text)
+    assert unmeasured.property_ids == [rows["reference"]]
+    assert "Clearing these filters shows 4 listings in Recommendations." in page.text
+    assert (
+        'hx-post="/api/ingest/email/run"'
+        not in page.text.split('id="empty-state-strict-criteria"', 1)[1]
+    )
+    assert (
+        "4 properties found"
+        in client.get(_href(page.text, "empty-state-clear-link")).text
+    )

@@ -46,6 +46,7 @@ from typing import Any, Dict, Optional
 from sqlalchemy import and_, func, or_
 
 from services.property_classification_service import (
+    LISTING_KIND_WHITESPACE,
     KIND_LAND,
     LAND_SUBTYPES,
     listing_kind,
@@ -279,8 +280,12 @@ def _definite_shapes(model):
     # `LAND_SUBTYPES`. `coalesce` before `trim` keeps every clause definite --
     # a NULL comparison here would be the third value these two exist to
     # avoid, and `filter(~expr)` would then drop rows outright.
-    category = func.lower(func.trim(func.coalesce(model.property_category, "")))
-    subtype = func.lower(func.trim(func.coalesce(model.property_subtype, "")))
+    category = func.lower(
+        func.trim(func.coalesce(model.property_category, ""), LISTING_KIND_WHITESPACE)
+    )
+    subtype = func.lower(
+        func.trim(func.coalesce(model.property_subtype, ""), LISTING_KIND_WHITESPACE)
+    )
     by_kind = or_(category == KIND_LAND, subtype.in_(LAND_SUBTYPES))
     is_plot = or_(by_area_type, by_kind)
     not_plot = and_(
