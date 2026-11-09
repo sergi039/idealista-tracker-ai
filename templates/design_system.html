@@ -18,6 +18,8 @@
         <div class="d-flex flex-wrap gap-2">
             {{ state_label(t('unknown')) }}
             {{ state_label(t('yes'), 'success') }}
+            {{ state_label(t('recommendation_confirmed'), 'success') }}
+            {{ state_label(t('recommendation_review'), 'warning') }}
             {{ state_label(t('recommendation_stale'), 'warning') }}
             {{ state_label(t('recommendation_rejected'), 'danger') }}
         </div>

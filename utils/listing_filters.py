@@ -68,6 +68,7 @@ NON_FILTERS: frozenset[str] = frozenset(
         "page",
         "per_page",
         "mode",
+        "recommendation_scope",
         "view_type",
         "endpoint",
     }

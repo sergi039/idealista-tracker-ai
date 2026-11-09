@@ -124,10 +124,12 @@ def test_explicit_form_and_external_sort_keep_one_owner(client):
 
 @pytest.mark.parametrize("sort", ["score_total", "score_investment"])
 def test_score_sort_keeps_recommendation_tab_and_explanations(client, sort):
-    response = client.get(f"/properties?mode=recommendation&view_type=list&sort={sort}")
+    response = client.get(
+        f"/properties?mode=recommendation&recommendation_scope=review&view_type=list&sort={sort}"
+    )
     assert response.status_code == 200
     tags = Tags(response.text).tags
-    tab = next(a for tag, a in tags if a.get("id") == "mode-recommendation-btn")
+    tab = next(a for tag, a in tags if a.get("id") == "mode-recommendation-review-btn")
     assert tab["aria-current"] == "true"
     assert any(
         tag == "table" and "recommendation-table" in a.get("class", "").split()

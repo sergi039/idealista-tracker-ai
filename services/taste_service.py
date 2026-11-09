@@ -1031,9 +1031,11 @@ def recommendation_profile_state(
             "mapped_clause_count": sum(
                 1 for clause in clauses if clause.get("mapping_state") == "executable"
             ),
-            "unapplied_clause_count": sum(
-                1 for clause in clauses if clause.get("mapping_state") != "executable"
-            ),
+            "unapplied_clauses": [
+                clause
+                for clause in clauses
+                if clause.get("mapping_state") != "executable"
+            ],
         }
     source = profile_data.get("source") if isinstance(profile_data, dict) else None
     if (
@@ -1070,9 +1072,9 @@ def recommendation_profile_state(
         "mapped_clause_count": sum(
             1 for clause in clauses if clause.get("mapping_state") == "executable"
         ),
-        "unapplied_clause_count": sum(
-            1 for clause in clauses if clause.get("mapping_state") != "executable"
-        ),
+        "unapplied_clauses": [
+            clause for clause in clauses if clause.get("mapping_state") != "executable"
+        ],
     }
 
 

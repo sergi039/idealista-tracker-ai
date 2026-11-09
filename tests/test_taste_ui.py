@@ -266,7 +266,7 @@ class TestRecommendationSurface:
             "version": 4,
             "positive_reference_count": 3,
             "mapped_clause_count": 2,
-            "unapplied_clause_count": 1,
+            "unapplied_clauses": [{"text": "A preference", "reason": "No mapping"}],
         }
         readings = {
             reference.id: {
@@ -282,7 +282,16 @@ class TestRecommendationSurface:
                     "id": reference.id,
                     "visual_matched_aspect_ids": ["visual_appeal"],
                 },
-                "matches": [{"label_key": "recommendation_aspect_sea_view"}],
+                "matches": [
+                    {
+                        "label_key": "recommendation_aspect_sea_view",
+                        "status": "supported",
+                    },
+                    {
+                        "label_key": "recommendation_aspect_house_character",
+                        "status": "claimed",
+                    },
+                ],
                 "conflicts": [{"label_key": "recommendation_aspect_house_condition"}],
                 "needs_verification": [
                     {"label_key": "recommendation_aspect_plot_outline"}
@@ -313,6 +322,7 @@ class TestRecommendationSurface:
         assert 'id="recommendation-profile-status"' in body
         assert "3 positive references and 2 recorded preferences" in body
         assert "1 preference(s) are not used yet" in body
+        assert "A preference" in body and "No mapping" in body
         assert 'data-recommendation-state="reference"' in body
         assert 'data-recommendation-state="candidate"' in body
         assert 'data-recommendation-state="rejected"' in body
@@ -324,6 +334,7 @@ class TestRecommendationSurface:
         assert "sea view" in body
         assert "house condition" in body
         assert "plot shape" in body
+        assert "? house character" in body and "✓ house character" not in body
         assert "Known conflicts need attention." in body
         assert "Rejected — not recommended" in body
         profile_status = re.search(
@@ -391,6 +402,7 @@ class TestRecommendationSurface:
                         "matches": [],
                         "conflicts": [],
                         "needs_verification": [],
+                        "group": "confident",
                         "rank_value": 100.0 if item.id == candidate.id else 1.0,
                     }
                     for item in items
@@ -407,7 +419,7 @@ class TestRecommendationSurface:
         assert 'id="mode-recommendation-btn"' in body
         assert 'value="recommendation" selected' in body
 
-    def test_recommendation_mode_hides_only_confirmed_hard_exclusions(
+    def test_review_mode_keeps_unknowns_and_hides_confirmed_hard_exclusions(
         self, client, profile_row
     ):
         excluded = _mk_property(profile_row, title="Confirmed hard conflict")
@@ -429,6 +441,7 @@ class TestRecommendationSurface:
                         "matches": [],
                         "conflicts": [],
                         "needs_verification": [],
+                        "needs_review": True,
                         "rank_value": 1.0,
                     }
                     for item in items
@@ -437,7 +450,7 @@ class TestRecommendationSurface:
 
         with patch("routes.main_routes.taste_recommendation.build_context", _context):
             body = client.get(
-                "/properties?profile_id=all&mode=recommendation&sort=recommendation"
+                "/properties?profile_id=all&mode=recommendation&recommendation_scope=review"
             ).get_data(as_text=True)
 
         assert "Confirmed hard conflict" not in body
@@ -485,6 +498,7 @@ class TestRecommendationSurface:
                         "matches": [],
                         "conflicts": [],
                         "needs_verification": [],
+                        "group": "confident",
                         "rank_value": 100.0 if item.id == candidate.id else 1.0,
                     }
                     for item in items
@@ -570,4 +584,4 @@ def test_recommendation_disclosure_bounds_long_repeated_evidence(
     button = re.search(
         r'<a id="mode-recommendation-btn".*?</a>', body, re.DOTALL
     ).group(0)
-    assert re.sub(r"<[^>]*>", "", button).strip() == "Recommendations"
+    assert re.sub(r"<[^>]*>", "", button).strip() == "Recommended"

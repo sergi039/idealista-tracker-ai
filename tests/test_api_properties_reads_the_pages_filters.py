@@ -89,7 +89,8 @@ NOT_A_FILTER = {
     "page": "the page's pagination; the API's is limit/offset, and a sent "
     "`page` is disclosed in scope.params_ignored (pinned below)",
     "per_page": "same as `page`",
-    "mode": "which score the page emphasises",
+    "mode": "which assessment or collection the page shows",
+    "recommendation_scope": "recommendation subcollection, outside the catalog API",
     "active_mode": "derived from the applied sort, never sent",
     "view_type": "cards or table",
 }
