@@ -495,6 +495,16 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     google_spend.ledger_path = lambda: _ledger
 
+    # The mail cursor leaves `DATA_DIR` for the whole session, for the same
+    # reason and before any fixture of any scope can run. `isolated_uid_cursor`
+    # then narrows it to one directory per test; this is what a session- or
+    # module-scoped fixture sees, since those run before a function-scoped one.
+    _cursor_dir = tempfile.mkdtemp(prefix="idealista-uid-cursor-")
+    Config.LAST_SEEN_UID_PATH = os.path.join(_cursor_dir, ".last_seen_uid")
+    Config.LAST_SEEN_UID_PROPERTIES_PATH = os.path.join(
+        _cursor_dir, ".last_seen_uid_properties"
+    )
+
 
 def _skip_reason(report: Any) -> str:
     """The message a skip was raised with, as pytest recorded it.

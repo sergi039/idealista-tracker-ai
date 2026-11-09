@@ -8,6 +8,8 @@ overwrote the production cursor with a fake mailbox's UID (99, found on
 
 import os
 
+import pytest
+
 from config import Config
 from services.property_imap_service import PropertyIMAPService
 from utils.uid_cursor import read_uid_file
@@ -38,3 +40,25 @@ def test_a_service_that_sets_no_path_saves_outside_the_data_directory():
     written = PropertyIMAPService._uid_file_path()
     assert read_uid_file(written) == 99
     assert not _inside(written, Config.DATA_DIR)
+
+
+@pytest.fixture(scope="module")
+def paths_before_any_test():
+    """What a module- or session-scoped fixture sees: it runs before the
+    per-test fixture, so only the session-wide redirect protects it."""
+    return {name: getattr(Config, name) for name in CURSOR_ATTRIBUTES}
+
+
+def test_a_wider_scoped_fixture_is_outside_the_data_directory_too(
+    paths_before_any_test,
+):
+    for name, path in paths_before_any_test.items():
+        assert not _inside(path, Config.DATA_DIR), (
+            f"Config.{name} = {path} before the first test is inside DATA_DIR"
+        )
+
+
+def test_each_test_gets_cursor_files_of_its_own(paths_before_any_test):
+    for name, session_path in paths_before_any_test.items():
+        assert getattr(Config, name) != session_path
+        assert not os.path.exists(getattr(Config, name))
