@@ -195,7 +195,12 @@ def read_verdict(record, now: Optional[datetime] = None) -> dict:
         elif stale:
             availability_key = "listing_needs_recheck"
 
+    from services.alternate_publication import REFUSALS, current_publications
+
     return {
+        "alternate_publications": current_publications(record, now)
+        if refusal in REFUSALS
+        else [],
         "state": state,
         "verified": verified,
         "source": source,

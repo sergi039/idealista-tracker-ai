@@ -365,6 +365,13 @@
                         <span id="listing-last-attempt" class="{{ '' if _verdict.attempted_at else 'd-none' }}">
                             {% if _verdict.attempted_at %}{{ t('listing_last_attempt') }}: {{ _verdict.attempted_local }} · {{ t(_verdict.availability_key) }}{% endif %}
                         </span>
+                        {% for publication in _verdict.alternate_publications %}
+                            <span data-alternate-publication>
+                                {{ t('listing_public_index_publication') }}
+                                <a href="{{ publication.url }}" target="_blank" rel="noopener noreferrer">{{ publication.label }}</a>
+                                · {{ publication.observed_local }}
+                            </span>
+                        {% endfor %}
                     </div>
                 </div>
             </div>
@@ -2839,7 +2846,8 @@ async function checkPropertyListingStatus(propertyId) {
             report('fas fa-triangle-exclamation', 'Status check failed — see the server logs.', 'error');
             return;
         }
-        if (result.changed) {
+        if (result.changed || result.attempt?.method === 'alternate_publication'
+                || document.querySelector('[data-alternate-publication]')) {
             window.location.reload();
             return;
         }

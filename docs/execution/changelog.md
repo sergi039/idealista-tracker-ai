@@ -2,6 +2,10 @@
 
 ## 2026-11-09
 
+- Recognise DataDome challenges inside saved Chrome iframe parts. Show recent
+  public-index evidence from matched Yaencontre and Fotocasa adverts when
+  Idealista refuses, preserving the primary status and confirmation date.
+
 - Show one recommendation per confirmed home in Malpica, Seiruga and
   Taboido, including the Seaia advert with different published figures.
   Apply the grouping to recommendations, map and CSV. All properties

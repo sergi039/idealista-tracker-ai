@@ -341,3 +341,133 @@ def test_favorite_batch_keeps_refused_idealista_off_both_transports(app, monkeyp
     assert result["details"][0]["refusal"] == "blocked"
     assert first.listing_status_source == "manual"
     assert first.listing_last_checked is None
+
+
+def test_public_index_matches_fall_back_without_network_or_refreshing_primary(
+    app, monkeypatch
+):
+    from datetime import timezone
+    from services.alternate_publication import record_publication
+    from services.listing_verification import read_verdict
+
+    # Most scraper tests disable the standing source stop to exercise parsing.
+    monkeypatch.setattr(ListingStatusService, "REFUSED_SOURCES", {"idealista"})
+    p = property_row()
+    observed_at = datetime.now(timezone.utc)
+    yae = "https://www.yaencontre.com/venta/casa/inmueble-4321-12345"
+    foto = "https://www.fotocasa.es/es/comprar/vivienda/somewhere/garage/98765/d"
+    for link in (yae, foto):
+        assert record_publication(p, p.url, link, observed_at.isoformat(), observed_at)
+
+    with (
+        patch(
+            "services.subscription_transport.read_listing_status",
+            side_effect=AssertionError("unexpected Chrome"),
+        ),
+        patch(
+            "services.listing_status_service.request_with_retries",
+            side_effect=AssertionError("unexpected HTTP"),
+        ),
+    ):
+        client = app.test_client()
+        response = client.post(f"/api/property/{p.id}/check-status")
+        assert response.status_code == 200
+        outcome = response.get_json()
+        assert outcome["observed"] == "error"
+        assert outcome["refusal"] == "blocked"
+        assert outcome["attempt"]["method"] == "alternate_publication"
+        db.session.refresh(p)
+        assert p.listing_status == "active"
+        assert p.listing_status_source == "manual"
+        assert p.listing_last_checked == datetime(2026, 8, 26)
+        assert p.enrichment["cadastre"] == {"reference": "preserve"}
+        assert {item["url"] for item in read_verdict(p)["alternate_publications"]} == {
+            yae,
+            foto,
+        }
+        rendered = client.get(f"/properties/{p.id}").get_data(as_text=True)
+        assert (
+            "Listed for sale in public index:" in rendered
+            and yae in rendered
+            and foto in rendered
+        )
+
+
+def test_publication_writer_refuses_wrong_subject_and_stale_evidence(app):
+    from datetime import timedelta, timezone
+    from services.alternate_publication import current_publications, record_publication
+
+    p = property_row()
+    now = datetime.now(timezone.utc)
+    yae = "https://www.yaencontre.com/venta/casa/inmueble-4321-12345"
+    with pytest.raises(ValueError, match="listing ID differs"):
+        record_publication(
+            p, p.url, yae.replace("12345", "99999"), now.isoformat(), now
+        )
+    with pytest.raises(ValueError, match="24 hours"):
+        record_publication(p, p.url, yae, (now - timedelta(days=2)).isoformat(), now)
+    assert record_publication(p, p.url, yae, now.isoformat(), now)
+    assert not record_publication(p, p.url, yae, now.isoformat(), now)
+    assert not current_publications(p, now + timedelta(days=2))
+    p.listing_status = "removed"
+    assert not current_publications(p, now)
+    db.session.commit()
+    with pytest.raises(ValueError, match="removed/sold"):
+        record_publication(p, p.url, yae, now.isoformat(), now)
+
+
+def test_receipt_arriving_during_browser_check_keeps_browser_provenance(
+    app, monkeypatch
+):
+    from datetime import timezone
+    from services.alternate_publication import record_publication
+    from services.listing_verification import read_verdict
+
+    monkeypatch.setattr(ListingStatusService, "REFUSED_SOURCES", {"idealista"})
+    p = property_row()
+    yae = "https://www.yaencontre.com/venta/casa/inmueble-4321-12345"
+
+    def blocked_after_receipt(url, nonce):
+        now = datetime.now(timezone.utc)
+        assert record_publication(p, url, yae, now.isoformat(), now)
+        return {"nonce": nonce, "refusal": "blocked"}
+
+    with patch(
+        "services.subscription_transport.read_listing_status",
+        side_effect=blocked_after_receipt,
+    ) as browser:
+        result = ListingStatusService().check_property_status(
+            p, allow_browser_fallback=True
+        )
+    assert browser.call_count == 1
+    assert result["attempt"]["method"] == "browser_archive"
+    assert result["attempt"]["http_refusal"] == "blocked"
+    assert read_verdict(p)["alternate_publications"][0]["url"] == yae
+
+
+def test_receipt_expiring_after_route_choice_keeps_attempt_method(app, monkeypatch):
+    from datetime import timedelta, timezone
+    from services.alternate_publication import WINDOW, record_publication
+    from services.listing_verification import read_verdict
+
+    monkeypatch.setattr(ListingStatusService, "REFUSED_SOURCES", {"idealista"})
+    p = property_row()
+    now = datetime.now(timezone.utc)
+    later = now + timedelta(seconds=2)
+    seen = now - WINDOW + timedelta(seconds=1)
+    yae = "https://www.yaencontre.com/venta/casa/inmueble-4321-12345"
+    assert record_publication(p, p.url, yae, seen.isoformat(), now)
+    with (
+        patch("services.listing_status_service.datetime", wraps=datetime) as clock,
+        patch(
+            "services.subscription_transport.read_listing_status",
+            side_effect=AssertionError("unexpected Chrome"),
+        ),
+    ):
+        clock.now.side_effect = [now, now, later, later]
+        result = ListingStatusService().check_property_status(
+            p, allow_browser_fallback=True
+        )
+    assert result["attempt"]["method"] == "alternate_publication"
+    assert read_verdict(p, later)["alternate_publications"] == []
+    assert p.listing_last_checked == datetime(2026, 8, 26)
