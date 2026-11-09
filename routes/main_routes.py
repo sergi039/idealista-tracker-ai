@@ -348,7 +348,7 @@ def _criteria_context():
 def _recommendation_selection(
     query, profile_data, profile_summary, similarity_ctx, *, focus_id=None
 ):
-    """Select the recommendation results shared by the catalog, map and CSV."""
+    """Apply the same evidence-based collection on the list, map and export."""
     rows = query.all()
     context = taste_recommendation.build_context(
         rows,
@@ -363,12 +363,29 @@ def _recommendation_selection(
         for property_id, reading in context.readings.items()
         if reading.get("eligibility") == "excluded"
     }
-    hidden_ids = excluded_ids | recommendation_duplicates.duplicate_ids(
-        rows, context.readings, excluded_ids, focus_id=focus_id
+    review = request.args.get("recommendation_scope") == "review"
+    selected_ids = {
+        property_id
+        for property_id, reading in context.readings.items()
+        if property_id not in excluded_ids
+        and reading["state"] not in {"reference", "rejected"}
+        and (
+            reading.get("needs_review")
+            if review
+            else reading["state"] == "candidate" and reading.get("group") == "confident"
+        )
+    }
+    duplicate_ids = recommendation_duplicates.duplicate_ids(
+        rows,
+        context.readings,
+        context.readings.keys() - selected_ids,
+        focus_id=focus_id,
     )
-    if hidden_ids:
-        query = query.filter(Property.id.notin_(hidden_ids))
-    return query, context, len(excluded_ids)
+    return (
+        query.filter(Property.id.in_(selected_ids - duplicate_ids)),
+        context,
+        len(excluded_ids),
+    )
 
 
 # The filter bar's dimensions, in the order the page applies them. One home
@@ -2411,8 +2428,14 @@ def properties():
                 "hide_removed": hide_removed_filter,
                 "sort_by": sort_by,
                 "order": sort_order,
-                "mode": mode,
+                "mode": "recommendation" if wants_recommendation_ranking else mode,
                 "active_mode": active_mode,
+                "recommendation_scope": (
+                    "review"
+                    if wants_recommendation_ranking
+                    and request.args.get("recommendation_scope") == "review"
+                    else None
+                ),
                 "view_type": view_type,
                 "page": page,
                 "per_page": per_page,
@@ -5074,6 +5097,7 @@ def map_view():
                         "view_type",
                         "per_page",
                         "hide_removed",
+                        "recommendation_scope",
                     },
                 )
             )

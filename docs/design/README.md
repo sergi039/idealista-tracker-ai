@@ -80,7 +80,7 @@ Each control has one home:
 |---|---|
 | Subscription toolbar | Scope multiselect, archived/unassigned access, Favorites, Hide removed; rare subscription tools disclose on demand |
 | Filter form | Search/type/municipality, additional filters, explicit Apply and Clear |
-| Result controls | All properties/recommendations, named assessment modes, sort/order, table/cards/map and collection actions |
+| Result controls | All properties/Recommended/Needs verification, named assessment modes, sort/order, table/cards/map and collection actions |
 
 All GET filter edits are drafts until **Apply** or Enter submits the form.
 Subscription menu checkboxes use the same form through `form=filter-form`;
@@ -148,7 +148,7 @@ available evidence are independent; a failed refresh can still have old data.
 | failed | Failed update; disclose whether previous evidence remains |
 | none | Honest starting state, not an endless spinner or fabricated ranking |
 
-Recommendations rank the filtered collection, not a new top-N shortlist.
+Recommended shows confirmed matches with verified requirements. Needs verification keeps listings with incomplete evidence separate. Both use the applied filters and rank before pagination. Unapplied preferences disclose their original text, source listing and reason.
 Refresh recommendations and retrain taste remain separate existing POSTs with
 CSRF and explicit confirmation. No paid operation on GET, tab, sort or view
 change. Preserve `unknown` versus measured absence and stale versus current

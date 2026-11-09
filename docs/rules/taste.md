@@ -156,7 +156,10 @@ applicable supported measurement can enforce an explicit hard conflict; a
 claim is potential evidence, an unknown asks for verification, and an unmapped
 clause stays visible. A confirmed hard violation is omitted only from the
 recommendation mode, with a disclosed count; the row remains available in the
-other modes. Numeric Similar and canonical photo-facet overlap are independent
+catalog. Recommended requires a current profile, a supported match and
+verified requirements. Incomplete readings belong to Needs verification. The
+profile disclosure lists each unapplied clause with its source and reason.
+Numeric Similar and canonical photo-facet overlap are independent
 ranking channels. The composite nearest positive reference names the photo
 facets it shares without presenting exemplar resemblance as an explicit owner
 preference or as supported coverage. Current rejections are kept as history and

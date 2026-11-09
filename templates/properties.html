@@ -43,6 +43,7 @@
     'favorites': 'on' if current_filters.favorites else None,
     'hide_removed': 'on' if current_filters.hide_removed else None,
     'mode': current_filters.mode,
+    'recommendation_scope': current_filters.recommendation_scope or None,
     'view_type': current_filters.view_type,
     'per_page': current_filters.per_page
 } %}
@@ -157,9 +158,25 @@
         {% set state = reading.get('state') %}
         {# Group repeated clauses only for display, separately by outcome.
            A matching aspect can still also need verification or conflict. #}
-        {% set matches = reading.get('matches', []) | unique(attribute='label_key') | list %}
-        {% set conflicts = reading.get('conflicts', []) | unique(attribute='label_key') | list %}
-        {% set checks = reading.get('needs_verification', []) | unique(attribute='label_key') | list %}
+        {% set checks = reading.get('needs_verification', []) %}
+        {% set evidence = namespace(matches=[], conflicts=[], checks=checks) %}
+        {% for facet in reading.get('matches', []) %}
+            {% if facet.get('status', 'supported') == 'supported' %}
+                {% set evidence.matches = evidence.matches + [facet] %}
+            {% else %}
+                {% set evidence.checks = evidence.checks + [facet] %}
+            {% endif %}
+        {% endfor %}
+        {% for facet in reading.get('conflicts', []) %}
+            {% if facet.get('status', 'supported') == 'supported' %}
+                {% set evidence.conflicts = evidence.conflicts + [facet] %}
+            {% else %}
+                {% set evidence.checks = evidence.checks + [facet] %}
+            {% endif %}
+        {% endfor %}
+        {% set matches = evidence.matches | unique(attribute='label_key') | list %}
+        {% set conflicts = evidence.conflicts | unique(attribute='label_key') | list %}
+        {% set checks = evidence.checks | unique(attribute='label_key') | list %}
         {% set nearest = reading.get('nearest_positive_reference') %}
         {% set visual = nearest.get('visual_matched_aspect_ids', []) | unique | list if nearest else [] %}
         <div class="recommendation-reading small mt-2" data-recommendation-state="{{ state }}">
@@ -169,7 +186,15 @@
                 {% elif state == 'rejected' %}
                     <span class="badge text-bg-danger">{{ t('recommendation_rejected') }}</span>
                 {% elif state == 'candidate' %}
-                    <span class="badge text-bg-success">{{ t('recommendation_candidate') }}</span>
+                    {% if reading.get('eligibility') == 'excluded' %}
+                        <span class="badge text-bg-danger">{{ t('recommendation_excluded') }}</span>
+                    {% elif reading.get('group') == 'confident' %}
+                        <span class="badge text-bg-success">{{ t('recommendation_confirmed') }}</span>
+                    {% elif reading.get('needs_review') %}
+                        <span class="badge text-bg-warning">{{ t('recommendation_review') }}</span>
+                    {% else %}
+                        <span class="badge text-bg-secondary">{{ t('recommendation_candidate') }}</span>
+                    {% endif %}
                 {% elif state == 'stale' %}
                     <span class="badge text-bg-warning">{{ t('recommendation_stale') }}</span>
                 {% elif state == 'no_profile' %}
@@ -879,6 +904,9 @@
                 <form method="GET" id="filter-form" class="workspace-filter-form" data-submit="explicit">
                     <!-- Hidden inputs to preserve state -->
                     <input type="hidden" name="mode" value="{{ current_filters.mode or 'combined' }}">
+                    {% if current_filters.recommendation_scope %}
+                        <input type="hidden" name="recommendation_scope" value="{{ current_filters.recommendation_scope }}">
+                    {% endif %}
                     <input type="hidden" name="view_type" value="{{ view_type }}">
                     <input type="hidden" name="order" value="{{ current_filters.order }}">
                     {# The two switches above are links, so their state has to
@@ -1174,11 +1202,13 @@
            change which rows they are. #}
         <section id="properties-results" aria-label="{{ t('properties') }}">
             <div class="workspace-result-controls">
-                <div class="workspace-result-tabs" role="group" aria-label="{{ t('workspace_collection') }}">
+                <div class="workspace-result-tabs flex-wrap" role="group" aria-label="{{ t('workspace_collection') }}">
                     <a id="mode-all-btn" class="workspace-result-tab" aria-current="{{ 'true' if active_mode != 'recommendation' else 'false' }}"
-                       href="{{ url_for('main.properties', **dict(base_args, mode='combined', sort='created_at', order='desc')) }}">{{ t('workspace_all') }}</a>
-                    <a id="mode-recommendation-btn" class="workspace-result-tab" aria-describedby="recommendation-entry-help" aria-current="{{ 'true' if active_mode == 'recommendation' else 'false' }}"
-                       href="{{ url_for('main.properties', **dict(base_args, favorites=None, mode='recommendation', sort='recommendation', order='desc')) }}" title="{{ t('recommendation_mode_title') }}">{{ t('workspace_auto') }}</a>
+                       href="{{ url_for('main.properties', **dict(base_args, mode='combined', recommendation_scope=None, sort='created_at', order='desc')) }}">{{ t('workspace_all') }}</a>
+                    <a id="mode-recommendation-btn" class="workspace-result-tab" aria-describedby="recommendation-entry-help" aria-current="{{ 'true' if active_mode == 'recommendation' and not current_filters.recommendation_scope else 'false' }}"
+                       href="{{ url_for('main.properties', **dict(base_args, favorites=None, mode='recommendation', recommendation_scope=None, sort='recommendation', order='desc')) }}" title="{{ t('recommendation_mode_title') }}">{{ t('recommendation_confirmed') }}</a>
+                    <a id="mode-recommendation-review-btn" class="workspace-result-tab" aria-describedby="recommendation-entry-help" aria-current="{{ 'true' if active_mode == 'recommendation' and current_filters.recommendation_scope else 'false' }}"
+                       href="{{ url_for('main.properties', **dict(base_args, favorites=None, mode='recommendation', recommendation_scope='review', sort='recommendation', order='desc')) }}">{{ t('recommendation_review') }}</a>
                 </div>
                 <div class="workspace-result-tools">
                     <div class="input-group input-group-sm properties-filter-sort">
@@ -1283,7 +1313,7 @@
                        export never re-derives a default the page has already
                        resolved. #}
                     <a class="dropdown-item"
-                       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, verdict=current_filters.verdict or None, action=current_filters.action or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, sea_dist=current_filters.sea_dist or None, build=current_filters.build or None, measured=current_filters.measured or None, similar=current_filters.similar or None, criteria=current_filters.criteria or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else 'off', mode=current_filters.mode, sort=current_filters.sort_by, order=current_filters.order) }}"
+                       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, verdict=current_filters.verdict or None, action=current_filters.action or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, sea_dist=current_filters.sea_dist or None, build=current_filters.build or None, measured=current_filters.measured or None, similar=current_filters.similar or None, criteria=current_filters.criteria or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else 'off', mode=current_filters.mode, recommendation_scope=current_filters.recommendation_scope or None, sort=current_filters.sort_by, order=current_filters.order) }}"
                        title="Download filtered data as CSV">
                         <i class="fas fa-download me-1"></i>{{ t('export_csv') }}
                     </a>
@@ -1459,7 +1489,6 @@
                         <span id="recommendation-profile-status" class="small" data-recommendation-profile-state="{{ _rp.get('state', 'none') }}">
                             {% if _rp.get('state') == 'current' %}
                                 <i class="fas fa-compass me-1"></i>{{ t('recommendation_profile_current')|format(_rp.get('positive_reference_count', 0), _rp.get('mapped_clause_count', 0)) }}
-                                {% if _rp.get('unapplied_clause_count', 0) %} {{ t('recommendation_profile_unapplied')|format(_rp.get('unapplied_clause_count', 0)) }}{% endif %}
                             {% elif _rp.get('state') == 'dirty' %}
                                 <i class="fas fa-clock-rotate-left me-1"></i>{{ t('recommendation_profile_dirty') }}
                             {% elif _rp.get('state') == 'pending' %}
@@ -1470,6 +1499,22 @@
                                 <i class="fas fa-compass me-1"></i>{{ t('recommendation_profile_none') }}
                             {% endif %}
                         </span>
+                        {% if _rp.get('unapplied_clauses') %}
+                            <details id="recommendation-unapplied-preferences" class="small">
+                                <summary>{{ t('recommendation_profile_unapplied')|format(_rp.unapplied_clauses|length) }}</summary>
+                                <ol class="mt-2 mb-0 text-break">
+                                    {% for clause in _rp.unapplied_clauses %}
+                                        <li>
+                                            {{ clause.text }}
+                                            {% if clause.source_property_id %}
+                                                <a href="{{ url_for('main.property_detail', property_id=clause.source_property_id) }}">#{{ clause.source_property_id }}</a>
+                                            {% endif %}
+                                            <div class="text-body-secondary">{{ clause.reason or t('recommendation_rule_unavailable') }}</div>
+                                        </li>
+                                    {% endfor %}
+                                </ol>
+                            </details>
+                        {% endif %}
                         {% if _rp.get('model_profile_dirty') %}<span id="model-profile-dirty" class="small text-warning-emphasis">{{ t('recommendation_model_dirty') }}</span>{% endif %}
                         {% if _rp.get('version') and _rp.get('state') in ('dirty', 'pending', 'failed') %}<span class="small">{{ t('workspace_previous') }}</span>{% endif %}
                         {% if _rp.get('usable_signal_count', 0) and (_rp.get('state') in ('none', 'dirty', 'failed') or _rp.get('model_profile_dirty')) %}
@@ -2061,11 +2106,15 @@
         {% else %}
             <div class="text-center py-5" id="properties-empty-state">
                 <i class="fas fa-search fa-3x text-muted mb-3"></i>
-                <h4>No properties found</h4>
+                {% if active_mode == 'recommendation' %}
+                    <h4>{{ t('recommendation_empty_review' if current_filters.recommendation_scope else 'recommendation_empty_confirmed') }}</h4>
+                {% else %}
+                    <h4>No properties found</h4>
+                {% endif %}
                 {% if current_filters.criteria == 'pass' and criteria_enabled %}
                 <p class="text-muted" id="empty-state-strict-criteria">
                     {{ t('empty_state_strict_criteria') }}
-                    <a href="{{ url_for('main.properties', **dict(base_args, criteria='unknown', sort=current_filters.sort_by, order=current_filters.order)) }}">{{ t('empty_state_unmeasured_link') }}</a>
+                    <a href="{{ url_for('main.properties', **dict(base_args, criteria='unknown', recommendation_scope='review' if active_mode == 'recommendation' else None, sort=current_filters.sort_by, order=current_filters.order)) }}">{{ t('empty_state_unmeasured_link') }}</a>
                 </p>
                 {% endif %}
                 {# The one remedy this state used to name was "run a manual
@@ -2081,7 +2130,7 @@
                    (utils/listing_filters.CLEARED_NOT_ABSENT). #}
                 {% if empty_state_scope_total is defined and empty_state_scope_total %}
                 <p class="text-muted" id="empty-state-filters-note">
-                    {{ t('empty_state_clear_recommendations' if empty_state_clear_recommendations else 'empty_state_filters_hide_all')|format(tn('listings_count', empty_state_scope_total)) }}
+                    {{ t(('empty_state_clear_review' if current_filters.recommendation_scope else 'empty_state_clear_recommendations') if empty_state_clear_recommendations else 'empty_state_filters_hide_all')|format(tn('listings_count', empty_state_scope_total)) }}
                     (<a id="empty-state-clear-link" href="{{ empty_state_clear_url }}">{{ t('workspace_all' if active_mode == 'recommendation' and not empty_state_clear_recommendations else 'empty_state_clear_link') }}</a>)
                 </p>
                 {% endif %}
