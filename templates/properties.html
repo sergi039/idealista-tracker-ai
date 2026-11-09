@@ -1970,8 +1970,8 @@
                                     {% endif %}
                                     {% if p.url %}
                                         <a href="{{ p.url }}" target="_blank" rel="noopener"
-                                           class="btn btn-success btn-sm" title="View on Idealista">
-                                            <i class="fas fa-home me-1"></i>Idealista
+                                           class="btn btn-success btn-sm">
+                                            <i class="fas fa-external-link-alt me-1"></i>{{ listing_source_label(listing_source_for(p)) }}
                                         </a>
                                     {% endif %}
                                 </div>

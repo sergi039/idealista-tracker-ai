@@ -56,6 +56,9 @@ _ANCHOR = re.compile(
     r'<a\b[^>]*href="(?P<href>[^"]+)"[^>]*>(?P<inner>.*?)</a>',
     re.IGNORECASE | re.DOTALL,
 )
+_PARAGRAPH = re.compile(r"<p\b([^>]*)>(.*?)</p>", re.IGNORECASE | re.DOTALL)
+_PRICE_TEXT = re.compile(r"[0-9][0-9.,]*\s*€")
+_STRUCK = re.compile(r"\bline-through\b|<(?:s|del|strike)\b", re.IGNORECASE)
 
 _BEDROOMS = re.compile(r"(\d+)\s*hab\b", re.IGNORECASE)
 _BATHROOMS = re.compile(r"(\d+)\s*baño", re.IGNORECASE)
@@ -217,6 +220,18 @@ def _text_of(fragment: str) -> str:
     return re.sub(r"\s+", " ", html_entities.unescape(text)).strip()
 
 
+def _asking_price(markup: str) -> Optional[float]:
+    # Discount cards carry the current price, a struck previous price, and
+    # "Ha bajado … €". The latter two are not asking prices.
+    for attrs, paragraph in _PARAGRAPH.findall(markup):
+        if _STRUCK.search(attrs + paragraph):
+            continue
+        plain = _text_of(re.sub(r"<!--.*?-->", "", paragraph, flags=re.DOTALL))
+        if _PRICE_TEXT.fullmatch(plain):
+            return extract_price(plain)
+    return None
+
+
 def cards_in_email(body: Optional[str]) -> List[YaencontreCard]:
     """Every listing card in an alert email body, one per listing id.
 
@@ -277,7 +292,7 @@ def cards_in_email(body: Optional[str]) -> List[YaencontreCard]:
                 break
 
         flat = _text_of(segment)
-        price = extract_price(flat)
+        price = _asking_price(segment)
         area = extract_area_m2(flat)
         url = normalize_url(anchors[start_i]["href"]) or anchors[start_i]["href"]
 

@@ -81,7 +81,7 @@ from utils.listing_filters import (
     rebuilt_from,
 )
 from utils.listing_search import interpret_search, listing_search_clause
-from utils.listing_source import source_filter_clause
+from utils.listing_source import source_filter_clause, source_label, source_of
 from utils.listing_status_scope import resolve_hide_removed
 from utils import listing_filter_memory
 from utils.municipality_grouping import (
@@ -1376,7 +1376,7 @@ def _source_choices(base_query, applied=""):
     page picking that source opens: Idealista offered "(318)" over a page
     finding 263 before it did.
     """
-    from utils.listing_source import SOURCES, source_label, source_of_url
+    from utils.listing_source import SOURCES, source_of_url
 
     query = base_query.with_entities(Property.url)
     counts = {}
@@ -5086,6 +5086,7 @@ def map_view():
                     "category": prop.property_category,
                     "subtype": prop.property_subtype,
                     "url": prop.url,
+                    "source_label": source_label(source_of(prop)),
                     "municipality": prop.municipality,
                     "travel": prop.travel if isinstance(prop.travel, dict) else None,
                     # The popup draws the same travel badges the list does, so

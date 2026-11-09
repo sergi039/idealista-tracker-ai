@@ -574,8 +574,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         <i class="fas fa-eye me-1"></i>Details
                     </a>
                     ${prop.url ? `
-                    <a href="${prop.url}" target="_blank" class="btn btn-success btn-sm">
-                        <i class="fas fa-home me-1"></i>Idealista
+                    <a href="${escapeHtml(prop.url)}" target="_blank" rel="noopener" class="btn btn-success btn-sm">
+                        <i class="fas fa-external-link-alt me-1"></i>${escapeHtml(prop.source_label)}
                     </a>
                     ` : ''}
                     <a href="https://www.google.com/maps?q=${prop.lat},${prop.lon}" target="_blank" class="btn btn-outline-light btn-sm">
