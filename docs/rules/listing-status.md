@@ -94,8 +94,13 @@ refusal. Other portals retain their existing readers.
 
 The authenticated host bridge’s `/v1/listing-status` route calls
 `tools/browser.sh --read-listing-status URL NONCE` on the fixed MacBook. It uses
-an already running normal Chrome and a new owned window/tab. No JavaScript
-permission, login, profile, clipboard or existing tab changes. Chrome saves the
+an already running normal Chrome and a new owned window/tab. An app-name
+AppleEvent can land in Playwright's Chrome if both processes are open. The
+reader requires one running stock Chrome executable with no launch arguments,
+owned by the current user, and binds every event to its PID and launch time.
+Playwright's separate process is excluded even when it has focus. A missing,
+ambiguous or replaced process fails without launching or switching browsers.
+No JavaScript permission, login, profile, clipboard or existing tab changes. Chrome saves the
 loaded page as MHTML to its own private temporary directory; only primary public
 fields leave the MacBook, and the archive is deleted. Both the archive snapshot
 URL and its main HTML URL must match the freshly generated nonce URL. The
