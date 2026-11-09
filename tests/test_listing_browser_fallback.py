@@ -414,3 +414,60 @@ def test_publication_writer_refuses_wrong_subject_and_stale_evidence(app):
     db.session.commit()
     with pytest.raises(ValueError, match="removed/sold"):
         record_publication(p, p.url, yae, now.isoformat(), now)
+
+
+def test_receipt_arriving_during_browser_check_keeps_browser_provenance(
+    app, monkeypatch
+):
+    from datetime import timezone
+    from services.alternate_publication import record_publication
+    from services.listing_verification import read_verdict
+
+    monkeypatch.setattr(ListingStatusService, "REFUSED_SOURCES", {"idealista"})
+    p = property_row()
+    yae = "https://www.yaencontre.com/venta/casa/inmueble-4321-12345"
+
+    def blocked_after_receipt(url, nonce):
+        now = datetime.now(timezone.utc)
+        assert record_publication(p, url, yae, now.isoformat(), now)
+        return {"nonce": nonce, "refusal": "blocked"}
+
+    with patch(
+        "services.subscription_transport.read_listing_status",
+        side_effect=blocked_after_receipt,
+    ) as browser:
+        result = ListingStatusService().check_property_status(
+            p, allow_browser_fallback=True
+        )
+    assert browser.call_count == 1
+    assert result["attempt"]["method"] == "browser_archive"
+    assert result["attempt"]["http_refusal"] == "blocked"
+    assert read_verdict(p)["alternate_publications"][0]["url"] == yae
+
+
+def test_receipt_expiring_after_route_choice_keeps_attempt_method(app, monkeypatch):
+    from datetime import timedelta, timezone
+    from services.alternate_publication import WINDOW, record_publication
+    from services.listing_verification import read_verdict
+
+    monkeypatch.setattr(ListingStatusService, "REFUSED_SOURCES", {"idealista"})
+    p = property_row()
+    now = datetime.now(timezone.utc)
+    later = now + timedelta(seconds=2)
+    seen = now - WINDOW + timedelta(seconds=1)
+    yae = "https://www.yaencontre.com/venta/casa/inmueble-4321-12345"
+    assert record_publication(p, p.url, yae, seen.isoformat(), now)
+    with (
+        patch("services.listing_status_service.datetime", wraps=datetime) as clock,
+        patch(
+            "services.subscription_transport.read_listing_status",
+            side_effect=AssertionError("unexpected Chrome"),
+        ),
+    ):
+        clock.now.side_effect = [now, now, later, later]
+        result = ListingStatusService().check_property_status(
+            p, allow_browser_fallback=True
+        )
+    assert result["attempt"]["method"] == "alternate_publication"
+    assert read_verdict(p, later)["alternate_publications"] == []
+    assert p.listing_last_checked == datetime(2026, 8, 26)

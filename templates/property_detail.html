@@ -2846,7 +2846,8 @@ async function checkPropertyListingStatus(propertyId) {
             report('fas fa-triangle-exclamation', 'Status check failed — see the server logs.', 'error');
             return;
         }
-        if (result.changed || result.attempt?.method === 'alternate_publication') {
+        if (result.changed || result.attempt?.method === 'alternate_publication'
+                || document.querySelector('[data-alternate-publication]')) {
             window.location.reload();
             return;
         }

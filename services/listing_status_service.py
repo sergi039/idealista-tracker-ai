@@ -640,13 +640,9 @@ class ListingStatusService:
                     "observed": status,
                     "refusal": refusal,
                 }
-                if (
-                    allow_browser_fallback
-                    and source_of_url(url) == IDEALISTA
-                    and status == "error"
-                    and refusal in REFUSALS
-                    and current_publications(prop, datetime.now(timezone.utc))
-                ):
+                # This describes which route actually ran, not which evidence
+                # might have appeared or expired while the browser was working.
+                if use_alternate:
                     attempt["method"] = "alternate_publication"
                 elif browser_meta:
                     attempt.update(browser_meta, http_refusal=http_refusal)
