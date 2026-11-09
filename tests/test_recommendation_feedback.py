@@ -1,8 +1,11 @@
 """Pilot import -> prepared evidence -> real recommendation/held-out selection."""
 
 import copy
+import csv
 import hashlib
+import io
 import json
+import re
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -995,3 +998,61 @@ def test_changed_feedback_fact_dirties_model_and_scope_drift_removes_example(sco
     yes = next(e for e in projected if e["answer"] == "yes")
     assert yes["property_id"] == rows[2].id
     assert yes["applicable_alias_ids"] == [rows[2].id]
+
+
+def test_card_votes_rerank_and_hide_without_a_taste_profile(scope):
+    app, profile, rows = scope
+    TasteProfile.query.delete()
+    db.session.commit()
+    client = app.test_client()
+    scope_args = f"profile_id={profile.id}&view_type=cards"
+    catalog = "/properties?" + scope_args + "&mode=combined"
+    recommendations = "/properties?" + scope_args + "&mode=recommendation"
+    export = "/properties/export.csv?" + scope_args + "&mode=recommendation"
+    voted = rows[0]
+    endpoint = f"/api/property/{voted.id}/recommendation-vote"
+    revision = feedback.card_vote_state(voted)["revision"]
+
+    def ranked():
+        response = client.get(export)
+        assert response.status_code == 200
+        return [int(row["ID"]) for row in csv.DictReader(io.StringIO(response.text))]
+
+    # Use the real CSRF token and request path, with no profile to refresh.
+    page = client.get(recommendations)
+    assert page.status_code == 200
+    assert endpoint in page.text
+    assert ranked()[0] == voted.id
+    token = re.search(r'<meta name="csrf-token" content="([^"]+)"', page.text)[1]
+    headers = {"X-CSRFToken": token}
+
+    def vote(answer, expected_revision):
+        return client.post(
+            endpoint,
+            headers=headers,
+            json={"answer": answer, "revision": expected_revision},
+        )
+
+    assert (
+        client.post(endpoint, json={"answer": "no", "revision": revision}).status_code
+        == 400
+    )
+    liked = vote("yes", revision)
+    assert liked.status_code == 200
+    assert ranked()[0] == rows[1].id
+    assert ranked().index(rows[1].id) < ranked().index(rows[4].id)
+    assert vote("no", revision).status_code == 409
+    disliked = vote("no", liked.json["revision"])
+    assert disliked.status_code == 200
+    assert voted.id not in ranked()
+    assert ranked()[0] == rows[4].id
+    assert endpoint not in client.get(recommendations).text
+    assert endpoint in client.get(catalog).text
+    assert voted.enrichment["unrelated"] == {"keep": True}
+    assert not voted.is_favorite and voted.owner_verdict is None
+
+    assert vote(None, disliked.json["revision"]).status_code == 200
+    assert ranked()[0] == voted.id
+    assert endpoint in client.get(recommendations).text
+    assert feedback.has_recorded_feedback(voted)
+    assert TasteProfile.query.count() == 0

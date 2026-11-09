@@ -322,14 +322,126 @@ class ArchiveIncomplete(ReaderFailure):
     pass
 
 
-def apple(script, deadline):
-    """Every AppleEvent has its own killable, bounded process group."""
+CHROME_EXECUTABLE = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+# Use Apple's local process-addressed events, not an application name or bundle
+# address. A second Chrome (e.g. Playwright) shares both of those names.
+CHROME_EVENTS = r"""
+ObjC.import("AppKit");
+const AE = $.NSAppleEventDescriptor;
+const code = s => [...s].reduce((n, c) => n * 256 + c.charCodeAt(0), 0);
+const text = s => AE.descriptorWithString(s);
+const type = s => AE.descriptorWithTypeCode(code(s));
+const enumeration = s => AE.descriptorWithEnumCode(code(s));
+function record(fields) {
+    const r = AE.recordDescriptor;
+    for (const k in fields) r.setDescriptorForKeyword(fields[k], code(k));
+    return r;
+}
+function spec(want, form, key, from) {
+    return record({want: type(want), form: enumeration(form), seld: key,
+                   from: from || AE.nullDescriptor}).coerceToDescriptorType(code("obj "));
+}
+const property = (k, from) => spec("prop", "prop", type(k), from);
+const byID = (kind, id, from) =>
+    spec(kind, "ID  ", AE.descriptorWithInt32(id), from);
+function matching(kind, key, value, from) {
+    const examined = AE.descriptorWithDescriptorTypeBytesLength(code("exmn"), null, 0);
+    const cmp = record({relo: enumeration("=   "), obj1: property(key, examined),
+                        obj2: text(value)}).coerceToDescriptorType(code("cmpd"));
+    return spec(kind, "test", cmp, from);
+}
+function chromeIdentity(app, executable) {
+    if (app.isNil() || app.terminated ||
+        ObjC.unwrap(app.bundleIdentifier) !== "com.google.Chrome" ||
+        ObjC.unwrap(app.executableURL.path) !== executable || app.launchDate.isNil()) {
+        return null;
+    }
+    return {pid: Number(app.processIdentifier),
+            started: Number(app.launchDate.timeIntervalSinceReferenceDate)};
+}
+function run(args) {
+    const req = JSON.parse(args[0]);
+    const running = $.NSRunningApplication;
+    if (req.operation === "discover") {
+        const apps = ObjC.unwrap(running.runningApplicationsWithBundleIdentifier("com.google.Chrome"));
+        return JSON.stringify(apps.map(a => chromeIdentity(a, req.executable)).filter(Boolean));
+    }
+    const target = AE.descriptorWithProcessIdentifier(req.target.pid);
+    function send(id, fields) {
+        // Recheck the launch identity even between events in a single operation.
+        // A vanished Chrome must not be relaunched or substituted by another.
+        const app = chromeIdentity(running.runningApplicationWithProcessIdentifier(req.target.pid),
+                                   req.executable);
+        if (!app || app.started !== req.target.started) throw Error("Chrome process changed");
+        const e = AE.appleEventWithEventClassEventIDTargetDescriptorReturnIDTransactionID(
+            code("core"), code(id), target, -1, 0);
+        for (const k in fields) e.setParamDescriptorForKeyword(fields[k], code(k));
+        const error = Ref();
+        const reply = e.sendEventWithOptionsTimeoutError(3, 3, error); // wait for reply
+        if (reply.isNil()) throw Error("AppleEvent " + error[0].code);
+        const failure = reply.paramDescriptorForKeyword(code("errn"));
+        if (!failure.isNil() && failure.int32Value) throw Error("AppleEvent " + failure.int32Value);
+        return reply.paramDescriptorForKeyword(code("----"));
+    }
+    const get = (key, obj) => send("getd", {"----": property(key, obj)});
+    const url = t => ObjC.unwrap(get("URL ", t).stringValue);
+    const ids = (w, t) => [ObjC.unwrap(get("ID  ", w).stringValue),
+                           ObjC.unwrap(get("ID  ", t).stringValue)];
+    const setURL = (t, dest) => send("setd", {"----": property("URL ", t), data: text(dest)});
+    let result = null;
+    if (req.operation === "open") {
+        const w = send("crel", {kocl: type("cwin"),
+                               prdt: record({GNam: text(req.marker), mode: text("normal")})});
+        const t = get("acTa", w);
+        setURL(t, req.initial);
+        result = ids(w, t);
+    } else if (req.operation === "recover") {
+        const windows = send("getd", {"----": matching("cwin", "GNam", req.marker)});
+        if (Number(windows.numberOfItems) !== 1) return "null";
+        const w = windows.descriptorAtIndex(1);
+        const tabs = send("getd", {"----": matching("CrTb", "URL ", req.initial, w)});
+        let t;
+        if (Number(tabs.numberOfItems) === 1) {
+            t = tabs.descriptorAtIndex(1);
+        } else {
+            const count = send("cnte", {"----": w, kocl: type("CrTb")});
+            if (Number(count.int32Value) !== 1) return "null";
+            t = get("acTa", w);
+            if (!["about:blank", "chrome://newtab/"].includes(url(t))) return "null";
+        }
+        result = ids(w, t);
+    } else {
+        const tab = byID("CrTb", req.tab, byID("cwin", req.window));
+        switch (req.operation) {
+        case "navigate": setURL(tab, req.url); break;
+        case "location": result = url(tab); break;
+        case "loading": result = get("ldng", tab).booleanValue; break;
+        case "save":
+            if (url(tab) !== req.url) return "false";
+            send("save", {"----": tab, kfil: AE.descriptorWithFileURL($.NSURL.fileURLWithPath(req.path)),
+                          fltp: text("single file")});
+            result = true;
+            break;
+        case "close":
+            if (req.allowed.includes(url(tab))) send("clos", {"----": tab});
+            break;
+        default: throw Error("Unknown Chrome operation");
+        }
+    }
+    return JSON.stringify(result);
+}
+"""
+
+
+def apple(operation, deadline, **fields):
+    """Every operation has its own killable, bounded process group."""
     budget = min(4, deadline - time.monotonic())
     if budget <= 0:
         raise ReaderFailure("browser_unavailable")
-    wrapped = "with timeout of 3 seconds\n" + script + "\nend timeout\n"
+    request = dict(operation=operation, executable=CHROME_EXECUTABLE, **fields)
     proc = subprocess.Popen(
-        [OSASCRIPT, "-"],
+        [OSASCRIPT, "-l", "JavaScript", "-", json.dumps(request)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -337,7 +449,7 @@ def apple(script, deadline):
         start_new_session=True,
     )
     try:
-        output, error = proc.communicate(wrapped, timeout=budget)
+        output, error = proc.communicate(CHROME_EVENTS, timeout=budget)
     except BaseException:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
@@ -346,99 +458,99 @@ def apple(script, deadline):
         proc.communicate(timeout=1)
         raise
     if proc.returncode:
-        reason = (
-            "missing_configuration"
-            if any(
-                s in error.lower()
-                for s in ("-1743", "turned off", "not authorized", "not permitted")
-            )
-            else "browser_unavailable"
-        )
+        reason = "missing_configuration" if "-1743" in error else "browser_unavailable"
         raise ReaderFailure(reason)
-    return output.strip()
+    return json.loads(output)
+
+
+def select_chrome(deadline):
+    """Select the single stock Chrome process, never one launched with flags."""
+    candidates = apple("discover", deadline)
+    ordinary = []
+    for target in candidates:
+        pid = target["pid"]
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ReaderFailure("browser_unavailable")
+        process = subprocess.run(
+            ["/bin/ps", "-ww", "-p", str(pid), "-o", "uid=", "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=min(2, remaining),
+        )
+        if process.returncode == 0 and process.stdout.strip().split(maxsplit=1) == [
+            str(os.getuid()),
+            CHROME_EXECUTABLE,
+        ]:
+            ordinary.append(target)
+    if len(ordinary) != 1:
+        raise ReaderFailure("missing_configuration")
+    return ordinary[0]
 
 
 class OwnedTab:
     def __init__(self, deadline):
         self.deadline = deadline
-        self.window = self.tab = None
+        self.target = self.window = self.tab = None
         self.creation_attempted = False
         self.last_url = "about:blank"
         self.marker = "IdealistaRank status " + os.urandom(16).hex()
         self.initial_url = "about:blank#" + self.marker.replace(" ", "-")
 
-    def command(self, body, *, deadline=None):
-        prefix = f'''tell application "Google Chrome"
-set auditTab to missing value
-repeat with n from 1 to (count of tabs of window id {self.window})
-if ((id of tab n of window id {self.window}) as string) is "{self.tab}" then set auditTab to tab n of window id {self.window}
-end repeat
-if auditTab is missing value then error "Owned tab absent"
-'''
+    def command(self, operation, *, deadline=None, **fields):
         return apple(
-            prefix + body + "\nend tell",
+            operation,
             deadline if deadline is not None else self.deadline,
+            target=self.target,
+            window=self.window,
+            tab=self.tab,
+            **fields,
         )
+
+    def set_ids(self, ids):
+        if (
+            not isinstance(ids, list)
+            or len(ids) != 2
+            or any(
+                not isinstance(value, str)
+                or not re.fullmatch(r"[0-9]{1,10}", value)
+                or not 0 < int(value) < 2**31
+                for value in ids
+            )
+        ):
+            raise ReaderFailure("browser_unavailable")
+        self.window, self.tab = map(int, ids)
 
     def open(self):
+        self.target = select_chrome(self.deadline)
         self.creation_attempted = True
-        raw = apple(
-            f"""tell application "Google Chrome"
-set auditWindow to make new window with properties {{given name: {json.dumps(self.marker)}, mode: "normal"}}
-set URL of active tab of auditWindow to {json.dumps(self.initial_url)}
-return (id of auditWindow as string) & ":" & (id of active tab of auditWindow as string)
-end tell""",
-            self.deadline,
-        )
-        window, tab = raw.split(":")
-        if not window.isdigit() or not tab.isdigit():
-            raise ReaderFailure("browser_unavailable")
-        self.window, self.tab = int(window), int(tab)
+        self.set_ids(self.command("open", marker=self.marker, initial=self.initial_url))
 
     def recover_initial_tab(self, deadline):
-        # Creation can commit while its reply is lost. Query only the window
-        # bearing our unpredictable creation marker, never owner window URLs.
-        raw = apple(
-            f"""tell application "Google Chrome"
-set ownedWindows to every window whose given name is {json.dumps(self.marker)}
-if (count of ownedWindows) is not 1 then return ""
-set auditWindow to item 1 of ownedWindows
-set ownedTabs to every tab of auditWindow whose URL is {json.dumps(self.initial_url)}
-if (count of ownedTabs) is 1 then
-set auditTab to item 1 of ownedTabs
-else if (count of tabs of auditWindow) is 1 then
-set auditTab to active tab of auditWindow
-if {{"about:blank", "chrome://newtab/"}} does not contain (URL of auditTab) then return ""
-else
-return ""
-end if
-return (id of auditWindow as string) & ":" & (id of auditTab as string)
-end tell""",
-            deadline,
+        # A lost reply can only be recovered in the original Chrome process.
+        ids = self.command(
+            "recover", deadline=deadline, marker=self.marker, initial=self.initial_url
         )
-        if re.fullmatch(r"[0-9]+:[0-9]+", raw):
-            self.window, self.tab = map(int, raw.split(":"))
+        if ids is not None:
+            self.set_ids(ids)
 
     def navigate(self, url):
         # Bind intent before the AppleEvent: it can apply and then time out.
         self.last_url = url
-        self.command("set URL of auditTab to " + json.dumps(url))
+        self.command("navigate", url=url)
 
     def location(self):
-        return self.command("return URL of auditTab")
+        return self.command("location")
+
+    def loading(self):
+        return self.command("loading")
 
     def archive(self, url, path):
-        # Guard every read/save. An owner-repurposed tab is left alone.
         if self.location() != url:
             raise ReaderFailure("not_the_listing_page")
-        if self.command("return loading of auditTab") != "false":
+        if self.loading():
             return False
-        self.command(
-            "save auditTab in (POSIX file "
-            + json.dumps(str(path))
-            + ') as "single file"'
-        )
-        if self.location() != url:
+        if not self.command("save", url=url, path=str(path)) or self.location() != url:
             raise ReaderFailure("not_the_listing_page")
         return True
 
@@ -455,30 +567,19 @@ end tell""",
                 self.initial_url,
                 self.last_url,
             }
-            # A query-stripping redirect stays on the requested listing.
             base = self.last_url.partition("?")[0]
             try:
                 identity(base)
                 allowed.add(base)
             except ValueError:
                 pass
-            # Unknown destinations could be the owner's navigation; preserve
-            # them along with every additional tab in this created window.
-            self.command(
-                "if {"
-                + ", ".join(json.dumps(url) for url in sorted(allowed))
-                + "} contains (URL of auditTab) then close auditTab",
-                deadline=deadline,
-            )
+            # A different destination might be the owner's navigation.
+            self.command("close", deadline=deadline, allowed=sorted(allowed))
 
 
 def read_native(url, nonce):
     wanted = navigation_url(url, nonce)
     if socket.gethostname() != MACBOOK:
-        raise ReaderFailure("missing_configuration")
-    if subprocess.run(
-        ["/usr/bin/pgrep", "-x", "Google Chrome"], stdout=subprocess.DEVNULL, timeout=2
-    ).returncode:
         raise ReaderFailure("missing_configuration")
     folder = Path.home() / "Library/Caches/IdealistaRank/native-status"
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -547,10 +648,7 @@ def read_native(url, nonce):
                 tab.navigate(wanted)
                 while time.monotonic() < deadline:
                     location = tab.location()
-                    if (
-                        location == wanted
-                        and tab.command("return loading of auditTab") == "false"
-                    ):
+                    if location == wanted and not tab.loading():
                         if tab.archive(wanted, path):
                             break
                     elif (

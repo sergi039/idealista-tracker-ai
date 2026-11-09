@@ -278,6 +278,23 @@ new style, price, privacy or condition rules. Reasons are retained verbatim as
 receipt data; a photo-trust complaint is not generalized into a style aversion.
 Similar still compares against favorites only. No overall score is rewritten.
 
+Card votes in Recommendations have a separate reversible receipt. Dislike
+waits five seconds before the browser sends the vote. Undo or leaving the page
+during that interval cancels it. After saving, the same listing is excluded
+from the recommendation list, map and CSV. The ordinary catalog keeps it and
+offers Clear recommendation rating. The write checks the rendered revision,
+listing identity and search scope under the enrichment row lock. Clearing a
+vote keeps historical exposure. Imported pilot receipts retain their own
+authority and history.
+
+Each recommendation read recomputes the ranking from the current votes,
+including voted examples outside the active filters. Within each subscription,
+up to 16 recent Likes and 16 recent Dislikes contribute a bounded adjustment
+using the existing comparable facts, their coverage and four neutral
+observations per side. Uncomparable examples abstain. Older Dislikes still
+exclude their own cards. Card votes do not trigger a bridge call or produce
+a new taste profile version.
+
 A missing primary can use an explicitly frozen surviving alias, with its URL
 and subscription verified. The original card ID remains provenance, one
 current surviving representative prevents duplicate anchors, and missing IDs are

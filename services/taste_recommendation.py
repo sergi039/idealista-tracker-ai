@@ -817,6 +817,75 @@ def build_context(
     return RecommendationContext(profile=profile_summary, readings=readings)
 
 
+def apply_card_votes(
+    context: RecommendationContext, rows: list[Any]
+) -> RecommendationContext:
+    """Rerank each search using recent, comparable positive and negative examples."""
+    profiles = {
+        row.search_profile_id for row in rows if row.search_profile_id is not None
+    }
+    votes = recommendation_feedback.load_card_votes(profiles)
+    if not votes:
+        return context
+
+    readings = dict(context.readings)
+    for ident in readings.keys() & votes.keys():
+        if votes[ident] == "no":
+            readings[ident] = {**readings[ident], "eligibility": "excluded"}
+
+    candidate_ids = [
+        ident
+        for ident, reading in readings.items()
+        if reading["eligibility"] != "excluded"
+    ]
+    if not candidate_ids:
+        return RecommendationContext(context.profile, readings)
+
+    facts = favorite_similarity.load_facts(profiles, candidate_ids + list(votes))
+    by_id = {fact.id: fact for fact in facts}
+    references = {}
+    for ident, answer in votes.items():
+        if ident in by_id:
+            ref = by_id[ident]
+            group = references.setdefault((ref.profile_id, answer), [])
+            if len(group) < 16:
+                group.append(ref)
+
+    points = favorite_similarity.municipality_points()
+    for ident in candidate_ids:
+        candidate = by_id.get(ident)
+        reading = readings[ident]
+        if candidate is None or reading["state"] in {"rejected", "reference"}:
+            continue
+        influence = 0.0
+        for answer, direction in (("yes", 1), ("no", -1)):
+            comparisons = [
+                favorite_similarity.compare(candidate, ref, points)
+                for ref in references.get((candidate.profile_id, answer), [])
+                if ref.id != ident
+            ]
+            usable = [result for result in comparisons if "score" in result]
+            # Sparse evidence carries less weight. Each side starts with four
+            # neutral pseudo-observations and contributes at most four points.
+            # Missing facts contribute no direction or sample count.
+            influence += (
+                direction
+                * 4
+                * sum(
+                    (result["score"] / 100) ** 2 * result["coverage"]
+                    for result in usable
+                )
+                / (4 + len(usable))
+            )
+        if influence:
+            readings[ident] = {
+                **reading,
+                "rank_value": reading["rank_value"] + influence,
+                "card_vote_influence": influence,
+            }
+    return RecommendationContext(context.profile, readings)
+
+
 def sort_expression(model: Any, ctx: RecommendationContext):
     """SQL ORDER BY expression for the exact context shown on the page."""
     ranks = {

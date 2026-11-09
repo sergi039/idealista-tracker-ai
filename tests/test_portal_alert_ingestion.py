@@ -155,6 +155,20 @@ class TestTheRealFotocasaAlert:
 
 
 class TestYaencontreCards:
+    def test_discount_card_reads_asking_price_instead_of_savings(self):
+        url = "https://www.yaencontre.com/venta/casa/inmueble-44986-111041512"
+        title = f'<a href="{url}">Chalet en venta en Cervo</a>'
+        discount = """
+            <p style="text-decoration-line:line-through">240.000<!-- --> €</p>
+            <p>Ha bajado <!-- -->21.000<!-- --> € (9%)</p>
+            <p>5 hab. | 2 baños | 425 m²</p>
+        """
+        (card,) = yaencontre_source.cards_in_email(
+            title + "<p>219.000 €</p>" + discount
+        )
+        assert card.price == 219000.0
+        assert yaencontre_source.cards_in_email(title + discount)[0].price is None
+
     def test_the_real_alert_parses_to_its_ten_cards(self):
         cards = yaencontre_source.cards_in_email(
             (DATA / "yaencontre_alert_boiro.html").read_text()
