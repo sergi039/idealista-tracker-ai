@@ -289,10 +289,29 @@ def surface_polygons(element: ET.Element) -> list:
         "interior": {"LinearRing"},
         "LinearRing": {"posList"},
     }
+    # The feature can also contain a cadastral reference point, an envelope,
+    # and GML metadata. Any other GML element could be an unparsed footprint.
+    ancillary_parts = {
+        "boundedBy",
+        "description",
+        "descriptionReference",
+        "Envelope",
+        "identifier",
+        "lowerCorner",
+        "metaDataProperty",
+        "name",
+        "Point",
+        "pos",
+        "posList",
+        "upperCorner",
+    }
     polygons = []
     for patch in element.iter():
         if patch.tag.startswith(_GML_NS):
-            allowed = allowed_parts.get(patch.tag.removeprefix(_GML_NS))
+            part = patch.tag.removeprefix(_GML_NS)
+            if part not in allowed_parts and part not in ancillary_parts:
+                raise CadastreError(MALFORMED, "unsupported or empty surface part")
+            allowed = allowed_parts.get(part)
             if allowed is not None:
                 children = {child.tag for child in patch}
                 if not children or children - {f"{_GML_NS}{tag}" for tag in allowed}:

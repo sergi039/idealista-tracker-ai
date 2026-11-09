@@ -642,11 +642,16 @@ def test_parcel_crs_code_must_match_exactly():
         c._parse_gml(wrong, 25829)
 
 
-def test_unsupported_surface_patch_refuses_the_collection():
+@pytest.mark.parametrize("unsupported", ["Rectangle", "TriangulatedSurface"])
+def test_unsupported_surface_part_refuses_the_collection(unsupported):
     root = ET.fromstring((DATA / "969_buildings.gml").read_text())
-    patches = root.find(f".//{n.GML}patches")
-    assert patches is not None
-    ET.SubElement(patches, f"{n.GML}Rectangle")
+    surface = root.find(f".//{n.GML}Surface")
+    assert surface is not None
+    parent = (
+        root.find(f".//{n.GML}patches") if unsupported == "Rectangle" else root[0][0]
+    )
+    assert parent is not None
+    ET.SubElement(parent, f"{n.GML}{unsupported}")
     with pytest.raises(c.CadastreError, match="unsupported or empty surface part"):
         n.parse_buildings(ET.tostring(root, encoding="unicode"), 25829)
 
