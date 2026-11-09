@@ -45,6 +45,7 @@ from services.listing_attribute_filters import (
 from services import taste_service
 from services import taste_recommendation
 from services import recommendation_feedback
+from services import recommendation_duplicates
 from services import favorite_similarity
 from services.coordinate_quality import shared_coordinate_peers
 from services import advertiser
@@ -344,7 +345,9 @@ def _criteria_context():
     return subscription_criteria.profile_context(Property)
 
 
-def _recommendation_selection(query, profile_data, profile_summary, similarity_ctx):
+def _recommendation_selection(
+    query, profile_data, profile_summary, similarity_ctx, *, focus_id=None
+):
     """Apply the same evidence-based collection on the list, map and export."""
     rows = query.all()
     context = taste_recommendation.build_context(
@@ -355,24 +358,34 @@ def _recommendation_selection(query, profile_data, profile_summary, similarity_c
         negative_feedback=recommendation_feedback.load_negative_listing_feedback(rows),
     )
     context = taste_recommendation.apply_card_votes(context, rows)
-    excluded_ids = [
+    excluded_ids = {
         property_id
         for property_id, reading in context.readings.items()
         if reading.get("eligibility") == "excluded"
-    ]
+    }
     review = request.args.get("recommendation_scope") == "review"
-    selected_ids = [
+    selected_ids = {
         property_id
         for property_id, reading in context.readings.items()
-        if reading.get("eligibility") != "excluded"
+        if property_id not in excluded_ids
         and reading["state"] not in {"reference", "rejected"}
         and (
             reading.get("needs_review")
             if review
             else reading["state"] == "candidate" and reading.get("group") == "confident"
         )
-    ]
-    return query.filter(Property.id.in_(selected_ids)), context, len(excluded_ids)
+    }
+    duplicate_ids = recommendation_duplicates.duplicate_ids(
+        rows,
+        context.readings,
+        context.readings.keys() - selected_ids,
+        focus_id=focus_id,
+    )
+    return (
+        query.filter(Property.id.in_(selected_ids - duplicate_ids)),
+        context,
+        len(excluded_ids),
+    )
 
 
 # The filter bar's dimensions, in the order the page applies them. One home
@@ -4965,7 +4978,7 @@ def map_view():
             profile_data = taste_service.load_current_profile()
             profile_summary = taste_service.recommendation_profile_state(profile_data)
             query, _, _ = _recommendation_selection(
-                query, profile_data, profile_summary, None
+                query, profile_data, profile_summary, None, focus_id=focus_id
             )
             if focus_property is not None:
                 query_without_profile, _, _ = _recommendation_selection(
