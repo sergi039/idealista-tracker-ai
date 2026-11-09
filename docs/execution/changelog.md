@@ -6,6 +6,11 @@
   public-index evidence from matched Yaencontre and Fotocasa adverts when
   Idealista refuses, preserving the primary status and confirmation date.
 
+- Show one recommendation per confirmed home in Malpica, Seiruga and
+  Taboido, including the Seaia advert with different published figures.
+  Apply the grouping to recommendations, map and CSV. All properties
+  retains the original adverts.
+
 - Pin the single-listing browser reader to ordinary Chrome on the MacBook,
   so an open Playwright profile cannot receive its Apple Events. Keep browser
   fallback unavailable to bulk and scheduled checks.
