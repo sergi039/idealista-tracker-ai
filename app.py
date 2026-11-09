@@ -283,6 +283,9 @@ def create_app(testing: bool = False):
     # Add localization functions to template context
     from utils.i18n import t, tn, get_current_language
 
+    from services.recommendation_feedback import card_vote_state
+
+    app.jinja_env.globals["card_vote_for"] = card_vote_state
     app.jinja_env.globals["t"] = t
     app.jinja_env.globals["tn"] = tn
     app.jinja_env.globals["get_current_language"] = get_current_language

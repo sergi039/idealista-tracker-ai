@@ -357,6 +357,7 @@ def _recommendation_selection(
         similarity_ctx=similarity_ctx,
         negative_feedback=recommendation_feedback.load_negative_listing_feedback(rows),
     )
+    context = taste_recommendation.apply_card_votes(context, rows)
     excluded_ids = {
         property_id
         for property_id, reading in context.readings.items()
