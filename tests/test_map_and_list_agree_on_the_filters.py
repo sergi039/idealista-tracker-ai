@@ -97,7 +97,11 @@ NOT_A_FILTER = {
     "order": "ordering",
     "page": "pagination",
     "per_page": "pagination",
-    "mode": "which score is emphasised",
+    "mode": "assessment or recommendation collection",
+    "recommendation_scope": (
+        "recommendation subcollection, swept with real evidence in "
+        "test_recommendation_export_agrees.py"
+    ),
     "active_mode": "derived from the applied sort, never sent",
     "view_type": "cards or table",
     "hide_removed": (

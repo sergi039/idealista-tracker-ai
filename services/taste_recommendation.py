@@ -398,12 +398,14 @@ def _reading(
     conflicts: list[dict[str, Any]] = []
     needs: list[dict[str, Any]] = []
     unapplied: list[dict[str, Any]] = []
+    unresolved_requirement = False
     relevant = 0
     supported = 0
     for clause in _applicable_clauses(
         clauses, getattr(prop, "search_profile_id", None)
     ):
         if clause.get("mapping_state") != "executable" or not clause.get("aspect_id"):
+            unresolved_requirement |= clause.get("strength") == "hard"
             unapplied.append(
                 {
                     "id": clause.get("id"),
@@ -588,7 +590,13 @@ def _reading(
     conflict_aspects = {facet["aspect_id"] for facet in conflicts}
     if conflicts:
         group = "conflict"
-    elif relevant and supported == relevant and matches and not needs:
+    elif (
+        relevant
+        and supported == relevant
+        and any(facet["status"] == "supported" for facet in matches)
+        and not needs
+        and not unresolved_requirement
+    ):
         group = "confident"
     else:
         group = "potential"
@@ -626,8 +634,17 @@ def _reading(
                 "batch_id": feedback["batch_id"],
             }
         )
+    needs_review = (
+        state == "stale"
+        or not relevant
+        or supported < relevant
+        or unresolved_requirement
+        or bool(needs)
+        or any(facet["status"] != "supported" for facet in conflicts)
+    )
     return {
         "state": state,
+        "needs_review": needs_review,
         "group": group if state in {"candidate", "stale"} else None,
         "eligibility": (
             "excluded"
@@ -660,13 +677,33 @@ def build_context(
     """Build page-ready readings with no bridge/network calls."""
     rows = list(props)
     if not profile_data:
+        negatives = (
+            negative_feedback
+            if negative_feedback is not None
+            else recommendation_feedback.negative_listing_feedback(rows)
+        )
         return RecommendationContext(
             profile=profile_summary,
             readings={
                 prop.id: {
-                    "state": "no_profile",
+                    "state": (
+                        "rejected"
+                        if getattr(prop, "owner_verdict", None) == "rejected"
+                        else "no_profile"
+                    ),
+                    "needs_review": True,
                     "group": None,
-                    "eligibility": None,
+                    "eligibility": (
+                        "excluded"
+                        if (
+                            recommendation_feedback.feedback_for_listing(
+                                prop, negatives
+                            )
+                            or {}
+                        ).get("answer")
+                        == "no"
+                        else None
+                    ),
                     "hard_exclusions": [],
                     "nearest_positive_reference": None,
                     "matches": [],

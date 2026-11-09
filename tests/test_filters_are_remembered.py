@@ -29,12 +29,12 @@ from utils import listing_filter_memory
 HOUSES = 3
 PLOTS = 2
 
-# What the form submits when housing / house / Recommendations are chosen:
+# What the form submits when housing / house / Needs verification are chosen:
 # the two hidden markers, the sort select, the filters, and a page number the
 # reader happened to be on. `search=` empty is the search box left blank.
 CHOSEN = (
     "/properties?mode=recommendation&view_type=list&category=housing"
-    "&subtype=house&sort=created_at&order=desc&search=&page=1"
+    "&subtype=house&recommendation_scope=review&sort=created_at&order=desc&search=&page=1"
 )
 
 
@@ -122,6 +122,7 @@ def test_a_bare_page_returns_to_the_last_state_chosen_on_it(client, listings):
     assert recalled["category"] == "housing"
     assert recalled["subtype"] == "house"
     assert recalled["mode"] == "recommendation"
+    assert recalled["recommendation_scope"] == "review"
     assert recalled["view_type"] == "list"
     assert "page" not in recalled, "a page number is where the reader was, not a filter"
     assert "search" not in recalled, "an empty value is not a filter"

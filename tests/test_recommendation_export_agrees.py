@@ -44,7 +44,7 @@ def selection():
                         "is_favorite": True,
                         "owner_verdict": "interested",
                         "owner_verdict_reason": (
-                            "Нравится вид на море. Никогда не хочу участок, а не дом."
+                            "Нравится вид на море. Никогда не хочу участок, а не дом. За 300."
                         ),
                     },
                 ),
@@ -68,8 +68,8 @@ def selection():
                 "area": 180,
                 "price": price,
                 "municipality": "Laxe",
-                "location_lat": None if name == "unknown" else 43.2,
-                "location_lon": None if name == "unknown" else -8.9,
+                "location_lat": 43.2,
+                "location_lon": -8.9,
                 "created_at": datetime(2020 + index, 1, 1),
             }
             values.update(extra)
@@ -140,9 +140,7 @@ def test_recommendation_export_keeps_ranked_ids_and_hard_exclusions(selection, o
     page_ids, csv_ids = _page_and_export(
         client, mode="recommendation", sort="recommendation", order=order
     )
-    expected = [rows[name] for name in ("matching", "unknown", "reference")]
-    if order == "asc":
-        expected.reverse()
+    expected = [rows["matching"]]
     assert page_ids == expected
     assert csv_ids == expected
 
@@ -152,7 +150,7 @@ def test_recommendation_mode_keeps_exclusions_when_sorted_by_price(selection):
     page_ids, csv_ids = _page_and_export(
         client, mode="recommendation", sort="price", order="asc"
     )
-    expected = [rows[name] for name in ("unknown", "matching", "reference")]
+    expected = [rows["matching"]]
     assert page_ids == expected
     assert csv_ids == expected
 
@@ -160,7 +158,7 @@ def test_recommendation_mode_keeps_exclusions_when_sorted_by_price(selection):
 def test_recommendation_sort_without_mode_keeps_the_same_selection(selection):
     client, rows = selection
     page_ids, csv_ids = _page_and_export(client, sort="recommendation")
-    expected = [rows[name] for name in ("matching", "unknown", "reference")]
+    expected = [rows["matching"]]
     assert page_ids == expected
     assert csv_ids == expected
 
@@ -184,26 +182,48 @@ def _href(body, element_id):
 
 
 @pytest.mark.parametrize(
-    "ranking", ["mode=recommendation&sort=price", "sort=recommendation"]
+    ("ranking", "expected", "tab"),
+    [
+        ("mode=recommendation&sort=price", "matching", "mode-recommendation-btn"),
+        ("sort=recommendation", "matching", "mode-recommendation-btn"),
+        (
+            "mode=recommendation&recommendation_scope=review&sort=price",
+            "unknown",
+            "mode-recommendation-review-btn",
+        ),
+    ],
 )
-def test_recommendation_map_keeps_the_collection_and_returns_to_it(selection, ranking):
+def test_recommendation_map_keeps_the_collection_and_returns_to_it(
+    selection, ranking, expected, tab
+):
     client, rows = selection
     start = f"/properties?profile_id=all&municipality=Laxe&view_type=list&order=asc&{ranking}"
     page = client.get(start)
     map_page = client.get(_href(page.text, "view-map-btn"))
     markers = json.loads(re.search(r"const markers = (\[.*?\]);", map_page.text)[1])
-    assert {marker["id"] for marker in markers} == {rows["reference"], rows["matching"]}
+    assert [marker["id"] for marker in markers] == [rows[expected]]
     returned = client.get(_href(map_page.text, "map-list-view-link"))
     parsed = _SelectionPage()
     parsed.feed(returned.text)
-    assert set(parsed.property_ids) == {
-        rows[name] for name in ("reference", "matching", "unknown")
-    }
-    assert 'id="mode-recommendation-btn"' in returned.text
-    assert (
-        'aria-current="true"'
-        in re.search(r'<a id="mode-recommendation-btn"[^>]+>', returned.text)[0]
+    assert parsed.property_ids == [rows[expected]]
+    assert 'aria-current="true"' in re.search(rf'<a id="{tab}"[^>]+>', returned.text)[0]
+
+
+def test_review_tab_exports_incomplete_listings_and_discloses_unapplied_rules(
+    selection,
+):
+    client, rows = selection
+    body = client.get("/properties?mode=recommendation&municipality=Laxe").text
+    assert 'id="recommendation-unapplied-preferences"' in body
+    assert "За 300" in body
+    assert "numeric budget predicate is not explicit" in body
+    assert f"/properties/{rows['reference']}" in body
+    review = _href(body, "mode-recommendation-review-btn")
+    assert "recommendation_scope=review" in review and "municipality=Laxe" in review
+    page_ids, csv_ids = _page_and_export(
+        client, mode="recommendation", recommendation_scope="review"
     )
+    assert page_ids == csv_ids == [rows["unknown"]]
 
 
 def test_strict_empty_state_links_to_unmeasured_and_counts_its_clear_target(selection):
@@ -213,7 +233,7 @@ def test_strict_empty_state_links_to_unmeasured_and_counts_its_clear_target(sele
     db.session.commit()
     page = client.get(
         "/properties?profile_id=all&mode=recommendation&view_type=list"
-        "&favorites=on&criteria=pass"
+        "&municipality=Laxe&criteria=pass"
     )
     assert "0 properties found" in page.text
     explanation = re.search(
@@ -222,13 +242,13 @@ def test_strict_empty_state_links_to_unmeasured_and_counts_its_clear_target(sele
     href = unescape(re.search(r'href="([^"]+)"', explanation)[1])
     unmeasured = _SelectionPage()
     unmeasured.feed(client.get(href).text)
-    assert unmeasured.property_ids == [rows["reference"]]
-    assert "Clearing these filters shows 4 listings in Recommendations." in page.text
+    assert set(unmeasured.property_ids) == {rows["matching"], rows["unknown"]}
+    assert "Your subscription selection holds 5 listings." in page.text
     assert (
         'hx-post="/api/ingest/email/run"'
         not in page.text.split('id="empty-state-strict-criteria"', 1)[1]
     )
     assert (
-        "4 properties found"
+        "5 properties found"
         in client.get(_href(page.text, "empty-state-clear-link")).text
     )

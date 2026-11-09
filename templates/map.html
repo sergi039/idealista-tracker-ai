@@ -9,7 +9,7 @@
             <h1 class="mb-0">
                 <i class="fas fa-map me-2"></i>
                 Properties Map
-                {% if recommendation_map %}<span class="badge bg-light text-body">{{ t('workspace_auto') }}</span>{% endif %}
+                {% if recommendation_map %}<span class="badge bg-light text-body">{{ t('recommendation_review' if list_view_args.get('recommendation_scope') == 'review' else 'recommendation_confirmed') }}</span>{% endif %}
                 <span class="badge bg-secondary">{{ markers|length }}</span>
             </h1>
             {# The markers come from `properties`, so the list view is /properties --

@@ -345,7 +345,7 @@ def _criteria_context():
 
 
 def _recommendation_selection(query, profile_data, profile_summary, similarity_ctx):
-    """One recommendation reading and hard-exclusion set for page and CSV."""
+    """Apply the same evidence-based collection on the list, map and export."""
     rows = query.all()
     context = taste_recommendation.build_context(
         rows,
@@ -359,9 +359,19 @@ def _recommendation_selection(query, profile_data, profile_summary, similarity_c
         for property_id, reading in context.readings.items()
         if reading.get("eligibility") == "excluded"
     ]
-    if excluded_ids:
-        query = query.filter(Property.id.notin_(excluded_ids))
-    return query, context, len(excluded_ids)
+    review = request.args.get("recommendation_scope") == "review"
+    selected_ids = [
+        property_id
+        for property_id, reading in context.readings.items()
+        if reading.get("eligibility") != "excluded"
+        and reading["state"] not in {"reference", "rejected"}
+        and (
+            reading.get("needs_review")
+            if review
+            else reading["state"] == "candidate" and reading.get("group") == "confident"
+        )
+    ]
+    return query.filter(Property.id.in_(selected_ids)), context, len(excluded_ids)
 
 
 # The filter bar's dimensions, in the order the page applies them. One home
@@ -2404,8 +2414,14 @@ def properties():
                 "hide_removed": hide_removed_filter,
                 "sort_by": sort_by,
                 "order": sort_order,
-                "mode": mode,
+                "mode": "recommendation" if wants_recommendation_ranking else mode,
                 "active_mode": active_mode,
+                "recommendation_scope": (
+                    "review"
+                    if wants_recommendation_ranking
+                    and request.args.get("recommendation_scope") == "review"
+                    else None
+                ),
                 "view_type": view_type,
                 "page": page,
                 "per_page": per_page,
@@ -5067,6 +5083,7 @@ def map_view():
                         "view_type",
                         "per_page",
                         "hide_removed",
+                        "recommendation_scope",
                     },
                 )
             )

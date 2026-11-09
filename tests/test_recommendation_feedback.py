@@ -443,7 +443,9 @@ def test_reimported_frozen_url_keeps_no_and_blind_exposure_across_new_ids(
     db.session.commit()
     assert replacements[0].id != old_id
     client = app.test_client()
-    page, exported = _page_and_export(client, mode="recommendation", profile_id="all")
+    page, exported = _page_and_export(
+        client, mode="recommendation", recommendation_scope="review", profile_id="all"
+    )
     assert page == exported
     assert not {row.id for row in replacements[:2]} & set(page)
     assert {row.id for row in replacements[2:]} <= set(page)
@@ -601,7 +603,10 @@ def test_dirty_snapshot_cannot_hide_by_removed_rule_but_current_no_still_hides(
     assert taste_service.recommendation_profile_state(current)["state"] == "current"
     client = app.test_client()
     before, before_csv = _page_and_export(
-        client, mode="recommendation", profile_id=profile.id
+        client,
+        mode="recommendation",
+        recommendation_scope="review",
+        profile_id=profile.id,
     )
     assert before == before_csv
     assert rows[4].id not in before and rows[1].id not in before
@@ -609,7 +614,10 @@ def test_dirty_snapshot_cannot_hide_by_removed_rule_but_current_no_still_hides(
     db.session.commit()
     assert taste_service.recommendation_profile_state(current)["state"] == "dirty"
     after, after_csv = _page_and_export(
-        client, mode="recommendation", profile_id=profile.id
+        client,
+        mode="recommendation",
+        recommendation_scope="review",
+        profile_id=profile.id,
     )
     assert after == after_csv
     assert rows[4].id in after and rows[1].id not in after
@@ -621,10 +629,18 @@ def test_dirty_snapshot_cannot_hide_by_removed_rule_but_current_no_still_hides(
     refreshed = taste_service.refresh_feedback_snapshot()["data"]
     assert taste_service.recommendation_profile_state(refreshed)["state"] == "current"
     final, final_csv = _page_and_export(
-        client, mode="recommendation", profile_id=profile.id
+        client,
+        mode="recommendation",
+        recommendation_scope="review",
+        profile_id=profile.id,
     )
     assert final == final_csv
-    assert rows[4].id in final and rows[1].id not in final
+    confirmed, confirmed_csv = _page_and_export(
+        client, mode="recommendation", profile_id=profile.id
+    )
+    assert confirmed == confirmed_csv
+    visible = set(final) | set(confirmed)
+    assert rows[4].id in visible and rows[1].id not in visible
 
 
 def test_another_receipt_cannot_replace_a_live_alias_rating(scope):
