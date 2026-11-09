@@ -1,180 +1,81 @@
 {% extends "base.html" %}
-
 {% block title %}{{ t('search_profiles') }}{% endblock %}
-
+{% macro profile_table(items, unassigned=false) %}
+<table class="table table-hover align-middle search-management-table">
+    <thead class="lands-table-head"><tr>{% for key in ['column_id', 'column_name', 'column_properties', 'column_active', 'column_visible', 'column_updated', 'search_actions'] %}<th>{{ t(key) }}</th>{% endfor %}</tr></thead>
+    <tbody>
+    {% for p in items %}
+    <tr data-profile-id="{{ p.id }}">
+        <td data-label="{{ t('column_id') }}">
+            {% if not p.is_default and not p.routed_to %}<label class="d-flex align-items-center gap-2"><input form="search-management-form" type="checkbox" class="form-check-input" name="source_id" value="{{ p.id }}" aria-label="{{ t('search_select') }} {{ p.name }}"> #{{ p.id }}</label>{% else %}#{{ p.id }}{% endif %}
+        </td>
+        <td data-label="{{ t('column_name') }}"><strong>{{ p.name }}</strong>
+            {% if p.is_default %}<span class="badge bg-primary">{{ t('column_default') }}</span>{% endif %}
+            {% if technical %}
+            {% if p.routed_to %}<div>{{ t('search_destination') }}: <a href="{{ url_for('main.properties', profile_id=p.routed_to, hide_removed='off', criteria='all') }}">#{{ p.routed_to }} · {{ names.get(p.routed_to, '') }}</a></div>
+            {% elif management.state(p) == 'technical' %}<div class="text-body-secondary">{{ t('search_needs_attention') }}</div>
+            {% elif management.state(p) == 'deleted' %}<div class="text-body-secondary">{{ t('search_deleted') }}</div>{% endif %}
+            {% if p.source_search_key %}<details><summary>{{ t('search_identity') }}</summary><span class="text-break">{{ p.source_search_key }}</span></details>{% endif %}
+            {% endif %}
+        </td>
+        <td data-label="{{ t('column_properties') }}">
+            {# All stored rows, with both filtering axes stated in the link. #}
+            <a class="small text-decoration-none" href="{{ url_for('main.properties', profile_id=p.id, hide_removed='off', criteria='all') }}">{{ property_counts.get(p.id, 0) }}</a>
+        </td>
+        <td class="text-nowrap" data-label="{{ t('column_active') }}">{{ t('yes') if p.is_active else t('archive') }}</td>
+        <td class="text-nowrap" data-label="{{ t('column_visible') }}"><span data-role="visibility-state">{{ t('hidden_badge') if p.is_hidden else t('yes') }}</span></td>
+        <td class="text-nowrap" data-label="{{ t('column_updated') }}">{{ p.updated_at.strftime('%Y-%m-%d') if p.updated_at else '—' }}</td>
+        <td data-label="{{ t('search_actions') }}"><div class="d-flex flex-wrap gap-2">
+            {% set portal_url = management.portal_search_url(p) %}
+            {% if portal_url %}
+                <a class="btn btn-sm btn-outline-secondary" href="{{ portal_url }}" target="_blank" rel="noopener noreferrer" data-role="portal-search-link">{{ t('search_open_portal') }} <i class="fas fa-arrow-up-right-from-square" aria-hidden="true"></i></a>
+            {% elif not p.is_default %}
+                <span class="small text-body-secondary align-self-center" data-role="portal-search-unavailable">{{ t('search_portal_unavailable') }}</span>
+            {% endif %}
+            {% if management.owner_search(p) %}
+                {% if not p.is_default %}<form method="post" action="{{ url_for('main.set_profile_visibility', profile_id=p.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="hidden" value="{{ 'off' if p.is_hidden else 'on' }}">
+                    <button class="btn btn-sm btn-outline-secondary" type="submit">{{ t('show') if p.is_hidden else t('hide') }}</button>
+                </form>{% endif %}
+                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('main.edit_profile', profile_id=p.id) }}">{{ t('edit') }}</a>
+                {% if not p.is_default %}<a class="btn btn-sm btn-outline-danger" href="{{ url_for('main.manage_searches', action='remove', source_id=p.id) }}">{{ t('search_action_remove') }}</a>{% endif %}
+            {% elif not p.routed_to and not p.is_default %}
+                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('main.manage_searches', action='promote', source_id=p.id) }}">{{ t('search_action_promote') }}</a>
+            {% endif %}
+        </div></td>
+    </tr>
+    {% endfor %}
+    {% if unassigned %}<tr id="profiles-unassigned-row" class="table-row-muted"><td>—</td><td>{{ t('no_subscription') }}</td><td><a class="small text-decoration-none" href="{{ url_for('main.properties', profile_id='unassigned', hide_removed='off', criteria='all') }}">{{ unassigned_count }}</a></td><td colspan="4">{{ t('unassigned_row_help') }}</td></tr>{% endif %}
+    </tbody>
+</table>
+{% endmacro %}
 {% block content %}
 <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
-    <div>
-        <h2 class="mb-1">{{ t('search_profiles') }}</h2>
-        <div class="text-body-secondary small">{{ t('search_profiles_subtitle') }}</div>
-    </div>
-    <div class="d-flex gap-2">
-        <a class="btn btn-outline-primary btn-sm" href="{{ url_for('main.create_profile') }}">
-            <i class="fas fa-plus me-1"></i>{{ t('new_profile') }}
-        </a>
-    </div>
+    <div><h2>{{ t('my_searches') }}</h2><p class="text-body-secondary mb-0">{{ t('search_management_help') }}</p></div>
+    <a class="btn btn-outline-primary" href="{{ url_for('main.create_profile') }}">{{ t('new_profile') }}</a>
 </div>
-
-<div class="card shadow-sm">
-    <div class="table-responsive">
-        <table class="table table-hover align-middle mb-0">
-            <thead class="lands-table-head">
-                <tr>
-                    <th style="width: 80px;">{{ t('column_id') }}</th>
-                    <th>{{ t('column_name') }}</th>
-                    <th style="width: 120px;">{{ t('column_properties') }}</th>
-                    <th style="width: 120px;">{{ t('column_default') }}</th>
-                    <th style="width: 120px;">{{ t('column_active') }}</th>
-                    <th style="width: 120px;">{{ t('column_visible') }}</th>
-                    <th style="width: 180px;">{{ t('column_updated') }}</th>
-                    <th style="width: 200px;"></th>
-                </tr>
-            </thead>
-            <tbody>
-                {% if profiles %}
-                    {% for p in profiles %}
-                        <tr>
-                            <td>{{ p.id }}</td>
-                            <td>
-                                <div class="fw-semibold">{{ p.name }}</div>
-                                {% if p.description %}
-                                    <div class="text-body-secondary small">{{ p.description }}</div>
-                                {% endif %}
-                            </td>
-                            <td>
-                            {# The number IS the link, and it counts every stored
-                               listing (#111 -- a column of counts that sums to less
-                               than the table tells the reader something untrue). So
-                               the link has to name that scope: without it /properties
-                               applies its own default and hides the withdrawn rows,
-                               and the count would overstate the page it opens.
-                               `drilldown_args` states it explicitly for the same
-                               reason (#417).
-
-                               `criteria=all` is the second half of that scope and it
-                               is stated for the same reason (#513): the subscription
-                               criteria hide measured fails by DEFAULT, so a link that
-                               says nothing about them re-issues the hide. Measured on
-                               production 2026-08-31, this column said 443 for the
-                               Galicia subscription and its own link opened on "384
-                               properties found". Here the number stays and the link
-                               moves -- what it counts is a FACT ABOUT THE
-                               SUBSCRIPTION, how many listings it holds, not a basis
-                               for comparing anything, so narrowing it would answer a
-                               question this page is not asking. That is the opposite
-                               call from /municipalities, deliberately: there the
-                               medians ARE the comparison and the counts moved
-                               instead. `utils/listing_filters.CLEARED_NOT_ABSENT`
-                               records why absence cannot do this job. #}
-                                <a class="small text-decoration-none" href="{{ url_for('main.properties', profile_id=p.id, hide_removed='off', criteria='all') }}">
-                                    {{ property_counts.get(p.id, 0) }}
-                                </a>
-                            </td>
-                            <td>
-                                {% if p.is_default %}
-                                    <span class="badge bg-primary">{{ t('yes') }}</span>
-                                {% else %}
-                                    <span class="text-body-secondary">—</span>
-                                {% endif %}
-                            </td>
-                            <td>
-                                {% if p.is_active %}
-                                    <span class="badge bg-success">{{ t('yes') }}</span>
-                                {% else %}
-                                    <span class="badge bg-secondary">{{ t('no') }}</span>
-                                {% endif %}
-                            </td>
-                            <td>
-                                {% if p.is_hidden %}
-                                    <span class="badge bg-secondary" data-role="visibility-state">{{ t('hidden_badge') }}</span>
-                                {% else %}
-                                    <span class="badge bg-success" data-role="visibility-state">{{ t('yes') }}</span>
-                                {% endif %}
-                            </td>
-                            <td class="small text-body-secondary">
-                                {% if p.updated_at %}{{ p.updated_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}
-                            </td>
-                            <td class="text-end">
-                                {# The catch-all cannot be hidden: it receives every email that
-                                   matches nothing else, so hiding it would take listings off
-                                   the property views as they arrive. #}
-                                {% if p.is_default %}
-                                    <button type="button" class="btn btn-outline-secondary btn-sm" disabled
-                                            title="{{ t('hide_default_title') }}">
-                                        {{ t('hide') }}
-                                    </button>
-                                {% else %}
-                                    <form method="POST" class="d-inline"
-                                          action="{{ url_for('main.set_profile_visibility', profile_id=p.id) }}">
-                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                                        <input type="hidden" name="hidden" value="{{ 'off' if p.is_hidden else 'on' }}"/>
-                                        <button type="submit"
-                                                class="btn btn-sm {{ 'btn-outline-success' if p.is_hidden else 'btn-outline-secondary' }}"
-                                                title="{{ t('show_title') if p.is_hidden else t('hide_title') }}">
-                                            <i class="fas {{ 'fa-eye' if p.is_hidden else 'fa-eye-slash' }} me-1"></i>{{ t('show') if p.is_hidden else t('hide') }}
-                                        </button>
-                                    </form>
-                                {% endif %}
-                                <a class="btn btn-outline-primary btn-sm" href="{{ url_for('main.edit_profile', profile_id=p.id) }}">{{ t('edit') }}</a>
-                            </td>
-                        </tr>
-                    {% endfor %}
-                {% else %}
-                    <tr>
-                        <td colspan="8" class="text-center text-body-secondary py-5">
-                            {{ t('no_profiles_yet') }}
-                        </td>
-                    </tr>
-                {% endif %}
-                {# Not a profile -- it has no id, no default flag and nothing to
-                   edit -- but its listings are real, and leaving the bucket out
-                   made this column sum to less than the table (issue #111). #}
-                <tr id="profiles-unassigned-row" class="table-row-muted">
-                    <td class="text-body-secondary">&mdash;</td>
-                    <td>
-                        <div class="fw-semibold">{{ t('no_subscription') }}</div>
-                        <div class="text-body-secondary small">
-                            {{ t('unassigned_row_help') }}
-                        </div>
-                    </td>
-                    <td>
-                        {# Same as the per-profile count above: unfiltered, so the
-                           link says so -- both axes of it, the listing status and
-                           the subscription criteria. An unassigned row is outside
-                           every subscription's criteria clause and so is never
-                           hidden by that reading today; `criteria=all` is stated
-                           anyway, because what makes the link honest is that it
-                           names the scope the number was counted under, not that
-                           somebody checked the two happen to agree this month. #}
-                        <a class="small text-decoration-none"
-                           href="{{ url_for('main.properties', profile_id='unassigned', hide_removed='off', criteria='all') }}">
-                            {{ unassigned_count }}
-                        </a>
-                    </td>
-                    <td class="text-body-secondary">&mdash;</td>
-                    <td class="text-body-secondary">&mdash;</td>
-                    <td class="text-body-secondary">&mdash;</td>
-                    <td class="text-body-secondary">&mdash;</td>
-                    <td class="text-end text-body-secondary">&mdash;</td>
-                </tr>
-            </tbody>
-        </table>
+<nav class="nav nav-pills gap-2 mb-3" aria-label="{{ t('search_profiles') }}">
+    <a class="nav-link {{ 'active' if not technical }}" {% if not technical %}aria-current="page"{% endif %} href="{{ url_for('main.profiles') }}">{{ t('my_searches') }}</a>
+    <a class="nav-link {{ 'active' if technical }}" {% if technical %}aria-current="page"{% endif %} href="{{ url_for('main.profiles', view='technical') }}">{{ t('technical_subscriptions') }} · {{ profiles|length }}</a>
+</nav>
+{% set pending = profiles | selectattr('routed_to', 'none') | list %}
+{% if not technical %}
+{% set attention = namespace(count=0, properties=0) %}{% for p in pending %}{% if management.state(p) == 'technical' %}{% set attention.count = attention.count + 1 %}{% set attention.properties = attention.properties + property_counts.get(p.id, 0) %}{% endif %}{% endfor %}
+{% if attention.count %}<div class="alert alert-warning"><a href="{{ url_for('main.profiles', view='technical') }}">{{ t('search_needs_attention') }}: {{ attention.count }}</a> · {{ t('column_properties') }}: {{ attention.properties }}</div>{% endif %}
+{% endif %}
+<form id="search-management-form" action="{{ url_for('main.manage_searches') }}" method="get" class="card card-body mb-3">
+    <div class="d-flex flex-wrap gap-3 align-items-end">
+        <label>{{ t('search_action') }}<select class="form-select" name="action"><option value="merge">{{ t('search_action_merge') }}</option><option value="remove">{{ t('search_action_remove') }}</option><option value="technical">{{ t('search_action_technical') }}</option>{% if technical %}<option value="promote">{{ t('search_action_promote') }}</option>{% endif %}</select></label>
+        <label class="flex-grow-1">{{ t('search_destination') }}<select name="target_id" class="form-select"><option value="">{{ t('search_choose_destination') }}</option>{% for p in profiles %}{% if management.owner_search(p) and p.is_active and not p.is_hidden and not p.is_default %}<option value="{{ p.id }}">{{ p.name }}</option>{% endif %}{% endfor %}</select></label>
+        <button class="btn btn-primary" type="submit">{{ t('search_management_preview') }}</button>
     </div>
-</div>
-
-<div class="alert alert-info mt-3 mb-0">
-    <div>
-        <strong>{{ t('hidden_panel_title') }}</strong>
-        {{ t('hidden_panel_body') }}
-        <a href="{{ url_for('main.properties') }}">{{ t('properties') }}</a>
-    </div>
-    <div class="mt-2">
-        {{ t('profiles_routing_note') }}
-    </div>
-    <div class="mt-2">
-        <strong>{{ t('profiles_unassigned_title') }}</strong>
-        {{ t('profiles_unassigned_body') }}
-        <a href="{{ url_for('main.properties', profile_id='unassigned') }}">{{ t('profiles_unassigned_link') }}</a>
-    </div>
-</div>
+    <p class="small text-body-secondary mt-2 mb-0">{{ t('search_selection_help') }}</p>
+</form>
+{% if technical %}{{ profile_table(profiles, true) }}
+{% else %}
+{% set active = namespace(items=[], archive=[]) %}{% for p in profiles %}{% if management.owner_search(p) %}{% if p.is_active %}{% set active.items = active.items + [p] %}{% else %}{% set active.archive = active.archive + [p] %}{% endif %}{% endif %}{% endfor %}
+{{ profile_table(active.items, true) }}
+{% if active.archive %}<details class="mb-3"><summary>{{ t('archive') }} · {{ active.archive|length }}</summary>{{ profile_table(active.archive) }}</details>{% endif %}
+{% endif %}
+<details class="alert alert-info mt-3"><summary>{{ t('hidden_panel_title') }}</summary><p>{{ t('hidden_panel_body') }}</p><p>{{ t('search_retention_note') }}</p><p>{{ t('profiles_routing_note') }}</p></details>
 {% endblock %}

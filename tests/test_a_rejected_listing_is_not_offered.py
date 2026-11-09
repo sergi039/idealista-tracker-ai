@@ -33,14 +33,15 @@ and the Verdict filter is the way back. What this file pins:
 """
 
 import re
-from html import unescape
 
 import pytest
 
 from app import create_app, db
 from models import Property, SearchProfile
 from services import owner_review
+from services.taste_service import TASTE_SCORER_VERSION
 from tests import setup_test_environment
+from tests.test_workspace_ui import subscription_options
 
 
 @pytest.fixture
@@ -271,18 +272,13 @@ class TestTheCountsStayHonest:
         a literal `&amp;hide_removed` and lands somewhere else entirely."""
         body = client.get("/properties?profile_id=all").get_data(as_text=True)
 
-        anchor = re.search(
-            r'<a[^>]*href="([^"]*profile_id=' + str(world["pid"]) + r'[^"]*)"'
-            r"[^>]*>(.*?)</a>",
-            body,
-            re.S,
+        count, href = next(
+            option
+            for option in subscription_options(body).values()
+            if f"profile_id={world['pid']}&" in option[1]
         )
-        assert anchor, "the subscription chip did not render"
-        badge = re.search(r">\s*(\d+)\s*<", anchor.group(2))
-        assert badge, f"the chip carries no count: {anchor.group(2)[:200]}"
-
-        opened = _count(client.get(unescape(anchor.group(1))).get_data(as_text=True))
-        assert opened == int(badge.group(1)) == 4
+        opened = _count(client.get(href).get_data(as_text=True))
+        assert opened == count == 4
 
     def test_clearing_the_filters_really_reveals(self, client, world):
         """`CLEARED_NOT_ABSENT` must carry `verdict`, or a link that promises
@@ -340,7 +336,7 @@ class TestTheTasteSortSaysWhenItCannotRank:
             "status": "ok",
             "score": 80,
             "profile_version": version,
-            "scorer_version": 1,
+            "scorer_version": TASTE_SCORER_VERSION,
             "facts_fingerprint": "x",
         }
         db.session.commit()

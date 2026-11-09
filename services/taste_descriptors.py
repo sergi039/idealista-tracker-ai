@@ -16,7 +16,12 @@ from collections import defaultdict
 from typing import Any, Iterable
 
 from services import sea_view_service, visual_input as visual_input_service
-from services.property_classification_service import listing_kind
+from services.property_classification_service import (
+    TYPOLOGY_ATTACHED,
+    PropertyClassificationService,
+    house_typology,
+    listing_kind,
+)
 from services.subscription_criteria import effective_figures
 from services import neighbours_service
 
@@ -188,8 +193,47 @@ def _text_claims(
                 "под реконструкц",
                 "много ремонта",
                 "большая реконструк",
-                "major renovation",
+                "большую реконструк",
+                "needs major renovation",
+                "requires major renovation",
+                "needs full restoration",
+                "requires full restoration",
+                "requires a full restoration",
+                "necesita reforma integral",
+                "requiere reforma integral",
+                "para reforma integral",
+                "completamente para rehabilitar",
+                "ejecutar una rehabilitación integral",
             ),
+        ),
+        (
+            "house_condition",
+            "renovation_needed",
+            (
+                "para reformar",
+                "por reformar",
+                "a reformar",
+                "house (reform)",
+                "needs renovation",
+                "needs refurbishment",
+                "para rehabilitar",
+                "para restaurar",
+                "para reconstruir",
+                "necesita reforma",
+                "necesita reformas",
+                "requiere reformas",
+                "requiere algunas reformas",
+            ),
+        ),
+        (
+            "house_condition",
+            "unfinished",
+            ("не готовый дом", "unfinished house", "obra parada"),
+        ),
+        (
+            "house_condition",
+            "well_maintained",
+            ("listo para entrar a vivir", "ready to move in", "buen estado"),
         ),
         ("house_condition", "damp", ("сырост", "сырость", "damp")),
         ("room_scale", "small", ("маленькие комнат", "small rooms")),
@@ -201,6 +245,11 @@ def _text_claims(
                 "много построек",
                 "не изолирован",
                 "dense neighbours",
+                "рядом соседи",
+                "соседи близко",
+                "рядом дома",
+                "isolation fails",
+                "isolation fails badly",
             ),
         ),
         (
@@ -223,7 +272,7 @@ def _text_claims(
         (
             "house_character",
             "old_farmhouse",
-            ("старый крестьянский дом", "old farmhouse"),
+            ("старый крестьянский дом", "old farmhouse", "galician farmhouse"),
         ),
         ("fiber", "present", ("оптика 1", "fiber on", "fibra disponible")),
         ("fiber", "absent", ("оптики на парцеле нет", "no fiber", "sin fibra")),
@@ -242,7 +291,50 @@ def _text_claims(
     )
     found: list[tuple[str, dict[str, Any]]] = []
     for aspect_id, value, needles in rules:
+        if (
+            aspect_id == "house_condition"
+            and value == "major_renovation"
+            and source_id == "attributes.condition"
+        ):
+            needles += ("major renovation", "full restoration", "complete restoration")
         matched = any(needle in low for needle in needles)
+        unfinished_matches = []
+        if aspect_id == "house_condition" and value == "unfinished":
+            # The house itself must be unfinished; an optional unfinished
+            # attic/annex does not establish an unfinished house.
+            unfinished_matches = list(
+                re.finditer(
+                    r"\b(?:casa|chalet|vivienda)(?:\s+(?:unifamiliar|independiente|forrad[ao]|de|en|piedra)){0,6}\s+para terminar\b",
+                    low,
+                )
+            )
+            matched = matched or bool(unfinished_matches)
+        if (
+            matched
+            and aspect_id == "house_condition"
+            and source_kind in {"listing_claim", "research_claim"}
+        ):
+            # A negated keyword does not establish the candidate's condition.
+            # Owner phrases retain their words for the preference compiler.
+            matched = any(
+                not re.search(
+                    r"(?:\bno|\bnot|\bwithout|\bsin|\bне|\bбез)\s+"
+                    r"(?:(?:need(?:s)?|require[sd]?|necesita|requiere|требуется|est[aá]|es)\s+)?"
+                    r"(?:en\s+)?(?:(?:un|una)\s+(?:(?:casa|chalet|vivienda)\s+)?)?$",
+                    low[: match.start()],
+                )
+                and not re.match(
+                    r"\s+(?:is\s+)?not\s+(?:needed|required)\b", low[match.end() :]
+                )
+                for match in (
+                    [
+                        match
+                        for needle in needles
+                        for match in re.finditer(r"(?<!\w)" + re.escape(needle), low)
+                    ]
+                    + unfinished_matches
+                )
+            )
         if aspect_id == "beach_access" and value == "walkable":
             matched = _walkable_beach_claim(low)
         if aspect_id == "fiber":
@@ -269,6 +361,35 @@ def _text_claims(
                 )
             )
     return found
+
+
+def _stored_claims(prop: Any) -> list[tuple[str, str, str]]:
+    """Known writer homes only; research is never a parcel measurement.
+
+    Read each bounded field separately: the import's risks often sit beyond
+    the first 1800 characters of its synthetic description. No counts from a
+    privacy-circle origin are promoted to measured neighbour proximity.
+    """
+    claims = []
+    title = _one_line(
+        PropertyClassificationService.title_head(getattr(prop, "title", None)), 1800
+    )
+    if title:
+        claims.append(("listing_claim", "properties.title", title))
+    attrs = _dict(getattr(prop, "attributes", None))
+    condition = _one_line(attrs.get("condition"), 1800)
+    if condition:
+        claims.append(("listing_claim", "attributes.condition", condition))
+    imported = _dict(_dict(getattr(prop, "enrichment", None)).get("import"))
+    if imported.get("source") == "research_sheet":
+        research = _dict(imported.get("research"))
+        for key in ("Type", "Key Positives", "Key Risks / Notes"):
+            text = _one_line(research.get(key), 1800)
+            if text:
+                claims.append(
+                    ("research_claim", f"enrichment.import.research.{key}", text)
+                )
+    return claims
 
 
 def text_claim_values(text: str | None) -> dict[str, list[str]]:
@@ -580,6 +701,9 @@ def descriptor_input(prop: Any) -> dict[str, Any]:
     neighbours = neighbours_service.read_verdict(prop)
     if neighbours:
         projection["neighbours"] = neighbours
+    claims = _stored_claims(prop)
+    if claims:
+        projection["stored_claims"] = claims
     kind = listing_kind(
         getattr(prop, "property_category", None),
         getattr(prop, "property_subtype", None),
@@ -615,6 +739,14 @@ def visual_property_fingerprint_matches(
     if stored == (current_fingerprint or input_fingerprint(prop)):
         return True
     projection = descriptor_input(prop)
+    # The new reader consumes existing structured claims. Their addition did
+    # not change the photographed property. This compatibility path validates
+    # photos only; descriptor/profile freshness still uses the new projection.
+    if "stored_claims" in projection:
+        projection.pop("stored_claims")
+        raw = json.dumps(projection, ensure_ascii=False, sort_keys=True, default=str)
+        if stored == hashlib.sha256(raw.encode("utf-8")).hexdigest():
+            return True
     if "property_kind" in projection or projection["beach_access"] is not None:
         return False
     beaches = _dict(_dict(getattr(prop, "travel", None)).get("beaches"))
@@ -754,7 +886,9 @@ def build_descriptor(
             _evidence(
                 source_kind=source_kind,
                 source_id="sea_view_service",
-                status="supported",
+                status="claimed"
+                if sea_state == sea_view_service.LIKELY
+                else "supported",
                 value=sea_state,
                 observed_at=_one_line(detail.get("measured_at")),
             )
@@ -783,10 +917,31 @@ def build_descriptor(
 
     for aspect_id, observation in _text_claims(
         getattr(prop, "description", None),
-        source_kind="listing_claim",
+        source_kind=(
+            "research_claim"
+            if (getattr(prop, "description", None) or "").startswith(
+                sea_view_service.RESEARCH_NOTES_PREFIX
+            )
+            else "listing_claim"
+        ),
         source_id="properties.description",
     ):
         aspects[aspect_id].append(observation)
+    for source_kind, source_id, text in _stored_claims(prop):
+        for aspect_id, observation in _text_claims(
+            text, source_kind=source_kind, source_id=source_id
+        ):
+            aspects[aspect_id].append(observation)
+    if house_typology(getattr(prop, "title", None)) == TYPOLOGY_ATTACHED:
+        aspects["neighbor_privacy"].append(
+            _evidence(
+                source_kind="listing_claim",
+                source_id="properties.title:house_typology",
+                status="claimed",
+                value="low",
+                quote=_one_line(getattr(prop, "title", None)),
+            )
+        )
     for aspect_id, observation in _text_claims(
         owner_reason,
         source_kind="owner_research_claim",

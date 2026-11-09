@@ -22,6 +22,7 @@ import logging
 
 from app import create_app
 from services import taste_service
+from utils.inflight import inflight
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,8 @@ def main() -> None:
             print("\nDry run — nothing built. Re-run with --apply.")
             return
 
-        outcome = taste_service.build_profile(provider=args.provider)
+        with inflight("utils.build_taste_profile", resumable=False):
+            outcome = taste_service.build_profile(provider=args.provider)
         if outcome.get("status") != "ok":
             print(f"\nBUILD FAILED: {outcome.get('error')}")
             raise SystemExit(1)

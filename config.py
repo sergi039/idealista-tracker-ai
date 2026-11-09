@@ -39,6 +39,10 @@ def _compose_database_url():
 class Config:
     DEV_MODE = os.environ.get("DEV_MODE", "").lower() == "true"
 
+    # Portal collectors never borrow the owner's direct network route. This
+    # accepts a non-credential HTTP(S) proxy; blank means no portal HTTP.
+    PORTAL_HTTP_PROXY_URL = os.environ.get("PORTAL_HTTP_PROXY_URL", "")
+
     # Browser/session isolation (important when running legacy + universal on localhost).
     # Cookies do not isolate by port, so use a different cookie name than the legacy app.
     SESSION_COOKIE_NAME = (
@@ -57,6 +61,9 @@ class Config:
         os.environ.get("AI_BRIDGE_URL") or "http://host.docker.internal:5061"
     )
     AI_BRIDGE_TOKEN = os.environ.get("AI_BRIDGE_TOKEN")
+    LISTING_BROWSER_FALLBACK_ENABLED = (
+        os.environ.get("LISTING_BROWSER_FALLBACK_ENABLED", "false").lower() == "true"
+    )
 
     # The one exception to "no API key anywhere", and it is deliberately
     # narrow (owner, 2026-09-19): TypeSafe's Jev answers the sea-view *text

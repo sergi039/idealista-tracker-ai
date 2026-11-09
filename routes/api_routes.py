@@ -2519,6 +2519,31 @@ def toggle_property_favorite(property_id):
         ), 500
 
 
+@api_bp.route("/property/<int:property_id>/recommendation-vote", methods=["POST"])
+@limiter.limit("60 per minute")
+def set_recommendation_vote(property_id):
+    from models import Property
+    from services import recommendation_feedback
+
+    payload = request.get_json(silent=True)
+    if (
+        not isinstance(payload, dict)
+        or "answer" not in payload
+        or payload["answer"] not in (None, "yes", "no")
+        or not isinstance(payload.get("revision"), str)
+        or len(payload["revision"]) != 64
+    ):
+        return jsonify(error="Invalid vote"), 400
+    prop = db.get_or_404(Property, property_id)
+    try:
+        state = recommendation_feedback.set_card_vote(
+            prop, payload["answer"], payload["revision"]
+        )
+    except recommendation_feedback.StaleCardVote:
+        return jsonify(error="The card changed. Reload to vote again."), 409
+    return jsonify(state)
+
+
 @api_bp.route("/property/<int:property_id>/enrich", methods=["POST"])
 @limiter.limit("5 per minute")
 def manual_property_enrichment(property_id: int):
@@ -2967,9 +2992,8 @@ def check_land_status(land_id):
 def check_property_status(property_id):
     """Check whether a universal Property listing is still live on Idealista.
 
-    Rate-limited on purpose: every call spends one outbound request
-    on idealista. Without a cap, a page left in a loop would drive the scraper
-    straight past the throttle the lands sweep is careful to respect.
+    Rate-limited on purpose: the single-property action may open the configured
+    browser reader after HTTP refuses. Batch checks cannot use that reader.
 
     It also refuses `?sync=1`. The fetch can hold a worker for its full 15s
     timeout, and the per-IP limit bounds the rate but not the concurrency: five
@@ -2992,7 +3016,9 @@ def check_property_status(property_id):
                 return {"success": False, "error": "No URL available for this listing"}
 
             service = ListingStatusService()
-            result = service.check_property_status(prop_local)
+            result = service.check_property_status(
+                prop_local, allow_browser_fallback=True
+            )
 
             return {
                 "success": True,
@@ -3013,6 +3039,7 @@ def check_property_status(property_id):
                 # the button on the tenth listing should learn that the wall is
                 # the site, not this listing.
                 "breaker": result.get("breaker"),
+                "attempt": result.get("attempt"),
                 "previous_status": result.get("previous_status"),
                 "changed": result.get("changed", False),
                 "last_checked": prop_local.listing_last_checked.isoformat()
@@ -3027,7 +3054,10 @@ def check_property_status(property_id):
             return jsonify(_run())
 
         job_id = _enqueue(
-            _run, job_type="property_check_status", meta={"property_id": prop.id}
+            _run,
+            job_type="property_check_status",
+            meta={"property_id": prop.id},
+            dedupe_key=f"property_check_status:{prop.id}",
         )
         return jsonify(
             {
@@ -3055,23 +3085,34 @@ def check_property_status(property_id):
 
 
 @api_bp.route("/listings/check-favorites", methods=["POST"])
+@limiter.limit("5 per minute")
 def check_favorites_status():
     """Check status of all favorite listings"""
     try:
         from services.listing_status_service import ListingStatusService
 
-        limit = request.args.get("limit", 50, type=int)
+        limit = max(1, min(request.args.get("limit", 50, type=int), 50))
+        target = current_app.config.get("INGESTION_TARGET", "properties")
+        if target not in {"lands", "properties"}:
+            return jsonify({"success": False, "error": "Unknown listing catalog"}), 400
 
         def _run():
             service = ListingStatusService()
-            results = service.check_favorites_status(limit=limit)
+            results = (
+                service.check_property_favorites_status(limit=limit)
+                if target == "properties"
+                else service.check_favorites_status(limit=limit)
+            )
             return {"success": True, **results}
 
-        if _should_run_sync():
+        if _should_run_sync(allow_request_override=False):
             return jsonify(_run())
 
         job_id = _enqueue(
-            _run, job_type="listings_check_favorites", meta={"limit": limit}
+            _run,
+            job_type="listings_check_favorites",
+            meta={"limit": limit},
+            dedupe_key=f"listings_check_favorites:{target}",
         )
         return jsonify(
             {

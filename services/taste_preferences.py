@@ -11,7 +11,7 @@ from services import taste_descriptors
 # Bump when compiled clauses change meaning. Published profiles record this
 # value and become dirty until the one-call recommendation refresh rebuilds
 # their deterministic clause snapshot.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
@@ -45,12 +45,28 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("sea_view", ("моря не видно", "вид на море")),
     (
         "house_condition",
-        ("сырост", "сырость", "заброш", "ремонт", "реконструк", "разруш"),
+        (
+            "сырост",
+            "сырость",
+            "заброш",
+            "ремонт",
+            "реконструк",
+            "разруш",
+            "не готовый дом",
+        ),
     ),
     ("area_consistency", ("расхожд", "кадастр сходится")),
     (
         "neighbor_privacy",
-        ("не изолирован", "чужие дома близко", "мало соседей", "нет других домов"),
+        (
+            "не изолирован",
+            "чужие дома близко",
+            "мало соседей",
+            "нет других домов",
+            "рядом соседи",
+            "соседи близко",
+            "рядом дома",
+        ),
     ),
     ("nearby_buildings", ("много построек",)),
     ("agricultural_context", ("сельхоз", "сх постройки", "огороды")),
@@ -203,6 +219,10 @@ def _intrinsic_avoid(text: str) -> bool:
         token in low
         for token in (
             "не изолирован",
+            "рядом соседи",
+            "соседи близко",
+            "рядом дома",
+            "не готовый дом",
             "не красив",
             "чужие дома близко",
             "далеко от пляж",

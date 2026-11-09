@@ -51,6 +51,7 @@ property page could not make, because it had no data at all to make it from.
 
 import logging
 import re
+from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qsl, urlparse
 
@@ -110,7 +111,7 @@ _SECRET_NAME_TOKENS = (
 
 # fotocasa serves a listing's photographs and its agency's logo from ONE host,
 # and the path segment is the only thing that separates them.
-_FOTOCASA_LISTING_PATH = "/images/ads/"
+_FOTOCASA_LISTING_PATHS = ("/images/ads/", "/images/anuncio/")
 
 # yaencontre's alert email is mostly chrome. Only this host carries the
 # listing's own photographs.
@@ -158,7 +159,58 @@ def normalise_photo_url(value: Any) -> Optional[str]:
         return None
     if _has_credential(url):
         return None
+    parsed = urlparse(url)
+    # Milanuncios' bare media API returns 404; its published email rendition
+    # returns image/jpeg (measured 2026-11-04). Apply on read too for old rows.
+    if (
+        parsed.hostname in ("images.milanuncios.com", "images-re.milanuncios.com")
+        and parsed.path.startswith("/api/v1/ma-ad-media-pro/images/")
+        and not parsed.query
+        and not parsed.fragment
+    ):
+        return parsed._replace(query="rule=hw396_70").geturl()
     return url
+
+
+class _IdealistaPhotos(HTMLParser):
+    """Bind a photo to the listing anchor wrapping it, never to the whole mail."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.listing_id = None
+        self.entries = {}
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == "a":
+            self.listing_id = None
+            try:
+                link = urlparse(attrs.get("href") or "")
+                match = re.fullmatch(r"/(?:[a-z]{2}/)?inmueble/(\d+)/?", link.path)
+                if link.hostname in ("idealista.com", "www.idealista.com") and match:
+                    self.listing_id = int(match.group(1))
+            except ValueError:
+                pass
+        elif tag == "img" and self.listing_id:
+            url = normalise_photo_url(attrs.get("src"))
+            if url:
+                parsed = urlparse(url)
+                if (
+                    re.fullmatch(r"img\d+\.idealista\.com", parsed.hostname or "")
+                    and "/id.pro.es.image.master/" in parsed.path
+                ):
+                    self.entries.setdefault(self.listing_id, []).append(_entry(url))
+
+    def handle_endtag(self, tag):
+        if tag == "a":
+            self.listing_id = None
+
+
+def from_idealista_email(markup: str) -> Dict[int, Dict[str, Any]]:
+    """Only observed listing photos; no photo in an email is not 'none published'."""
+    parser = _IdealistaPhotos()
+    parser.feed(markup or "")
+    return {key: _capture(items, len(items)) for key, items in parser.entries.items()}
 
 
 def _entry(url: Optional[str], kind: Any = None) -> Optional[Dict[str, Any]]:
@@ -222,7 +274,9 @@ def from_fotocasa_payload(estate: Any, detail: Any) -> Dict[str, Any]:
         if not isinstance(item, dict):
             continue
         url = normalise_photo_url(item.get("src") or item.get("url"))
-        if url is None or _FOTOCASA_LISTING_PATH not in urlparse(url).path:
+        if url is None or not any(
+            path in urlparse(url).path for path in _FOTOCASA_LISTING_PATHS
+        ):
             # The agency logo lives at /images/client/ on the same host. On
             # the one fixture measured it sits OUTSIDE this block entirely
             # (`publisher.logo`, `agency.logo`, `promotionLogo`), so this

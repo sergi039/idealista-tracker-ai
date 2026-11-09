@@ -28,6 +28,8 @@ imapclient · anthropic SDK · Google API clients · uv (`uv.lock`) · pytest.
 ## Run
 
 - **The stack runs in Docker on the Mac mini, and nowhere else** (owner, 2026-08-31): a MacBook writes code and opens the mini's app through the ssh tunnel on `127.0.0.1:5001`; never bring a second stack up on a laptop, and there is no local PostgreSQL for this project. → docs/rules/run-and-deploy.md
+- **Browser/UI checks run Chrome on the MacBook, never on the Mac mini** (owner, 2026-11-05): use `bash tools/browser.sh`, even when this chat's shell runs on the mini; an unavailable MacBook stops the check with no mini-browser fallback. → docs/rules/run-and-deploy.md#browser-checks-on-the-macbook
+- **Portal automation must not use the owner's ordinary Chrome profile or shared public IP** (owner incident, 2026-11-07): no bulk portal navigation through the app QA browser launcher; keep the archived MacBook audit paused. A future collector needs its own profile and a verified separate egress, with no direct-network fallback; a portal refusal stops that source, never triggers IP rotation or a browser fallback. Yaencontre remains email-only. → docs/rules/portal-network-safety.md
 
 ```bash
 docker compose up -d --build                 # the mini; app on 127.0.0.1:5001
@@ -47,6 +49,10 @@ pytest tests/ --cov=app --cov-report=html    # coverage report
 - Merge `main` in a `git worktree` when another session holds uncommitted edits to the same files; a squash-merged branch conflicts with its own follow-up, and the resolution is your version, verified by diff. → docs/rules/run-and-deploy.md
 - The dual-build isolation contract from the transition — legacy on 5001 vs universal on 5050, unique Docker names, separate IMAP labels and cookie names — lives in docs/DEV_RULES.md and TODO.md; respect it if you ever run both side by side.
 
+## Interface design → docs/design/README.md
+
+- **Use the approved Bootstrap workspace contract** (owner, 2026-11-04): shared tokens/components, labelled collapsible navigation, one subscription multiselect, explicit filter Apply, visible applied conditions and compact recommendation states. Keep Bootstrap 5.3.2 and the existing icon family. Read `docs/design/README.md` before changing templates, CSS or UI JavaScript; `/design-system` is the read-only component reference. No alternate listing state, score, framework or hidden measurement semantics.
+
 ## Product rules
 
 ### Listing surface and subscriptions → docs/rules/subscriptions.md
@@ -56,6 +62,7 @@ pytest tests/ --cov=app --cov-report=html    # coverage report
 - **Retiring a subscription and hiding one are different questions**: `search_profiles.is_hidden` (migration 020) takes one off every screen and out of `profile_id=all`; the control is on `/profiles` only; the rule has one home, `SearchProfileService.visible_clause()` / `list_visible_profiles()`, and `list_profiles()` still returns everything; the catch-all cannot be hidden (`ck_search_profiles_catch_all_never_hidden`, migration 028).
 - **Routing one is a third question, because hiding does not stop mail** (#502): `search_profiles.routed_to` (migration 025); the enforcement is a database trigger on `properties`, exactly one hop, under `FOR KEY SHARE`; `SearchProfileService.canonical_profile()` is the first line and `fotocasa_import.build_property()` applies it too.
 - `route_profile()` is the ONE writer of `routed_to`: it refuses a self-route, the catch-all on either side, a chain in either direction, and re-pointing an already-routed stub; both rows lock `FOR UPDATE` in id order and the listings move in the same transaction. `auto_route_from_pattern` lives on the TARGET, never on a routed stub.
+- **Owner searches and technical subscriptions are separate views** (owner, 2026-11-06): `/profiles` opens My searches; `view=technical` retains the complete inventory. New ingestion labels are hidden technical records pending assignment, never new owner goals. Previewed merges retain IDs, owner state and original feedback receipts through `enrichment.profile_transfers`; Delete from My searches retains a technical tombstone, objects and incoming routes. No physical delete or portal unsubscribe. → docs/search-management.md
 - **The owner's criteria are enforced here because no portal can express them**: `search_profiles.criteria` + `services/subscription_criteria.py`, `pass` / `fail` / `unknown` in Python and SQL branch for branch; `unknown` is not `fail`; a favorited or reviewed row is never hidden; every SQL clause is definite, never NULL; NaN is not a measurement (one credibility rule, `MAX_CREDIBLE_M2`).
 - Migration-touching code is proven against real PostgreSQL 15 (`.with_for_update().count()` passes SQLite and fails there); CI pins `postgres:15-alpine` by digest and `tools/ci/migration_test_db.sh` uses the bare tag on purpose: pin both or neither. The comment card sends `keep_action` and `set_review` re-reads the action under its own lock.
 - `/properties` opens on the table, not the cards (`DEFAULT_PROPERTY_VIEW_TYPE`), sorted by date, and carries `view_type`, `mode` and `inv_metr`.
@@ -80,7 +87,7 @@ pytest tests/ --cov=app --cov-report=html    # coverage report
 ### Listing status → docs/rules/listing-status.md
 
 - **`listing_status` is `active` by default, so `active` is only shown when somebody established it**: `services/listing_verification.py` is the only reader; `active` shows only with source `check` or `manual`, everything else presents as `unchecked` (a presentation state, not a database value); CSV and `to_dict` carry the verdict.
-- **Idealista blocks the checker from this machine, and the app says so instead of retrying into the wall**: `RefusalBreaker` in `services/listing_status_service.py`, a reason per refusal, an `error` still writes nothing; defeating DataDome is not on the table; `tests/conftest.py` resets the breaker; there is no scheduled sweep for `Property`.
+- **Idealista blocks the checker from this machine, and the app says so instead of retrying into the wall**: `RefusalBreaker` in `services/listing_status_service.py`, a reason per refusal, an `error` never confirms status or advances `listing_last_checked`, but persists a separate attempt; defeating DataDome is not on the table; `tests/conftest.py` resets the breaker; the daily job checks up to 30 visible active/unknown `Property` favorites, stopping each refused host; optional `LISTING_BROWSER_FALLBACK_ENABLED` retries Idealista via an owned normal-Chrome archive on the MacBook without changing permissions (#610).
 
 ### Sea distance and the cache → docs/rules/sea-distance-and-cache.md
 

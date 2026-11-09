@@ -156,7 +156,10 @@ applicable supported measurement can enforce an explicit hard conflict; a
 claim is potential evidence, an unknown asks for verification, and an unmapped
 clause stays visible. A confirmed hard violation is omitted only from the
 recommendation mode, with a disclosed count; the row remains available in the
-other modes. Numeric Similar and canonical photo-facet overlap are independent
+catalog. Recommended requires a current profile, a supported match and
+verified requirements. Incomplete readings belong to Needs verification. The
+profile disclosure lists each unapplied clause with its source and reason.
+Numeric Similar and canonical photo-facet overlap are independent
 ranking channels. The composite nearest positive reference names the photo
 facets it shares without presenting exemplar resemblance as an explicit owner
 preference or as supported coverage. Current rejections are kept as history and
@@ -210,3 +213,152 @@ current signal basis. The isolated four-row artifact rendered in about 0.17 s;
 production-scale request cost has not been profiled. Reusing that request-local
 basis is a performance follow-up if measurement shows it matters, without
 changing ranking or freshness semantics.
+
+Stored listing condition, title-head typology and explicit research risk fields
+also supply claims. In particular, an attached title is a privacy claim, not a
+cadastral neighbour count; “para reformar” supplies a renovation risk whose
+extent remains unknown. These may demote a candidate but cannot enforce hard
+exclusions. Likely sea view is claimed rather than supported evidence. Repeated
+owner clauses retain every source in the explanation but count once per aspect
+in ranking. Stated subscription bounds supply positive matches when met and
+conflicts when violated, including reviewed rows that the normal criteria filter
+deliberately keeps visible. Unknown figures remain verification needs.
+Ready-house evidence alongside an unspecified renovation claim is conflicting,
+not proof of major works on the main house. Negated condition phrases supply no
+positive condition claim. Legacy research area repair moves only the original
+source-key-proven plot figure and leaves house area unknown; explicit house
+measurements require a separately verified source, never prose inference.
+Conflicting exact areas still yield a claimed bound match or shortfall when
+every credible source agrees on that bound; the exact area remains a check.
+
+## Completed appeal reviews (2026-11-05, #598)
+
+### Numeric rebuilds (#603)
+
+The first live eight-row probe of rubric v3 still used regional facilities as
+an aesthetic concern and assigned low fit where it named only missing facts.
+Do not scale a mechanically successful batch before inspecting its reasons.
+Rubric v4 defines 50 as neutral unknown fit: move only on observed matches,
+conflicts or an exact-card owner appeal. Unknown traits/weights affect only
+confidence. Exact Yes remains observed appeal even without an explanatory
+reason; it cannot establish a general trait. A per-square-metre price is not
+above-market evidence without a supplied market comparison.
+
+Regional hazard lines are omitted from numeric candidate and appeal-exemplar
+inputs, so they cannot be reinterpreted as neighbours, privacy, aesthetics or
+air quality. They remain available in independent hazard checks, full canonical
+facts, profile-build provenance and the conservative freshness fingerprint.
+The stored evidence is never deleted. Prior v3 numeric results read as stale.
+
+Both model prompts now receive one typed appeal example per applicable frozen
+card, with subscription, live aliases, answer, original reason and stored facts.
+Duplicate portal rows are not extra votes. Binary votes cannot establish new
+traits, weights, budget thresholds or dealbreakers: profile traits still cite
+explicit purchase-review comments only. Yes supplies a scoped exemplar; No
+cannot penalize other objects for resemblance. Photo-trust concerns stay local.
+Candidate subscription IDs are explicit in the scoring request. These inputs
+participate in the model-basis fingerprint, so new votes or changed exemplar
+facts require a model rebuild before numeric scoring. Rubric v3 invalidates
+older numeric scores. No overall score, purchase verdict or favorite changes.
+
+`build_taste_profile` marks its one-call operation non-resumable; the backfill
+marker records the complete real argv. Freeze the exact existing stale numeric
+IDs before an authorized production run, back up their taste blocks/numbers and
+the profile ledger, rebuild once, then use `backfill_taste --ids ... --apply`
+without force. Finished rows leave the scope. A failed call writes nothing;
+report any remaining stale rows rather than declaring a partial run complete.
+
+`services/recommendation_feedback.py` owns the `recommendation_feedback`
+enrichment block. A binary appeal answer is separate from a purchase verdict
+and from a favorite. Yes adds the primary card as a positive recommendation
+reference in its own subscription, using the existing numeric comparator.
+No excludes the known card and its frozen aliases from Recommendations only;
+they remain browsable in the ordinary catalog. Missing reasons do not produce
+new style, price, privacy or condition rules. Reasons are retained verbatim as
+receipt data; a photo-trust complaint is not generalized into a style aversion.
+Similar still compares against favorites only. No overall score is rewritten.
+
+Card votes in Recommendations have a separate reversible receipt. Dislike
+waits five seconds before the browser sends the vote. Undo or leaving the page
+during that interval cancels it. After saving, the same listing is excluded
+from the recommendation list, map and CSV. The ordinary catalog keeps it and
+offers Clear recommendation rating. The write checks the rendered revision,
+listing identity and search scope under the enrichment row lock. Clearing a
+vote keeps historical exposure. Imported pilot receipts retain their own
+authority and history.
+
+Each recommendation read recomputes the ranking from the current votes,
+including voted examples outside the active filters. Within each subscription,
+up to 16 recent Likes and 16 recent Dislikes contribute a bounded adjustment
+using the existing comparable facts, their coverage and four neutral
+observations per side. Uncomparable examples abstain. Older Dislikes still
+exclude their own cards. Card votes do not trigger a bridge call or produce
+a new taste profile version.
+
+A missing primary can use an explicitly frozen surviving alias, with its URL
+and subscription verified. The original card ID remains provenance, one
+current surviving representative prevents duplicate anchors, and missing IDs are
+disclosed. The representative is recomputed from validated live aliases, so
+removing the primary later does not strand the answer. No surviving alias
+refuses the entire import; no rows are created.
+
+The importer binds every answer to its manifest fingerprint, media revision,
+subscription, frozen aliases, baseline and current listing URLs. Only UTM
+tracking and fragments are ignored in identity checks. All rows are locked in
+ID order and validated before any write. Conflicting imports are refused;
+the same source is an idempotent no-op. Only the feedback signal and monotonic
+exposure marker change; other enrichment blocks are preserved.
+`utils.import_recommendation_feedback` accepts completed checkpoints only,
+reports without `--apply`, and requires a fresh `--snapshot` path to apply.
+The private, exclusively created and fsynced receipt records before and exact
+expected-after values before commit. `--restore RECEIPT --apply` validates
+all expected writes under locks before restoring only these blocks atomically;
+a later edit refuses the whole restore. Deleted rows are disclosed and never
+recreated; all surviving rows must still pass the same CAS guards. A receipt
+written before a failed commit is evidence of an attempt; its expected-after comparisons refuse restore.
+
+Use `--refresh-profile --apply` after import or restore. This deterministic
+refresh inserts a source snapshot into the existing profile ledger, preserving
+the model's likes/dislikes and compiling only explicit purchase-review reasons.
+It carries the original model basis separately: changed explicit reasons or
+facts keep `model_profile_dirty` true, disclose that in the UI, and refuse new
+numeric taste scoring until a real model rebuild. Prepared deterministic
+recommendations may still be current. New profile versions invalidate older
+numeric taste scores; no rescore is scheduled or called. It makes no model or
+network calls. Import and refresh are separate durable
+steps: if refresh fails, rerun refresh alone. This is not a mass taste rescore.
+
+`gather_facts` reads `hazard_service.read_verdict`, including search radius,
+coordinate slack, scan completeness and distance bounds. Facilities in a
+regional industrial scan never establish residential neighbour counts or
+privacy. Stale/missing measurements remain unknown. Scorer rubric v2 makes
+legacy numeric taste judgements stale so their misleading penalties cannot
+rank as current. Recommendation descriptions remain source typed.
+
+Retained feedback namespaces reserve rows/entities from future blind trials,
+even if URL/scope drift makes a previous answer inapplicable to current rank.
+A separate `recommendation_exposure` marker survives ranking rollback: undoing
+a signal cannot make an already-viewed object unseen. Frozen historical alias
+IDs are reserved as well. Incomplete cards are refused by the service itself.
+Exact frozen primary/alias URLs also reserve reimported rows with new IDs
+(#601), using the importer's identity normalizer and original subscription.
+Current No receipts are read outside page filters, but only a live URL/scope-
+validated carrier can enforce No on those aliases. Historical exposure alone
+never restores a rolled-back answer. New imports union scoped URL identities
+into exposure; CAS restore also retains them before removing legacy feedback.
+Blind manifests report `incomplete_exposure_row_ids` when retained legacy
+markers lack URL history; they cannot reconstruct identities already lost with
+all retained rows. A later complete import cannot erase an older unknown URL
+history; only a source-matched receipt can fill a legacy marker's gap.
+This also applies to pre-upgrade mixed states: a current receipt's URLs do
+not prove a different old receipt's ID-only exposure history complete.
+Existing conservative entity deduplication remains intact.
+
+Stored hard clauses exclude only current candidates (#602). A dirty snapshot
+can still explain its old conflicts but cannot hide a listing by a removed or
+reversed owner rule; current direct No remains independent and still excludes.
+The shared recommendation context preserves identical page/CSV selection.
+An existing favorite remains its independent positive reference even if that
+card receives No; the card itself is excluded from Recommendations.
+The next unlabeled twenty are not training data. These training ratings are
+not evidence of prospective recommendation accuracy.

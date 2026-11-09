@@ -97,8 +97,8 @@ def test_portal_photo_sources_reject_a_db_injected_host():
 @pytest.mark.parametrize(
     "url",
     [
-        "https://media.yaencontre.com:8443/photo.jpg",
-        "https://media.yaencontre.com:invalid/photo.jpg",
+        "https://static.fotocasa.es:8443/photo.jpg",
+        "https://static.fotocasa.es:invalid/photo.jpg",
     ],
 )
 def test_portal_photo_sources_require_default_https_port(url):
@@ -140,7 +140,7 @@ def test_download_photo_source_streams_with_no_redirect_and_hashes_bytes():
         {
             "source_kind": "portal_photo",
             "source_id": "property:1375:photo:0",
-            "url": "https://media.yaencontre.com/photo.jpg",
+            "url": "https://static.fotocasa.es/photo.jpg",
         },
         session=session,
     )
@@ -161,7 +161,7 @@ def test_download_photo_source_closes_only_an_internally_created_session(monkeyp
         {
             "source_kind": "portal_photo",
             "source_id": "property:1375:photo:0",
-            "url": "https://media.yaencontre.com/photo.jpg",
+            "url": "https://static.fotocasa.es/photo.jpg",
         }
     )
 
@@ -188,7 +188,7 @@ def test_download_photo_source_closes_an_owned_session_after_a_request_error(
             {
                 "source_kind": "portal_photo",
                 "source_id": "property:1375:photo:0",
-                "url": "https://media.yaencontre.com/photo.jpg",
+                "url": "https://static.fotocasa.es/photo.jpg",
             }
         )
 
@@ -218,7 +218,7 @@ def test_download_photo_source_refuses_an_oversized_stream_before_it_grows():
             {
                 "source_kind": "portal_photo",
                 "source_id": "property:1375:photo:0",
-                "url": "https://media.yaencontre.com/photo.jpg",
+                "url": "https://static.fotocasa.es/photo.jpg",
             },
             session=_Session(response),
         )

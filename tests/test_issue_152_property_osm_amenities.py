@@ -562,23 +562,26 @@ class TestPacing:
         it lets both callers read the same gap and pass.
         """
         gate = RateGate(0.15, name="threaded")
-        gate.wait()  # the first slot is taken; both threads below must queue
-        starts = []
         barrier = threading.Barrier(2)
 
         def _caller():
             barrier.wait()
             gate.wait()
-            starts.append(time.monotonic())
 
-        threads = [threading.Thread(target=_caller) for _ in range(2)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=5)
+        # Assert on the reserved waits. A descheduled worker can wake late
+        # even when its reservation was correct.
+        with patch("utils.http.time") as clock:
+            clock.monotonic.return_value = 1000.0
+            gate.wait()  # take the first slot at the same clock reading
+            threads = [threading.Thread(target=_caller) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=5)
 
-        assert len(starts) == 2
-        assert abs(starts[1] - starts[0]) >= 0.15 * 0.8, starts
+        assert all(not thread.is_alive() for thread in threads)
+        delays = sorted(call.args[0] for call in clock.sleep.call_args_list)
+        assert delays == pytest.approx([0.15, 0.30])
 
     def test_a_retry_waits_for_the_slot_the_gate_gives_it(self):
         """The backoff and the gate together, on a fake clock.

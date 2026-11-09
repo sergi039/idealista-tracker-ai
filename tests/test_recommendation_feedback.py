@@ -1,0 +1,1064 @@
+"""Pilot import -> prepared evidence -> real recommendation/held-out selection."""
+
+import copy
+import csv
+import hashlib
+import io
+import json
+import re
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
+
+from app import create_app, db
+from models import Property, SearchProfile, TasteProfile
+from services import (
+    favorite_similarity,
+    recommendation_feedback as feedback,
+    taste_recommendation,
+    taste_service,
+)
+from tests import setup_test_environment
+from utils.review_json import canonical
+
+
+@pytest.fixture
+def scope(tmp_path):
+    setup_test_environment()
+    app = create_app()
+    with app.app_context():
+        db.create_all()
+        profile = SearchProfile(name="Pilot")
+        other = SearchProfile(name="Other")
+        db.session.add_all([profile, other])
+        db.session.flush()
+        rows = []
+        for i in range(6):
+            row = Property(
+                source_email_id=f"pilot:{i}",
+                title="Casa independiente",
+                price=275000 if i != 4 else 50000,
+                area=275,
+                area_type="built",
+                property_category="housing",
+                property_subtype="house",
+                search_profile_id=other.id if i == 5 else profile.id,
+                municipality="Laxe",
+                location_lat=43.2,
+                location_lon=-8.9,
+                location_accuracy="precise",
+                url=f"https://www.idealista.com/inmueble/{100 + i}/",
+                enrichment={"unrelated": {"keep": True}},
+            )
+            db.session.add(row)
+            rows.append(row)
+        db.session.commit()
+        db.session.add(
+            TasteProfile(
+                provider="fixture",
+                model="none",
+                signals_fingerprint="0" * 64,
+                profile={"likes": [{"trait": "existing owner words"}]},
+                source={"signals": []},
+            )
+        )
+        db.session.commit()
+        original = feedback.import_batch
+        counter = iter(range(100))
+
+        def imported(*args, **kwargs):
+            if kwargs.get("apply"):
+                kwargs.setdefault(
+                    "snapshot_path", tmp_path / f"receipt-{next(counter)}.json"
+                )
+            return original(*args, **kwargs)
+
+        with patch.object(feedback, "import_batch", imported):
+            yield app, profile, rows
+        db.session.remove()
+        db.drop_all()
+
+
+def batch(profile, rows, *, alias=False):
+    cards = [
+        {
+            "id": rows[0].id,
+            "row_ids": [rows[0].id, rows[2].id] if alias else [rows[0].id],
+            "similarity": 90,
+            "rank": 1,
+            "url": rows[0].url,
+            "source_urls": [
+                {"url": row.url} for row in ([rows[0], rows[2]] if alias else [rows[0]])
+            ],
+        },
+        {
+            "id": rows[1].id,
+            "row_ids": [rows[1].id],
+            "similarity": 85,
+            "rank": 2,
+            "url": rows[1].url,
+        },
+    ]
+    manifest = {
+        "batch_id": "synthetic-pilot",
+        "protocol": {"source_profile_id": profile.id},
+        "candidates": cards,
+    }
+    answers = {
+        "schema_version": 1,
+        "artifact_kind": "idealista_owner_batch_feedback",
+        "batch_id": manifest["batch_id"],
+        "batch_fingerprint": hashlib.sha256(canonical(manifest).encode()).hexdigest(),
+        "answer_meaning": feedback.MEANING,
+        "answers": [
+            {
+                "property_id": c["id"],
+                "row_ids": c["row_ids"],
+                "baseline": {"similarity": c["similarity"], "rank": c["rank"]},
+                "answer": "yes" if i == 0 else "no",
+                "reason": "",
+                "updated_at": "2026-11-04T13:00:00Z",
+            }
+            for i, c in enumerate(cards)
+        ],
+    }
+    return manifest, answers
+
+
+def test_import_is_scoped_atomic_idempotent_and_preserves_purchase_state(scope):
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows, alias=True)
+    assert (
+        feedback.import_batch(manifest, answers, profile_id=profile.id)["changed"] == 0
+    )
+    assert feedback.read_feedback(rows[0]) is None
+    result = feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    assert result == {"ratings": 2, "aliases": 3, "changed": 3, "applied": True}
+    assert (
+        feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)[
+            "changed"
+        ]
+        == 0
+    )
+    for row in rows:
+        assert row.owner_verdict is None and row.is_favorite is False
+        assert row.enrichment["unrelated"] == {"keep": True}
+    assert feedback.read_feedback(rows[2])["property_id"] == rows[0].id
+    changed = copy.deepcopy(answers)
+    changed["answers"][0]["answer"] = "no"
+    with pytest.raises(ValueError, match="another rating"):
+        feedback.import_batch(manifest, changed, profile_id=profile.id, apply=True)
+    assert feedback.read_feedback(rows[0])["answer"] == "yes"
+
+
+def test_invalid_scope_or_baseline_writes_nothing(scope):
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows)
+    answers["answers"][1]["baseline"]["rank"] = 999
+    with pytest.raises(ValueError):
+        feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    assert all(feedback.read_feedback(row) is None for row in rows)
+
+
+@pytest.mark.parametrize("changed_index", [0, 2])
+def test_listing_identity_changed_after_freeze_cannot_receive_old_rating(
+    scope, changed_index
+):
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows, alias=True)
+    rows[changed_index].url = "https://www.idealista.com/inmueble/999/"
+    db.session.commit()
+    with pytest.raises(ValueError, match="listing URL"):
+        feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    assert all(feedback.read_feedback(row) is None for row in rows)
+
+
+def test_tracking_query_change_keeps_the_same_frozen_listing(scope):
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows)
+    rows[0].url += "?utm_source=alert&utm_campaign=example"
+    db.session.commit()
+    feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    assert feedback.read_feedback(rows[0])["answer"] == "yes"
+    rows[0].url += "&utm_medium=email"
+    db.session.commit()
+    assert feedback.read_feedback(rows[0])["answer"] == "yes"
+    assert (
+        feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)[
+            "changed"
+        ]
+        == 0
+    )
+
+
+def test_inactive_old_listing_feedback_is_not_silently_overwritten(scope):
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows)
+    feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    stored = copy.deepcopy(rows[0].enrichment[feedback.KEY])
+    rows[0].url = "https://www.idealista.com/inmueble/999/"
+    db.session.commit()
+    assert feedback.read_feedback(rows[0]) is None
+    new_manifest, new_answers = batch(profile, rows)
+    with pytest.raises(ValueError, match="another rating"):
+        feedback.import_batch(
+            new_manifest, new_answers, profile_id=profile.id, apply=True
+        )
+    assert rows[0].enrichment[feedback.KEY] == stored
+
+
+def test_frozen_fingerprint_and_mid_write_failure_leave_no_partial_import(scope):
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows, alias=True)
+    changed_manifest = copy.deepcopy(manifest)
+    changed_manifest["candidates"][0]["url"] = "https://example.org/changed"
+    with pytest.raises(ValueError, match="frozen pilot"):
+        feedback.import_batch(
+            changed_manifest, answers, profile_id=profile.id, apply=True
+        )
+    original = feedback.merge_json_object_changes_under_lock
+    calls = 0
+
+    def fail_second(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("injected write failure")
+        return original(*args, **kwargs)
+
+    with patch.object(feedback, "merge_json_object_changes_under_lock", fail_second):
+        with pytest.raises(RuntimeError, match="injected"):
+            feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    db.session.expire_all()
+    assert calls == 2
+    assert all(feedback.read_feedback(row) is None for row in rows)
+    manifest, answers = batch(profile, [rows[0], rows[5]])
+    with pytest.raises(ValueError, match="subscription"):
+        feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    assert all(feedback.read_feedback(row) is None for row in rows)
+
+
+def test_feedback_refresh_and_ranking_need_no_model_and_do_not_invent_clauses(scope):
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows, alias=True)
+    answers["answers"][1]["reason"] = "фейк генерация"
+    feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    with patch(
+        "services.subscription_transport.complete",
+        side_effect=AssertionError("no model call"),
+    ):
+        current = taste_service.refresh_feedback_snapshot()["data"]
+        assert current["source"]["positive_reference_ids"] == [rows[0].id]
+        assert current["source"]["clauses"] == []
+        assert current["profile"]["likes"] == [{"trait": "existing owner words"}]
+        summary = taste_service.recommendation_profile_state(current)
+        assert summary["state"] == "current"
+        ctx = taste_recommendation.build_context(
+            rows,
+            current,
+            summary,
+            similarity_ctx=favorite_similarity.build_context([profile.id]),
+        )
+        assert ctx.readings[rows[1].id]["eligibility"] == "excluded"
+        assert (
+            ctx.readings[rows[3].id]["nearest_positive_reference"]["id"] == rows[0].id
+        )
+        assert (
+            ctx.readings[rows[3].id]["rank_value"]
+            > ctx.readings[rows[4].id]["rank_value"]
+        )
+        assert ctx.readings[rows[5].id]["nearest_positive_reference"] is None
+        assert taste_service.refresh_feedback_snapshot()["changed"] is False
+        assert favorite_similarity.build_context([profile.id]) is None
+        assert all(
+            row.owner_verdict is None and row.is_favorite is False for row in rows
+        )
+
+
+def test_hazard_scan_is_not_evidence_of_residential_neighbours(scope):
+    _, _, rows = scope
+    row = rows[0]
+    row.location_accuracy = "approximate"
+    row.enrichment = {
+        "hazards": {
+            "status": "ok",
+            "origin": {"lat": row.location_lat, "lon": row.location_lon},
+            "searched_m": 5984,
+            "item_count": 1,
+            "truncated": False,
+            "items": [
+                {"kind": "quarry", "severity": "moderate", "origin_distance_m": 3000}
+            ],
+        }
+    }
+    facts = taste_service.gather_facts(row)
+    assert not any(line.startswith("INDUSTRIAL NEIGHBOURS") for line in facts)
+    scan = next(line for line in facts if line.startswith("REGIONAL HAZARD SCAN"))
+    assert "5,984 m" in scan and "5,000 m" in scan and "NOT a count" in scan
+    assert any("0 m to 8,000 m" in line for line in facts)
+    row.location_lat += 1
+    assert any("stale_origin" in line for line in taste_service.gather_facts(row))
+
+
+def test_restore_preserves_other_writes_and_refuses_partial_rollback(scope, tmp_path):
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows, alias=True)
+    receipt = tmp_path / "rollback.json"
+    feedback.import_batch(
+        manifest, answers, profile_id=profile.id, apply=True, snapshot_path=receipt
+    )
+    snapshot = json.loads(receipt.read_text())
+    assert receipt.stat().st_mode & 0o777 == 0o600
+    assert feedback.restore_batch(snapshot)["rows"] == 3
+    for row in rows:
+        row.enrichment = {**row.enrichment, "later": 123}
+    changed = copy.deepcopy(rows[1].enrichment)
+    changed[feedback.KEY]["reason"] = "later edit"
+    rows[1].enrichment = changed
+    db.session.commit()
+    with pytest.raises(ValueError, match="changed since import"):
+        feedback.restore_batch(snapshot, apply=True)
+    assert feedback.read_feedback(rows[0])
+    rows[1].enrichment = {
+        **rows[1].enrichment,
+        feedback.KEY: next(
+            item["after"]["value"]
+            for item in snapshot["changes"]
+            if item["id"] == rows[1].id
+        ),
+    }
+    db.session.commit()
+    assert feedback.restore_batch(snapshot, apply=True)["restored"] == 3
+    assert all(feedback.read_feedback(row) is None for row in rows)
+    assert all(row.enrichment["later"] == 123 for row in rows)
+    with pytest.raises(ValueError, match="changed since import"):
+        feedback.restore_batch(snapshot, apply=True)
+
+
+def test_receipt_failure_rolls_back_every_change(scope, tmp_path):
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows)
+    receipt = tmp_path / "occupied.json"
+    receipt.write_text("do not replace")
+    with pytest.raises(FileExistsError):
+        feedback.import_batch(
+            manifest, answers, profile_id=profile.id, apply=True, snapshot_path=receipt
+        )
+    assert all(feedback.read_feedback(row) is None for row in rows)
+    assert receipt.read_text() == "do not replace"
+
+
+def test_only_completed_checkpoint_is_importable():
+    from utils.import_recommendation_feedback import completed_feedback
+
+    for value in (
+        {},
+        {"ok": True, "completed_at": None},
+        {
+            "ok": True,
+            "completed_at": "2026-11-04T13:05:34Z",
+            "feedback": {"answers": [{"answer": None}]},
+        },
+    ):
+        with pytest.raises(ValueError):
+            completed_feedback(value)
+
+
+def test_binary_no_is_hidden_only_from_recommendation_page_and_csv(scope):
+    from tests.test_recommendation_export_agrees import _page_and_export
+
+    app, profile, rows = scope
+    manifest, answers = batch(profile, rows)
+    manifest["candidates"][1]["row_ids"] = [rows[1].id, rows[4].id]
+    manifest["candidates"][1]["source_urls"] = [{"url": rows[4].url}]
+    answers["answers"][1]["row_ids"] = [rows[1].id, rows[4].id]
+    answers["batch_fingerprint"] = hashlib.sha256(
+        canonical(manifest).encode()
+    ).hexdigest()
+    feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    taste_service.refresh_feedback_snapshot()
+    client = app.test_client()
+    normal, normal_csv = _page_and_export(client, mode="all", profile_id=profile.id)
+    recommended, exported = _page_and_export(
+        client, mode="recommendation", profile_id=profile.id
+    )
+    assert set(recommended) == set(exported)
+    text = client.get(
+        f"/properties?profile_id={profile.id}&mode=recommendation&remember=off"
+    ).get_data(as_text=True)
+    assert "by your answers or confirmed requirements" in text
+    for row in (rows[1], rows[4]):
+        assert row.id in normal and row.id in normal_csv
+        assert row.id not in recommended and row.id not in exported
+        assert row.owner_verdict is None and not row.is_favorite
+
+
+@pytest.mark.parametrize("delete_before_import", [False, True])
+def test_reimported_frozen_url_keeps_no_and_blind_exposure_across_new_ids(
+    scope, delete_before_import
+):
+    """#601: frozen primary URL returning as a new row must not become unseen.
+
+    The surviving cross-portal carrier is outside the page's municipality
+    filter. Ordinary unseen URLs and the same URL in another subscription
+    remain recommendation candidates; meaningful query changes are not
+    tracking aliases. Blind trials retain their broader entity deduplication.
+    """
+    from services import taste_evaluation
+    from tests.test_recommendation_export_agrees import _page_and_export
+
+    app, profile, rows = scope
+    rows[2].url = "https://www.fotocasa.es/es/comprar/vivienda/laxe/102/d"
+    rows[2].municipality = "Navia"
+    db.session.commit()
+    manifest, answers = batch(profile, rows, alias=True)
+    answers["answers"][0]["answer"] = "no"
+    original_url = rows[0].url
+    old_id = rows[0].id
+    if delete_before_import:
+        db.session.delete(rows[0])
+        db.session.commit()
+    feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    taste_service.refresh_feedback_snapshot()
+    if not delete_before_import:
+        db.session.delete(rows[0])
+        db.session.commit()
+    replacements = []
+    for index, (url, subscription) in enumerate(
+        [
+            (original_url + "?utm_source=mail#photos", profile.id),
+            (rows[2].url + "/?utm_source=mail", profile.id),
+            (original_url + "?id=999", profile.id),
+            (original_url, rows[5].search_profile_id),
+            ("https://www.idealista.com/inmueble/789/", profile.id),
+        ]
+    ):
+        row = Property(
+            title="Reimport",
+            source_email_id=f"reimport:{index}",
+            url=url,
+            municipality="Laxe",
+            search_profile_id=subscription,
+        )
+        db.session.add(row)
+        replacements.append(row)
+    db.session.commit()
+    assert replacements[0].id != old_id
+    client = app.test_client()
+    page, exported = _page_and_export(
+        client, mode="recommendation", recommendation_scope="review", profile_id="all"
+    )
+    assert page == exported
+    assert not {row.id for row in replacements[:2]} & set(page)
+    assert {row.id for row in replacements[2:]} <= set(page)
+    normal, normal_csv = _page_and_export(client, mode="combined", profile_id="all")
+    assert normal == normal_csv
+    assert {row.id for row in replacements} <= set(normal)
+    held_out = taste_evaluation.build_manifest(
+        Property.query.all(), learning_property_ids=set(), activity_property_ids=set()
+    )
+    candidates = {item["property_id"] for item in held_out["candidates"]}
+    assert not {row.id for row in replacements[:2]} & candidates
+    assert replacements[4].id in candidates and rows[3].id in candidates
+    assert rows[2].enrichment["unrelated"] == {"keep": True}
+    assert all(
+        row.owner_verdict is None and not row.is_favorite for row in replacements
+    )
+
+
+@pytest.mark.parametrize("legacy_marker", [False, True])
+def test_legacy_restore_preserves_frozen_urls_without_restoring_no(
+    scope, tmp_path, legacy_marker
+):
+    """#601: old ID-only markers must retain URLs before CAS removes the receipt."""
+    from services import taste_evaluation
+
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows, alias=True)
+    answers["answers"][0]["answer"] = "no"
+    receipt = tmp_path / "legacy-exposure.json"
+    feedback.import_batch(
+        manifest, answers, profile_id=profile.id, apply=True, snapshot_path=receipt
+    )
+    if legacy_marker:
+        for row in rows[:3]:
+            old_marker = copy.deepcopy(row.enrichment[feedback.EXPOSURE_KEY])
+            old_marker.pop("listing_identities")
+            row.enrichment = {
+                **row.enrichment,
+                feedback.EXPOSURE_KEY: old_marker,
+            }
+    db.session.commit()
+    original_url = rows[0].url
+    feedback.restore_batch(json.loads(receipt.read_text()), apply=True)
+    db.session.delete(rows[0])
+    new = Property(
+        source_email_id="after-restore", url=original_url, search_profile_id=profile.id
+    )
+    db.session.add(new)
+    db.session.commit()
+    current = taste_service.refresh_feedback_snapshot()["data"]
+    ctx = taste_recommendation.build_context(
+        [new], current, taste_service.recommendation_profile_state(current)
+    )
+    assert ctx.readings[new.id]["eligibility"] == "eligible"
+    held_out = taste_evaluation.build_manifest(
+        Property.query.all(), learning_property_ids=set(), activity_property_ids=set()
+    )
+    assert new.id not in {item["property_id"] for item in held_out["candidates"]}
+    assert "incomplete_exposure_row_ids" not in held_out
+    assert rows[2].enrichment["unrelated"] == {"keep": True}
+
+
+@pytest.mark.parametrize("change", ["url", "subscription"])
+def test_drifted_carrier_cannot_transfer_its_no_to_reimported_url(scope, change):
+    """A historical URL is exposure, not authority for a current binary No."""
+    from services import taste_evaluation
+
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows, alias=True)
+    answers["answers"][0]["answer"] = "no"
+    feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    old_url = rows[0].url
+    db.session.delete(rows[0])
+    if change == "url":
+        rows[2].url = "https://www.idealista.com/inmueble/888/"
+    else:
+        rows[2].search_profile_id = rows[5].search_profile_id
+    new = Property(
+        source_email_id="drifted-reimport", url=old_url, search_profile_id=profile.id
+    )
+    db.session.add(new)
+    db.session.commit()
+    current = taste_service.refresh_feedback_snapshot()["data"]
+    ctx = taste_recommendation.build_context(
+        [new], current, taste_service.recommendation_profile_state(current)
+    )
+    assert ctx.readings[new.id]["eligibility"] == "eligible"
+    result = taste_evaluation.build_manifest(
+        Property.query.all(), learning_property_ids=set(), activity_property_ids=set()
+    )
+    assert new.id not in {item["property_id"] for item in result["candidates"]}
+
+
+def test_recommendation_context_can_reserve_urls_without_an_application_or_database():
+    """Keep the standalone descriptor/reranker contract found by the full suite."""
+    rows = [
+        Property(id=ident, search_profile_id=24, url=f"https://example.com/{ident}")
+        for ident in (1, 2, 3)
+    ]
+    manifest, answers = batch(SimpleNamespace(id=24), rows)
+    answers["answers"][0]["answer"] = "no"
+    record = feedback.validate_batch(manifest, answers, 24)[0]
+    rows[0].enrichment = {feedback.KEY: {**record, "listing_url": rows[0].url}}
+    rows[1].url = rows[0].url + "?utm_source=reimport"
+    context = taste_recommendation.build_context(
+        rows, {"source": {"signals": []}}, {"state": "current"}
+    )
+    assert context.readings[rows[1].id]["eligibility"] == "excluded"
+    assert context.readings[rows[2].id]["eligibility"] == "eligible"
+
+
+def test_new_import_cannot_claim_missing_legacy_url_history_was_recovered(
+    scope, tmp_path
+):
+    """A complete new receipt must not hide an older untraceable exposure."""
+    from services import taste_evaluation
+
+    _, profile, rows = scope
+    rows[0].enrichment = {
+        **rows[0].enrichment,
+        feedback.EXPOSURE_KEY: {"row_ids": [9999]},
+    }
+    db.session.commit()
+    manifest, answers = batch(profile, rows)
+    receipt = tmp_path / "new-with-legacy-gap.json"
+    feedback.import_batch(
+        manifest, answers, profile_id=profile.id, apply=True, snapshot_path=receipt
+    )
+    for restored in (False, True):
+        if restored:
+            feedback.restore_batch(json.loads(receipt.read_text()), apply=True)
+        result = taste_evaluation.build_manifest(
+            rows, learning_property_ids=set(), activity_property_ids=set()
+        )
+        assert result["incomplete_exposure_row_ids"] == [rows[0].id]
+        assert 9999 in feedback.exposed_alias_ids(rows[0])
+
+
+@pytest.mark.parametrize("new_reason", ["", "Хочу участок, а не дом."])
+def test_dirty_snapshot_cannot_hide_by_removed_rule_but_current_no_still_hides(
+    scope, new_reason
+):
+    """#602: actual page/CSV selection must stop enforcing an old hard clause."""
+    from tests.test_recommendation_export_agrees import _page_and_export
+
+    app, profile, rows = scope
+    rows[3].is_favorite = True
+    rows[3].owner_verdict = "interested"
+    rows[3].owner_verdict_reason = "Никогда не хочу участок, а не дом."
+    rows[4].property_category = "land"
+    db.session.commit()
+    manifest, answers = batch(profile, rows)
+    feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    current = taste_service.refresh_feedback_snapshot()["data"]
+    assert taste_service.recommendation_profile_state(current)["state"] == "current"
+    client = app.test_client()
+    before, before_csv = _page_and_export(
+        client,
+        mode="recommendation",
+        recommendation_scope="review",
+        profile_id=profile.id,
+    )
+    assert before == before_csv
+    assert rows[4].id not in before and rows[1].id not in before
+    rows[3].owner_verdict_reason = new_reason
+    db.session.commit()
+    assert taste_service.recommendation_profile_state(current)["state"] == "dirty"
+    after, after_csv = _page_and_export(
+        client,
+        mode="recommendation",
+        recommendation_scope="review",
+        profile_id=profile.id,
+    )
+    assert after == after_csv
+    assert rows[4].id in after and rows[1].id not in after
+    ordinary, ordinary_csv = _page_and_export(
+        client, mode="combined", profile_id=profile.id
+    )
+    assert ordinary == ordinary_csv
+    assert rows[4].id in ordinary and rows[1].id in ordinary
+    refreshed = taste_service.refresh_feedback_snapshot()["data"]
+    assert taste_service.recommendation_profile_state(refreshed)["state"] == "current"
+    final, final_csv = _page_and_export(
+        client,
+        mode="recommendation",
+        recommendation_scope="review",
+        profile_id=profile.id,
+    )
+    assert final == final_csv
+    confirmed, confirmed_csv = _page_and_export(
+        client, mode="recommendation", profile_id=profile.id
+    )
+    assert confirmed == confirmed_csv
+    visible = set(final) | set(confirmed)
+    assert rows[4].id in visible and rows[1].id not in visible
+
+
+def test_another_receipt_cannot_replace_a_live_alias_rating(scope):
+    """Refute reviewer scenario: receipt B cannot overwrite a live receipt A."""
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows, alias=True)
+    feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    db.session.delete(rows[0])
+    db.session.commit()
+    before = copy.deepcopy(rows[2].enrichment)
+    second_manifest, second_answers = batch(profile, [rows[2], rows[3]])
+    with pytest.raises(ValueError, match="another rating"):
+        feedback.import_batch(
+            second_manifest, second_answers, profile_id=profile.id, apply=True
+        )
+    assert rows[2].enrichment == before
+
+
+def test_preupgrade_mixed_receipt_and_legacy_exposure_discloses_missing_history(
+    scope, tmp_path
+):
+    """A pre-upgrade A -> rollback -> B sequence has B URLs but no A URL history."""
+    from services import taste_evaluation
+
+    _, profile, rows = scope
+    first_manifest, first_answers = batch(profile, rows, alias=True)
+    first_receipt = tmp_path / "first.json"
+    feedback.import_batch(
+        first_manifest,
+        first_answers,
+        profile_id=profile.id,
+        apply=True,
+        snapshot_path=first_receipt,
+    )
+    old_marker = copy.deepcopy(rows[2].enrichment[feedback.EXPOSURE_KEY])
+    old_marker.pop("listing_identities")
+    feedback.restore_batch(json.loads(first_receipt.read_text()), apply=True)
+    db.session.delete(rows[0])
+    db.session.commit()
+    second_manifest, second_answers = batch(profile, [rows[2], rows[3]])
+    second_receipt = tmp_path / "second.json"
+    feedback.import_batch(
+        second_manifest,
+        second_answers,
+        profile_id=profile.id,
+        apply=True,
+        snapshot_path=second_receipt,
+    )
+    # Persisted by the pre-upgrade writer: it unions IDs but retains A's
+    # provenance; B's current receipt does not reconstruct A's deleted URL.
+    rows[2].enrichment = {**rows[2].enrichment, feedback.EXPOSURE_KEY: old_marker}
+    db.session.commit()
+    for restored in (False, True):
+        if restored:
+            feedback.restore_batch(json.loads(second_receipt.read_text()), apply=True)
+        result = taste_evaluation.build_manifest(
+            Property.query.all(),
+            learning_property_ids=set(),
+            activity_property_ids=set(),
+        )
+        assert result["incomplete_exposure_row_ids"] == [rows[2].id]
+
+
+def test_missing_primary_uses_only_verified_surviving_frozen_alias_once(scope):
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows, alias=True)
+    missing = rows[0].id
+    db.session.delete(rows[0])
+    db.session.commit()
+    report = feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    assert report["ratings"] == 2 and report["aliases"] == 2
+    assert report["missing_alias_ids"] == [missing]
+    stored = feedback.read_feedback(rows[2])
+    assert stored["property_id"] == missing
+    current = taste_service.refresh_feedback_snapshot()["data"]
+    assert current["source"]["positive_reference_ids"] == [rows[2].id]
+    assert (
+        feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)[
+            "changed"
+        ]
+        == 0
+    )
+    rows[2].url = "https://www.idealista.com/inmueble/9999/"
+    db.session.commit()
+    with pytest.raises(ValueError, match="listing URL"):
+        feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+
+
+def test_card_without_any_surviving_alias_refuses_whole_batch(scope):
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows)
+    db.session.delete(rows[0])
+    db.session.commit()
+    with pytest.raises(ValueError, match="no surviving"):
+        feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    assert feedback.read_feedback(rows[1]) is None
+
+
+def test_claude_primary_removed_after_import_keeps_one_anchor_and_restores_survivors(
+    scope, tmp_path
+):
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows, alias=True)
+    receipt = tmp_path / "deleted-primary.json"
+    feedback.import_batch(
+        manifest, answers, profile_id=profile.id, apply=True, snapshot_path=receipt
+    )
+    missing = rows[0].id
+    db.session.delete(rows[0])
+    db.session.commit()
+    current = taste_service.refresh_feedback_snapshot()["data"]
+    assert current["source"]["positive_reference_ids"] == [rows[2].id]
+    assert (
+        feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)[
+            "changed"
+        ]
+        == 0
+    )
+    report = feedback.restore_batch(json.loads(receipt.read_text()), apply=True)
+    assert report["restored"] == 2 and report["missing_alias_ids"] == [missing]
+    assert feedback.read_feedback(rows[2]) is None
+
+
+def test_claude_no_does_not_change_existing_favorite_reference(scope):
+    _, profile, rows = scope
+    rows[1].is_favorite = True
+    db.session.commit()
+    manifest, answers = batch(profile, rows)
+    feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    current = taste_service.refresh_feedback_snapshot()["data"]
+    assert rows[1].id in current["source"]["positive_reference_ids"]
+    ctx = taste_recommendation.build_context(
+        rows, current, taste_service.recommendation_profile_state(current)
+    )
+    assert ctx.readings[rows[1].id]["eligibility"] == "excluded"
+    assert rows[1].is_favorite and rows[1].owner_verdict is None
+
+
+def test_claude_new_purchase_reason_does_not_masquerade_as_rebuilt_model(scope):
+    app, profile, rows = scope
+    taste_service.refresh_feedback_snapshot()
+    rows[3].owner_verdict = "rejected"
+    rows[3].owner_verdict_reason = "carretera ruidosa"
+    db.session.commit()
+    current = taste_service.refresh_feedback_snapshot()["data"]
+    assert current["source"].get("model_profile_dirty") is True
+    assert (
+        taste_service.recommendation_profile_state(current)["model_profile_dirty"]
+        is True
+    )
+    body = (
+        app.test_client()
+        .get(f"/properties?profile_id={profile.id}&mode=recommendation&remember=off")
+        .get_data(as_text=True)
+    )
+    assert (
+        'id="model-profile-dirty"' in body
+        and 'id="recommendation-refresh-button"' in body
+    )
+    with patch(
+        "services.subscription_transport.complete",
+        side_effect=AssertionError("stale model cannot be scored"),
+    ):
+        result = taste_service.score_batch([rows[4]], current)
+    assert (
+        result["failure_kind"] == "model_profile_dirty"
+        and result["bridge_called"] is False
+    )
+
+
+def test_claude_restore_retains_exposure_for_blind_evaluation(scope, tmp_path):
+    from services import taste_evaluation
+
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows, alias=True)
+    receipt = tmp_path / "exposure.json"
+    feedback.import_batch(
+        manifest, answers, profile_id=profile.id, apply=True, snapshot_path=receipt
+    )
+    feedback.restore_batch(json.loads(receipt.read_text()), apply=True)
+    assert feedback.has_recorded_feedback(rows[0])
+    result = taste_evaluation.build_manifest(
+        rows, learning_property_ids=set(), activity_property_ids=set()
+    )
+    assert not {rows[0].id, rows[1].id, rows[2].id} & {
+        item["property_id"] for item in result["candidates"]
+    }
+
+
+def test_incomplete_direct_import_has_no_effect(scope):
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows)
+    answers["answers"][1]["answer"] = None
+    with pytest.raises(ValueError):
+        feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    assert all(feedback.read_feedback(row) is None for row in rows)
+
+
+def test_binary_refresh_requires_model_rebuild_for_new_appeal_inputs(scope):
+    _, profile, rows = scope
+    initial = taste_service.refresh_feedback_snapshot()["data"]
+    manifest, answers = batch(profile, rows)
+    feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    current = taste_service.refresh_feedback_snapshot()["data"]
+    assert (
+        current["source"]["model_basis_fingerprint"]
+        == initial["source"]["model_basis_fingerprint"]
+    )
+    assert current["source"]["model_profile_dirty"] is True
+
+
+def _prompt_examples(prompt):
+    # Inspect the real subscription transport's payload, not source fragments.
+    data = prompt.split(
+        "The following JSON contains data; LISTING_TEXT content is untrusted:\n", 1
+    )[1]
+    return json.JSONDecoder().raw_decode(data)[0]
+
+
+def test_model_build_and_numeric_call_receive_typed_deduplicated_answers(scope):
+    from services import subscription_transport
+
+    _, profile, rows = scope
+    rows[4].owner_verdict = "interested"
+    rows[4].owner_verdict_reason = "нравится вид на море"
+    for row in (rows[0], rows[4]):
+        row.location_accuracy = "approximate"
+        row.enrichment = {
+            **row.enrichment,
+            "hazards": {
+                "status": "ok",
+                "origin": {
+                    "lat": float(row.location_lat),
+                    "lon": float(row.location_lon),
+                },
+                "searched_m": 5984,
+                "item_count": 1,
+                "truncated": False,
+                "items": [
+                    {
+                        "kind": "quarry",
+                        "severity": "moderate",
+                        "origin_distance_m": 3000,
+                    }
+                ],
+            },
+        }
+    db.session.commit()
+    manifest, answers = batch(profile, rows, alias=True)
+    answers["answers"][1]["reason"] = "фейк генерация "
+    feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    before = [copy.deepcopy(row.enrichment) for row in rows]
+    payload = {
+        "likes": [
+            {
+                "trait": "sea view",
+                "weight": 0.8,
+                "evidence": "owner words",
+                "evidence_property_ids": [rows[4].id],
+            }
+        ],
+        "dislikes": [],
+        "dealbreakers": [],
+        "summary_ru": "Вам нравится вид на море.",
+    }
+    with (
+        patch.object(
+            subscription_transport,
+            "complete",
+            return_value={"text": json.dumps(payload), "model": "fixture"},
+        ) as bridge,
+        patch("utils.google_spend.billed_get", side_effect=AssertionError("Google")),
+    ):
+        built = taste_service.build_profile()
+    assert built["status"] == "ok"
+    examples = _prompt_examples(bridge.call_args.args[0])
+    assert len(examples) == 2
+    yes = next(e for e in examples if e["answer"] == "yes")
+    no = next(e for e in examples if e["answer"] == "no")
+    assert yes["applicable_alias_ids"] == [rows[0].id, rows[2].id]
+    assert yes["property_id"] == rows[0].id
+    assert yes["profile_id"] == profile.id
+    assert yes["reason"] == ""
+    assert no["reason"] == "фейк генерация "
+    assert any("275,000" in fact for fact in yes["facts"])
+    assert any("quarry" in fact for fact in yes["facts"])
+    assert built["data"]["source"]["model_profile_dirty"] is False
+    answer = {
+        "results": [
+            {
+                "property_id": rows[4].id,
+                "score": 70,
+                "reasons_ru": ["Есть подтверждённые совпадения."],
+                "matched_likes": [],
+                "matched_dislikes": [],
+                "closest_reference_id": rows[0].id,
+                "confidence": "medium",
+            }
+        ]
+    }
+    with (
+        patch.object(
+            subscription_transport,
+            "complete",
+            return_value={"text": json.dumps(answer), "model": "fixture"},
+        ) as bridge,
+        patch("utils.google_spend.billed_get", side_effect=AssertionError("Google")),
+    ):
+        result = taste_service.score_batch([rows[4]], built["data"])
+    assert result["rows"] == {rows[4].id: "scored"}
+    scored_examples = _prompt_examples(bridge.call_args.args[0])
+    assert [{k: v for k, v in e.items() if k != "facts"} for e in scored_examples] == [
+        {k: v for k, v in e.items() if k != "facts"} for e in examples
+    ]
+    assert any("275,000" in fact for fact in scored_examples[0]["facts"])
+    assert not any(
+        fact.startswith("REGIONAL HAZARD")
+        for example in scored_examples
+        for fact in example["facts"]
+    )
+    # Regional data stays stored and reaches model-profile provenance, but
+    # cannot be reinterpreted as an aesthetic/privacy penalty by the scorer.
+    assert "quarry" not in bridge.call_args.args[0]
+    assert "REGIONAL HAZARD:" not in bridge.call_args.args[0]
+    # The emitted model contract must distinguish unknown fit from low fit.
+    assert "Start at 50 (neutral)." in bridge.call_args.args[0]
+    assert "exact YES must raise the score above neutral" in bridge.call_args.args[0]
+    assert f"SUBSCRIPTION PROFILE ID: {profile.id}" in bridge.call_args.args[0]
+    assert taste_service.read_taste(rows[4], built["data"]["version"])["state"] == "ok"
+    assert [row.enrichment for row in rows] == before
+    rows[4].taste = {**rows[4].taste, "scorer_version": 3}
+    db.session.commit()
+    assert (
+        taste_service.read_taste(rows[4], built["data"]["version"])["state"] == "stale"
+    )
+
+
+def test_changed_feedback_fact_dirties_model_and_scope_drift_removes_example(scope):
+    _, profile, rows = scope
+    manifest, answers = batch(profile, rows, alias=True)
+    feedback.import_batch(manifest, answers, profile_id=profile.id, apply=True)
+    original = taste_service.collect_signals()
+    # A measurement attached to a reasonless vote is now a real model input.
+    rows[0].price = 300000
+    db.session.commit()
+    assert taste_service._model_basis(
+        taste_service.collect_signals()
+    ) != taste_service._model_basis(original)
+    rows[0].url = "https://www.idealista.com/inmueble/999999/"
+    db.session.commit()
+    projected = taste_service._appeal_examples(taste_service.collect_signals())
+    yes = next(e for e in projected if e["answer"] == "yes")
+    assert yes["property_id"] == rows[2].id
+    assert yes["applicable_alias_ids"] == [rows[2].id]
+
+
+def test_card_votes_rerank_and_hide_without_a_taste_profile(scope):
+    app, profile, rows = scope
+    TasteProfile.query.delete()
+    db.session.commit()
+    client = app.test_client()
+    scope_args = f"profile_id={profile.id}&view_type=cards"
+    catalog = "/properties?" + scope_args + "&mode=combined"
+    recommended = "/properties?" + scope_args + "&mode=recommendation"
+    review = recommended + "&recommendation_scope=review"
+    export = (
+        "/properties/export.csv?"
+        + scope_args
+        + "&mode=recommendation&recommendation_scope=review"
+    )
+    voted = rows[0]
+    endpoint = f"/api/property/{voted.id}/recommendation-vote"
+    revision = feedback.card_vote_state(voted)["revision"]
+
+    def ranked():
+        response = client.get(export)
+        assert response.status_code == 200
+        return [int(row["ID"]) for row in csv.DictReader(io.StringIO(response.text))]
+
+    # Use the real CSRF token and request path, with no profile to refresh.
+    assert "0 properties found" in client.get(recommended).text
+    page = client.get(review)
+    assert page.status_code == 200
+    assert endpoint in page.text
+    assert ranked()[0] == voted.id
+    token = re.search(r'<meta name="csrf-token" content="([^"]+)"', page.text)[1]
+    headers = {"X-CSRFToken": token}
+
+    def vote(answer, expected_revision):
+        return client.post(
+            endpoint,
+            headers=headers,
+            json={"answer": answer, "revision": expected_revision},
+        )
+
+    assert (
+        client.post(endpoint, json={"answer": "no", "revision": revision}).status_code
+        == 400
+    )
+    liked = vote("yes", revision)
+    assert liked.status_code == 200
+    assert ranked()[0] == rows[1].id
+    assert ranked().index(rows[1].id) < ranked().index(rows[4].id)
+    assert vote("no", revision).status_code == 409
+    disliked = vote("no", liked.json["revision"])
+    assert disliked.status_code == 200
+    assert voted.id not in ranked()
+    assert ranked()[0] == rows[4].id
+    assert endpoint not in client.get(review).text
+    assert endpoint in client.get(catalog).text
+    assert voted.enrichment["unrelated"] == {"keep": True}
+    assert not voted.is_favorite and voted.owner_verdict is None
+
+    assert vote(None, disliked.json["revision"]).status_code == 200
+    assert ranked()[0] == voted.id
+    assert endpoint in client.get(review).text
+    assert feedback.has_recorded_feedback(voted)
+    assert TasteProfile.query.count() == 0

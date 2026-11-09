@@ -54,3 +54,59 @@ def test_missing_learning_rows_fail_closed_before_their_entity_can_leak():
         taste_evaluation.build_manifest(
             [candidate], learning_property_ids={1}, activity_property_ids=set()
         )
+
+
+def test_retained_feedback_excludes_row_and_known_entity(monkeypatch):
+    def prop(ident, entity, enrichment):
+        return SimpleNamespace(
+            id=ident,
+            idealista_property_id=entity,
+            enrichment=enrichment,
+            owner_verdict=None,
+            is_favorite=False,
+        )
+
+    monkeypatch.setattr(
+        taste_evaluation.taste_descriptors,
+        "build_descriptor",
+        lambda row: {"input_fingerprint": str(row.id)},
+    )
+    result = taste_evaluation.build_manifest(
+        [
+            prop(1, "same", {"recommendation_feedback": {"old": "retained"}}),
+            prop(2, "same", {}),
+            prop(3, "new", {}),
+        ],
+        learning_property_ids=set(),
+        activity_property_ids=set(),
+    )
+    assert [item["property_id"] for item in result["candidates"]] == [3]
+    assert result["incomplete_exposure_row_ids"] == [1]
+    assert result["utility_claim"] == "not_measured"
+
+
+def test_reappeared_cross_portal_alias_stays_seen_after_feedback_rollback(monkeypatch):
+    def row(ident, entity, enrichment):
+        return SimpleNamespace(
+            id=ident,
+            idealista_property_id=entity,
+            enrichment=enrichment,
+            owner_verdict=None,
+            is_favorite=False,
+        )
+
+    monkeypatch.setattr(
+        taste_evaluation.taste_descriptors,
+        "build_descriptor",
+        lambda prop: {"input_fingerprint": str(prop.id)},
+    )
+    result = taste_evaluation.build_manifest(
+        [
+            row(1, "portal-a", {"recommendation_exposure": {"row_ids": [1, 2]}}),
+            row(2, "portal-b", {}),
+            row(3, "unseen", {}),
+        ],
+        learning_property_ids=set(),
+        activity_property_ids=set(),
+    )
+    assert [item["property_id"] for item in result["candidates"]] == [3]

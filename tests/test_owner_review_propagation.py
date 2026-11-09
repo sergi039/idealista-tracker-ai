@@ -16,6 +16,9 @@ hour nobody is looking, and reads as a caching bug.
 """
 
 import json
+import re
+from html import unescape
+from urllib.parse import parse_qs, urlparse
 from datetime import date, datetime, timedelta
 from unittest.mock import patch
 
@@ -168,7 +171,8 @@ class TestBothFiltersTogether:
 def _links(body, prefix):
     """Every href on the page starting with `prefix`, unescaped.
 
-    Minus exactly one: the count line's "clear filters" link. This file
+    Exclude explicitly labelled filter-removal controls, including the count
+    line's "clear filters" link, advanced Clear and removable condition chips. This file
     guards against a link *silently* widening the page; that link's entire,
     labelled purpose is to drop the filter bar, and the narrowing note beside
     it says what it is dropping ("Filters: X of Y shown"). Excluded here by
@@ -183,7 +187,15 @@ def _links(body, prefix):
         if not href_match:
             continue
         href = href_match.group(1).replace("&amp;", "&")
-        if href.startswith(prefix) and 'id="clear-filters-link"' not in tag:
+        removal = any(
+            marker in tag
+            for marker in (
+                'id="clear-filters-link"',
+                'id="clear-additional-filters"',
+                'class="filter-chip"',
+            )
+        )
+        if href.startswith(prefix) and not removal:
             links.append(href)
     return links
 
@@ -405,6 +417,29 @@ def test_a_row_untouched_by_this_feature_still_renders(client, profile):
     db.session.commit()
     body = _rendered(client.get("/properties"))
     assert "Plot legacy" in body
-    # No badge: `undecided` is most of the table, and a badge on most of the
-    # table marks nothing.
-    assert "Not decided yet" not in body
+    # The approved decision column states the neutral case without a badge.
+    assert "Not decided yet" in body
+    assert not re.search(
+        r'<span[^>]*class="[^"]*badge[^"]*"[^>]*>\s*Not decided yet', body
+    )
+
+
+@pytest.mark.parametrize("removed,kept", [("verdict", "action"), ("action", "verdict")])
+def test_explicit_owner_condition_removal_keeps_the_other(client, rows, removed, kept):
+    body = _rendered(client.get(f"/properties?{BOTH}&mode=combined&view_type=list"))
+    values = {"verdict": "rejected", "action": "overdue"}
+    links = []
+    for tag in re.findall(r'<a\b[^>]*class="filter-chip"[^>]*>', body):
+        href = unescape(re.search(r'href="([^"]+)"', tag).group(1))
+        query = parse_qs(urlparse(href).query)
+        if removed not in query and query.get(kept) == [values[kept]]:
+            links.append(href)
+    assert len(links) == 1, "one named chip removes only this applied condition"
+    landed = _rendered(client.get(links[0]))
+    assert "Plot rejected-and-late" in landed
+    if removed == "verdict":
+        assert "Plot interested-and-late" in landed
+        assert "Plot rejected-only" not in landed
+    else:
+        assert "Plot rejected-only" in landed
+        assert "Plot interested-and-late" not in landed

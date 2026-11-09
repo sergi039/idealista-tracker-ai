@@ -8,11 +8,15 @@ import re
 import requests
 import time
 import random
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple, Optional, Dict, Tuple
+from urllib.parse import urlsplit, parse_qs
 
 from models import Land, LandHistory, Property, SyncHistory
 from app import db
+from services import fotocasa_source, milanuncios_source, yaencontre_source
+from services.enrichment_write import check_writable, locked_write
 
 #  moved to utils/http.py with  (#399) and is
 # re-exported here: it was this module's for months, and
@@ -21,6 +25,7 @@ from utils.http import (  # noqa: F401  (re-export)
     HostBreakers,
     RefusalBreaker,
     request_with_retries,
+    HTTP_USER_AGENT,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,6 +68,8 @@ class ListingStatusService:
         "checking your browser",
         "just a moment",
         "ddos-guard",
+        "access is temporarily restricted",
+        "we detected unusual activity from your device or network",
     ]
 
     # Patterns that indicate listing was sold
@@ -72,8 +79,9 @@ class ListingStatusService:
         "se ha vendido",
     ]
 
-    # User agent to mimic browser
-    USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    USER_AGENT = HTTP_USER_AGENT
+    # Known source refusals are not healed by a fresh process or alternate IP.
+    REFUSED_SOURCES = frozenset({"idealista"})
 
     # When idealista refuses this machine it refuses everything: measured
     # 2026-08-10, the home page answers 403 with the same DataDome block page a
@@ -98,7 +106,12 @@ class ListingStatusService:
         threshold=REFUSAL_BREAKER_THRESHOLD, cooldown_s=REFUSAL_COOLDOWN_S
     )
 
+    browser_breakers = HostBreakers(
+        threshold=REFUSAL_BREAKER_THRESHOLD, cooldown_s=REFUSAL_COOLDOWN_S
+    )
+
     def __init__(self):
+        self.captured_photos = None
         self.session = requests.Session()
         self.session.headers.update(
             {
@@ -132,8 +145,22 @@ class ListingStatusService:
         storage contract is unchanged: 'error' still writes nothing, so no
         reason here can become a status.
         """
+        self.captured_photos = None
         if not url:
             return Observation("error", None, "no_url")
+
+        # The archived MacBook bulk audit reached Yaencontre's restriction on
+        # the owner's shared public IP. Ingestion already uses email only and
+        # Property checks exclude this source; enforce the same stop for Land
+        # and direct observe callers, before even consulting a process-local
+        # breaker. Restarting a worker must not buy another probe here.
+        if yaencontre_source.is_yaencontre_url(url):
+            return Observation("error", None, "blocked")
+
+        from utils.listing_source import source_of_url
+
+        if source_of_url(url) in self.REFUSED_SOURCES:
+            return Observation("error", None, "blocked")
 
         # Resolved once, from this URL: the wall belongs to one host, and the
         # rest of this method must not reach for a different one.
@@ -153,19 +180,21 @@ class ListingStatusService:
             return Observation("error", None, "backing_off")
 
         try:
+            host = urlsplit(url).hostname
+            gate = None
+            if host in ("www.fotocasa.es", "fotocasa.es"):
+                gate = fotocasa_source.FOTOCASA_GATE
+            elif host in ("www.milanuncios.com", "milanuncios.com"):
+                gate = milanuncios_source.MILANUNCIOS_GATE
             response = request_with_retries(
                 self.session.get,
                 url,
                 timeout=15,
                 allow_redirects=True,
                 logger=logger,
+                gate=gate,
+                portal_egress=True,
             )
-
-            # Check for 404
-            if response.status_code == 404:
-                # A reached answer, not a refusal: the host talked to us.
-                breaker.record_success()
-                return Observation("removed", None)
 
             # Check response content
             content = response.text.lower()
@@ -175,6 +204,19 @@ class ListingStatusService:
                 if pattern.lower() in content:
                     logger.warning(f"Hit captcha protection for: {url}")
                     return self._refused("blocked", url)
+
+            final_url = getattr(response, "url", None)
+            final = urlsplit(
+                final_url if isinstance(final_url, str) and final_url else url
+            )
+            if (host or "").removeprefix("www.") != (final.hostname or "").removeprefix(
+                "www."
+            ):
+                return self._refused("not_the_listing_page", url)
+
+            if response.status_code in (404, 410):
+                breaker.record_success()
+                return Observation("removed", None)
 
             # Everything below reads the body as if it were the listing page,
             # so refuse anything that is not a plain 200 first. An error page
@@ -194,6 +236,46 @@ class ListingStatusService:
                     "blocked" if response.status_code in (401, 403) else "http_error"
                 )
                 return self._refused(reason, url)
+
+            # Fotocasa's explicit missing-property redirect is an answer about
+            # this request. A bare search redirect is still no evidence.
+            if (
+                host in ("www.fotocasa.es", "fotocasa.es")
+                and fotocasa_source.listing_id_from_url(url) is not None
+                and final.hostname in ("www.fotocasa.es", "fotocasa.es")
+                and final.path.endswith("/l")
+                and "propertyNotFound" in parse_qs(final.query, keep_blank_values=True)
+            ):
+                breaker.record_success()
+                return Observation("removed", None)
+
+            if not self._looks_like_listing_page(url, response):
+                return self._refused("not_the_listing_page", url)
+
+            # These pages embed translations including 'vendido' even for live
+            # adverts. Read their listing payload, never the page-wide lexicon.
+            if host in ("www.fotocasa.es", "fotocasa.es"):
+                # No URL fallback id: the payload must name the advert itself.
+                listing = fotocasa_source.parse_listing(response.text, "")
+                if (
+                    not listing.ok
+                    or listing.listing_id != fotocasa_source.listing_id_from_url(url)
+                ):
+                    return self._refused(listing.refusal or "not_the_listing_page", url)
+                self.captured_photos = listing.photos
+                breaker.record_success()
+                return Observation("active", None)
+            if host in ("www.milanuncios.com", "milanuncios.com"):
+                listing = milanuncios_source.parse_listing(response.text, "")
+                if listing.get("reason") or listing.get(
+                    "listing_id"
+                ) != milanuncios_source.listing_id_from_url(url):
+                    return self._refused(
+                        listing.get("reason") or "not_the_listing_page", url
+                    )
+                self.captured_photos = listing.get("photos")
+                breaker.record_success()
+                return Observation("active", None)
 
             # Check for sold patterns
             for pattern in self.SOLD_PATTERNS:
@@ -260,6 +342,8 @@ class ListingStatusService:
     _LISTING_ID_PATTERNS = (
         (re.compile(r"/inmueble/(\d+)"), "inmueble/{id}(?!\\d)"),
         (re.compile(r"/(\d{4,})/d/?(?:[?#]|$)"), "/{id}/d(?![0-9])"),
+        (re.compile(r"/inmueble-\d+-(\d+)"), r"/inmueble-\d+-{id}(?!\d)"),
+        (re.compile(r"-(\d+)\.htm(?:[?#]|$)"), r"-{id}\.htm(?:$|[?#])"),
     )
 
     @classmethod
@@ -304,7 +388,13 @@ class ListingStatusService:
             return True
 
         final_url = (getattr(response, "url", "") or "").lower()
-        return bool(re.search(served, final_url))
+        asked = urlsplit(url)
+        final = urlsplit(final_url)
+        if (asked.hostname or "").removeprefix("www.") != (
+            final.hostname or ""
+        ).removeprefix("www."):
+            return False
+        return bool(re.search(served, final.path))
 
     def _extract_removal_date(self, html_content: str) -> Optional[str]:
         """Try to extract the removal date from the page content"""
@@ -435,13 +525,53 @@ class ListingStatusService:
             "refusal": refusal,
         }
 
-    def check_property_status(self, prop: Property) -> Dict:
+    def _browser_fallback(self, url):
+        from config import Config
+        from services.listing_browser import classify_page, identity
+        from services.subscription_transport import (
+            read_listing_status,
+            SubscriptionTransportError,
+        )
+
+        if not Config.LISTING_BROWSER_FALLBACK_ENABLED:
+            return None, None
+        try:
+            identity(url)
+        except ValueError:
+            return None, None
+        breaker = self.browser_breakers.for_url(url)
+        if breaker.should_skip():
+            return Observation("error", None, "backing_off"), {
+                "method": "browser_archive"
+            }
+        nonce = uuid.uuid4().hex
+        started = time.monotonic()
+        try:
+            page = read_listing_status(url, nonce)
+            status, refusal = classify_page(
+                url, nonce, page, (time.monotonic() - started) * 1000
+            )
+        except SubscriptionTransportError as exc:
+            status, refusal = (
+                "error",
+                "browser_busy" if exc.status == 503 else "browser_unavailable",
+            )
+        if refusal == "blocked":
+            breaker.record_refusal(refusal)
+        elif status != "error":
+            breaker.record_success()
+        return Observation(status, None, refusal), {"method": "browser_archive"}
+
+    def check_property_status(
+        self, prop: Property, *, allow_browser_fallback: bool = False
+    ) -> Dict:
         """
         Check the listing status for a single universal Property row.
 
         Properties have no history table, so unlike Land there is no snapshot
         side effect here -- the row itself carries status, removal date and
-        last-checked time.
+        last-checked time. Only the explicit single-property action may opt
+        into the owner Chrome reader; batch checks must stay on isolated HTTP.
         """
         if not prop.url:
             return {
@@ -450,10 +580,75 @@ class ListingStatusService:
                 "property_id": prop.id,
             }
 
-        status, removed_date_str, refusal = self.observe(prop.url)
-        previous_status = prop.listing_status
+        from utils.listing_source import IDEALISTA, FOTOCASA, MILANUNCIOS, source_of_url
 
-        changed, _ = self._apply_observed_status(prop, status, removed_date_str)
+        locked = check_writable(prop, True)
+        columns = (
+            "url",
+            "listing_status",
+            "listing_status_source",
+            "listing_last_checked",
+            "listing_removed_date",
+        )
+        baseline = tuple(getattr(prop, key) for key in columns)
+        baseline_attempt = (prop.enrichment or {}).get("listing_status_check")
+        attempt = None
+        url = prop.url
+        started = datetime.now(timezone.utc).isoformat()
+        if source_of_url(url) in {IDEALISTA, FOTOCASA, MILANUNCIOS}:
+            status, removed_date_str, refusal = self.observe(url)
+        else:
+            status, removed_date_str, refusal = Observation(
+                "error", None, "unsupported_source"
+            )
+
+        from services.alternate_publication import REFUSALS, current_publications
+
+        http_refusal = refusal
+        use_alternate = (
+            allow_browser_fallback
+            and source_of_url(url) == IDEALISTA
+            and status == "error"
+            and refusal in REFUSALS
+            and bool(current_publications(prop, datetime.now(timezone.utc)))
+        )
+        browser, browser_meta = (
+            self._browser_fallback(url)
+            if allow_browser_fallback and status == "error" and not use_alternate
+            else (None, None)
+        )
+        if browser is not None:
+            status, removed_date_str, refusal = browser
+
+        with locked_write(prop, locked=locked, commit=True):
+            previous_status = prop.listing_status
+            if (
+                tuple(getattr(prop, key) for key in columns) != baseline
+                or (prop.enrichment or {}).get("listing_status_check")
+                != baseline_attempt
+            ):
+                # A result for an old URL or a superseded manual decision is
+                # not evidence about the current row. No lock spans the fetch.
+                status, refusal = "error", "superseded"
+                changed = False
+            else:
+                enrichment = dict(prop.enrichment or {})
+                attempt = {
+                    "url": url,
+                    "started_at": started,
+                    "attempted_at": datetime.now(timezone.utc).isoformat(),
+                    "observed": status,
+                    "refusal": refusal,
+                }
+                # This describes which route actually ran, not which evidence
+                # might have appeared or expired while the browser was working.
+                if use_alternate:
+                    attempt["method"] = "alternate_publication"
+                elif browser_meta:
+                    attempt.update(browser_meta, http_refusal=http_refusal)
+                enrichment["listing_status_check"] = attempt
+                prop.enrichment = enrichment
+                changed, _ = self._apply_observed_status(prop, status, removed_date_str)
 
         if changed:
             logger.info(
@@ -463,10 +658,10 @@ class ListingStatusService:
                 prop.listing_status,
             )
 
-        db.session.commit()
         return {
             "success": True,
             "property_id": prop.id,
+            "attempt": attempt,
             "previous_status": previous_status,
             "new_status": status,
             "changed": changed,
@@ -476,8 +671,84 @@ class ListingStatusService:
             "refusal": refusal,
             # This listing's host, not every host: a reader looking at one
             # fotocasa listing is not helped by idealista's wall.
-            "breaker": self.breakers.for_url(prop.url).state(),
+            "breaker": (self.browser_breakers if browser_meta else self.breakers)
+            .for_url(prop.url)
+            .state(),
         }
+
+    def check_property_favorites_status(self, limit: int = 30) -> Dict:
+        """Bounded daily checks for the visible universal catalog, oldest first.
+
+        Attempts, not only successful confirmations, rotate the queue. A host
+        that blocks one favorite is not dialled again for its siblings in this
+        run; other portals remain eligible. Removed favorites stay references,
+        not candidates for automatic resurrection.
+        """
+        from models import SearchProfile
+        from services.search_profile_service import SearchProfileService
+
+        limit = max(1, min(int(limit), 50))
+        last_attempt = Property.enrichment["listing_status_check"][
+            "attempted_at"
+        ].as_string()
+        favorites = (
+            Property.query.join(SearchProfile)
+            .filter(
+                Property.is_favorite,
+                Property.listing_status.in_(("active", "unknown")),
+                Property.url.isnot(None),
+                SearchProfile.is_active,
+                SearchProfileService.visible_clause(),
+            )
+            .order_by(
+                last_attempt.asc().nullsfirst(),
+                Property.listing_last_checked.asc().nullsfirst(),
+                Property.id.asc(),
+            )
+            .limit(limit)
+            .all()
+        )
+        results = {
+            "checked": 0,
+            "active": 0,
+            "removed": 0,
+            "sold": 0,
+            "errors": 0,
+            "stopped_early": False,
+            "unchecked": 0,
+            "details": [],
+        }
+        blocked_hosts = set()
+        for prop in favorites:
+            host = self.breakers.host_of(prop.url)
+            if host in blocked_hosts:
+                results["unchecked"] += 1
+                results["stopped_early"] = True
+                continue
+            time.sleep(random.uniform(1, 3))
+            result = self.check_property_status(prop)
+            results["checked"] += 1
+            status = result.get("new_status", "error")
+            results[
+                status if status in ("active", "removed", "sold") else "errors"
+            ] += 1
+            if result.get("refusal") in {
+                "blocked",
+                "backing_off",
+                "not_the_listing_page",
+            }:
+                blocked_hosts.add(host)
+            results["details"].append(
+                {
+                    "property_id": prop.id,
+                    "title": (prop.title or "Unknown")[:50],
+                    "old_status": result.get("previous_status"),
+                    "new_status": status,
+                    "refusal": result.get("refusal"),
+                }
+            )
+        results["breaker"] = self.breakers.state()
+        return results
 
     @staticmethod
     def _was_refused(result: Dict) -> bool:

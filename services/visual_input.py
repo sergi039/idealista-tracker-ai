@@ -1,7 +1,7 @@
 """Bounded photo inputs for the optional visual descriptor extractor.
 
 Portal URLs are display links, not blanket permission for a server-side fetch.
-This module accepts only the three image CDNs already captured by the portal
+This module accepts only approved image CDNs already captured by the portal
 readers, refuses redirects, and streams a small number of bytes at a time.
 The bridge receives typed bytes and hashes, never a URL or host filesystem
 path.  It may therefore attach an image to Codex without acquiring a general
@@ -21,6 +21,7 @@ from urllib.parse import urljoin, urlsplit
 import requests
 
 from services import attachments, portal_photos
+from utils.http import portal_proxies
 
 SCHEMA_VERSION = 1
 MAX_IMAGES = 3
@@ -31,11 +32,12 @@ _CONNECT_TIMEOUT_S = 3
 _READ_TIMEOUT_S = 15
 
 # These are image origins established by the portal import readers, rather
-# than an arbitrary host supplied in a row edited through psql.
+# than an arbitrary host supplied in a row edited through psql. Keep the
+# refused Idealista/Yaencontre hosts out of the server-fetch allowlist; the
+# separate display reader still retains their captured photo URLs.
 _PORTAL_IMAGE_HOSTS = frozenset(
     {
         "static.fotocasa.es",
-        "media.yaencontre.com",
         "images.milanuncios.com",
         "images-re.milanuncios.com",
     }
@@ -197,6 +199,7 @@ def dossier_photo_sources(
             stream=True,
             allow_redirects=False,
             timeout=(_CONNECT_TIMEOUT_S, _READ_TIMEOUT_S),
+            proxies=portal_proxies(session=http),
         )
         if response.status_code != 200:
             return []
@@ -361,6 +364,7 @@ def download_photo_source(
             allow_redirects=False,
             timeout=(_CONNECT_TIMEOUT_S, _READ_TIMEOUT_S),
             headers={"User-Agent": "IdealistaRank visual descriptor input"},
+            proxies=portal_proxies(session=http),
         )
         if response.status_code != 200:
             raise VisualInputError(f"photo source returned HTTP {response.status_code}")

@@ -13,6 +13,7 @@ more than one profile's listings at once was impossible.
 import html
 import json
 import re
+from html.parser import HTMLParser
 
 import pytest
 
@@ -22,17 +23,22 @@ from tests import setup_test_environment
 
 
 def _extract_href(body, title_text):
-    """Pull the href of the <a ...> whose title attribute is `title_text`.
+    """Read one titled anchor independently of attribute order or whitespace."""
 
-    The templates emit `href="..."` on the line before `title="..."`, so a
-    plain substring check like `"profile_id=all" in body` can't tell *which*
-    link on the page carries it -- it passes as long as any one link does,
-    even if a different link silently lost it. Pinning each link's own href
-    is the only way to prove both independently.
-    """
-    match = re.search(rf'href="([^"]*)"\s*\n?\s*title="{re.escape(title_text)}"', body)
-    assert match, f"no link with title={title_text!r} found in the page"
-    return match.group(1)
+    class Links(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.href = None
+
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if tag == "a" and attrs.get("title") == title_text:
+                self.href = attrs.get("href")
+
+    links = Links()
+    links.feed(body)
+    assert links.href, f"no link with title={title_text!r} found in the page"
+    return links.href
 
 
 def _property_ids(body):

@@ -44,6 +44,8 @@ from services.listing_attribute_filters import (
 )
 from services import taste_service
 from services import taste_recommendation
+from services import recommendation_feedback
+from services import recommendation_duplicates
 from services import favorite_similarity
 from services.coordinate_quality import shared_coordinate_peers
 from services import advertiser
@@ -80,7 +82,7 @@ from utils.listing_filters import (
     rebuilt_from,
 )
 from utils.listing_search import interpret_search, listing_search_clause
-from utils.listing_source import source_filter_clause
+from utils.listing_source import source_filter_clause, source_label, source_of
 from utils.listing_status_scope import resolve_hide_removed
 from utils import listing_filter_memory
 from utils.municipality_grouping import (
@@ -343,22 +345,47 @@ def _criteria_context():
     return subscription_criteria.profile_context(Property)
 
 
-def _recommendation_selection(query, profile_data, profile_summary, similarity_ctx):
-    """One recommendation reading and hard-exclusion set for page and CSV."""
+def _recommendation_selection(
+    query, profile_data, profile_summary, similarity_ctx, *, focus_id=None
+):
+    """Apply the same evidence-based collection on the list, map and export."""
+    rows = query.all()
     context = taste_recommendation.build_context(
-        query.all(),
+        rows,
         profile_data,
         profile_summary,
         similarity_ctx=similarity_ctx,
+        negative_feedback=recommendation_feedback.load_negative_listing_feedback(rows),
     )
-    excluded_ids = [
+    context = taste_recommendation.apply_card_votes(context, rows)
+    excluded_ids = {
         property_id
         for property_id, reading in context.readings.items()
         if reading.get("eligibility") == "excluded"
-    ]
-    if excluded_ids:
-        query = query.filter(Property.id.notin_(excluded_ids))
-    return query, context, len(excluded_ids)
+    }
+    review = request.args.get("recommendation_scope") == "review"
+    selected_ids = {
+        property_id
+        for property_id, reading in context.readings.items()
+        if property_id not in excluded_ids
+        and reading["state"] not in {"reference", "rejected"}
+        and (
+            reading.get("needs_review")
+            if review
+            else reading["state"] == "candidate" and reading.get("group") == "confident"
+        )
+    }
+    duplicate_ids = recommendation_duplicates.duplicate_ids(
+        rows,
+        context.readings,
+        context.readings.keys() - selected_ids,
+        focus_id=focus_id,
+    )
+    return (
+        query.filter(Property.id.in_(selected_ids - duplicate_ids)),
+        context,
+        len(excluded_ids),
+    )
 
 
 # The filter bar's dimensions, in the order the page applies them. One home
@@ -713,6 +740,8 @@ def _map_focus_link(profile_id, keep_filters=True):
         # (`utils/listing_filters.CLEARED_NOT_ABSENT`). Without this the
         # notice for a criteria-hidden listing linked to itself.
         args.update(CLEARED_NOT_ABSENT)
+        if "recommendation" in (request.args.get("mode"), request.args.get("sort")):
+            args.update(mode="combined", sort=DEFAULT_PROPERTY_SORT)
     return url_for("main.map_view", profile_id=profile_id, **args)
 
 
@@ -902,7 +931,13 @@ def _search_reveal_notice(read, shown_total, profile_selection):
     }
 
 
-def _empty_state_scope(profile_selection, criteria_ctx):
+def _empty_state_scope(
+    profile_selection,
+    criteria_ctx,
+    recommendation_profile_data,
+    recommendation_profile_summary,
+    similarity_ctx,
+):
     """What the reader's subscription selection holds with nothing narrowing.
 
     The empty state named one remedy -- ingest more listings -- for a page
@@ -913,7 +948,7 @@ def _empty_state_scope(profile_selection, criteria_ctx):
     a real offer. Counted on the zero-result path alone, where an extra
     COUNT(*) costs nothing anybody is waiting for.
 
-    Returns (total, url). The count is taken under `criteria=all` and with
+    Returns (total, url, recommendations). The count is taken under `criteria=all` and with
     both toolbar switches off, which is exactly what the link states.
     """
     query = apply_profile_filter(
@@ -927,7 +962,18 @@ def _empty_state_scope(profile_selection, criteria_ctx):
     # mean the switches too or the count and the page it lands on disagree.
     args["hide_removed"] = "off"
     args["page"] = 1
-    return query.count(), url_for("main.properties", **args)
+    if "recommendation" in (request.args.get("mode"), request.args.get("sort")):
+        recommended, _, _ = _recommendation_selection(
+            query,
+            recommendation_profile_data,
+            recommendation_profile_summary,
+            similarity_ctx,
+        )
+        total = recommended.count()
+        if total:
+            return total, url_for("main.properties", **args), True
+        args.update(mode="combined", sort=DEFAULT_PROPERTY_SORT)
+    return query.count(), url_for("main.properties", **args), False
 
 
 class ProfileListingCount(NamedTuple):
@@ -1353,7 +1399,7 @@ def _source_choices(base_query, applied=""):
     page picking that source opens: Idealista offered "(318)" over a page
     finding 263 before it did.
     """
-    from utils.listing_source import SOURCES, source_label, source_of_url
+    from utils.listing_source import SOURCES, source_of_url
 
     query = base_query.with_entities(Property.url)
     counts = {}
@@ -1597,6 +1643,12 @@ def index():
     legacy `Land` model cannot represent the houses that now arrive.
     """
     return redirect(url_for("main.properties"))
+
+
+@main_bp.route("/design-system")
+def design_system():
+    """Read-only examples of the shared Bootstrap interface contract."""
+    return render_template("design_system.html")
 
 
 @main_bp.route("/properties")
@@ -2156,9 +2208,11 @@ def properties():
                     sort_column.desc().nullslast(), Property.id.asc()
                 )
 
-        # Derive the highlighted mode from the sort actually applied, the same
-        # way /lands does, so the buttons cannot disagree with the ordering.
-        if sort_by == "score_investment":
+        # Keep the recommendation collection and its explanations visible
+        # when the owner changes the order of that collection.
+        if mode == "recommendation" or sort_by == "recommendation":
+            active_mode = "recommendation"
+        elif sort_by == "score_investment":
             active_mode = "investment"
         elif sort_by == "score_lifestyle":
             active_mode = "lifestyle"
@@ -2166,8 +2220,6 @@ def properties():
             active_mode = "combined"
         elif sort_by == "taste_score":
             active_mode = "taste"
-        elif sort_by == "recommendation":
-            active_mode = "recommendation"
         else:
             active_mode = mode
 
@@ -2189,6 +2241,13 @@ def properties():
                 recommendation_profile_data,
                 recommendation_profile_summary,
                 similarity_ctx=similarity_ctx,
+                negative_feedback=(
+                    recommendation_feedback.load_negative_listing_feedback(
+                        pagination.items
+                    )
+                    if recommendation_profile_data
+                    else None
+                ),
             )
 
         # Nothing on screen: the two things the page used to get wrong about
@@ -2200,9 +2259,18 @@ def properties():
         )
         empty_state_scope_total = None
         empty_state_clear_url = None
+        empty_state_clear_recommendations = False
         if not pagination.total:
-            empty_state_scope_total, empty_state_clear_url = _empty_state_scope(
-                profile_selection, criteria_ctx
+            (
+                empty_state_scope_total,
+                empty_state_clear_url,
+                empty_state_clear_recommendations,
+            ) = _empty_state_scope(
+                profile_selection,
+                criteria_ctx,
+                recommendation_profile_data,
+                recommendation_profile_summary,
+                similarity_ctx,
             )
 
         # Travel columns for whatever subscriptions are on screen: presets for
@@ -2331,6 +2399,7 @@ def properties():
             # genuine and no recovery is offered for it.
             empty_state_scope_total=empty_state_scope_total,
             empty_state_clear_url=empty_state_clear_url,
+            empty_state_clear_recommendations=empty_state_clear_recommendations,
             # The page's one date. Every badge that asks whether an action is
             # late is handed this value; a template calling `date.today()` per
             # row would disagree with the query that selected the rows.
@@ -2359,8 +2428,14 @@ def properties():
                 "hide_removed": hide_removed_filter,
                 "sort_by": sort_by,
                 "order": sort_order,
-                "mode": mode,
+                "mode": "recommendation" if wants_recommendation_ranking else mode,
                 "active_mode": active_mode,
+                "recommendation_scope": (
+                    "review"
+                    if wants_recommendation_ranking
+                    and request.args.get("recommendation_scope") == "review"
+                    else None
+                ),
                 "view_type": view_type,
                 "page": page,
                 "per_page": per_page,
@@ -2642,6 +2717,7 @@ def profiles():
     """
     try:
         from services.search_profile_service import SearchProfileService
+        from services import search_management as management
 
         profiles = SearchProfileService.list_profiles(active_only=False)
         # Ensure at least one profile exists.
@@ -2665,13 +2741,76 @@ def profiles():
             profiles=profiles,
             property_counts=counts,
             unassigned_count=unassigned_count,
+            technical=request.args.get("view") == "technical",
+            management=management,
+            names={p.id: p.name for p in profiles},
         )
     except Exception:
         logger.error("Failed to load profiles page", exc_info=True)
-        flash("An error occurred while loading profiles. Check server logs.", "error")
-        return render_template(
-            "profiles.html", profiles=[], property_counts={}, unassigned_count=0
+        abort(500)
+
+
+@main_bp.route("/profiles/manage", methods=["GET", "POST"])
+def manage_searches():
+    """A session-bound, expiring preview; the service rechecks it under locks."""
+    from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+    from services import search_management as management
+
+    serializer = URLSafeTimedSerializer(
+        current_app.secret_key, salt="search-management-v1"
+    )
+    try:
+        if request.method == "POST":
+            payload = serializer.loads(
+                request.form.get("preview_token", ""), max_age=1800
+            )
+            if payload.get("session") != session.get("search_management_nonce"):
+                raise ValueError("stale_preview")
+            management.apply(
+                payload["sources"],
+                payload["target"],
+                payload["action"],
+                payload["fingerprint"],
+                acknowledge=request.form.get("acknowledge") == "on",
+            )
+            flash(t("search_management_done"), "success")
+            return redirect(url_for("main.profiles"))
+        source_ids = [int(value) for value in request.args.getlist("source_id")]
+        action = request.args.get("action", "merge")
+        target_id = (
+            request.args.get("target_id", type=int) if action == "merge" else None
         )
+        report = management.preview(source_ids, target_id, action)
+        nonce = session.setdefault("search_management_nonce", uuid.uuid4().hex)
+        token = serializer.dumps(
+            {
+                "sources": source_ids,
+                "target": target_id,
+                "action": action,
+                "fingerprint": report["fingerprint"],
+                "session": nonce,
+            }
+        )
+        return render_template(
+            "search_management_preview.html", report=report, preview_token=token
+        )
+    except (BadSignature, SignatureExpired, ValueError, KeyError, TypeError) as exc:
+        db.session.rollback()
+        reason = (
+            str(exc)
+            if str(exc)
+            in {
+                "stale_preview",
+                "acknowledge_conflicts",
+                "source_carries_a_pattern",
+                "source_is_a_route_target",
+                "protected_profile",
+                "invalid_target",
+            }
+            else "invalid_selection"
+        )
+        flash(t("search_management_error_" + reason), "error")
+        return redirect(url_for("main.profiles", view="technical"))
 
 
 @main_bp.route("/profiles/<int:profile_id>/visibility", methods=["POST"])
@@ -2688,8 +2827,21 @@ def set_profile_visibility(profile_id):
     arrive, with nothing on screen saying where they went -- the same reason
     `edit_profile` forces the default profile active.
     """
-    profile = db.get_or_404(SearchProfile, profile_id)
+    # Serialize Show/Hide with merge, retirement and explicit promotion.
+    # Re-read under the same row lock used by search management before
+    # checking ownership; a stale Show must not unhide a technical stub.
+    profile = (
+        SearchProfile.query.filter_by(id=profile_id)
+        .populate_existing()
+        .with_for_update()
+        .first_or_404()
+    )
     hidden = request.form.get("hidden") == "on"
+    from services.search_management import owner_search
+
+    if not hidden and not owner_search(profile):
+        flash(t("search_management_error_protected_profile"), "error")
+        return redirect(url_for("main.profiles", view="technical"))
 
     if hidden and profile.is_default:
         flash(t("profile_default_cannot_hide"), "error")
@@ -2769,7 +2921,28 @@ def edit_profile(profile_id):
     )
     from services.settings_service import SettingsService
 
-    profile = db.get_or_404(SearchProfile, profile_id)
+    if request.method == "POST":
+        # Eligibility and the settings write must share management's row lock.
+        # Making a default also updates other profiles: acquire those locks in
+        # id order first, matching route_profile's order rather than inverting it.
+        if (
+            request.form.get("action") or ""
+        ).strip() == "save_profile_settings" and request.form.get("is_default") == "on":
+            SearchProfile.query.order_by(SearchProfile.id).with_for_update().all()
+        profile = (
+            SearchProfile.query.filter_by(id=profile_id)
+            .populate_existing()
+            .with_for_update()
+            .first_or_404()
+        )
+    else:
+        profile = db.get_or_404(SearchProfile, profile_id)
+
+    from services.search_management import owner_search
+
+    if request.method == "POST" and not owner_search(profile):
+        flash(t("search_management_error_protected_profile"), "error")
+        return redirect(url_for("main.profiles", view="technical"))
 
     if request.method == "POST":
         action = (request.form.get("action") or "").strip()
@@ -4797,6 +4970,23 @@ def map_view():
         query, rejected_hidden_count = owner_review.apply_rejected_hide(
             query, Property, verdict_filter, count_hidden=True
         )
+        recommendation_map = "recommendation" in (
+            request.args.get("mode"),
+            request.args.get("sort"),
+        )
+        if recommendation_map:
+            profile_data = taste_service.load_current_profile()
+            profile_summary = taste_service.recommendation_profile_state(profile_data)
+            query, _, _ = _recommendation_selection(
+                query, profile_data, profile_summary, None, focus_id=focus_id
+            )
+            if focus_property is not None:
+                query_without_profile, _, _ = _recommendation_selection(
+                    query_without_profile.filter(Property.id == focus_id),
+                    profile_data,
+                    profile_summary,
+                    None,
+                )
         props = query.all()
 
         # The lift, in the only control this page has — a link. Same URL,
@@ -4887,41 +5077,30 @@ def map_view():
                     }
                 )
 
-        # "List View" has to land on the set this map is drawing. It carried
-        # `profile_id` alone until #444, so a map of the 52 listings sold by
-        # their owners had a button that opened a list of 144.
-        #
-        # It is no longer a list of keys. #444 wrote one, and it was stale
-        # within the hour -- `verdict` and `action` (#430) had reached
-        # /properties that same morning -- which is why the filters are now
-        # read through `FilterArgs` above and handed straight back here. What
-        # this page reads is what this link carries, and there is nothing to
-        # keep in step (utils/listing_filters.py).
-        #
-        # `hide_removed` is the one key that is *not* the record of a read, and
-        # it is stated rather than copied: the map excludes delisted listings
-        # unconditionally (the `notin_` above) whatever the caller asked, so
-        # 'on' is what this map is really showing, and reading the parameter
-        # would send the reader to a list holding rows the map refused to plot.
-        # Stating it also follows `utils/listing_status_scope.py` (#439) -- a
-        # link should say what it means rather than rely on the reading at the
-        # far end. Note what it is no longer: before #439 the value was load
-        # bearing, because an absent `hide_removed` beside any other filter
-        # read as an unticked box and widened the list. That mechanism is gone,
-        # and measured today the far end agrees either way. Keep the statement;
-        # do not restore the old reasoning for it.
-        #
-        # `measured` used to be excluded here, deliberately, because this page
-        # did not apply it -- and a link carrying a filter its origin ignored
-        # opens a list narrower than the map it came from. #445 removed the
-        # premise by applying it above, so it now rides the link like any other
-        # filter. If a future filter is again read by /properties and not by
-        # this page, the answer is the same as it was: do not carry it.
+        # Standalone maps return to a list with the map's own filters and
+        # withdrawn listings hidden. A Recommendations map returns to the
+        # originating collection and display state, which can also show rows
+        # the map cannot plot.
         list_view_args = {
             "profile_id": list(profile_selection.link_values),
             **filters.link_args(),
             "hide_removed": "on",
         }
+        if recommendation_map:
+            list_view_args.update(
+                rebuilt_from(
+                    request.args,
+                    keep={
+                        "mode",
+                        "sort",
+                        "order",
+                        "view_type",
+                        "per_page",
+                        "hide_removed",
+                        "recommendation_scope",
+                    },
+                )
+            )
 
         markers = []
         for prop in props:
@@ -4937,6 +5116,7 @@ def map_view():
                     "category": prop.property_category,
                     "subtype": prop.property_subtype,
                     "url": prop.url,
+                    "source_label": source_label(source_of(prop)),
                     "municipality": prop.municipality,
                     "travel": prop.travel if isinstance(prop.travel, dict) else None,
                     # The popup draws the same travel badges the list does, so
@@ -4957,6 +5137,7 @@ def map_view():
             selected_profile_id=selected_profile_id,
             profile_selection=profile_selection,
             list_view_args=list_view_args,
+            recommendation_map=recommendation_map,
             travel_display_targets=travel_display_targets,
             focus_notice=focus_notice,
             # The map drops a hidden subscription's markers exactly as the

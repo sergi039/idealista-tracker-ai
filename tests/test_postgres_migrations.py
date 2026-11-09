@@ -3406,3 +3406,306 @@ def test_028_a_judged_row_that_fails_the_criteria_is_still_shown_on_postgres(
         ).get_json()
         assert {p["id"] for p in only_fails["properties"]} == fails
         _db.session.remove()
+
+
+def test_management_merge_serializes_ingestion_and_preserves_enrichment(
+    postgres_url, monkeypatch
+):
+    """A row held by an enrichment writer delays merge; a later insert follows its stub."""
+    import threading
+    from app import create_app
+    from migrations.runner import run_migrations
+    from models import Property, SearchProfile
+    from services import search_management
+    from tests import setup_test_environment
+
+    engine = create_engine(postgres_url)
+    run_migrations(engine)
+    setup_test_environment()
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    app = create_app()
+    with app.app_context():
+        source, target = SearchProfile(name="City"), SearchProfile(name="Region")
+        db.session.add_all([source, target])
+        db.session.flush()
+        row = Property(
+            source_email_id="management-concurrent",
+            search_profile_id=source.id,
+            enrichment={"original": True},
+        )
+        db.session.add(row)
+        db.session.commit()
+        source_id, target_id, row_id = source.id, target.id, row.id
+
+    started, done = threading.Event(), threading.Event()
+    errors = []
+
+    def merge():
+        try:
+            with app.app_context():
+                started.set()
+                report = search_management.preview([source_id], target_id, lock=True)
+                search_management.apply(
+                    [source_id], target_id, "merge", report["fingerprint"]
+                )
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            done.set()
+
+    try:
+        with engine.begin() as writer:
+            writer.execute(
+                text("SELECT id FROM properties WHERE id=:id FOR UPDATE"),
+                {"id": row_id},
+            )
+            thread = threading.Thread(target=merge, daemon=True)
+            thread.start()
+            assert started.wait(10)
+            # Observe actual pg_locks rather than treating a sleeping thread as proof.
+            deadline = time.monotonic() + 10
+            blocked = False
+            while time.monotonic() < deadline and not done.is_set():
+                with engine.connect() as observer:
+                    blocked = observer.execute(
+                        text(
+                            "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT%%properties%%')"
+                        )
+                    ).scalar()
+                if blocked:
+                    break
+                time.sleep(0.02)
+            assert blocked, errors
+            writer.execute(
+                text(
+                    "UPDATE properties SET enrichment='{"
+                    + '"original": true, "concurrent": true'
+                    + "}'::json WHERE id=:id"
+                ),
+                {"id": row_id},
+            )
+        thread.join(15)
+        assert done.is_set() and not errors
+        with app.app_context():
+            row = db.session.get(Property, row_id)
+            assert row.search_profile_id == target_id
+            assert (
+                row.enrichment["concurrent"] is True
+                and row.enrichment["original"] is True
+            )
+            assert row.enrichment["profile_transfers"] == [
+                {"from_profile_id": source_id, "to_profile_id": target_id}
+            ]
+            # Stale raw ingestion identity is canonicalized by the production trigger.
+            incoming = Property(
+                source_email_id="after-management-merge", search_profile_id=source_id
+            )
+            db.session.add(incoming)
+            db.session.commit()
+            db.session.refresh(incoming)
+            assert incoming.search_profile_id == target_id
+    finally:
+        engine.dispose()
+
+
+def test_show_cannot_revive_a_concurrently_technical_subscription(
+    postgres_url, monkeypatch
+):
+    """Pause Show after its role check: Move to technical must wait for its row lock."""
+    import threading
+    from app import create_app
+    from migrations.runner import run_migrations
+    from models import SearchProfile
+    from services import search_management
+    from tests import setup_test_environment
+
+    engine = create_engine(postgres_url)
+    run_migrations(engine)
+    setup_test_environment()
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    app = create_app(testing=True)
+    with app.app_context():
+        source = SearchProfile(
+            name="Hidden owner search", is_hidden=True, is_active=True
+        )
+        db.session.add(source)
+        db.session.commit()
+        source_id = source.id
+
+    checked, release_show, move_started, move_done = [
+        threading.Event() for _ in range(4)
+    ]
+    errors = []
+    original = search_management.owner_search
+
+    def paused_owner_search(profile):
+        result = original(profile)
+        if threading.current_thread().name == "show-owner-search":
+            checked.set()
+            assert release_show.wait(15), "Show was never released"
+        return result
+
+    monkeypatch.setattr(search_management, "owner_search", paused_owner_search)
+
+    def show():
+        try:
+            with app.test_client() as client:
+                assert (
+                    client.post(
+                        f"/profiles/{source_id}/visibility", data={"hidden": "off"}
+                    ).status_code
+                    == 302
+                )
+        except BaseException as exc:
+            errors.append(exc)
+
+    def move():
+        try:
+            with app.app_context():
+                move_started.set()
+                report = search_management.preview(
+                    [source_id], action="technical", lock=True
+                )
+                search_management.apply(
+                    [source_id], None, "technical", report["fingerprint"]
+                )
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            move_done.set()
+
+    shower = threading.Thread(target=show, name="show-owner-search", daemon=True)
+    mover = threading.Thread(target=move, daemon=True)
+    try:
+        shower.start()
+        assert checked.wait(10)
+        mover.start()
+        assert move_started.wait(10)
+        deadline = time.monotonic() + 10
+        blocked = False
+        while time.monotonic() < deadline and not move_done.is_set():
+            with engine.connect() as observer:
+                blocked = observer.execute(
+                    text(
+                        "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT%%search_profiles%%')"
+                    )
+                ).scalar()
+            if blocked:
+                break
+            time.sleep(0.02)
+        assert blocked, (
+            "Move did not wait: Show's eligibility check and update are not atomic"
+        )
+    finally:
+        release_show.set()
+        shower.join(15)
+        if mover.ident:
+            mover.join(15)
+        engine.dispose()
+    assert not shower.is_alive() and not mover.is_alive() and not errors
+    with app.app_context():
+        source = db.session.get(SearchProfile, source_id)
+        assert source.is_hidden is True
+        assert search_management.state(source) == "technical"
+
+
+def test_stale_settings_save_cannot_reactivate_a_removed_subscription(
+    postgres_url, monkeypatch
+):
+    """Before the fix, a POST reads owner state before removal, then saves over it."""
+    import threading
+    from app import create_app
+    from migrations.runner import run_migrations
+    from models import SearchProfile
+    from services import search_management
+    from tests import setup_test_environment
+
+    engine = create_engine(postgres_url)
+    run_migrations(engine)
+    setup_test_environment()
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    app = create_app(testing=True)
+    with app.app_context():
+        source = SearchProfile(
+            name="Archived matcher search", is_active=False, description="Retained"
+        )
+        db.session.add(source)
+        db.session.commit()
+        source_id = source.id
+
+    removal_pending, release_removal, edit_started = [
+        threading.Event() for _ in range(3)
+    ]
+    errors, responses = [], []
+    original = search_management.set_state
+
+    def paused_removal(profile, value):
+        original(profile, value)
+        if threading.current_thread().name == "remove-owner-search":
+            removal_pending.set()
+            assert release_removal.wait(15), "Removal was never released"
+
+    monkeypatch.setattr(search_management, "set_state", paused_removal)
+
+    def remove():
+        try:
+            with app.app_context():
+                report = search_management.preview(
+                    [source_id], action="remove", lock=True
+                )
+                search_management.apply(
+                    [source_id], None, "remove", report["fingerprint"]
+                )
+        except BaseException as exc:
+            errors.append(exc)
+
+    def edit():
+        try:
+            with app.test_client() as client:
+                edit_started.set()
+                response = client.post(
+                    f"/profiles/{source_id}/edit",
+                    data={
+                        "action": "save_profile_settings",
+                        "is_active": "on",
+                        "description": "Stale settings",
+                    },
+                )
+                responses.append((response.status_code, response.location))
+        except BaseException as exc:
+            errors.append(exc)
+
+    remover = threading.Thread(target=remove, name="remove-owner-search", daemon=True)
+    editor = threading.Thread(target=edit, daemon=True)
+    try:
+        remover.start()
+        assert removal_pending.wait(10)
+        editor.start()
+        assert edit_started.wait(10)
+        deadline = time.monotonic() + 10
+        waiting = False
+        while time.monotonic() < deadline:
+            with engine.connect() as observer:
+                waiting = observer.execute(
+                    text(
+                        "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%%search_profiles%%')"
+                    )
+                ).scalar()
+            if waiting:
+                break
+            time.sleep(0.02)
+        assert waiting, "Settings request never reached the locked subscription"
+    finally:
+        release_removal.set()
+        remover.join(15)
+        if editor.ident:
+            editor.join(15)
+        engine.dispose()
+    assert not remover.is_alive() and not editor.is_alive() and not errors
+    with app.app_context():
+        source = db.session.get(SearchProfile, source_id)
+        assert search_management.state(source) == "deleted"
+        assert source.is_hidden is True
+        assert source.is_active is False, "Stale settings reactivated a removed search"
+        assert source.description == "Retained"
+    assert responses == [(302, "/profiles?view=technical")]

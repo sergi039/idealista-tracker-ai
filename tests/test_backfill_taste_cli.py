@@ -9,7 +9,9 @@ row comes back in.
 """
 
 import contextlib
+import json
 from argparse import Namespace
+from pathlib import Path
 
 import pytest
 
@@ -167,3 +169,52 @@ def test_nonsense_arguments_are_refused(app, monkeypatch, argv_tail):
     with pytest.raises(SystemExit) as excinfo:
         backfill_taste.main()
     assert excinfo.value.code == 2
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_backfill_marker_matches_actual_arguments(app, monkeypatch, tmp_path, force):
+    profile = SearchProfile(name="Marker")
+    db.session.add(profile)
+    db.session.commit()
+    _ledger_row()
+    row = _mk_property(profile.id)
+    argv = ["--ids", str(row.id), "--apply", "--batch", "1"]
+    if force:
+        argv.append("--force")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["backfill_taste", *argv])
+    monkeypatch.setattr(backfill_taste, "create_app", lambda: app)
+
+    def score(*args, **kwargs):
+        (marker,) = Path("data/.inflight").glob("*.json")
+        data = json.loads(marker.read_text())
+        assert data["argv"] == argv
+        assert data["module"] == "utils.backfill_taste"
+        assert data["resumable"] is not force
+        return {"status": "ok", "rows": {row.id: "scored"}, "bridge_called": True}
+
+    monkeypatch.setattr(taste_service, "score_batch", score)
+    backfill_taste.main()
+    assert not list(Path("data/.inflight").glob("*.json"))
+
+
+def test_profile_build_marker_is_nonresumable_and_cleans_up(app, monkeypatch, tmp_path):
+    from utils import build_taste_profile
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["build_taste_profile", "--apply"])
+    monkeypatch.setattr(build_taste_profile, "create_app", lambda: app)
+
+    def build(**kwargs):
+        (marker,) = Path("data/.inflight").glob("*.json")
+        data = json.loads(marker.read_text())
+        assert data["argv"] == ["--apply"]
+        assert data["module"] == "utils.build_taste_profile"
+        assert data["resumable"] is False
+        return {"status": "failed", "error": "test refusal"}
+
+    monkeypatch.setattr(taste_service, "build_profile", build)
+    with pytest.raises(SystemExit) as excinfo:
+        build_taste_profile.main()
+    assert excinfo.value.code == 1
+    assert not list(Path("data/.inflight").glob("*.json"))

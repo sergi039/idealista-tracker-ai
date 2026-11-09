@@ -199,14 +199,15 @@ class TestCanonicalResolution:
         assert raw.is_hidden is True
         assert stub is not None
 
-    def test_a_name_nobody_claimed_is_born_ordinary(self, app):
+    def test_a_name_nobody_claimed_is_born_unbound_technical(self, app):
         _profile("Galicia · costa", auto_route_from_pattern=r"^Galicia\s")
         created = SearchProfileService.get_or_create_profile_by_name(
             "Asturias oriente casas"
         )
         raw = SearchProfile.query.filter_by(name="Asturias oriente casas").one()
         assert raw.routed_to is None
-        assert raw.is_hidden is False
+        assert raw.is_hidden is True
+        assert raw.ui_config["search_management"]["state"] == "technical"
         assert created is not None
 
     def test_a_broken_pattern_never_kills_mail_routing(self, app):
@@ -269,7 +270,8 @@ class TestABlankPatternClaimsNothing:
             f"a {blank!r} pattern adopted a new subscription: it was born "
             "routed and hidden with no chip and no notice"
         )
-        assert created.is_hidden is not True
+        assert created.is_hidden is True
+        assert created.ui_config["search_management"]["state"] == "technical"
         assert carrier.id != created.id
 
     def test_a_real_pattern_still_adopts(self, app):

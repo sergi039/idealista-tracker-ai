@@ -1,4 +1,7 @@
 import contextvars
+from collections.abc import Mapping
+from functools import partial
+from inspect import signature
 import logging
 import random
 import threading
@@ -9,6 +12,8 @@ from typing import Callable, Dict, Iterable, Optional, Tuple, Union
 from urllib.parse import urlsplit
 
 import requests
+from requests.adapters import HTTPAdapter
+from requests.sessions import Session
 
 # What a caller may hand to `timeout=`. `requests` accepts a scalar, which
 # urllib3 expands to `connect=read=value` -- so a 60 s read allowance for an
@@ -28,6 +33,86 @@ _DEFAULT_RETRY_STATUSES = (429, 500, 502, 503, 504)
 # `IdealistaRank/1.0 (personal property tracker)` is refused while the bare
 # product token is served. Keep this a plain token.
 HTTP_USER_AGENT = "IdealistaRank/1.0"
+
+
+class PortalEgressUnavailable(requests.RequestException):
+    """The explicitly isolated portal route is absent or invalid."""
+
+
+def _has_portal_hooks(hooks):
+    return hooks is not None and (not isinstance(hooks, Mapping) or any(hooks.values()))
+
+
+def portal_proxies(*, session=None, auth=None, hooks=None) -> Dict[str, str]:
+    """Force both URL schemes through the configured route, with no fallback.
+
+    Do not inherit HTTP_PROXY/HTTPS_PROXY/NO_PROXY or accept a caller's direct
+    route. Credentials are deliberately unsupported and never echoed in errors.
+    The operator verifies this proxy's exit IP before enabling collection.
+    """
+    from config import Config
+
+    raw = Config.PORTAL_HTTP_PROXY_URL
+    try:
+        if not isinstance(raw, str) or not raw or any(c.isspace() for c in raw):
+            raise ValueError
+        parsed = urlsplit(raw)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+            or parsed.port == 0
+        ):
+            raise ValueError
+    except ValueError:
+        raise PortalEgressUnavailable(
+            "Portal HTTP requires a configured non-credential isolated proxy"
+        ) from None
+    # Digest auth registers a response hook that can resend a 401 directly
+    # through its adapter; caller hooks can do the same. These public portal
+    # reads do not need authentication or hooks at either Requests layer.
+    if (
+        auth is not None
+        or _has_portal_hooks(hooks)
+        or (
+            isinstance(session, Session)
+            and (session.auth is not None or _has_portal_hooks(session.hooks))
+        )
+    ):
+        raise PortalEgressUnavailable(
+            "Portal HTTP does not allow authentication or response hooks"
+        )
+    if isinstance(session, Session):
+        # A retry adapter can spend several requests below our one-attempt
+        # loop. Unknown adapters may also ignore the proxy argument entirely.
+        # Reject them without modifying a caller's shared session.
+        if any(
+            type(adapter) is not HTTPAdapter
+            or getattr(adapter.max_retries, "total", None) != 0
+            for adapter in session.adapters.values()
+        ):
+            raise PortalEgressUnavailable(
+                "Portal HTTP requires standard adapters without retries"
+            )
+
+    # requests merges session/environment proxy keys with per-call settings.
+    # Host-specific keys win over scheme keys, even when their value is empty
+    # (direct). Replace every routing key, including keys relevant to a later
+    # redirect, rather than merely supplying http/https defaults.
+    keys = set(requests.utils.getproxies()) | {"http", "https"}
+    configured = getattr(session, "proxies", None)
+    if isinstance(configured, Mapping):
+        keys.update(configured)
+    return {
+        key: raw
+        for key in keys
+        if isinstance(key, str) and key not in {"no", "no_proxy"}
+    }
+
 
 # overpass-api.de grants two query slots per IP, answers 504 while both are
 # busy, and answers 429 when the *rate* is too high for the slots it is willing
@@ -414,6 +499,7 @@ def request_with_retries(
     deadline: Optional[float] = None,
     logger: Optional[logging.Logger] = None,
     gate: Optional[RateGate] = None,
+    portal_egress: bool = False,
     **kwargs,
 ) -> requests.Response:
     """Issue a request, retrying the statuses the server retries on.
@@ -467,6 +553,39 @@ def request_with_retries(
     watched refuse three times, and needs those three refusals to learn it.
     The deadline bounds what the very first of them costs.
     """
+    if portal_egress:
+        # The first refusal is the answer. Never retry 429/5xx from a portal
+        # or spend a second request trying a different network route.
+        owner = request_fn
+        # Resolve partial defaults without changing the call. Call-time
+        # keywords take precedence, just as they do for functools.partial.
+        transport_args, transport_kwargs = args, kwargs
+        while isinstance(owner, partial):
+            transport_args = owner.args + transport_args
+            transport_kwargs = {**owner.keywords, **transport_kwargs}
+            owner = owner.func
+        session = getattr(owner, "__self__", None)
+        if session is None:
+            session = transport_kwargs.get("self")
+        if (
+            session is None
+            and transport_args
+            and isinstance(transport_args[0], Session)
+        ):
+            session = transport_args[0]
+        auth, hooks = transport_kwargs.get("auth"), transport_kwargs.get("hooks")
+        if getattr(owner, "__func__", owner) is Session.request:
+            # Session.request (unlike get/post) also accepts auth and hooks
+            # positionally. Refuse them before Requests can install a replay.
+            bound = (
+                signature(owner)
+                .bind_partial(*transport_args, **transport_kwargs)
+                .arguments
+            )
+            auth, hooks = bound.get("auth"), bound.get("hooks")
+        kwargs["proxies"] = portal_proxies(session=session, auth=auth, hooks=hooks)
+        max_attempts = silence_max_attempts = 1
+
     if max_attempts < 1:
         max_attempts = 1
 

@@ -182,12 +182,6 @@
     max-width: 32rem;
 }
 
-.properties-filter-type {
-    flex: 0 1 20rem;
-    min-width: 14rem;
-    width: auto;
-}
-
 .properties-filter-select {
     flex: 0 1 12rem;
     min-width: 10rem;
@@ -198,11 +192,6 @@
     flex: 0 1 17rem;
     min-width: 13rem;
     width: auto;
-}
-
-.properties-filter-order {
-    max-width: 4.5rem;
-    flex-grow: 0;
 }
 
 /* Disabled on purpose (#98) -- keep it visibly inert rather than merely

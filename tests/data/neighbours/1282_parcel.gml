@@ -33,7 +33,7 @@
       <cp:label>01483</cp:label>
       <cp:nationalCadastralReference>15044A01901483</cp:nationalCadastralReference>
       <cp:referencePoint>
-        <gml:Point gml:id="ReferencePoint_ES.SDGC.CP.15044A01901483" srsName="http://www.opengis.net/def/crs/EPSG/0/25829"> 
+        <gml:Point gml:id="ReferencePoint_ES.SDGC.CP.15044A01901483" srsName="http://www.opengis.net/def/crs/EPSG/0/25829">
           <gml:pos>511000.19 4795646.94</gml:pos>
         </gml:Point>
       </cp:referencePoint>

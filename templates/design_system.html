@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% from "components/ui.html" import icon, state_label with context %}
+{% block title %}{{ t('workspace_design_title') }} · IdealistaRank{% endblock %}
+{% block content %}
+<div class="workspace-page-heading"><h1>{{ t('workspace_design_title') }}</h1></div>
+<p class="text-body-secondary">{{ t('workspace_design_intro') }}</p>
+<div class="workspace-catalog-example">
+    <section class="card"><div class="card-body">
+        <h2 class="h5">{{ t('workspace_actions') }}</h2>
+        <div class="d-flex flex-wrap gap-2">
+            <button type="button" class="btn btn-primary">{{ icon('check') }}{{ t('apply') }}</button>
+            <button type="button" class="btn btn-outline-secondary">{{ t('cancel') }}</button>
+            <button type="button" class="btn btn-outline-secondary" disabled>{{ t('loading') }}</button>
+        </div>
+    </div></section>
+    <section class="card"><div class="card-body">
+        <h2 class="h5">{{ t('workspace_data') }}</h2>
+        <div class="d-flex flex-wrap gap-2">
+            {{ state_label(t('unknown')) }}
+            {{ state_label(t('yes'), 'success') }}
+            {{ state_label(t('recommendation_confirmed'), 'success') }}
+            {{ state_label(t('recommendation_review'), 'warning') }}
+            {{ state_label(t('recommendation_stale'), 'warning') }}
+            {{ state_label(t('recommendation_rejected'), 'danger') }}
+        </div>
+        <details class="workspace-row-details"><summary>{{ t('workspace_facts') }}</summary><p>{{ t('workspace_rank_explanation') }}</p></details>
+    </div></section>
+    <section class="card"><div class="card-body">
+        <h2 class="h5">{{ t('workspace_filters') }}</h2>
+        <label for="example-search">{{ t('search') }}</label>
+        <input class="form-control mt-2" id="example-search" placeholder="{{ t('search_properties') }}">
+        <p class="small text-body-secondary mt-2 mb-0">{{ t('workspace_apply_hint') }}</p>
+    </div></section>
+</div>
+{% endblock %}

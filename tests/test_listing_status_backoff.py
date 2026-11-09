@@ -274,6 +274,20 @@ class TestTheRefusalSaysWhichKind:
             (FakeResponse(status_code=403, text=CAPTCHA_PAGE), "blocked"),
             (FakeResponse(status_code=200, text=CAPTCHA_PAGE), "blocked"),
             (FakeResponse(status_code=403, text="<html>denied</html>"), "blocked"),
+            (
+                FakeResponse(
+                    status_code=200,
+                    text="<h1>Access is temporarily restricted</h1>",
+                ),
+                "blocked",
+            ),
+            (
+                FakeResponse(
+                    status_code=200,
+                    text="We detected unusual activity from your device or network.",
+                ),
+                "blocked",
+            ),
             (FakeResponse(status_code=503, text="<html>oops</html>"), "http_error"),
             (
                 FakeResponse(
@@ -294,6 +308,20 @@ class TestTheRefusalSaysWhichKind:
                 observation = ListingStatusService().observe(LISTING_URL)
             assert observation.status == "error"
             assert observation.refusal == expected
+
+    @pytest.mark.parametrize(
+        "host", ["yaencontre.com", "www.yaencontre.com", "m.yaencontre.com"]
+    )
+    def test_yaencontre_stop_survives_new_service_and_breaker_reset(self, host):
+        with patch("services.listing_status_service.request_with_retries") as transport:
+            for _ in range(4):
+                ListingStatusService.breakers.reset()
+                observed = ListingStatusService().observe(
+                    f"https://{host}/venta/casa/inmueble-47374-113011735"
+                )
+                assert observed.status == "error"
+                assert observed.refusal == "blocked"
+            transport.assert_not_called()
 
     def test_a_timeout_is_its_own_reason(self, app):
         import requests

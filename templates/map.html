@@ -9,6 +9,7 @@
             <h1 class="mb-0">
                 <i class="fas fa-map me-2"></i>
                 Properties Map
+                {% if recommendation_map %}<span class="badge bg-light text-body">{{ t('recommendation_review' if list_view_args.get('recommendation_scope') == 'review' else 'recommendation_confirmed') }}</span>{% endif %}
                 <span class="badge bg-secondary">{{ markers|length }}</span>
             </h1>
             {# The markers come from `properties`, so the list view is /properties --
@@ -16,14 +17,16 @@
                subscription selection, or it opens a wider set than the map the
                reader is looking at and says nothing about it. `list_view_args`
                is built in map_view() beside the filters it applies; see the
-               comment there for why `hide_removed` is asserted and `measured`
-               is left out. #}
+               comment there for the map's location and status constraints. #}
             <a id="map-list-view-link"
                href="{{ url_for('main.properties', **list_view_args) }}"
                class="btn btn-outline-secondary">
                 <i class="fas fa-list me-1"></i>List View
             </a>
         </div>
+        {% if recommendation_map %}
+            <p class="small text-body-secondary">{{ t('recommendation_map_scope') }}</p>
+        {% endif %}
 
         {# Same rule as /properties (issue #104): custom travel target ids
            belong to one profile, so the popups drop them rather than mixing
@@ -571,8 +574,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         <i class="fas fa-eye me-1"></i>Details
                     </a>
                     ${prop.url ? `
-                    <a href="${prop.url}" target="_blank" class="btn btn-success btn-sm">
-                        <i class="fas fa-home me-1"></i>Idealista
+                    <a href="${escapeHtml(prop.url)}" target="_blank" rel="noopener" class="btn btn-success btn-sm">
+                        <i class="fas fa-external-link-alt me-1"></i>${escapeHtml(prop.source_label)}
                     </a>
                     ` : ''}
                     <a href="https://www.google.com/maps?q=${prop.lat},${prop.lon}" target="_blank" class="btn btn-outline-light btn-sm">

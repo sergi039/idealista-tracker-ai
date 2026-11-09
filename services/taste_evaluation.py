@@ -7,7 +7,7 @@ import json
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
-from services import taste_descriptors
+from services import recommendation_feedback, taste_descriptors
 
 SCHEMA_VERSION = 1
 
@@ -57,11 +57,21 @@ def build_manifest(
             + ", ".join(str(value) for value in sorted(missing_excluded_ids))
         )
 
+    historical_aliases = set().union(
+        *(recommendation_feedback.exposed_alias_ids(prop) for prop in rows)
+    )
+    excluded_row_ids |= historical_aliases
+    reserved_listings = set().union(
+        *(recommendation_feedback.listing_reservations(prop) for prop in rows)
+    )
+
     def excluded(prop: Any) -> bool:
         return (
             prop.id in excluded_row_ids
             or bool(getattr(prop, "is_favorite", False))
             or getattr(prop, "owner_verdict", None) is not None
+            or recommendation_feedback.has_recorded_feedback(prop)
+            or recommendation_feedback.listing_is_reserved(prop, reserved_listings)
         )
 
     # Every known-label/activity row reserves its entity before candidate
@@ -101,4 +111,5 @@ def build_manifest(
         "basis_fingerprint": hashlib.sha256(basis.encode()).hexdigest(),
         "owner_labels_included": False,
         "utility_claim": "not_measured",
+        **recommendation_feedback.exposure_report(rows),
     }

@@ -33,7 +33,7 @@
       <cp:label>19</cp:label>
       <cp:nationalCadastralReference>4463719NH1946S</cp:nationalCadastralReference>
       <cp:referencePoint>
-        <gml:Point gml:id="ReferencePoint_ES.SDGC.CP.4463719NH1946S" srsName="http://www.opengis.net/def/crs/EPSG/0/25829"> 
+        <gml:Point gml:id="ReferencePoint_ES.SDGC.CP.4463719NH1946S" srsName="http://www.opengis.net/def/crs/EPSG/0/25829">
           <gml:pos>514298.8 4795942.55</gml:pos>
         </gml:Point>
       </cp:referencePoint>

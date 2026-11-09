@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: owner-fit ranking and research area provenance (#591)
+- Research CSV plot figures stay in `plot_area`, never the house area. The
+  dry-run repair moves only source-key-proven untouched imports, with a locked,
+  compare-before-restore snapshot; it never guesses house sizes from prose.
+- Recommendation ranking uses stated size/budget bounds, renovation and privacy
+  claims, preserving unknowns and source conflicts for verification. Repair of
+  an unspecified annex does not establish that a ready main house needs work.
+- Reviewed listings remain visible under the existing filter contract but their
+  known mismatches still affect rank. Repeated owner clauses count once per
+  aspect, and changed evidence requires a fresh preference profile.
+
 ### 🌊 Added: the sea-view text claim asks TypeSafe's Jev first, the bridge decides what Jev declines (2026-09-19, #574)
 - **What**: `classify_text_with_ai` now asks Jev one typed Choice question
   (`view` / `proximity` / `none`) through the new

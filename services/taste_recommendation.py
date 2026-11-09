@@ -5,11 +5,18 @@ from __future__ import annotations
 import hashlib
 import math
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Iterable
 
 from sqlalchemy import case, false
 
-from services import taste_descriptors, taste_preferences
+from services import (
+    favorite_similarity,
+    recommendation_feedback,
+    subscription_criteria,
+    taste_descriptors,
+    taste_preferences,
+)
 
 _VISUAL_RESEMBLANCE_ASPECTS = frozenset(
     {
@@ -29,6 +36,8 @@ _CONTRADICTORY_VALUE_PAIRS = {
         {
             frozenset({"well_maintained", "major_renovation"}),
             frozenset({"well_maintained", "ruined"}),
+            frozenset({"well_maintained", "renovation_needed"}),
+            frozenset({"well_maintained", "unfinished"}),
         }
     ),
     "room_scale": frozenset(
@@ -90,6 +99,12 @@ def _value_relationship(candidate: str, source: str, aspect_id: str) -> str:
     verification instead of manufacturing a conflict.
     """
     if candidate == source:
+        return "equivalent"
+    if (
+        aspect_id == "house_condition"
+        and candidate == "ruined"
+        and source == "major_renovation"
+    ):
         return "equivalent"
     if (
         aspect_id == "agricultural_context"
@@ -270,7 +285,8 @@ def _numeric_similarity(
     reference_id = similarity_reading.get("reference_id")
     score = similarity_reading.get("score")
     if (
-        isinstance(reference_id, bool)
+        similarity_reading.get("state", "ok") not in {"ok", "reference"}
+        or isinstance(reference_id, bool)
         or not isinstance(reference_id, int)
         or reference_id not in reference_ids
         or isinstance(score, bool)
@@ -363,7 +379,9 @@ def _reading(
     state_reference_ids: list[int],
     reference_ids: list[int],
     profile_state: str,
+    feedback: dict[str, Any] | None = None,
     similarity_reading: dict[str, Any] | None = None,
+    criteria: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     property_id = prop.id
     if (
@@ -380,12 +398,14 @@ def _reading(
     conflicts: list[dict[str, Any]] = []
     needs: list[dict[str, Any]] = []
     unapplied: list[dict[str, Any]] = []
+    unresolved_requirement = False
     relevant = 0
     supported = 0
     for clause in _applicable_clauses(
         clauses, getattr(prop, "search_profile_id", None)
     ):
         if clause.get("mapping_state") != "executable" or not clause.get("aspect_id"):
+            unresolved_requirement |= clause.get("strength") == "hard"
             unapplied.append(
                 {
                     "id": clause.get("id"),
@@ -414,6 +434,43 @@ def _reading(
             continue
         candidate_values = _usable_values(candidate_rows, aspect_id)
         source_values = _clause_values(clause, source_rows, aspect_id)
+        # "Para reformar" establishes a renovation risk, not its extent.
+        # It may lower a candidate against an aversion to major works, but
+        # cannot become a supported violation or enforce a hard exclusion.
+        renovation_risk = [
+            row
+            for row in candidate_rows
+            if row.get("value") == "renovation_needed"
+            and row.get("status") in {"supported", "claimed"}
+        ]
+        if (
+            aspect_id == "house_condition"
+            and clause.get("polarity") == "avoid"
+            and "major_renovation" in source_values
+            and renovation_risk
+            and not any(
+                row.get("value") in {"major_renovation", "ruined"}
+                for row in candidate_rows
+            )
+        ):
+            facet = _facet(
+                aspect_id,
+                renovation_risk,
+                source_property_id=clause.get("source_property_id"),
+            )
+            facet.update(
+                status="claimed", hard=False, reason="renovation_extent_unknown"
+            )
+            if any(
+                row.get("value") == "well_maintained"
+                and row.get("status") in {"supported", "claimed"}
+                for row in candidate_rows
+            ):
+                facet.update(status="conflicting", reason="renovation_scope_unresolved")
+                needs.append(facet)
+            else:
+                conflicts.append(facet)
+            continue
         if not candidate_values or not source_values:
             needs.append(
                 {
@@ -474,9 +531,72 @@ def _reading(
             )
             conflicts.append(facet)
 
+    # Reviewed/favorited rows survive the normal criteria filter by design.
+    # That exemption keeps them visible, but must not erase their shortfall
+    # from recommendation ranking. Unknown figures never become violations.
+    criteria_verdict = subscription_criteria.read_verdict(prop, criteria)
+    for check, passed in criteria_verdict.get("checks", {}).items():
+        relevant += 1
+        aspect_id = {
+            "house": "house_area_m2",
+            "plot": "plot_area_m2",
+            "price": "budget_condition",
+        }[check]
+        bound_key = "max_price_eur" if check == "price" else f"min_{check}_m2"
+        facet = {
+            "aspect_id": aspect_id,
+            "label_key": f"recommendation_aspect_{aspect_id}",
+            "status": "supported" if passed is not None else "unknown",
+            "source_kind": "subscription_criteria",
+            "source_property_id": None,
+            "evidence": f"{bound_key}={criteria[bound_key]}",
+            "hard": False,
+        }
+        # Disagreement about the exact surface is not necessarily disagreement
+        # about a bound. Reuse the criteria reader for each reported surface:
+        # all below still means a shortfall; straddling means unknown. Keep
+        # the source disagreement visible even when the bound is unanimous.
+        if _strongest_status(_rows(descriptor, aspect_id)) == "conflicting":
+            needs.append({**facet, "status": "conflicting"})
+            if check not in {"house", "plot"}:
+                continue
+            verdicts = {
+                subscription_criteria.read_verdict(
+                    SimpleNamespace(
+                        area=row.get("value"),
+                        plot_area=row.get("value"),
+                        area_type="built",
+                    ),
+                    {bound_key: criteria[bound_key]},
+                )["checks"][check]
+                for row in _rows(descriptor, aspect_id)
+            }
+            if verdicts not in ({True}, {False}):
+                continue
+            passed = verdicts.pop()
+            facet["status"] = "claimed"
+        if passed is not None and facet["status"] == "supported":
+            supported += 1
+        if passed is False:
+            conflicts.append(facet)
+        elif passed is None:
+            needs.append(facet)
+        else:
+            matches.append(facet)
+
+    # Repeating the same preference in several reviews is not several
+    # independent wins or penalties. Preserve all source facets for display.
+    match_aspects = {facet["aspect_id"] for facet in matches}
+    conflict_aspects = {facet["aspect_id"] for facet in conflicts}
     if conflicts:
         group = "conflict"
-    elif relevant and supported == relevant and matches:
+    elif (
+        relevant
+        and supported == relevant
+        and any(facet["status"] == "supported" for facet in matches)
+        and not needs
+        and not unresolved_requirement
+    ):
         group = "confident"
     else:
         group = "potential"
@@ -499,18 +619,37 @@ def _reading(
         group_base = 0.0
     rank_value = (
         group_base
-        + min(len(matches), 20) * 10
-        - min(len(conflicts), 20) * 10
+        + min(len(match_aspects), 20) * 10
+        - min(len(conflict_aspects), 20) * 10
         + numeric_component
         + visual_match_count
     )
     hard_conflicts = [facet for facet in conflicts if facet.get("hard")]
+    if feedback and feedback["answer"] == "no":
+        hard_conflicts.append(
+            {
+                "aspect_id": "owner_batch_feedback",
+                "hard": True,
+                "source_property_id": feedback["property_id"],
+                "batch_id": feedback["batch_id"],
+            }
+        )
+    needs_review = (
+        state == "stale"
+        or not relevant
+        or supported < relevant
+        or unresolved_requirement
+        or bool(needs)
+        or any(facet["status"] != "supported" for facet in conflicts)
+    )
     return {
         "state": state,
+        "needs_review": needs_review,
         "group": group if state in {"candidate", "stale"} else None,
         "eligibility": (
             "excluded"
-            if state == "candidate" and hard_conflicts
+            if (feedback and feedback["answer"] == "no")
+            or (hard_conflicts and state == "candidate")
             else "eligible"
             if state == "candidate"
             else None
@@ -533,17 +672,38 @@ def build_context(
     profile_summary: dict[str, Any],
     *,
     similarity_ctx: Any = None,
+    negative_feedback: dict | None = None,
 ) -> RecommendationContext:
     """Build page-ready readings with no bridge/network calls."""
     rows = list(props)
     if not profile_data:
+        negatives = (
+            negative_feedback
+            if negative_feedback is not None
+            else recommendation_feedback.negative_listing_feedback(rows)
+        )
         return RecommendationContext(
             profile=profile_summary,
             readings={
                 prop.id: {
-                    "state": "no_profile",
+                    "state": (
+                        "rejected"
+                        if getattr(prop, "owner_verdict", None) == "rejected"
+                        else "no_profile"
+                    ),
+                    "needs_review": True,
                     "group": None,
-                    "eligibility": None,
+                    "eligibility": (
+                        "excluded"
+                        if (
+                            recommendation_feedback.feedback_for_listing(
+                                prop, negatives
+                            )
+                            or {}
+                        ).get("answer")
+                        == "no"
+                        else None
+                    ),
                     "hard_exclusions": [],
                     "nearest_positive_reference": None,
                     "matches": [],
@@ -588,6 +748,42 @@ def build_context(
         if profile_id is not None and not isinstance(profile_id, int):
             continue
         references_by_profile.setdefault(profile_id, []).append(reference_id)
+    # Reuse Similar's fact loader/comparator while leaving its favorite-only
+    # public meaning untouched. Restrict new references to the same subscription.
+    feedback_numeric = {}
+    negatives = (
+        negative_feedback
+        if negative_feedback is not None
+        else recommendation_feedback.negative_listing_feedback(rows)
+    )
+    if any(
+        _dict(signal.get("batch_feedback")).get("answer") == "yes"
+        for signal in source.get("signals", [])
+        if isinstance(signal, dict)
+    ):
+        profiles = {
+            prop.search_profile_id
+            for prop in rows
+            if prop.search_profile_id is not None
+        }
+        facts = favorite_similarity.load_facts(
+            profiles, [prop.id for prop in rows] + state_reference_ids
+        )
+        points = (
+            similarity_ctx.points
+            if similarity_ctx is not None
+            else favorite_similarity.municipality_points()
+        )
+        by_id = {fact.id: fact for fact in facts}
+        for fact in facts:
+            refs = [
+                by_id[ident]
+                for ident in references_by_profile.get(fact.profile_id, [])
+                if ident in by_id and not by_id[ident].is_rejected
+            ]
+            feedback_numeric[fact.id] = favorite_similarity.read_against(
+                fact, refs, points
+            )
     readings = {}
     for prop in rows:
         taste = _dict(getattr(prop, "taste", None))
@@ -607,11 +803,87 @@ def build_context(
                 getattr(prop, "search_profile_id", None), []
             ),
             profile_state=profile_summary.get("state", "none"),
+            feedback=recommendation_feedback.feedback_for_listing(prop, negatives),
             similarity_reading=(
-                similarity_ctx.read(prop.id) if similarity_ctx is not None else None
+                feedback_numeric.get(prop.id)
+                or (
+                    similarity_ctx.read(prop.id) if similarity_ctx is not None else None
+                )
+            ),
+            criteria=subscription_criteria.read_criteria(
+                getattr(prop, "search_profile", None)
             ),
         )
     return RecommendationContext(profile=profile_summary, readings=readings)
+
+
+def apply_card_votes(
+    context: RecommendationContext, rows: list[Any]
+) -> RecommendationContext:
+    """Rerank each search using recent, comparable positive and negative examples."""
+    profiles = {
+        row.search_profile_id for row in rows if row.search_profile_id is not None
+    }
+    votes = recommendation_feedback.load_card_votes(profiles)
+    if not votes:
+        return context
+
+    readings = dict(context.readings)
+    for ident in readings.keys() & votes.keys():
+        if votes[ident] == "no":
+            readings[ident] = {**readings[ident], "eligibility": "excluded"}
+
+    candidate_ids = [
+        ident
+        for ident, reading in readings.items()
+        if reading["eligibility"] != "excluded"
+    ]
+    if not candidate_ids:
+        return RecommendationContext(context.profile, readings)
+
+    facts = favorite_similarity.load_facts(profiles, candidate_ids + list(votes))
+    by_id = {fact.id: fact for fact in facts}
+    references = {}
+    for ident, answer in votes.items():
+        if ident in by_id:
+            ref = by_id[ident]
+            group = references.setdefault((ref.profile_id, answer), [])
+            if len(group) < 16:
+                group.append(ref)
+
+    points = favorite_similarity.municipality_points()
+    for ident in candidate_ids:
+        candidate = by_id.get(ident)
+        reading = readings[ident]
+        if candidate is None or reading["state"] in {"rejected", "reference"}:
+            continue
+        influence = 0.0
+        for answer, direction in (("yes", 1), ("no", -1)):
+            comparisons = [
+                favorite_similarity.compare(candidate, ref, points)
+                for ref in references.get((candidate.profile_id, answer), [])
+                if ref.id != ident
+            ]
+            usable = [result for result in comparisons if "score" in result]
+            # Sparse evidence carries less weight. Each side starts with four
+            # neutral pseudo-observations and contributes at most four points.
+            # Missing facts contribute no direction or sample count.
+            influence += (
+                direction
+                * 4
+                * sum(
+                    (result["score"] / 100) ** 2 * result["coverage"]
+                    for result in usable
+                )
+                / (4 + len(usable))
+            )
+        if influence:
+            readings[ident] = {
+                **reading,
+                "rank_value": reading["rank_value"] + influence,
+                "card_vote_influence": influence,
+            }
+    return RecommendationContext(context.profile, readings)
 
 
 def sort_expression(model: Any, ctx: RecommendationContext):
