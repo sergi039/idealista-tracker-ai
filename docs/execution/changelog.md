@@ -1,5 +1,11 @@
 # Execution changelog
 
+## 2026-11-09
+
+- Pin the single-listing browser reader to ordinary Chrome on the MacBook,
+  so an open Playwright profile cannot receive its Apple Events. Keep browser
+  fallback unavailable to bulk and scheduled checks.
+
 ## 2026-11-07
 
 - Keep Yaencontre status checks offline even through direct and legacy callers.

@@ -151,6 +151,91 @@ def test_incomplete_ambiguous_or_stale_evidence_never_confirms(tmp_path, changes
     assert classified(tmp_path / "bad.mhtml", **changes)[0] == "error"
 
 
+ORDINARY = {"pid": 120, "started": 101.55}
+AUTOMATED = {"pid": 43, "started": 112.77}
+CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+
+def chrome_processes(monkeypatch, candidates, commands):
+    def process(args, **kwargs):
+        if args[0] == "/usr/bin/pgrep":  # pre-fix Chrome presence probe
+            return subprocess.CompletedProcess(args, 0)
+        pid = int(args[args.index("-p") + 1])
+        command = commands[pid]
+        return subprocess.CompletedProcess(
+            args, 0, stdout=f" {reader.os.getuid()} {command}\n"
+        )
+
+    monkeypatch.setattr(reader.subprocess, "run", process)
+    return list(candidates)
+
+
+def test_live_archive_with_two_chromes_never_addresses_test_profile(
+    tmp_path, monkeypatch
+):
+    candidates = chrome_processes(
+        monkeypatch,
+        [AUTOMATED, ORDINARY],
+        {
+            43: CHROME + " --remote-debugging-pipe --user-data-dir=/tmp/test",
+            120: CHROME,
+        },
+    )
+    monkeypatch.setattr(reader.socket, "gethostname", lambda: reader.MACBOOK)
+    monkeypatch.setattr(reader.Path, "home", lambda: tmp_path)
+    events = []
+    location = None
+
+    def apple(operation, deadline, **fields):
+        nonlocal location
+        if operation == "discover":
+            return candidates
+        # Unaddressed Apple Events reached the foreground test process on
+        # the MacBook. Reproduce that routing at the native event boundary.
+        target = fields.get("target", AUTOMATED)
+        events.append((operation, target))
+        if target != ORDINARY:
+            raise reader.ReaderFailure("not_the_listing_page")
+        if operation == "open":
+            location = fields["initial"]
+            return ["12", "34"]
+        assert (fields["window"], fields["tab"]) == (12, 34)
+        if operation == "navigate":
+            location = fields["url"]
+            # A later focus/order change must not retarget subsequent operations.
+            candidates.reverse()
+        elif operation == "location":
+            return location
+        elif operation == "loading":
+            return False
+        elif operation == "save":
+            write_archive(Path(fields["path"]))
+            return True
+
+    monkeypatch.setattr(reader, "apple", apple)
+    page = reader.read_native(URL, NONCE)
+    assert reader.classify_page(URL, NONCE, page, 5000) == ("active", None)
+    assert events[0] == ("open", ORDINARY)
+    assert events[-1] == ("close", ORDINARY)
+    assert {target["pid"] for _, target in events} == {120}
+
+
+@pytest.mark.parametrize("ordinary_count", [0, 2])
+def test_no_unambiguous_ordinary_chrome_never_opens_a_tab(monkeypatch, ordinary_count):
+    candidates = [AUTOMATED, ORDINARY][: 1 + ordinary_count]
+    commands = {43: CHROME + " --user-data-dir=/tmp/test"}
+    if ordinary_count == 2:
+        candidates.append({"pid": 121, "started": 110.1})
+        commands.update({120: CHROME, 121: CHROME})
+    apple = Mock(return_value=chrome_processes(monkeypatch, candidates, commands))
+    monkeypatch.setattr(reader, "apple", apple)
+    tab = reader.OwnedTab(reader.time.monotonic() + 30)
+    with pytest.raises(reader.ReaderFailure, match="missing_configuration"):
+        tab.open()
+    tab.close()
+    assert [call.args[0] for call in apple.call_args_list] == ["discover"]
+
+
 def test_owned_tab_archive_refuses_repurposed_tab_before_save(monkeypatch):
     tab = reader.OwnedTab(100)
     tab.window, tab.tab, tab.last_url = 12, 34, WANTED
@@ -163,31 +248,33 @@ def test_owned_tab_archive_refuses_repurposed_tab_before_save(monkeypatch):
     monkeypatch.setattr(tab, "command", command)
     with pytest.raises(reader.ReaderFailure):
         tab.archive(WANTED, Path("/unused"))
-    assert commands == ["return URL of auditTab"]
+    assert commands == ["location"]
 
 
 def test_owned_tab_cleanup_targets_only_created_id_and_preserves_repurposed_tab(
     monkeypatch,
 ):
-    scripts = []
-    monkeypatch.setattr(
-        reader, "apple", lambda script, deadline: scripts.append(script)
-    )
+    events = Mock()
+    monkeypatch.setattr(reader, "apple", events)
     tab = reader.OwnedTab(100)
-    tab.window, tab.tab, tab.last_url = 12, 34, WANTED
+    tab.target, tab.window, tab.tab, tab.last_url = ORDINARY, 12, 34, WANTED
     tab.close()
-    assert "window id 12" in scripts[0] and 'is "34"' in scripts[0]
-    assert json.dumps(WANTED) in scripts[0] and json.dumps(URL) in scripts[0]
-    assert '"about:blank"' in scripts[0]
-    assert "contains (URL of auditTab) then close auditTab" in scripts[0]
-    assert "close window" not in scripts[0] and "execute" not in scripts[0]
+    op, deadline = events.call_args.args
+    assert op == "close" and deadline > reader.time.monotonic()
+    assert events.call_args.kwargs == {
+        "target": ORDINARY,
+        "window": 12,
+        "tab": 34,
+        "allowed": sorted(
+            ["about:blank", "chrome://newtab/", WANTED, URL, tab.initial_url]
+        ),
+    }
 
 
 def test_remote_failure_cleans_owned_temp_and_restores_handlers(tmp_path, monkeypatch):
     import signal
 
     monkeypatch.setattr(reader.socket, "gethostname", lambda: reader.MACBOOK)
-    monkeypatch.setattr(reader.subprocess, "run", lambda *a, **kw: Mock(returncode=0))
     monkeypatch.setattr(reader.Path, "home", lambda: tmp_path)
     closed = []
 
@@ -224,7 +311,7 @@ def test_osascript_timeout_kills_and_reaps_only_its_process_group(monkeypatch):
     monkeypatch.setattr(reader.subprocess, "Popen", launch)
     monkeypatch.setattr(reader.os, "killpg", killed)
     with pytest.raises(subprocess.TimeoutExpired):
-        reader.apple("return true", reader.time.monotonic() + 10)
+        reader.apple("discover", reader.time.monotonic() + 10)
     assert launch.call_args.kwargs["start_new_session"] is True
     assert killed.call_args.args[0] == 9876 and proc.communicate.call_count == 2
 
@@ -304,7 +391,6 @@ def test_completed_refusal_propagates_instead_of_becoming_browser_timeout(
     tmp_path, monkeypatch, html, reason
 ):
     monkeypatch.setattr(reader.socket, "gethostname", lambda: reader.MACBOOK)
-    monkeypatch.setattr(reader.subprocess, "run", lambda *a, **kw: Mock(returncode=0))
     monkeypatch.setattr(reader.Path, "home", lambda: tmp_path)
     monkeypatch.setattr(reader, "REMOTE_SECONDS", 2)
     closed = []
@@ -322,8 +408,8 @@ def test_completed_refusal_propagates_instead_of_becoming_browser_timeout(
         def location(self):
             return WANTED
 
-        def command(self, command):
-            return "false"
+        def loading(self):
+            return False
 
         def archive(self, url, path):
             write_archive(path, html)
@@ -351,14 +437,11 @@ def test_navigate_timeout_keeps_the_requested_url_for_own_tab_cleanup(monkeypatc
     with pytest.raises(subprocess.TimeoutExpired):
         tab.navigate(WANTED)
     assert tab.last_url == WANTED
-    scripts = []
-    monkeypatch.setattr(
-        reader, "apple", lambda script, deadline: scripts.append(script)
-    )
+    events = Mock()
+    monkeypatch.setattr(reader, "apple", events)
     monkeypatch.delattr(tab, "command")
     tab.close()
-    assert json.dumps(WANTED) in scripts[0] and json.dumps(URL) in scripts[0]
-    assert '"about:blank"' in scripts[0]
+    assert {WANTED, URL, "about:blank"}.issubset(events.call_args.kwargs["allowed"])
 
 
 def test_browser_transport_socket_timeout_includes_existing_cleanup_margin(monkeypatch):
@@ -480,44 +563,47 @@ def test_protocol_relative_technical_challenge_is_detected(tmp_path):
 
 
 def test_creation_reply_timeout_recovers_only_its_marked_initial_tab(monkeypatch):
-    scripts = []
-
-    def apple(script, deadline):
-        scripts.append(script)
-        if len(scripts) == 1:
-            raise subprocess.TimeoutExpired("osascript", 4)
-        if len(scripts) == 2:
-            return "12:34"
-        return ""
-
-    monkeypatch.setattr(reader, "apple", apple)
+    events = Mock(
+        side_effect=[subprocess.TimeoutExpired("osascript", 4), ["12", "34"], None]
+    )
+    monkeypatch.setattr(reader, "apple", events)
+    monkeypatch.setattr(reader, "select_chrome", Mock(return_value=ORDINARY))
     tab = reader.OwnedTab(reader.time.monotonic() + 30)
     with pytest.raises(subprocess.TimeoutExpired):
         tab.open()
     assert tab.tab is None
     tab.close()
-    assert len(scripts) == 3 and (tab.window, tab.tab) == (12, 34)
-    assert "given name: " + json.dumps(tab.marker) in scripts[0]
-    assert "every window whose given name is " + json.dumps(tab.marker) in scripts[1]
-    assert (
-        "every tab of auditWindow whose URL is " + json.dumps(tab.initial_url)
-        in scripts[1]
+    opened, recovered, closed = events.call_args_list
+    assert (opened.args[0], recovered.args[0], closed.args[0]) == (
+        "open",
+        "recover",
+        "close",
     )
-    assert "window id 12" in scripts[2] and 'is "34"' in scripts[2]
-    assert "then close auditTab" in scripts[2] and "close window" not in scripts[2]
+    assert (
+        opened.kwargs
+        == recovered.kwargs
+        == {
+            "target": ORDINARY,
+            "window": None,
+            "tab": None,
+            "marker": tab.marker,
+            "initial": tab.initial_url,
+        }
+    )
+    assert closed.kwargs["target"] == ORDINARY
+    assert (closed.kwargs["window"], closed.kwargs["tab"]) == (12, 34)
 
 
 def test_missing_or_ambiguous_marker_never_closes_an_owner_window(monkeypatch):
-    scripts = []
-    monkeypatch.setattr(
-        reader, "apple", lambda script, deadline: scripts.append(script) or ""
-    )
+    events = Mock(return_value=None)
+    monkeypatch.setattr(reader, "apple", events)
     tab = reader.OwnedTab(100)
+    tab.target = ORDINARY
     tab.creation_attempted = True
     tab.close()
-    assert tab.tab is None and len(scripts) == 1
-    assert '(count of ownedWindows) is not 1 then return ""' in scripts[0]
-    assert "close" not in scripts[0]
+    assert tab.tab is None and events.call_count == 1
+    assert events.call_args.args[0] == "recover"
+    assert events.call_args.kwargs["marker"] == tab.marker
 
 
 def test_watchdog_signal_cannot_interrupt_archive_deletion(tmp_path, monkeypatch):
@@ -525,7 +611,6 @@ def test_watchdog_signal_cannot_interrupt_archive_deletion(tmp_path, monkeypatch
     import threading
 
     monkeypatch.setattr(reader.socket, "gethostname", lambda: reader.MACBOOK)
-    monkeypatch.setattr(reader.subprocess, "run", lambda *a, **kw: Mock(returncode=0))
     monkeypatch.setattr(reader.Path, "home", lambda: tmp_path)
     events = []
 
@@ -542,8 +627,8 @@ def test_watchdog_signal_cannot_interrupt_archive_deletion(tmp_path, monkeypatch
         def location(self):
             return WANTED
 
-        def command(self, body):
-            return "false"
+        def loading(self):
+            return False
 
         def archive(self, url, path):
             write_archive(path)
