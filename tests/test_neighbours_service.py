@@ -640,3 +640,26 @@ def test_parcel_crs_code_must_match_exactly():
     wrong = (DATA / "969_parcel.gml").read_text().replace('/25829"', '/258290"')
     with pytest.raises(c.CadastreError):
         c._parse_gml(wrong, 25829)
+
+
+def test_unsupported_surface_patch_refuses_the_collection():
+    root = ET.fromstring((DATA / "969_buildings.gml").read_text())
+    patches = root.find(f".//{n.GML}patches")
+    assert patches is not None
+    ET.SubElement(patches, f"{n.GML}Rectangle")
+    with pytest.raises(c.CadastreError, match="unsupported or empty surface part"):
+        n.parse_buildings(ET.tostring(root, encoding="unicode"), 25829)
+
+
+def test_empty_use_does_not_disappear_beside_a_known_use():
+    root = ET.fromstring((DATA / "969_buildings.gml").read_text())
+    building = root[0][0]
+    use_tag = building.tag.rsplit("}", 1)[0] + "}currentUse"
+    for use in building.findall(use_tag):
+        building.remove(use)
+    ET.SubElement(building, use_tag).text = "1_residential"
+    ET.SubElement(
+        building, use_tag, {"{http://www.w3.org/2001/XMLSchema-instance}nil": "true"}
+    )
+    parsed = n.parse_buildings(ET.tostring(root, encoding="unicode"), 25829)
+    assert parsed[0]["uses"] == {"1_residential", ""}

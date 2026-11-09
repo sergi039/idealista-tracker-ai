@@ -159,8 +159,7 @@ def parse_buildings(text: str, epsg: int) -> list[dict]:
                 raw = (element.text or element.get(XLINK + "href") or "").rsplit(
                     "/", 1
                 )[-1]
-                if raw.strip():
-                    uses.add(raw.strip())
+                uses.add(raw.strip())
         buildings.append(
             {
                 "id": identifier,

@@ -276,8 +276,27 @@ def surface_polygons(element: ET.Element) -> list:
     Coordinates stay in the source CRS. The consumer must check that CRS and
     validate the resulting polygons before measuring anything.
     """
+    surface_types = {"Polygon", "Surface"}
+    allowed_parts = {
+        "MultiSurface": {"surfaceMember", "surfaceMembers"},
+        "surfaceMember": surface_types,
+        "surfaceMembers": surface_types,
+        "Surface": {"patches"},
+        "patches": {"PolygonPatch"},
+        "Polygon": {"exterior", "interior"},
+        "PolygonPatch": {"exterior", "interior"},
+        "exterior": {"LinearRing"},
+        "interior": {"LinearRing"},
+        "LinearRing": {"posList"},
+    }
     polygons = []
     for patch in element.iter():
+        if patch.tag.startswith(_GML_NS):
+            allowed = allowed_parts.get(patch.tag.removeprefix(_GML_NS))
+            if allowed is not None:
+                children = {child.tag for child in patch}
+                if not children or children - {f"{_GML_NS}{tag}" for tag in allowed}:
+                    raise CadastreError(MALFORMED, "unsupported or empty surface part")
         if patch.tag not in {f"{_GML_NS}Polygon", f"{_GML_NS}PolygonPatch"}:
             continue
         rings = []
