@@ -610,3 +610,33 @@ def test_shortlist_plan_compare_is_under_lock_after_network(app, monkeypatch):
     with pytest.raises(ValueError, match="plan changed during lookup"):
         service.enrich(p, commit=True, expected_previous=None)
     assert p.enrichment["neighbours"] == concurrent
+
+
+def test_mixed_known_and_unknown_uses_cannot_support_agricultural_absence():
+    result = n.measure_buildings(
+        box(0, 0, 10, 10),
+        REF,
+        [
+            dict(
+                parcels={"other"},
+                shape=box(20, 0, 22, 2),
+                uses={"1_residential", "unknown_use"},
+            )
+        ],
+    )
+    assert result["unknown_use_buildings_within_100m"] == 1
+    assert result["agricultural_buildings_within_100m"] == 0
+
+
+def test_unknown_collection_container_does_not_mean_no_buildings():
+    with pytest.raises(c.CadastreError):
+        n.parse_buildings(
+            '<FeatureCollection xmlns="http://www.opengis.net/gml/3.2"><featureMembers/></FeatureCollection>',
+            25829,
+        )
+
+
+def test_parcel_crs_code_must_match_exactly():
+    wrong = (DATA / "969_parcel.gml").read_text().replace('/25829"', '/258290"')
+    with pytest.raises(c.CadastreError):
+        c._parse_gml(wrong, 25829)

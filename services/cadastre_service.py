@@ -231,7 +231,9 @@ def _parse_gml(text: str, expected_epsg: int) -> Dict[str, Any]:
     srs_names = {
         element.get("srsName") for element in parcel.iter() if element.get("srsName")
     }
-    if not any(str(expected_epsg) in (name or "") for name in srs_names):
+    if not srs_names or any(
+        not re.search(rf"(?:/|:){expected_epsg}$", name) for name in srs_names
+    ):
         # The service reprojects into whatever it is asked for and says so in
         # the response; a mismatch means the numbers are not in the CRS the
         # metrics would be computed against.

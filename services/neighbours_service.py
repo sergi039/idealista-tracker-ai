@@ -103,6 +103,13 @@ def parse_buildings(text: str, epsg: int) -> list[dict]:
             cadastre.MALFORMED, "partial or refused collection"
         )
     members = root.findall(GML + "featureMember") + root.findall(WFS + "member")
+    if any(
+        child.tag not in {GML + "featureMember", WFS + "member", GML + "boundedBy"}
+        for child in root
+    ):
+        raise cadastre.CadastreError(
+            cadastre.MALFORMED, "unsupported collection content"
+        )
     if len(members) >= MAX_FEATURES:
         raise cadastre.CadastreError(cadastre.MALFORMED, "building feature cap reached")
     for name in ("numberMatched", "numberReturned"):
@@ -138,7 +145,7 @@ def parse_buildings(text: str, epsg: int) -> list[dict]:
                 for key, values in parse_qs(urlsplit(href).query).items():
                     if key.lower() == "refcat":
                         refs.update(
-                            cadastre.parcel_reference(r)
+                            cadastre.parcel_reference(cadastre.normalize_reference(r))
                             for r in values
                             if cadastre.normalize_reference(r)
                         )
@@ -181,14 +188,14 @@ def measure_buildings(parcel, reference: str, buildings: list[dict]) -> dict:
             neighbours.append((distance, building))
     uses = {"agricultural": 0, "industrial": 0, "unknown": 0}
     for _, building in neighbours:
-        known = False
+        unknown = not building["uses"]
+        agricultural = False
+        industrial = False
         for use in building["uses"]:
             if use in {"2_agriculture", "agriculture", "agricultural"}:
-                uses["agricultural"] += 1
-                known = True
+                agricultural = True
             elif use in {"3_industrial", "industrial"}:
-                uses["industrial"] += 1
-                known = True
+                industrial = True
             elif use in {
                 "1_residential",
                 "4_1_office",
@@ -197,9 +204,12 @@ def measure_buildings(parcel, reference: str, buildings: list[dict]) -> dict:
                 "4_4_ancillary",
                 "residential",
             }:
-                known = True
-        if not known:
-            uses["unknown"] += 1
+                pass
+            else:
+                unknown = True
+        uses["agricultural"] += agricultural
+        uses["industrial"] += industrial
+        uses["unknown"] += unknown
     return {
         "buildings_within_50m": sum(d <= 50 for d, _ in neighbours),
         "buildings_within_100m": len(neighbours),
