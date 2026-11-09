@@ -1,4 +1,4 @@
-"""Owner pilot ratings, separate from purchase verdicts and favorites.
+"""Owner recommendation ratings, separate from purchase verdicts and favorites.
 
 The importer is explicit, scoped and atomic. Existing JSON write locks protect
 the feedback block just as they protect every other enrichment writer.
@@ -15,14 +15,20 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from models import Property, db
 from services.dossier import normalise_url
-from services.enrichment_write import merge_json_object_changes_under_lock
+from services.enrichment_write import (
+    check_writable,
+    locked_write,
+    merge_json_object_changes_under_lock,
+)
 from utils.review_json import canonical, valid_reason, valid_timestamp
 
 KEY = "recommendation_feedback"
+CARD_KEY = "recommendation_card_vote"
 EXPOSURE_KEY = "recommendation_exposure"
 MEANING = "recommendation_appeal_not_purchase_verdict"
 
@@ -139,6 +145,92 @@ def read_feedback(prop: Any) -> dict[str, Any] | None:
     ):
         return None
     return copy.deepcopy(item)
+
+
+def card_vote_state(prop: Property) -> dict | None:
+    """Bind the card control to the displayed identity and vote revision."""
+    identity = _listing_identity(prop.url)
+    if not identity or prop.search_profile_id is None:
+        return None
+    block = prop.enrichment if isinstance(prop.enrichment, dict) else {}
+    vote = block.get(CARD_KEY)
+    vote = vote if isinstance(vote, dict) else {}
+    answer = (
+        vote["answer"]
+        if vote.get("answer") in ("yes", "no")
+        and vote.get("url") == identity
+        and transferred_scope(prop, vote.get("profile_id")) == prop.search_profile_id
+        else None
+    )
+    return {
+        "answer": answer,
+        "revision": digest(
+            [prop.id, prop.search_profile_id, identity, vote.get("revision")]
+        ),
+    }
+
+
+class StaleCardVote(ValueError):
+    """The card changed since it was rendered."""
+
+
+def set_card_vote(prop: Property, answer: str | None, revision: str) -> dict:
+    """Store one reversible vote without changing any imported receipt."""
+    if answer not in (None, "yes", "no"):
+        raise ValueError("invalid card vote")
+    with locked_write(prop, locked=check_writable(prop, True), commit=True):
+        current = card_vote_state(prop)
+        if current is None or current["revision"] != revision:
+            raise StaleCardVote()
+        if current["answer"] != answer:
+            block = dict(prop.enrichment or {})
+            vote_revision = uuid4().hex
+            block[CARD_KEY] = {
+                "answer": answer,
+                "revision": vote_revision,
+                "rated_at": datetime.now(timezone.utc).isoformat(),
+                "url": _listing_identity(prop.url),
+                "profile_id": prop.search_profile_id,
+            }
+            if answer is not None:
+                block[EXPOSURE_KEY] = _retain_exposure(
+                    block,
+                    {
+                        "schema_version": 1,
+                        "batch_id": "catalog-card",
+                        "property_id": prop.id,
+                        "row_ids": [prop.id],
+                        "source_sha256": digest(vote_revision),
+                        "profile_id": prop.search_profile_id,
+                        "frozen_alias_urls": [prop.url],
+                    },
+                )
+            prop.enrichment = block
+        return card_vote_state(prop)
+
+
+def load_card_votes(profile_ids: set[int]) -> dict[int, str]:
+    """Read current votes beyond the catalog's candidate filters."""
+    if not profile_ids:
+        return {}
+    rows = (
+        Property.query.filter(
+            Property.search_profile_id.in_(profile_ids),
+            Property.enrichment[CARD_KEY]["answer"].as_string().in_(("yes", "no")),
+        )
+        .order_by(
+            Property.enrichment[CARD_KEY]["rated_at"].as_string().desc(), Property.id
+        )
+        .populate_existing()
+    )
+    votes = {}
+    for row in rows:
+        state = card_vote_state(row)
+        if state and state["answer"]:
+            # A purchase rejection supersedes a Like as a positive anchor.
+            if state["answer"] == "no" or row.owner_verdict != "rejected":
+                votes[row.id] = state["answer"]
+    return votes
 
 
 def _record_reservations(record: Any) -> set[tuple[int, str]]:
@@ -267,25 +359,35 @@ def feedback_for_listing(prop: Any, negatives: dict) -> dict[str, Any] | None:
 
 def _retain_exposure(base: dict, record: dict) -> dict:
     """Union exposure under the import/restore row lock; rollback is monotonic."""
-    previous = base.get(EXPOSURE_KEY) or {
-        name: record[name]
-        for name in (
-            "schema_version",
-            "batch_id",
-            "property_id",
-            "row_ids",
-            "source_sha256",
-        )
-    }
+    stored = base.get(EXPOSURE_KEY)
+    previous = (
+        stored
+        if isinstance(stored, dict) and stored
+        else {
+            name: record[name]
+            for name in (
+                "schema_version",
+                "batch_id",
+                "property_id",
+                "row_ids",
+                "source_sha256",
+            )
+        }
+    )
     reservations = (
         _record_reservations(previous)
         | _record_reservations(base.get(KEY))
         | _record_reservations(record)
     )
     incomplete = _exposure_incomplete(base, record)
+    previous_ids = previous.get("row_ids")
+    previous_ids = previous_ids if isinstance(previous_ids, list) else []
     return {
         **previous,
-        "row_ids": sorted(set(previous.get("row_ids", [])) | set(record["row_ids"])),
+        "row_ids": sorted(
+            {ident for ident in previous_ids if type(ident) is int and ident > 0}
+            | set(record["row_ids"])
+        ),
         "listing_identities": [
             {"profile_id": profile_id, "url": url}
             for profile_id, url in sorted(reservations)

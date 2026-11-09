@@ -2519,6 +2519,31 @@ def toggle_property_favorite(property_id):
         ), 500
 
 
+@api_bp.route("/property/<int:property_id>/recommendation-vote", methods=["POST"])
+@limiter.limit("60 per minute")
+def set_recommendation_vote(property_id):
+    from models import Property
+    from services import recommendation_feedback
+
+    payload = request.get_json(silent=True)
+    if (
+        not isinstance(payload, dict)
+        or "answer" not in payload
+        or payload["answer"] not in (None, "yes", "no")
+        or not isinstance(payload.get("revision"), str)
+        or len(payload["revision"]) != 64
+    ):
+        return jsonify(error="Invalid vote"), 400
+    prop = db.get_or_404(Property, property_id)
+    try:
+        state = recommendation_feedback.set_card_vote(
+            prop, payload["answer"], payload["revision"]
+        )
+    except recommendation_feedback.StaleCardVote:
+        return jsonify(error="The card changed. Reload to vote again."), 409
+    return jsonify(state)
+
+
 @api_bp.route("/property/<int:property_id>/enrich", methods=["POST"])
 @limiter.limit("10 per minute")
 def manual_property_enrichment(property_id: int):

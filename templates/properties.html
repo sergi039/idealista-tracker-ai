@@ -117,6 +117,41 @@
     </div>
 {%- endmacro %}
 
+{% macro recommendation_vote(property, recommendation_mode) -%}
+    {% set vote = card_vote_for(property) %}
+    {% if vote and (recommendation_mode or vote.answer) %}
+        <div class="mt-2" data-recommendation-vote hidden
+             data-url="{{ url_for('api.set_recommendation_vote', property_id=property.id) }}"
+             data-revision="{{ vote.revision }}" data-answer="{{ vote.answer or '' }}"
+             data-refresh="{{ 'yes' if recommendation_mode else 'no' }}"
+             data-pending="{{ t('recommendation_vote_pending') }}"
+             data-saving="{{ t('recommendation_vote_saving') }}"
+             data-saved="{{ t('recommendation_vote_saved') }}"
+             data-error="{{ t('recommendation_vote_error') }}">
+            <div class="d-flex flex-wrap gap-1" role="group" aria-label="{{ t('recommendation_vote_label') }} · {{ property.title or property.id }}">
+                {% if recommendation_mode %}
+                    {% for answer, symbol in [('yes', 'thumbs-up'), ('no', 'thumbs-down')] %}
+                        <button type="button" class="btn btn-sm btn-outline-secondary{{ ' active' if vote.answer == answer else '' }}" data-vote="{{ answer }}"
+                                aria-pressed="{{ 'true' if vote.answer == answer else 'false' }}"
+                                aria-label="{{ t('recommendation_vote_' ~ answer) }}"
+                                title="{{ t('recommendation_vote_' ~ answer) }}">{{ icon(symbol) }}</button>
+                    {% endfor %}
+                {% else %}
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-vote="">
+                        {{ t('recommendation_vote_clear') }}
+                    </button>
+                {% endif %}
+                <button type="button" class="btn btn-sm btn-outline-secondary" data-vote-undo hidden>
+                    {{ t('recommendation_vote_undo') }}
+                </button>
+            </div>
+            <div class="small text-body-secondary" data-vote-status role="status">
+                {% if not recommendation_mode and vote.answer %}{{ t('recommendation_vote_' ~ vote.answer) }}{% endif %}
+            </div>
+        </div>
+    {% endif %}
+{%- endmacro %}
+
 {% macro recommendation_reading(reading) -%}
     {% if reading %}
         {% set state = reading.get('state') %}
@@ -146,6 +181,9 @@
                     </span>
                 {% endif %}
             </div>
+            {% if reading.get('card_vote_influence') %}
+                <div class="text-body-secondary">{{ t('recommendation_vote_raised' if reading.card_vote_influence > 0 else 'recommendation_vote_lowered') }}</div>
+            {% endif %}
             {% if state == 'candidate' %}
                 {{ recommendation_facets(matches[:2], 'success', '✓') if matches }}
                 {% if conflicts %}
@@ -1723,6 +1761,7 @@
                                                     <i class="fas fa-star {{ 'text-warning' if p.is_favorite else 'text-muted' }}"
                                                        style="font-size: 1.1rem; cursor: pointer;"></i>
                                                 </button><a class="btn btn-outline-secondary" href="{{ url_for('main.property_detail', property_id=p.id) }}">{{ t('workspace_open') }}</a></div>
+    {{ recommendation_vote(p, active_mode == 'recommendation') }}
     {% set _decision = owner_decision_for(p) %}
     {{ owner_review_badges(p, review_today) }}
     {% if not _decision.decided %}<span>{{ t('workspace_not_decided') }}</span>{% endif %}
@@ -1745,7 +1784,7 @@
                     {# Two per row from the tablet breakpoint up: the container
                        is no longer capped at 720px there, and one card spanning
                        the whole width just stretches the same content. #}
-                    <div class="col-md-6 col-xl-4 mb-4" data-listing-status="{{ listing_verdict_for(p).state }}">
+                    <div class="col-md-6 col-xl-4 mb-4" data-recommendation-card data-listing-status="{{ listing_verdict_for(p).state }}">
                         <div class="card h-100 property-card {% if p.listing_status in ('removed', 'sold') %}listing-inactive-card{% endif %}"
                              data-property-id="{{ p.id }}" style="overflow: hidden;">
                             {% set _card_photos = photos_for(p) %}
@@ -1842,6 +1881,7 @@
                                 </div>
                                 {% set _recommendation = (recommendation_readings or {}).get(p.id) %}
                                 {{ recommendation_reading(_recommendation) }}
+                                {{ recommendation_vote(p, active_mode == 'recommendation') }}
 
                                 <!-- Price and Area -->
                                 <div class="row mb-3">
@@ -2074,6 +2114,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ url_for('static', filename='js/recommendation-vote.js') }}" defer></script>
 <script>
     // Subscription menu (issue #104). Progressive enhancement only: the
     // server reads the ticked checkboxes on its own, so with JavaScript off
