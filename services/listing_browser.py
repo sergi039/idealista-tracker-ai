@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from urllib.parse import unquote, urlsplit
 
 MACBOOK = "MacBook-Pro007.local"
 REMOTE_SECONDS = 30
@@ -198,12 +199,16 @@ class PublicFields(HTMLParser):
         self.overflow = False
         self.challenge = False
         self.page_title = []
+        self.frame_cids = set()
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
+        src = (attrs.get("src") or "").strip()
+        if tag == "iframe" and src.startswith("cid:") and 4 < len(src) <= 256:
+            self.frame_cids.add(unquote(src[4:]))
         if tag in {"script", "iframe"} and re.match(
             r"(?:https?:)?//(?:[a-z0-9-]+\.)?captcha-delivery\.com/",
-            (attrs.get("src") or "").strip(),
+            src,
             re.I,
         ):
             self.challenge = True
@@ -311,7 +316,51 @@ def read_archive(path, expected):
         .decode(parts[0].get_content_charset() or "utf-8")
     )
     parser.close()
+    if (
+        not parser.canonicals
+        and not parser.prices
+        and _has_archived_challenge(message, parser.frame_cids)
+    ):
+        raise ReaderFailure("blocked")
     return dict(parser.result(), archive_url=expected, main_url=expected, saved=True)
+
+
+def _has_archived_challenge(message, frame_cids):
+    """Chrome replaces iframe URLs with CID references in the saved main HTML."""
+    if not frame_cids:
+        return False
+    # Only an unambiguous HTML part referenced by a real iframe can establish
+    # a challenge. Unreferenced images/scripts and seller text do not count.
+    linked = {}
+    for part in message.walk():
+        ids = [str(value).strip() for value in part.get_all("Content-ID", [])]
+        locations = part.get_all("Content-Location", [])
+        for content_id in ids:
+            if not (content_id.startswith("<") and content_id.endswith(">")):
+                continue
+            cid = content_id[1:-1]
+            if cid not in frame_cids:
+                continue
+            if cid in linked or len(ids) != 1 or len(locations) != 1:
+                linked[cid] = False
+                continue
+            try:
+                location = urlsplit(str(locations[0]))
+                host = location.hostname or ""
+            except ValueError:
+                linked[cid] = False
+                continue
+            linked[cid] = (
+                part.get_content_type() == "text/html"
+                and location.scheme == "https"
+                and location.username is None
+                and location.password is None
+                and (
+                    host == "captcha-delivery.com"
+                    or host.endswith(".captcha-delivery.com")
+                )
+            )
+    return any(linked.values())
 
 
 class ReaderFailure(RuntimeError):

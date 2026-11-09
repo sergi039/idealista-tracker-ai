@@ -143,3 +143,30 @@ Process-directed signals delivered through a background thread are also deferred
 by the Python handler while cleanup is active, then re-delivered to the restored
 handler after deletion. A pthread mask alone cannot protect Python's main-thread
 signal dispatch in that case.
+
+## Alternate publication after an Idealista refusal
+
+Chrome can archive a DataDome iframe under a `cid:` URL. For a page
+without primary listing fields, the reader resolves that CID against the
+archive's unique HTML part and recognises the HTTPS DataDome host. It does
+not follow or request the frame.
+
+When a separately checked Yaencontre or Fotocasa advert has current
+public-index evidence, the manual property action uses that evidence after
+an Idealista refusal. The detail links the alternate advert and gives the
+Madrid observation time. It does not refresh Idealista's confirmation date,
+change the primary status or infer sale/withdrawal from an alternate.
+
+The app performs no Yaencontre or Fotocasa HTTP calls for this fallback:
+both can refuse its route. A trusted operator can refresh evidence after
+reading the public indexed page and matching the same property:
+
+```sh
+python -m utils.record_alternate_publication PROPERTY_ID IDEALISTA_URL ALTERNATE_URL OBSERVED_AT_ISO
+```
+
+The exact Idealista URL must still match under the property row lock.
+Yaencontre must also have the same syndicated listing ID. Fotocasa has its
+own ID and requires the operator to establish the match. Only observations
+from the last 24 hours are shown; dates are never advanced by checking
+cached evidence. Terminal primary statuses suppress alternate evidence.

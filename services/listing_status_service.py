@@ -602,10 +602,19 @@ class ListingStatusService:
                 "error", None, "unsupported_source"
             )
 
+        from services.alternate_publication import REFUSALS, current_publications
+
         http_refusal = refusal
+        use_alternate = (
+            allow_browser_fallback
+            and source_of_url(url) == IDEALISTA
+            and status == "error"
+            and refusal in REFUSALS
+            and bool(current_publications(prop, datetime.now(timezone.utc)))
+        )
         browser, browser_meta = (
             self._browser_fallback(url)
-            if allow_browser_fallback and status == "error"
+            if allow_browser_fallback and status == "error" and not use_alternate
             else (None, None)
         )
         if browser is not None:
@@ -631,7 +640,15 @@ class ListingStatusService:
                     "observed": status,
                     "refusal": refusal,
                 }
-                if browser_meta:
+                if (
+                    allow_browser_fallback
+                    and source_of_url(url) == IDEALISTA
+                    and status == "error"
+                    and refusal in REFUSALS
+                    and current_publications(prop, datetime.now(timezone.utc))
+                ):
+                    attempt["method"] = "alternate_publication"
+                elif browser_meta:
                     attempt.update(browser_meta, http_refusal=http_refusal)
                 enrichment["listing_status_check"] = attempt
                 prop.enrichment = enrichment

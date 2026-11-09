@@ -689,3 +689,62 @@ def test_unopened_reader_never_queries_chrome_during_cleanup(monkeypatch):
     monkeypatch.setattr(reader, "apple", apple)
     reader.OwnedTab(100).close()
     apple.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "frame_id,location,has_listing,expected",
+    [
+        (
+            "challenge@mhtml",
+            "https://geo.captcha-delivery.com/captcha/",
+            False,
+            "blocked",
+        ),
+        (
+            "challenge%40mhtml",
+            "https://geo.captcha-delivery.com/captcha/",
+            False,
+            "blocked",
+        ),
+        (
+            "other@mhtml",
+            "https://geo.captcha-delivery.com/captcha/",
+            False,
+            "not_the_listing_page",
+        ),
+        (
+            "challenge@mhtml",
+            "https://captcha-delivery.com.evil.invalid/captcha/",
+            False,
+            "not_the_listing_page",
+        ),
+        ("challenge@mhtml", "https://geo.captcha-delivery.com/captcha/", True, None),
+    ],
+)
+def test_mhtml_cid_challenge_links_to_archived_html(
+    tmp_path, frame_id, location, has_listing, expected
+):
+    iframe = f'<iframe src="cid:{frame_id}"></iframe>'
+    html = (
+        HTML.replace("</body>", iframe + "</body>")
+        if has_listing
+        else (
+            f"<html><head><title>idealista.com</title></head><body>{iframe}</body></html>"
+        )
+    )
+    path = write_archive(tmp_path / "frame.mhtml", html)
+    from email import policy
+    from email.parser import BytesParser
+
+    message = BytesParser(policy=policy.default).parsebytes(path.read_bytes())
+    frame = EmailMessage()
+    frame.set_content("<html><body>Technical check</body></html>", subtype="html")
+    frame["Content-ID"] = "<challenge@mhtml>"
+    frame["Content-Location"] = location
+    message.attach(frame)
+    path.write_bytes(message.as_bytes())
+    if expected is not None:
+        with pytest.raises(reader.ReaderFailure, match=f"^{expected}$"):
+            reader.read_archive(path, WANTED)
+    else:
+        assert reader.read_archive(path, WANTED)["canonical"] == URL

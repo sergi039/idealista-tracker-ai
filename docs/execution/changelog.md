@@ -2,6 +2,10 @@
 
 ## 2026-11-09
 
+- Recognise DataDome challenges inside saved Chrome iframe parts. Show recent
+  public-index evidence from matched Yaencontre and Fotocasa adverts when
+  Idealista refuses, preserving the primary status and confirmation date.
+
 - Pin the single-listing browser reader to ordinary Chrome on the MacBook,
   so an open Playwright profile cannot receive its Apple Events. Keep browser
   fallback unavailable to bulk and scheduled checks.
