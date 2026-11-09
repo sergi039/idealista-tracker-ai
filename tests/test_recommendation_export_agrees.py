@@ -232,3 +232,80 @@ def test_strict_empty_state_links_to_unmeasured_and_counts_its_clear_target(sele
         "4 properties found"
         in client.get(_href(page.text, "empty-state-clear-link")).text
     )
+
+
+def test_recommendations_group_portal_aliases(selection):
+    client, rows = selection
+    reference = db.session.get(Property, rows["reference"])
+    reference.url = "https://www.idealista.com/inmueble/93478124/"
+    reference.taste_score = 95
+    alias = Property(
+        source_email_id="recommendation-export:alias",
+        title="Chalet en venta en calle Dp",
+        url="https://www.yaencontre.com/venta/casa/inmueble-45594-93478124",
+        search_profile_id=reference.search_profile_id,
+        property_category=reference.property_category,
+        property_subtype="house",
+        area_type="built",
+        area=reference.area,
+        price=reference.price,
+        municipality=reference.municipality,
+        location_lat=reference.location_lat,
+        location_lon=reference.location_lon,
+        taste_score=50,
+    )
+    seaia = Property(
+        source_email_id="recommendation-export:seaia",
+        title="Chalet en venta en calle Lugar de Seaia",
+        url="https://www.yaencontre.com/venta/casa/inmueble-81643-106962112",
+        search_profile=SearchProfile(name="Yaencontre", is_active=True),
+        property_category=reference.property_category,
+        property_subtype="house",
+        area_type="built",
+        area=585,
+        price=reference.price + 5000,
+        municipality=reference.municipality,
+        location_lat=reference.location_lat,
+        location_lon=reference.location_lon,
+        attributes={"bedrooms": 6, "bathrooms": 3},
+        taste_score=68,
+    )
+    db.session.add_all([alias, seaia])
+    db.session.commit()
+    alias_id = alias.id
+
+    params = {"mode": "recommendation", "sort": "price"}
+    page_ids, csv_ids = _page_and_export(client, **params)
+    assert reference.id in page_ids
+    assert {alias_id, seaia.id}.isdisjoint(page_ids)
+    assert csv_ids == page_ids
+    card_ids, csv_ids = _page_and_export(client, **params, view_type="cards")
+    assert card_ids == csv_ids == page_ids
+
+    start = (
+        "/properties?profile_id=all&municipality=Laxe&mode=recommendation&sort=price"
+    )
+    page = client.get(start)
+    map_href = _href(page.text, "view-map-btn")
+    map_page = client.get(map_href)
+    markers = json.loads(re.search(r"const markers = (\[.*?\]);", map_page.text)[1])
+    map_ids = set(page_ids) - {rows["unknown"]}
+    assert {marker["id"] for marker in markers} == map_ids
+    focused_map = client.get(f"{map_href}&focus={alias_id}")
+    markers = json.loads(re.search(r"const markers = (\[.*?\]);", focused_map.text)[1])
+    assert {marker["id"] for marker in markers} == (map_ids - {reference.id}) | {
+        alias_id
+    }
+
+    # The alias remains accessible from its own portal filter and in the catalog.
+    page_ids, csv_ids = _page_and_export(client, **params, source="yaencontre")
+    assert page_ids == csv_ids == [alias_id]
+    page_ids, csv_ids = _page_and_export(client, mode="combined")
+    assert {reference.id, alias_id, seaia.id} <= set(page_ids) == set(csv_ids)
+
+    # Even a matching numeric ID and figures need independent corroboration.
+    reference.url = "https://www.idealista.com/inmueble/99999999/"
+    alias.url = "https://www.yaencontre.com/venta/casa/inmueble-45594-99999999"
+    db.session.commit()
+    page_ids, csv_ids = _page_and_export(client, **params)
+    assert {reference.id, alias_id} <= set(page_ids) == set(csv_ids)

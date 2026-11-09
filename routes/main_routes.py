@@ -45,6 +45,7 @@ from services.listing_attribute_filters import (
 from services import taste_service
 from services import taste_recommendation
 from services import recommendation_feedback
+from services import recommendation_duplicates
 from services import favorite_similarity
 from services.coordinate_quality import shared_coordinate_peers
 from services import advertiser
@@ -344,8 +345,10 @@ def _criteria_context():
     return subscription_criteria.profile_context(Property)
 
 
-def _recommendation_selection(query, profile_data, profile_summary, similarity_ctx):
-    """One recommendation reading and hard-exclusion set for page and CSV."""
+def _recommendation_selection(
+    query, profile_data, profile_summary, similarity_ctx, *, focus_id=None
+):
+    """Select the recommendation results shared by the catalog, map and CSV."""
     rows = query.all()
     context = taste_recommendation.build_context(
         rows,
@@ -354,13 +357,16 @@ def _recommendation_selection(query, profile_data, profile_summary, similarity_c
         similarity_ctx=similarity_ctx,
         negative_feedback=recommendation_feedback.load_negative_listing_feedback(rows),
     )
-    excluded_ids = [
+    excluded_ids = {
         property_id
         for property_id, reading in context.readings.items()
         if reading.get("eligibility") == "excluded"
-    ]
-    if excluded_ids:
-        query = query.filter(Property.id.notin_(excluded_ids))
+    }
+    hidden_ids = excluded_ids | recommendation_duplicates.duplicate_ids(
+        rows, context.readings, excluded_ids, focus_id=focus_id
+    )
+    if hidden_ids:
+        query = query.filter(Property.id.notin_(hidden_ids))
     return query, context, len(excluded_ids)
 
 
@@ -4948,7 +4954,7 @@ def map_view():
             profile_data = taste_service.load_current_profile()
             profile_summary = taste_service.recommendation_profile_state(profile_data)
             query, _, _ = _recommendation_selection(
-                query, profile_data, profile_summary, None
+                query, profile_data, profile_summary, None, focus_id=focus_id
             )
             if focus_property is not None:
                 query_without_profile, _, _ = _recommendation_selection(
