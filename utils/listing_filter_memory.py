@@ -72,7 +72,11 @@ REMEMBER_FORGET = "forget"
 # Never stored: the parameter above is an instruction to this module, not a
 # state of the page. The page number is stored (see the docstring) but only
 # when it is a position past the first, see `_stored_pair`.
-NOT_REMEMBERED = frozenset({REMEMBER_PARAM})
+# `duplicate_of` names one group, a view of one row's twins like the reveal link
+# a listing page draws (#633); it is shown without being kept. `duplicates=show`
+# is a standing state of the page like `verdict=all` and IS remembered.
+DUPLICATE_OF_PARAM = "duplicate_of"
+NOT_REMEMBERED = frozenset({REMEMBER_PARAM, DUPLICATE_OF_PARAM})
 PAGE_PARAM = "page"
 
 # The signed session cookie holds everything the app keeps per browser in

@@ -69,13 +69,19 @@ def world(app):
     db.session.add(profile)
     db.session.commit()
 
+    created = []
+
     def mk(slug, **kwargs):
+        created.append(slug)
         row = Property(
             source_email_id=f"rej:{slug}",
             title=f"Casa {slug}",
             municipality="Malpica de Bergantiños",
             search_profile_id=profile.id,
-            price=200000,
+            # A distinct asking price per row: five rows with one price, one
+            # area and one point are, by #633's rule, five publications of
+            # one home, and the list would fold them. These are five homes.
+            price=200000 + 1000 * len(created),
             area=200,
             # Coordinates, because the map can only withhold a row it could
             # otherwise have plotted -- its count is about markers, not rows.

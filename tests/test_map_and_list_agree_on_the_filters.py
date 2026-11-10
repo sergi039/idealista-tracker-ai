@@ -104,6 +104,14 @@ NOT_A_FILTER = {
     ),
     "active_mode": "derived from the applied sort, never sent",
     "view_type": "cards or table",
+    "duplicates": (
+        "how the fold of same-home publications is read, not what a row is: "
+        "swept across list, CSV, API and map in test_duplicates_fold_on_the_list.py"
+    ),
+    "duplicate_of": (
+        "one group shown unfolded: swept across list, CSV, API and map in "
+        "test_duplicates_fold_on_the_list.py"
+    ),
     "hide_removed": (
         "the map excludes delisted listings unconditionally, so the two "
         "surfaces cannot be compared on it -- see the List View link's own "
