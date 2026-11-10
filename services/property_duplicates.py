@@ -105,6 +105,10 @@ class Edge:
     tier: str
     evidence: Tuple[Tuple[str, str, Any], ...]  # (signal, status, value)
 
+    def explain(self) -> Dict[str, Any]:
+        """The same answer `explain(a, b)` gives, without re-evaluating."""
+        return _explanation(self.a, self.b, self.tier, self.evidence)
+
     def signals(self) -> Dict[str, Dict[str, Any]]:
         return {name: {"status": s, "value": v} for name, s, v in self.evidence}
 
@@ -187,6 +191,21 @@ def built_area(row: Any) -> Optional[float]:
     return round(value, 2) if value is not None else None
 
 
+# A bare postcode component ("15165") is not part of the place.
+_POSTCODE = re.compile(r"^\d{5}$")
+
+# Folded (accents stripped) words that name a kind of place and nothing more.
+# A phrase made only of these identifies nothing and abstains.
+GENERIC_PLACE_WORDS: FrozenSet[str] = frozenset(
+    {
+        "calle", "c", "lugar", "rua", "avenida", "avda", "camino", "barrio",
+        "carretera", "plaza", "paseo", "travesia", "urbanizacion", "estrada",
+        "aldea", "barriada", "ronda", "via", "pasaje", "de", "del", "la", "el",
+        "los", "las", "do", "da", "n", "s", "sn",
+    }
+)  # fmt: skip
+
+
 def place_phrase(row: Any) -> Optional[str]:
     """The street / locality phrase the title names, folded; None to abstain.
 
@@ -194,9 +213,10 @@ def place_phrase(row: Any) -> Optional[str]:
     portals' grammars ("X en venta en <place>", "<type> en <place>",
     "<type> in <place>", "<district> en <municipality>") are read in one place.
     Then, per comma component, `municipality_codes.normalize` (casefold,
-    accents, punctuation, articles); components that are only numbers (house
-    numbers differ between portals) or that are the row's own municipality are
-    dropped. What is left must be non-empty. A title with no place marker comes
+    accents, punctuation, articles); postcode components, generic-street-word
+    components and the row's own municipality are dropped. Digits that are part
+    of the place are kept ("calle 1", "km 3", a house number). What is left must
+    be non-empty. A title with no place marker comes
     back from the reader as the whole title, which is prose and not a place, so
     it abstains.
     """
@@ -214,11 +234,14 @@ def place_phrase(row: Any) -> Optional[str]:
     municipality = group_key(getattr(row, "municipality", None))
     parts = []
     for component in phrase.split(","):
-        folded = " ".join(
-            tok for tok in fold_place(component).split() if not tok.isdigit()
-        )
-        if folded and folded != municipality:
-            parts.append(folded)
+        folded = fold_place(component)
+        if _POSTCODE.match(folded) or folded == municipality:
+            continue
+        # Digits stay: "calle 1" and "calle 2" are different streets. A
+        # component of nothing but generic street words names no place.
+        if all(tok in GENERIC_PLACE_WORDS for tok in folded.split()):
+            continue
+        parts.append(folded)
     return ", ".join(parts) or None
 
 
@@ -270,10 +293,10 @@ def _identity_signals(a: Any, b: Any) -> List[Tuple[str, str, Any]]:
     ref_a, ref_b = cadastral_reference(a), cadastral_reference(b)
     if ref_a is None or ref_b is None:
         out.append(_signal(SOURCE_CADASTRE, ABSTAINED, "no reference on a side"))
+    elif min(len(ref_a), len(ref_b)) < UNIT_REFERENCE_MIN_LENGTH:
+        out.append(_signal(SOURCE_CADASTRE, ABSTAINED, "parcel-level reference"))
     elif ref_a != ref_b:
         out.append(_signal(SOURCE_CADASTRE, FAILED, [ref_a, ref_b]))
-    elif len(ref_a) < UNIT_REFERENCE_MIN_LENGTH:
-        out.append(_signal(SOURCE_CADASTRE, ABSTAINED, "parcel-level reference"))
     else:
         out.append(_signal(SOURCE_CADASTRE, MET, ref_a))
     return out
@@ -341,11 +364,23 @@ def _corroboration_signals(a: Any, b: Any) -> List[Tuple[str, str, Any]]:
     return out
 
 
+def _vetoed(signals: Iterable[Tuple[str, str, Any]]) -> bool:
+    """Two different unit-level cadastral references are two different homes.
+
+    The signal is FAILED only when both sides carry a unit-level reference and
+    they differ; a parcel-level reference on either side abstains. A veto
+    outranks every other signal, a shared listing id included.
+    """
+    return any(n == SOURCE_CADASTRE and st == FAILED for n, st, _ in signals)
+
+
 def _evaluate(a: Any, b: Any) -> Tuple[Optional[str], Tuple[Tuple[str, str, Any], ...]]:
     identity = _identity_signals(a, b)
     three = _three_field_signals(a, b)
     corroboration = _corroboration_signals(a, b)
     signals = tuple(identity + three + corroboration)
+    if _vetoed(signals):
+        return None, signals
     if any(status == MET for _, status, _ in identity):
         return CONFIRMED, signals
     if all(status == MET for _, status, _ in three):
@@ -358,12 +393,20 @@ def _evaluate(a: Any, b: Any) -> Tuple[Optional[str], Tuple[Tuple[str, str, Any]
 def explain(a: Any, b: Any) -> Dict[str, Any]:
     """The tier (or None) and every signal with its value and status."""
     tier, signals = _evaluate(a, b)
-    return {
-        "a": a.id,
-        "b": b.id,
+    return _explanation(a.id, b.id, tier, signals)
+
+
+def _explanation(a_id: int, b_id: int, tier: Optional[str], signals) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "a": a_id,
+        "b": b_id,
         "tier": tier,
         "signals": {n: {"status": s, "value": v} for n, s, v in signals},
     }
+    if _vetoed(signals):
+        result["verdict"] = "different"
+        result["vetoed_by"] = SOURCE_CADASTRE
+    return result
 
 
 # --- edges and groups --------------------------------------------------------
@@ -385,10 +428,13 @@ def _candidate_pairs(rows: Sequence[Any]) -> Set[Tuple[int, int]]:
         ref = cadastral_reference(row)
         if ref is not None:
             add(("ref", ref), row.id)
-        municipality = group_key(row.municipality)
-        if municipality is not None:
+        # The three-field key. A row is indexed under each of its price
+        # values (current and previous); a row whose area is unknown or
+        # disqualified cannot meet the three fields, so it is not indexed.
+        municipality, area = group_key(row.municipality), built_area(row)
+        if municipality is not None and area is not None:
             for price in prices(row):
-                add(("mp", municipality, price), row.id)
+                add(("mpa", municipality, price, area), row.id)
 
     pairs: Set[Tuple[int, int]] = set()
     for ids in buckets.values():
@@ -399,11 +445,18 @@ def _candidate_pairs(rows: Sequence[Any]) -> Set[Tuple[int, int]]:
     return pairs
 
 
-def edges(rows: Iterable[Any]) -> List[Edge]:
-    """Every pair that earns a tier, ordered by (a, b)."""
+def edges(rows: Iterable[Any], *, stats: Optional[Dict[str, int]] = None) -> List[Edge]:
+    """Every pair that earns a tier, ordered by (a, b).
+
+    Compute once and hand the result to `groups(found_edges=...)`. `stats`, if
+    given, receives `evaluated`: how many pairs were looked at.
+    """
     by_id = {row.id: row for row in rows}
+    pairs = sorted(_candidate_pairs(list(by_id.values())))
+    if stats is not None:
+        stats["evaluated"] = len(pairs)
     found = []
-    for left, right in sorted(_candidate_pairs(list(by_id.values()))):
+    for left, right in pairs:
         tier, signals = _evaluate(by_id[left], by_id[right])
         if tier is not None:
             found.append(Edge(left, right, tier, signals))
@@ -481,7 +534,10 @@ def _components(edge_list: List[Edge]) -> List[List[Edge]]:
 
 
 def groups(
-    rows: Iterable[Any], *, tiers: Sequence[str] = GROUPABLE_TIERS
+    rows: Iterable[Any],
+    *,
+    tiers: Sequence[str] = GROUPABLE_TIERS,
+    found_edges: Optional[List[Edge]] = None,
 ) -> List[Group]:
     """Connected components over `tiers`; `possible` is never groupable."""
     unknown = [t for t in tiers if t not in GROUPABLE_TIERS]
@@ -489,7 +545,7 @@ def groups(
         raise ValueError(f"tiers {unknown} cannot form a group")
     row_list = list(rows)
     by_id = {row.id: row for row in row_list}
-    all_edges = edges(row_list)
+    all_edges = edges(row_list) if found_edges is None else found_edges
 
     used: List[Edge] = [
         e for e in all_edges if e.tier == CONFIRMED and CONFIRMED in tiers

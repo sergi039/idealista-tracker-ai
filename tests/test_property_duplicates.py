@@ -131,6 +131,35 @@ class TestConfirmed:
         assert result["signals"]["cadastral_reference"]["status"] == dup.ABSTAINED
 
 
+class TestCadastralVeto:
+    REF1, REF2 = "9872023VH5797S0001WX", "9872023VH5797S0002WX"
+
+    def pair(self, ref_a, ref_b):
+        a = yae(1, title=YAE_TITLE, area=120, price=200000, cadastral_reference=ref_a)
+        b = foto(2, title=FOTO_TITLE, area=120, price=200000, cadastral_reference=ref_b)
+        return a, b
+
+    def test_different_unit_references_veto_a_corroborated_match(self):
+        a, b = self.pair(self.REF1, self.REF2)
+        result = dup.explain(a, b)
+        assert result["tier"] is None
+        assert result["verdict"] == "different"
+        assert result["vetoed_by"] == "cadastral_reference"
+        assert dup.edges([a, b]) == []
+        assert dup.groups([a, b]) == []
+
+    def test_the_veto_outranks_a_shared_listing_id(self):
+        a = ide(93555555, cadastral_reference=self.REF1)
+        b = yae(93555555, cadastral_reference=self.REF2)
+        assert dup.edges([a, b]) == []
+
+    def test_a_parcel_level_reference_on_either_side_does_not_veto(self):
+        for ref_a, ref_b in [(self.REF1, "9872023VH5797S"), ("9872023VH5797S", None)]:
+            a, b = self.pair(ref_a, ref_b)
+            assert tier(a, b) == dup.PROBABLE
+            assert "verdict" not in dup.explain(a, b)
+
+
 class TestProbable:
     def three(self, **kw):
         a = yae(1, title=YAE_TITLE, area=120, **kw)
@@ -156,10 +185,42 @@ class TestProbable:
         b = foto(2, title="House for sale in calle Outra, Bergondo", area=120)
         assert tier(a, b) == dup.POSSIBLE
 
-    def test_house_numbers_do_not_split_a_place(self):
+    def test_equal_house_numbers_corroborate(self):
+        a = yae(1, title="Casa en venta en calle Fiobre, 12, Bergondo", area=120)
+        b = foto(2, title="House for sale in calle Fiobre, 12, Bergondo", area=120)
+        assert tier(a, b) == dup.PROBABLE
+
+    def test_a_number_on_one_side_only_is_not_corroboration(self):
         a = yae(1, title="Casa en venta en calle Fiobre, 12, Bergondo", area=120)
         b = foto(2, title=FOTO_TITLE, area=120)
+        assert tier(a, b) == dup.POSSIBLE
+
+    def test_streets_that_differ_only_by_a_digit_do_not_corroborate(self):
+        a = yae(1, title="Casa en venta en calle 1, Bergondo", area=120)
+        b = foto(2, title="House for sale in calle 2, Bergondo", area=120)
+        assert dup.place_phrase(a) == "calle 1"
+        assert tier(a, b) == dup.POSSIBLE
+
+    def test_km_and_parcela_numbers_are_part_of_the_place(self):
+        a = yae(1, title="Casa en venta en carretera km 3, Bergondo", area=120)
+        b = foto(2, title="House for sale in carretera km 4, Bergondo", area=120)
+        assert tier(a, b) == dup.POSSIBLE
+
+    def test_a_postcode_component_is_not_part_of_the_place(self):
+        a = yae(1, title="Casa en venta en calle Fiobre, 15165, Bergondo", area=120)
+        b = foto(2, title=FOTO_TITLE, area=120)
         assert tier(a, b) == dup.PROBABLE
+
+    @pytest.mark.parametrize(
+        "word", ["calle", "lugar", "rua", "avenida", "camino", "barrio"]
+    )
+    def test_a_generic_street_word_alone_abstains(self, word):
+        a = yae(1, title=f"Casa en venta en {word}, Bergondo", area=120)
+        b = foto(2, title=f"House for sale in {word}, Bergondo", area=120)
+        assert dup.place_phrase(a) is None
+        result = dup.explain(a, b)
+        assert result["signals"]["title_place"]["status"] == dup.ABSTAINED
+        assert result["tier"] == dup.POSSIBLE
 
     def test_a_title_naming_only_the_municipality_does_not_corroborate(self):
         a = yae(1, title="Casa en venta en Bergondo", area=120)
@@ -360,6 +421,39 @@ class TestGroups:
             rng.shuffle(shuffled)
             assert [g.ids for g in dup.groups(shuffled)] == expected
             assert dup.edges(shuffled) == dup.edges(rows)
+
+
+class TestNoQuadraticCrossProduct:
+    def test_three_thousand_rows_that_only_share_municipality_and_price(self):
+        import time
+
+        rows = [foto(i, area=i) for i in range(1, 3001)]
+        stats = {}
+        started = time.perf_counter()
+        found = dup.edges(rows, stats=stats)
+        elapsed = time.perf_counter() - started
+        assert found == []
+        assert stats["evaluated"] == 0
+        assert elapsed < 2.0
+
+    def test_rows_agreeing_on_all_three_fields_are_the_only_pairs_evaluated(self):
+        rows = [foto(i, area=i) for i in range(1, 301)] + [foto(9999, area=7)]
+        stats = {}
+        dup.edges(rows, stats=stats)
+        assert stats["evaluated"] == 1
+
+    def test_a_previous_price_indexes_the_row_under_both_values(self):
+        a = foto(1, area=100, price=190000, previous_price=200000)
+        b = foto(2, area=100, price=200000)
+        stats = {}
+        assert [e.tier for e in dup.edges([a, b], stats=stats)] == [dup.POSSIBLE]
+        assert stats["evaluated"] == 1
+
+    def test_groups_reuse_given_edges(self, monkeypatch):
+        rows = [yae(1, title=YAE_TITLE, area=120), foto(2, title=FOTO_TITLE, area=120)]
+        found = dup.edges(rows)
+        monkeypatch.setattr(dup, "edges", lambda *a, **k: pytest.fail("recomputed"))
+        assert len(dup.groups(rows, found_edges=found)) == 1
 
 
 class TestRepresentativeAndFolding:

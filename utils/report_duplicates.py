@@ -47,13 +47,13 @@ def collect(
         raise ValueError(f"unknown tier {tier!r}")
     activity = frozenset(activity_ids)
     by_id = {row.id: row for row in rows}
-    all_edges = dup.edges(rows)
+    all_edges = dup.edges(rows)  # once: groups, counts and sample reuse it
 
     tiers: Dict[str, Dict[str, Any]] = {}
     for name in dup.GROUPABLE_TIERS:
         # Cumulative: `probable` means confirmed and probable together.
         wanted = dup.GROUPABLE_TIERS[: dup.GROUPABLE_TIERS.index(name) + 1]
-        found = dup.groups(rows, tiers=wanted)
+        found = dup.groups(rows, tiers=wanted, found_edges=all_edges)
         members = [row for group in found for row in group.members]
         folded = dup.folded_ids(found, activity_ids=activity)
         protected = Counter(
@@ -80,7 +80,7 @@ def collect(
                 "tier": edge.tier,
                 "url_a": a.url,
                 "url_b": b.url,
-                "explain": dup.explain(a, b),
+                "explain": edge.explain(),
             }
         )
     return {
