@@ -165,7 +165,13 @@ def collect_comparables(
                     Property.area >= pass_bounds[0], Property.area <= pass_bounds[1]
                 )
 
-            fetched = q.limit(limit).all()
+            # A ceiling without an order returns whichever rows the heap gives
+            # first, and any write to the table reshuffles that: on production
+            # (2026-11-10) rescoring an untouched row moved its value score by
+            # 1/6 of a point per swapped peer, 2-6 rows of 107 on every pass.
+            # Newest first is the order: a capped pool is the current market,
+            # and the id makes it total, so the same table gives the same pool.
+            fetched = q.order_by(Property.id.desc()).limit(limit).all()
             rows = [
                 p
                 for p in fetched
