@@ -41,11 +41,17 @@ def collect(
     *,
     tier: str = dup.PROBABLE,
     sample: int = DEFAULT_SAMPLE,
+    links: Optional[dup.Links] = None,
 ) -> Dict[str, Any]:
-    """The report as data. Pure: rows in, numbers and sample pairs out."""
+    """The report as data. Pure: rows in, numbers and sample pairs out.
+
+    `links` are the owner's decisions (`dup.load_links`); they are applied the
+    way the rule applies them everywhere: `same` first, `different` forbidden.
+    """
     if tier not in dup.TIERS:
         raise ValueError(f"unknown tier {tier!r}")
     activity = frozenset(activity_ids)
+    links = links if links is not None else dup.Links()
     by_id = {row.id: row for row in rows}
     all_edges = dup.edges(rows)  # once: groups, counts and sample reuse it
 
@@ -54,7 +60,9 @@ def collect(
         # Cumulative: `probable` means confirmed and probable together.
         wanted = dup.GROUPABLE_TIERS[: dup.GROUPABLE_TIERS.index(name) + 1]
         refused: List[Any] = []
-        found = dup.groups(rows, tiers=wanted, found_edges=all_edges, refused=refused)
+        found = dup.groups_with_links(
+            rows, links, tiers=wanted, found_edges=all_edges, refused=refused
+        )
         members = [row for group in found for row in group.members]
         folded = dup.folded_ids(found, activity_ids=activity)
         protected = Counter(
@@ -69,6 +77,7 @@ def collect(
             "refused_by_veto": len(refused),
             "protected_by_reason": dict(sorted(protected.items())),
         }
+    owner = _owner_summary(by_id, links)
     tiers[dup.POSSIBLE] = {"pairs": sum(1 for e in all_edges if e.tier == dup.POSSIBLE)}
 
     wanted_edges = [e for e in all_edges if e.tier == tier]
@@ -89,9 +98,36 @@ def collect(
         "rows": len(rows),
         "edges": dict(Counter(e.tier for e in all_edges)),
         "tiers": tiers,
+        "owner_links": owner,
         "sample_tier": tier,
         "sample_total": len(wanted_edges),
         "sample": pairs,
+    }
+
+
+def _owner_summary(by_id: Dict[int, Any], links: dup.Links) -> Dict[str, int]:
+    """How many of the owner's decisions touch these rows, and how many held.
+
+    A decision is read only when both ends are among the rows. `same` is
+    counted as applied when its ends end up in one group (by the strongest
+    reading, confirmed + probable); one refused by an owner `different` is
+    counted separately.
+    """
+    inside = {p for p in links.same_pairs if p[0] in by_id and p[1] in by_id}
+    different = {p for p in links.different_pairs if p[0] in by_id and p[1] in by_id}
+    refused: List[Any] = []
+    joined = dup.groups_with_links(
+        list(by_id.values()),
+        dup.Links(frozenset(inside), frozenset(different)),
+        found_edges=[],
+        refused=refused,
+    )
+    together = {i: g.ids for g in joined for i in g.ids}
+    held = sum(1 for a, b in inside if together.get(a) and b in together[a])
+    return {
+        "same_applied": held,
+        "same_refused": len(inside) - held,
+        "different_applied": len(different),
     }
 
 
@@ -110,6 +146,16 @@ def _print_text(report: Dict[str, Any]) -> None:
             )
         for reason, count in t["protected_by_reason"].items():
             print(f"    protected ({reason}): {count}")
+    owner = report["owner_links"]
+    print(
+        f"owner decisions applied: {owner['same_applied']} same, "
+        f"{owner['different_applied']} different"
+        + (
+            f"; {owner['same_refused']} same refused by a different"
+            if owner["same_refused"]
+            else ""
+        )
+    )
     print(f"possible (never grouped): {report['tiers'][dup.POSSIBLE]['pairs']} pairs")
     shown = len(report["sample"])
     print(
@@ -165,7 +211,10 @@ def main(argv: Optional[Sequence[str]] = None, app: Any = None) -> int:
     app = app or create_app()
     with app.app_context():
         rows, activity = load(args.profile_id)
-        report = collect(rows, activity, tier=args.tier, sample=args.sample)
+        links = dup.load_links(row.id for row in rows)
+        report = collect(
+            rows, activity, tier=args.tier, sample=args.sample, links=links
+        )
         db.session.rollback()  # nothing was written; leave no open transaction
 
     (_print_csv if args.format == "csv" else _print_text)(report)

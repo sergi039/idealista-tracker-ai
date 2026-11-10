@@ -1572,6 +1572,67 @@ class PropertyAttachment(db.Model):
         return f"<PropertyAttachment {self.id} property={self.property_id}>"
 
 
+def _utcnow_naive():
+    """Naive UTC, what the schema stores (the column is WITHOUT TIME ZONE)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+class PropertyDuplicateLink(db.Model):
+    """The owner's word on one pair of listings: same home, or different (#633).
+
+    One row per unordered pair (`property_low_id < property_high_id`, migration
+    029). `services/property_duplicates.set_link` is the only writer; the rule
+    in the same module reads these rows as owner edges. Nothing here merges or
+    deletes a listing.
+    """
+
+    __tablename__ = "property_duplicate_link"
+
+    id = db.Column(db.Integer, primary_key=True)
+    property_low_id = db.Column(
+        db.Integer,
+        db.ForeignKey("properties.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    property_high_id = db.Column(
+        db.Integer,
+        db.ForeignKey("properties.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    verdict = db.Column(db.String(9), nullable=False)
+    source = db.Column(db.String(8), nullable=False, default="owner")
+    note = db.Column(db.Text)
+    # The rule's `explain` output at decision time.
+    evidence = db.Column(JSON)
+    decided_at = db.Column(db.DateTime, nullable=False, default=_utcnow_naive)
+
+    __table_args__ = (
+        CheckConstraint(
+            "property_low_id < property_high_id",
+            name="ck_property_duplicate_link_order",
+        ),
+        CheckConstraint(
+            "verdict IN ('same', 'different')",
+            name="ck_property_duplicate_link_verdict",
+        ),
+        CheckConstraint(
+            "source IN ('owner', 'seed')", name="ck_property_duplicate_link_source"
+        ),
+        db.UniqueConstraint(
+            "property_low_id",
+            "property_high_id",
+            name="ux_property_duplicate_link_pair",
+        ),
+    )
+
+    def __repr__(self):
+        return (
+            f"<PropertyDuplicateLink {self.property_low_id}-"
+            f"{self.property_high_id} {self.verdict}>"
+        )
+
+
 class BackgroundJob(db.Model):
     """Persists the state `services/background_jobs.py` used to keep only in a
     process-local dict (issue #176).

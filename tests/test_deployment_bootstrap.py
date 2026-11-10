@@ -196,6 +196,8 @@ def _create_historical_schema(engine):
         # Migration 024 (issue #498) added the taste-profile ledger -- a new
         # table with no pre-ledger equivalent, like background_jobs.
         connection.execute(text("DROP TABLE taste_profile"))
+        # Migration 029 (issue #633) added the owner's duplicate links.
+        connection.execute(text("DROP TABLE property_duplicate_link"))
 
 
 def test_the_stated_historical_table_matches_the_runners_fingerprint(tmp_path):
