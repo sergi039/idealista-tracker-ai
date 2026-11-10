@@ -477,23 +477,19 @@ class TestNoQuadraticCrossProduct:
         assert stats["evaluated"] == 0
         assert elapsed < 2.0
 
-    def test_a_long_chain_of_joins_keeps_the_larger_component(self):
-        """20,000 rows joined so that a growing component keeps meeting a
-        two-member one: merging into the lower id copied ~10^8 members."""
-        import time
-
-        n = 20000
-        union = dup._Union({i: foto(i, area=1) for i in range(1, n + 1)})
-        pairs = [(i, n + 1 - i) for i in range(1, n // 2 + 1)]
-        pairs += [(j, j + 1) for j in range(n // 2 + 1, n)]
-
-        started = time.perf_counter()
-        for left, right in pairs:
+    def test_a_join_keeps_the_larger_component(self):
+        """Merging into the lower id copied the growing component on every
+        join of a long chain; the larger member set must be the one kept."""
+        union = dup._Union({i: foto(i, area=1) for i in range(1, 8)})
+        for left, right in ((4, 5), (5, 6), (6, 7)):
             assert union.join(left, right)
-        elapsed = time.perf_counter() - started
+        large = union.members[union.find(7)]
+        assert union.join(1, 2)
 
-        assert len(union.members[union.find(1)]) == n
-        assert elapsed < 2.0
+        assert union.join(2, 7)
+
+        assert union.members[union.find(1)] is large
+        assert large == set(range(1, 8)) - {3}
 
     def test_rows_agreeing_on_all_three_fields_are_the_only_pairs_evaluated(self):
         rows = [foto(i, area=i) for i in range(1, 301)] + [foto(9999, area=7)]
