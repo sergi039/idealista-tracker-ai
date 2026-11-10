@@ -69,6 +69,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from utils.idealista_extractors import (
     extract_area_figures_m2,
     extract_card_price_blocks_m2,
+    single_listing_mail,
 )
 from utils.inflight import inflight
 from utils.listing_source import IDEALISTA, source_of
@@ -135,7 +136,10 @@ def diagnose(prop: Any) -> Tuple[str, Optional[float], Optional[str]]:
     at another price cannot repair row 111. Among the same-price blocks: one
     distinct area is the answer, none is `unstated`, several different ones
     are `ambiguous`. No block at the row's price (or a row without a price) is
-    `no_card`. A description that does carry listing links is scoped to the
+    `no_card`. A description that does not state it is about exactly one
+    listing (`single_listing_mail`) is `ambiguous` whatever its blocks say.
+    The room counts of same-price blocks are not exposed by the block parser,
+    so no guard compares them. A description that does carry listing links is scoped to the
     row's own card by the shared extractor.
     """
     description = (prop.description or "").strip()
@@ -155,6 +159,10 @@ def diagnose(prop: Any) -> Tuple[str, Optional[float], Optional[str]]:
     ]
     if not blocks:
         return (NO_CARD, *old)
+    # A price matches the row's card only when the mail holds one listing; in a
+    # mail with several, a later card at the same price would pass for it.
+    if not single_listing_mail(description):
+        return (AMBIGUOUS, *old)
     distinct: List[float] = []
     for _, a in blocks:
         if a is not None and not any(_same(a, d) for d in distinct):

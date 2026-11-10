@@ -25,6 +25,7 @@ from utils.idealista_extractors import (
     extract_card_blocks_m2,
     extract_card_price_blocks_m2,
     extract_price,
+    single_listing_mail,
 )
 
 SEARCH_SUBJECT = (
@@ -313,3 +314,32 @@ def test_the_legacy_parser_reads_the_body_for_the_area():
         }
     )
     assert without["area"] is None
+
+
+class TestSingleListingMail:
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Hola, Sergioalicante, 1 anuncio recién publicado con tus criterios",
+            "Hello Sergioalicante, 1 new listing that matches your search criteria",
+            "<p>Hola, X,</p><p>1 anuncio recién publicado</p>",
+            "The price of this listing has dropped from 140,000€ to 120,000€",
+        ],
+    )
+    def test_a_stated_single_listing(self, text):
+        assert single_listing_mail(text) is True
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Hola, X, 11 anuncios nuevos con tus criterios",
+            "Hello X, 21 new listings that match your search criteria",
+            "Hola, X, 2 anuncios",
+            "Hello X, 1,1 new listing",
+            "320.000 € 4 hab. 316 m²",
+            "",
+            None,
+        ],
+    )
+    def test_anything_else_is_not(self, text):
+        assert single_listing_mail(text) is False

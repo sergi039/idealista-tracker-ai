@@ -12,7 +12,7 @@ from app import create_app, db
 from models import Property
 from tests import setup_test_environment
 from utils import repair_area_from_subject as tool
-from utils.idealista_extractors import extract_price
+from utils.idealista_extractors import extract_price, single_listing_mail
 
 SUBJECT = "¡Nuevo chalet en tu búsqueda: Rias Bajas costa - 350k - 150m2!"
 URL = "https://www.idealista.com/inmueble/{}/"
@@ -46,7 +46,12 @@ def _row(
     area_type="built",
     url=None,
     price="first",
+    greeting=True,
 ):
+    if greeting and not single_listing_mail(description):
+        description = (
+            f"Hola, X, 1 anuncio recién publicado con tus criterios {description}"
+        )
     if price == "first":  # the row's price is the description's first amount
         price = extract_price(description.split("€")[0] + "€")
     prop = Property(
@@ -550,3 +555,49 @@ def test_a_price_drop_description_matches_on_the_new_price(app, tmp_path):
     tool.repair(apply=True, snapshot_path=str(tmp_path / "s.json"))
 
     assert _state(pid) == (357.0, "built")
+
+
+# --- one listing per mail (the repair recovers only from such a mail) --------
+
+
+def test_a_later_listing_at_the_same_price_cannot_supply_the_area(app, tmp_path):
+    pid = _row(
+        31,
+        price=320000,
+        greeting=False,
+        description=(
+            "Casa A 320.000 € 4 hab. Consultar detalles. Casa B 320.000 € 3 hab. 90 m²"
+        ),
+    )
+    outcome = tool.repair(apply=True, snapshot_path=str(tmp_path / "s.json"))
+
+    assert outcome["counts"]["ambiguous"] == 1
+    assert _state(pid) == (150.0, "built")
+
+
+def test_a_mail_announcing_several_listings_is_ambiguous(app, tmp_path):
+    pid = _row(
+        32,
+        greeting=False,
+        price=320000,
+        description="Hola, X, 11 anuncios nuevos 320.000 € 4 hab. 316 m²",
+    )
+    outcome = tool.repair(apply=True, snapshot_path=str(tmp_path / "s.json"))
+
+    assert outcome["counts"]["ambiguous"] == 1
+    assert _state(pid) == (150.0, "built")
+
+
+def test_an_english_price_drop_notice_recovers(app, tmp_path):
+    pid = _row(
+        33,
+        greeting=False,
+        price=120000,
+        description=(
+            "The price of this listing has dropped from 140,000€ to 120,000€ "
+            "120,000 € 1,000 €/m² 3 bed. 120 m2 Nice house"
+        ),
+    )
+    tool.repair(apply=True, snapshot_path=str(tmp_path / "s.json"))
+
+    assert _state(pid) == (120.0, "built")

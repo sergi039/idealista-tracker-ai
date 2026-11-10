@@ -418,6 +418,32 @@ def extract_card_blocks_m2(
     return [a for _, a in extract_card_price_blocks_m2(text, idealista_property_id)]
 
 
+# "Hola, <name>, 1 anuncio recién publicado con tus criterios" / "Hello <name>,
+# 1 new listing that matches your search criteria": the count is anchored (no
+# digit, dot or comma before the 1) so "11 anuncios" and "21 new listings" are
+# not it. The English price-drop notice is single by construction. A Spanish
+# price-drop wording has not been established from stored mail and is
+# deliberately unsupported: such a mail reads as "no statement".
+_SINGLE_LISTING_RE = re.compile(
+    r"(?<![\d.,])1\s+(?:nuevo\s+|new\s+)?(?:anuncio|listing)\b"
+    r"|\bthe\s+price\s+of\s+this\s+listing\s+has\s+dropped\b",
+    re.IGNORECASE,
+)
+
+
+def single_listing_mail(text: Optional[str]) -> bool:
+    """Whether the e-mail text states it is about exactly one listing.
+
+    The one home of that question. Which card belongs to a row cannot be told
+    in a mail that holds several listings (the same price proves nothing), so
+    anything that recovers a figure from stored text asks this first. No
+    statement means False.
+    """
+    if not text:
+        return False
+    return _SINGLE_LISTING_RE.search(_strip_html(text)) is not None
+
+
 def extract_card_area_m2(
     text: str, idealista_property_id: Optional[int] = None
 ) -> Optional[float]:
