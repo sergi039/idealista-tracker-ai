@@ -141,6 +141,10 @@ def recall(session: MutableMapping[str, Any]) -> str | None:
     return urlencode(pairs)
 
 
+# A page number longer than this is not a page (10^7 pages of listings).
+MAX_PAGE_DIGITS = 7
+
+
 def forget(session: MutableMapping[str, Any]) -> None:
     session.pop(SESSION_KEY, None)
 
@@ -151,7 +155,14 @@ def _stored_pair(key: str, value: str) -> bool:
     if value == "":
         return False
     if key == PAGE_PARAM:
-        return value.isascii() and value.isdigit() and int(value) > 1
+        # Bounded before conversion: Python refuses to turn a string of
+        # thousands of digits into an int, and no listing has that many pages.
+        return (
+            len(value) <= MAX_PAGE_DIGITS
+            and value.isascii()
+            and value.isdigit()
+            and int(value) > 1
+        )
     return True
 
 

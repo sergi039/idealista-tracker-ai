@@ -344,3 +344,13 @@ def test_the_back_link_returns_to_the_row(app, client, many):
         rf'href="/properties#listing-{prop_id}"[^>]*>\s*<i class="fas fa-arrow-left',
         body,
     ), "the back link must end with the row's fragment"
+
+
+def test_an_absurdly_long_page_number_is_ignored_not_an_error(client, many):
+    """Python refuses to convert thousands of digits to an int; the page must
+    render and the junk must not be stored (#630 review)."""
+    response = client.get("/properties?mode=combined&view_type=list&page=" + "9" * 5000)
+    assert response.status_code == 200
+
+    recalled = client.get("/properties")
+    assert "page=" not in (recalled.headers.get("Location") or "")
