@@ -29,6 +29,7 @@ import pytest
 
 from app import create_app, db
 from config import Config
+from utils.uid_cursor import HeldUids
 from models import Property, SearchProfile
 from services import fotocasa_import, fotocasa_source
 from services.fotocasa_source import (
@@ -151,6 +152,10 @@ def app(monkeypatch):
         app.config["DEFAULT_PROFILE_ID"] = profile.id
         yield app
         db.drop_all()
+
+
+def _held(uid_file) -> list:
+    return HeldUids(str(uid_file) + ".held.json").uids()
 
 
 @pytest.fixture
@@ -366,7 +371,8 @@ class TestRefusalsHoldTheCursor:
         self, app, uid_file, imap, monkeypatch
     ):
         """Fotocasa's block page is a 200; consuming the email would lose the
-        listing forever, holding it costs one re-read after the block lifts."""
+        listing forever, so it waits on the retry list -- and the cursor passes
+        it, because behind a held cursor no later email was ever read."""
         monkeypatch.setattr(
             fotocasa_source,
             "fetch_listing",
@@ -382,7 +388,8 @@ class TestRefusalsHoldTheCursor:
 
             assert created == 0
             assert Property.query.count() == 0
-            assert service.last_seen_uid == 0, "a blocked page must hold the cursor"
+            assert _held(uid_file) == [1], "a blocked page must keep the email"
+            assert service.last_seen_uid == 1
 
             # The block lifts; a fresh run re-reads the same email and lands it.
             monkeypatch.setattr(
@@ -394,6 +401,7 @@ class TestRefusalsHoldTheCursor:
             assert second.run_ingestion(sync_type="test") == 1
             assert Property.query.count() == 1
             assert second.last_seen_uid == 1
+            assert _held(uid_file) == []
 
     def test_a_delisted_listing_is_consumed(self, app, uid_file, imap, monkeypatch):
         """`not_the_listing_page` is the server answering "gone", and the
@@ -438,7 +446,7 @@ class TestRefusalsHoldTheCursor:
             service = _service()
             assert service.run_ingestion(sync_type="test") == 0
             assert len(calls) == PORTAL_MAX_CONSECUTIVE_REFUSALS
-            assert service.last_seen_uid == 0
+            assert _held(uid_file) == [1]
 
     def test_a_held_fotocasa_email_does_not_lose_the_idealista_mail_around_it(
         self, app, uid_file, imap, monkeypatch
@@ -475,9 +483,113 @@ class TestRefusalsHoldTheCursor:
             assert created == 2
             ids = {p.idealista_property_id for p in Property.query.all()}
             assert ids == {990001, 990002}
-            # The watermark stops behind the held email; UID 3's work is
-            # committed, so re-reading it next run is a dedup no-op.
-            assert service.last_seen_uid == 1
+            # The held email waits on its own list and the cursor is past
+            # all three: the next run starts at new mail, not at this batch.
+            assert _held(uid_file) == [2]
+            assert service.last_seen_uid == 3
+
+
+class TestHeldMailDoesNotBlockNewMail:
+    """The defect of 2026-11-10: one blocked page kept 273 newer emails unread."""
+
+    @staticmethod
+    def _block(monkeypatch, calls=None):
+        def blocked(url, session=None):
+            if calls is not None:
+                calls.append(url)
+            return FotocasaListing(url=url, refusal=REFUSAL_BLOCKED)
+
+        monkeypatch.setattr(fotocasa_source, "fetch_listing", blocked)
+
+    @staticmethod
+    def _alert(n: int) -> bytes:
+        url = f"https://www.fotocasa.es/es/comprar/terreno/aviles/x/1902809{n}/d"
+        return _alert_email("Alerta: 1 anuncio nuevo", [url])
+
+    def test_mail_that_arrives_later_is_read_while_the_page_stays_blocked(
+        self, app, uid_file, imap, monkeypatch
+    ):
+        self._block(monkeypatch)
+        imap.payloads = {1: self._alert(1)}
+
+        with app.app_context():
+            _service().run_ingestion(sync_type="test")
+
+            monkeypatch.setattr(
+                fotocasa_source,
+                "fetch_listing",
+                lambda url, session=None: (
+                    _real_listing(url)
+                    if url.endswith("19028092/d")
+                    else FotocasaListing(url=url, refusal=REFUSAL_BLOCKED)
+                ),
+            )
+            imap.payloads[2] = self._alert(2)
+            second = _service()
+
+            assert second.run_ingestion(sync_type="test") == 1
+            assert second.last_seen_uid == 2
+            assert _held(uid_file) == [1]
+
+    def test_a_retry_never_moves_the_cursor_back(
+        self, app, uid_file, imap, monkeypatch
+    ):
+        self._block(monkeypatch)
+        imap.payloads = {1: self._alert(1), 2: self._alert(2)}
+
+        with app.app_context():
+            _service().run_ingestion(sync_type="test")
+            second = _service()
+            second.run_ingestion(sync_type="test")
+
+            assert second.last_seen_uid == 2
+            assert _held(uid_file) == [1, 2]
+
+    def test_one_run_retries_a_bounded_number_of_held_emails(
+        self, app, uid_file, imap, monkeypatch
+    ):
+        self._block(monkeypatch)
+        imap.payloads = {n: self._alert(n) for n in (1, 2, 3)}
+
+        with app.app_context():
+            _service().run_ingestion(sync_type="test")
+            assert _held(uid_file) == [1, 2, 3]
+
+            monkeypatch.setattr(
+                "services.property_imap_service.HELD_RETRY_MAX_PER_RUN", 1
+            )
+            calls: list[str] = []
+            self._block(monkeypatch, calls)
+            _service().run_ingestion(sync_type="test")
+
+            assert len(calls) == 1
+            assert _held(uid_file) == [1, 2, 3]
+
+    def test_a_held_email_the_mailbox_no_longer_has_is_dropped(
+        self, app, uid_file, imap, monkeypatch
+    ):
+        self._block(monkeypatch)
+        imap.payloads = {1: self._alert(1), 2: self._alert(2)}
+
+        with app.app_context():
+            _service().run_ingestion(sync_type="test")
+            del imap.payloads[1]
+            _service().run_ingestion(sync_type="test")
+
+            assert _held(uid_file) == [2]
+
+    def test_the_run_says_what_is_waiting(self, app, uid_file, imap, monkeypatch):
+        from models import SyncHistory
+
+        self._block(monkeypatch)
+        imap.payloads = {1: self._alert(1)}
+
+        with app.app_context():
+            _service().run_ingestion(sync_type="test")
+            history = SyncHistory.query.order_by(SyncHistory.id.desc()).first()
+
+            assert history.status == "partial"
+            assert "wait for a retry (UIDs 1)" in history.error_message
 
 
 class TestDisabled:

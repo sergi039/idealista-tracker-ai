@@ -28,7 +28,12 @@ from services.settings_service import SettingsService
 from services.search_profile_service import SearchProfileService
 from services.property_classification_service import PropertyClassificationService
 from utils.email_parser import EmailParser
-from utils.uid_cursor import UidBatchCursor, read_uid_file, write_uid_file
+from utils.uid_cursor import (
+    HeldUids,
+    UidBatchCursor,
+    read_uid_file,
+    write_uid_file,
+)
 from utils.idealista_extractors import (
     extract_area_m2,
     extract_idealista_property_id,
@@ -44,6 +49,13 @@ from utils.idealista_extractors import (
 )
 
 logger = logging.getLogger(__name__)
+
+# How many held emails one run retries, least recently tried first. Small on
+# purpose: a portal that is refusing answers three times and the run stops
+# asking it, so a long list must not crowd new mail out of the batch.
+HELD_RETRY_MAX_PER_RUN = 20
+# How many held UIDs the run's history line names before it says "...".
+HELD_UIDS_SHOWN = 10
 
 # Fotocasa serves its "SENTIMOS LA INTERRUPCIÓN" page with a 200 after a
 # handful of closely spaced requests (measured 2026-08-17 during the
@@ -95,6 +107,12 @@ class PropertyIMAPService:
         # its portal and PORTAL_MAX_CONSECUTIVE_REFUSALS stops that portal's
         # fetching for the rest of the run.
         self._portal_refusals: Dict[str, int] = {}
+        # Emails that could not be stored and wait for a retry instead of
+        # holding the cursor; loaded by get_idealista_emails(). `_held_now` is
+        # what this run put (or kept) there, so a later success for the same
+        # UID -- another listing of the same email -- cannot release it.
+        self._held: Optional[HeldUids] = None
+        self._held_now: set[int] = set()
         # Ids of rows whose slow, free enrichment waits for the end of the
         # run; None outside run_ingestion(), where a new row is enriched in
         # full on the spot. See `_run_deferred_enrichment`.
@@ -280,6 +298,9 @@ class PropertyIMAPService:
             logger.error("Failed to save last UID: %s", e)
             return False
 
+    def _held_file_path(self) -> str:
+        return self._uid_file_path() + ".held.json"
+
     def _advance_uid_cursor(self, email_data: Dict[str, Any]) -> None:
         """Mark one email's UID as done and persist the resulting watermark.
 
@@ -287,12 +308,45 @@ class PropertyIMAPService:
         needed no write at all), so the persisted cursor can never step over an
         email whose rows never landed.
         """
+        uid = email_data.get("uid")
+        if uid in self._held_now:
+            return
+        if self._held is not None and uid in self._held:
+            try:
+                self._held.release([uid])
+            except Exception as e:
+                # Still listed, so it is retried once more and deduplicated.
+                logger.error("Failed to release held UID %s: %s", uid, e)
+        self._pass_uid(uid)
+
+    def _pass_uid(self, uid: Any) -> None:
         cursor = self._uid_cursor
         if cursor is None:
             return
-        if cursor.resolve(email_data.get("uid")) and cursor.watermark > 0:
+        if cursor.resolve(uid) and cursor.watermark > 0:
             if self._save_last_seen_uid(cursor.watermark):
                 self.last_seen_uid = cursor.watermark
+
+    def _hold_uid(self, uid: Any, reason: str) -> None:
+        """Park an email that could not be stored, and let the cursor pass it.
+
+        The retry list is written first: if that write fails the cursor stays
+        behind the email, which is the old behaviour and loses nothing.
+        """
+        if uid is None or self._held is None:
+            return
+        try:
+            self._held.hold(int(uid), reason)
+        except Exception as e:
+            logger.error(
+                "Failed to record held UID %s; the cursor stays behind it: %s",
+                uid,
+                e,
+            )
+            return
+        self._held_now.add(uid)
+        logger.warning("UID %s waits for a retry (%s)", uid, reason)
+        self._pass_uid(uid)
 
     def _decode_header_value(self, value: str) -> str:
         return decode_header_value(value)
@@ -524,8 +578,26 @@ class PropertyIMAPService:
                     client.select_folder(self.folder or "INBOX", readonly=True)
                     uids = client.search(["ALL"])
 
+                # Held emails first, a bounded number of them: they are older
+                # than the cursor by definition and no search past it finds
+                # them. One the mailbox no longer answers for is gone.
+                self._held = HeldUids(self._held_file_path())
+                self._held_now = set()
+                in_mailbox = set(uids)
+                if in_mailbox:
+                    gone = [u for u in self._held.uids() if u not in in_mailbox]
+                    if gone:
+                        logger.warning(
+                            "Held UIDs %s are no longer in the mailbox; dropped",
+                            gone,
+                        )
+                        self._held.release(gone)
+                retry_uids = self._held.due(min(HELD_RETRY_MAX_PER_RUN, limit))
+
                 if self.last_seen_uid > 0:
                     uids = [u for u in uids if u > self.last_seen_uid]
+                uids = [u for u in uids if u not in retry_uids]
+                new_limit = limit - len(retry_uids)
 
                 # Oldest first, and that is not the defect it looks like.
                 # `UidBatchCursor.watermark` advances only through *contiguous*
@@ -541,7 +613,7 @@ class PropertyIMAPService:
                 # to the sync history and to the page that renders it. #98, in
                 # the ingest: an absence of measurement drawn as a measurement.
                 matched = sorted(uids)
-                uids = matched[:limit]
+                uids = matched[:new_limit]
                 if len(matched) > len(uids):
                     self._truncation = {
                         "matched": len(matched),
@@ -561,11 +633,14 @@ class PropertyIMAPService:
                         self._truncation["oldest_left_uid"],
                         self._truncation["newest_left_uid"],
                     )
+                # The cursor tracks new mail only: a retried UID is unknown
+                # to it, so retrying can neither move nor hold the watermark.
+                cursor = UidBatchCursor(uids, start=self.last_seen_uid)
+                uids = sorted([*retry_uids, *uids])
                 if not uids:
                     return []
 
                 fetch_data = client.fetch(uids, ["RFC822", "INTERNALDATE"])
-                cursor = UidBatchCursor(uids, start=self.last_seen_uid)
                 self._uid_cursor = cursor
 
                 for uid in uids:
@@ -794,11 +869,11 @@ class PropertyIMAPService:
                     except Exception:
                         failed = True
                         logger.error(
-                            "Failed to process UID %s - holding last_seen_uid "
-                            "behind it so the email is re-read next run",
+                            "Failed to process UID %s - it waits for a retry",
                             uid,
                             exc_info=True,
                         )
+                        self._hold_uid(uid, "the email could not be parsed")
                     finally:
                         if not emitted and not failed:
                             self._advance_uid_cursor({"uid": uid})
@@ -1348,6 +1423,7 @@ class PropertyIMAPService:
 
             for email_data in emails:
                 email_failed = False
+                hold_reason = "its listing page could not be read"
                 try:
                     profile_id = email_data.get("search_profile_id")
                     deal_type = (email_data.get("deal_type") or "sale").strip().lower()
@@ -1591,6 +1667,7 @@ class PropertyIMAPService:
                     self._enrich_new_property(prop)
                 except Exception as e:
                     email_failed = True
+                    hold_reason = f"storing it failed ({type(e).__name__})"
                     logger.error(
                         "Failed to process email %s: %s",
                         email_data.get("source_email_id"),
@@ -1599,15 +1676,12 @@ class PropertyIMAPService:
                     db.session.rollback()
                     continue
                 finally:
-                    # The cursor may only pass an email whose DB work landed;
-                    # a failed one holds it back so the next run re-fetches the
-                    # unprocessed tail (issue #24).
+                    # The cursor may only pass an email whose DB work landed
+                    # (issue #24) or one parked for a retry: a failed email
+                    # must be neither lost nor allowed to keep every later one
+                    # unread behind it.
                     if email_failed:
-                        logger.error(
-                            "Holding last_seen_uid at %s: email %s was not persisted",
-                            self.last_seen_uid,
-                            email_data.get("source_email_id"),
-                        )
+                        self._hold_uid(email_data.get("uid"), hold_reason)
                     else:
                         self._advance_uid_cursor(email_data)
 
@@ -1642,6 +1716,20 @@ class PropertyIMAPService:
                 )
             else:
                 sync_history.status = "completed"
+            # A run that left an email waiting did not finish its mail, and
+            # `completed` would say it had.
+            held = self._held.uids() if self._held is not None else []
+            if held and sync_history.status != "failed":
+                shown = ", ".join(str(u) for u in held[:HELD_UIDS_SHOWN])
+                more = "" if len(held) <= HELD_UIDS_SHOWN else ", ..."
+                waiting = (
+                    f"{len(held)} email(s) could not be stored and wait for a "
+                    f"retry (UIDs {shown}{more})"
+                )
+                sync_history.status = "partial"
+                sync_history.error_message = "; ".join(
+                    part for part in (sync_history.error_message, waiting) if part
+                )
             sync_history.completed_at = datetime.now(timezone.utc)
             sync_history.sync_duration = int(
                 (datetime.now(timezone.utc) - start_time).total_seconds()

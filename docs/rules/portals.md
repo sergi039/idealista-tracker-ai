@@ -212,8 +212,14 @@ LIKE patterns in `PORTAL_URL_PATTERNS` are anchored per source -- the NULL
 All fetches run in `run_ingestion`, never inside the open IMAP connection,
 each portal paced by its own gate and counted by its own refusal counter
 (`PORTAL_MAX_CONSECUTIVE_REFUSALS`, the `backfill_advertiser` pattern): a
-refusal **holds the UID cursor** so the email is re-read when the block
-lifts; only an *answered* "gone" (`not_the_listing_page`, a 404, a demand
+refusal **parks the email on a retry list** (`<cursor file>.held.json`,
+`utils/uid_cursor.HeldUids`) so it is re-read when the block lifts, and the
+cursor passes it. Until 2026-11-10 the refusal held the cursor itself, and one
+fotocasa page that answered "blocked" for UID 494344 kept 273 newer emails
+unread: every run re-read the same oldest batch. A run retries at most
+`HELD_RETRY_MAX_PER_RUN` held emails, least recently tried first, drops one
+the mailbox no longer has, and is recorded `partial` with the waiting UIDs
+while any remain; only an *answered* "gone" (`not_the_listing_page`, a 404, a demand
 ad) is consumed, because tomorrow's answer is the same. Profile resolution
 is the existing chain (matchers, then the catch-all). The fixtures under
 `tests/data/` -- both alert bodies, the milanuncios payload -- are the real
