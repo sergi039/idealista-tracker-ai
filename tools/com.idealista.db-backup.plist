@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Nightly verified database dump for IdealistaRank (#640).
+
+  Runs tools/backup_db.sh at 03:30 local time. Dumps land in
+  ~/IdealistaRank-backups/daily (internal disk, inside Time Machine).
+
+  Install:
+    cp tools/com.idealista.db-backup.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.idealista.db-backup.plist
+  Run once now:
+    launchctl kickstart gui/$UID/com.idealista.db-backup
+  Remove:
+    launchctl bootout gui/$UID/com.idealista.db-backup
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.idealista.db-backup</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/ss/IdealistaRank/tools/backup_db.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/ss/IdealistaRank</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/ss/IdealistaRank/data/db-backup.launchd.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/ss/IdealistaRank/data/db-backup.launchd.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Minimal launchd PATH; docker lives in /usr/local/bin and python3
+             (the lock helper) in /usr/bin. -->
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
