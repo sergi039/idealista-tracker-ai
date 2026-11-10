@@ -354,3 +354,10 @@ def test_an_absurdly_long_page_number_is_ignored_not_an_error(client, many):
 
     recalled = client.get("/properties")
     assert "page=" not in (recalled.headers.get("Location") or "")
+
+
+def test_the_page_rule_itself_refuses_an_overlong_number_without_raising():
+    from utils import listing_filter_memory
+
+    assert listing_filter_memory._stored_pair("page", "9" * 5000) is False
+    assert listing_filter_memory._stored_pair("page", "12") is True
