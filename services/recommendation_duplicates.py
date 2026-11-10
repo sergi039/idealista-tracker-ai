@@ -17,6 +17,8 @@ _CONFIRMED_ALIASES = {
     (YAENCONTRE, 105654216): (IDEALISTA, 105654216),  # Seiruga, matching listing facts
     (IDEALISTA, 112319968): (IDEALISTA, 105654216),  # Seiruga, dossier's other_listings
 }
+# Read by services/property_duplicates.py as `confirmed`, source "seed".
+CONFIRMED_ALIASES = _CONFIRMED_ALIASES
 _CONFIRMED_REFERENCES = frozenset(_CONFIRMED_ALIASES.values())
 
 
