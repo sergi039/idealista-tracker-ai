@@ -23,7 +23,9 @@ from utils.email_parser import EmailParser
 from utils.idealista_extractors import (
     extract_card_area_m2,
     extract_card_blocks_m2,
+    extract_card_price_blocks_m2,
     extract_price,
+    single_listing_mail,
 )
 
 SEARCH_SUBJECT = (
@@ -130,6 +132,48 @@ def _ingest(service, raw: bytes) -> list[dict]:
     emails = service.get_idealista_emails()
     assert len(emails) == 1
     return emails
+
+
+class TestRealPriceDropAndEnglishCards:
+    """Verbatim card texts from real alert e-mails (2026-11-10)."""
+
+    @pytest.mark.parametrize(
+        "card, expected",
+        [
+            (
+                "fotos Casa o chalet independiente en Baris, Carballo 325.000€ "
+                "↓4% 312.000 € 910 €/m² 6 hab. 357 m² Chalet independiente en "
+                "venta en Carballo, ",
+                357.0,
+            ),
+            (
+                "Ver 32 fotos Casa o chalet independiente en Valga 85.000€ ↓12% "
+                "75.000 € 518 €/m² 3 hab. 164 m² Se vende casa para reformar ",
+                164.0,
+            ),
+            (
+                "Casa o chalet independiente en Camino dos Vilares, San "
+                "Mateo-Castro-O ... 169.710 € 606 €/m² 3 hab. 280 m² PRECIO DE "
+                "REMATE ",
+                280.0,
+            ),
+            ("Casa en Foo 325.000€ ↑4% 338.000 € 910 €/m² 6 hab. 357 m² x", 357.0),
+            ("Casa en Foo 325.000€ ↓4,5% 310.000 € 910 €/m² 6 hab. 357 m² x", 357.0),
+            ("Casa en Foo 325.000€ ↓4.5% 310.000 € 3 hab. 1.357 m² x", 1357.0),
+            # English separators: comma groups thousands
+            ("58,000 € 1,500 m2 Developed plot ? NEW BUILDING PLOT", 1500.0),
+        ],
+    )
+    def test_the_card_area_is_read(self, card, expected):
+        assert extract_card_area_m2(card) == expected
+
+    def test_the_block_price_is_the_new_price(self):
+        blocks = extract_card_price_blocks_m2(
+            "325.000€ ↓4% 312.000 € 910 €/m² 6 hab. 357 m²"
+        )
+
+        assert blocks == [(312000.0, 357.0)]
+        assert extract_card_price_blocks_m2("58,000 € 1,500 m2") == [(58000.0, 1500.0)]
 
 
 class TestRoomLabels:
@@ -270,3 +314,48 @@ def test_the_legacy_parser_reads_the_body_for_the_area():
         }
     )
     assert without["area"] is None
+
+
+class TestSingleListingMail:
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Hola, Sergioalicante, 1 anuncio recién publicado con tus criterios",
+            "Hello Sergioalicante, 1 new listing that matches your search criteria",
+            "<p>Hola, X,</p><p>1 anuncio recién publicado</p>",
+            "The price of this listing has dropped from 140,000€ to 120,000€",
+        ],
+    )
+    def test_a_stated_single_listing(self, text):
+        assert single_listing_mail(text) is True
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Hola, X, 11 anuncios nuevos con tus criterios",
+            "Hello X, 21 new listings that match your search criteria",
+            "Hola, X, 2 anuncios",
+            "Hello X, 1,1 new listing",
+            "320.000 € 4 hab. 316 m²",
+            "",
+            None,
+        ],
+    )
+    def test_anything_else_is_not(self, text):
+        assert single_listing_mail(text) is False
+
+
+def test_a_count_above_one_outranks_a_later_one_anuncio_in_the_prose():
+    """A two-listing header, then listing prose that happens to say
+    '1 anuncio': the mail is not about one listing (#645 review)."""
+    text = (
+        "Hola, X, 2 anuncios nuevos con tus criterios. Casa A 320.000 € 4 hab. "
+        "Consultar detalles. Casa B 320.000 € 3 hab. 90 m². "
+        "Dos viviendas en 1 anuncio."
+    )
+    assert single_listing_mail(text) is False
+
+
+def test_a_listing_id_is_not_read_as_a_count():
+    text = "Hola, X, 1 anuncio recién publicado con tus criterios. Anuncio 112188391."
+    assert single_listing_mail(text) is True
