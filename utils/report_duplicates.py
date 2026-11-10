@@ -53,7 +53,8 @@ def collect(
     for name in dup.GROUPABLE_TIERS:
         # Cumulative: `probable` means confirmed and probable together.
         wanted = dup.GROUPABLE_TIERS[: dup.GROUPABLE_TIERS.index(name) + 1]
-        found = dup.groups(rows, tiers=wanted, found_edges=all_edges)
+        refused: List[Any] = []
+        found = dup.groups(rows, tiers=wanted, found_edges=all_edges, refused=refused)
         members = [row for group in found for row in group.members]
         folded = dup.folded_ids(found, activity_ids=activity)
         protected = Counter(
@@ -65,6 +66,7 @@ def collect(
             "groups": len(found),
             "rows": len(members),
             "would_fold": len(folded),
+            "refused_by_veto": len(refused),
             "protected_by_reason": dict(sorted(protected.items())),
         }
     tiers[dup.POSSIBLE] = {"pairs": sum(1 for e in all_edges if e.tier == dup.POSSIBLE)}
@@ -102,6 +104,10 @@ def _print_text(report: Dict[str, Any]) -> None:
             f"{label}: {t['groups']} groups, {t['rows']} rows, "
             f"{t['would_fold']} would fold"
         )
+        if t["refused_by_veto"]:
+            print(
+                f"    edges refused (would join a vetoed pair): {t['refused_by_veto']}"
+            )
         for reason, count in t["protected_by_reason"].items():
             print(f"    protected ({reason}): {count}")
     print(f"possible (never grouped): {report['tiers'][dup.POSSIBLE]['pairs']} pairs")

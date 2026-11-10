@@ -463,9 +463,36 @@ def edges(rows: Iterable[Any], *, stats: Optional[Dict[str, int]] = None) -> Lis
     return found
 
 
+def unit_reference(row: Any) -> Optional[str]:
+    """The row's unit-level cadastral reference, or None (parcel-level abstains)."""
+    ref = cadastral_reference(row)
+    return ref if ref is not None and len(ref) >= UNIT_REFERENCE_MIN_LENGTH else None
+
+
 class _Union:
-    def __init__(self, ids: Iterable[int]):
-        self.parent = {i: i for i in ids}
+    """Union-find that refuses a join which would put a vetoed pair together.
+
+    Each component tracks its member ids and its set of unit-level cadastral
+    references: two distinct references in one component means a vetoed pair
+    (linear, no all-pairs scan). `forbidden` is an injected set of id pairs
+    (e.g. the owner's "different" decisions), applied the same way.
+    """
+
+    def __init__(
+        self,
+        rows: Dict[int, Any],
+        forbidden: Iterable[Tuple[int, int]] = (),
+    ):
+        self.parent = {i: i for i in rows}
+        self.members = {i: {i} for i in rows}
+        self.refs = {
+            i: ({r} if (r := unit_reference(row)) is not None else set())
+            for i, row in rows.items()
+        }
+        self.apart: Dict[int, Set[int]] = {}
+        for x, y in forbidden:
+            self.apart.setdefault(x, set()).add(y)
+            self.apart.setdefault(y, set()).add(x)
 
     def find(self, item: int) -> int:
         while self.parent[item] != item:
@@ -473,10 +500,27 @@ class _Union:
             item = self.parent[item]
         return item
 
-    def join(self, left: int, right: int) -> None:
+    def _allowed(self, a: int, b: int) -> bool:
+        if len(self.refs[a] | self.refs[b]) > 1:
+            return False
+        small, large = sorted((a, b), key=lambda r: len(self.members[r]))
+        return not any(
+            self.apart.get(member, set()) & self.members[large]
+            for member in self.members[small]
+        )
+
+    def join(self, left: int, right: int) -> bool:
+        """Merge the two components; False if that would join a vetoed pair."""
         a, b = self.find(left), self.find(right)
-        if a != b:
-            self.parent[max(a, b)] = min(a, b)
+        if a == b:
+            return True
+        if not self._allowed(a, b):
+            return False
+        keep, drop = min(a, b), max(a, b)
+        self.parent[drop] = keep
+        self.members[keep] |= self.members.pop(drop)
+        self.refs[keep] |= self.refs.pop(drop)
+        return True
 
 
 def _probable_components(
@@ -524,7 +568,7 @@ def _current_price(row: Any) -> Optional[float]:
 
 def _components(edge_list: List[Edge]) -> List[List[Edge]]:
     ids = {i for e in edge_list for i in (e.a, e.b)}
-    union = _Union(sorted(ids))
+    union = _Union({i: SimpleNamespace() for i in sorted(ids)})
     for e in edge_list:
         union.join(e.a, e.b)
     grouped: Dict[int, List[Edge]] = {}
@@ -538,8 +582,17 @@ def groups(
     *,
     tiers: Sequence[str] = GROUPABLE_TIERS,
     found_edges: Optional[List[Edge]] = None,
+    forbidden_pairs: Iterable[Tuple[int, int]] = (),
+    refused: Optional[List[Edge]] = None,
 ) -> List[Group]:
-    """Connected components over `tiers`; `possible` is never groupable."""
+    """Connected components over `tiers`; `possible` is never groupable.
+
+    A vetoed pair never shares a group, directly or through an intermediate
+    row: two different unit-level cadastral references, or a pair in the
+    injected `forbidden_pairs`. Edges are applied strongest tier first, then by
+    ids; an edge whose join would put a vetoed pair together is skipped (the
+    weaker one loses) and appended to `refused` if given, so it stays visible.
+    """
     unknown = [t for t in tiers if t not in GROUPABLE_TIERS]
     if unknown:
         raise ValueError(f"tiers {unknown} cannot form a group")
@@ -555,12 +608,16 @@ def groups(
         for component in _probable_components(by_id, probable):
             used.extend(component)
 
-    union = _Union(sorted(by_id))
-    for e in used:
-        union.join(e.a, e.b)
+    union = _Union(by_id, forbidden_pairs)
+    accepted: List[Edge] = []
+    for e in sorted(used, key=lambda e: (e.tier != CONFIRMED, e.a, e.b)):
+        if union.join(e.a, e.b):
+            accepted.append(e)
+        elif refused is not None:
+            refused.append(e)
     members: Dict[int, Set[int]] = {}
     edge_map: Dict[int, List[Edge]] = {}
-    for e in used:
+    for e in accepted:
         root = union.find(e.a)
         members.setdefault(root, set()).update((e.a, e.b))
         edge_map.setdefault(root, []).append(e)

@@ -423,6 +423,47 @@ class TestGroups:
             assert dup.edges(shuffled) == dup.edges(rows)
 
 
+class TestAVetoedPairNeverSharesAGroup:
+    REF1, REF2 = "9872023VH5797S0001WX", "9872023VH5797S0002WX"
+
+    def trio(self):
+        a = ide(93555555, cadastral_reference=self.REF1)
+        b = yae(93555555, title=YAE_TITLE, area=120)
+        c = foto(2, title=FOTO_TITLE, area=120, cadastral_reference=self.REF2)
+        return a, b, c
+
+    def test_the_intermediate_row_cannot_bridge_a_cadastral_veto(self):
+        a, b, c = self.trio()
+        assert {e.tier for e in dup.edges([a, b, c])} == {dup.CONFIRMED, dup.PROBABLE}
+        refused = []
+        found = dup.groups([a, b, c], refused=refused)
+        assert [g.ids for g in found] == [(a.id, b.id)]
+        assert [(e.a, e.b) for e in refused] == [(b.id, c.id)]
+        assert c.id not in dup.folded_ids(found)
+
+    def test_an_injected_forbidden_pair_does_the_same(self):
+        a = ide(93666666)
+        b = yae(93666666, title=YAE_TITLE, area=120)
+        c = foto(2, title=FOTO_TITLE, area=120)
+        assert [g.ids for g in dup.groups([a, b, c])] == [(a.id, b.id, c.id)]
+        found = dup.groups([a, b, c], forbidden_pairs={(a.id, c.id)})
+        assert [g.ids for g in found] == [(a.id, b.id)]
+        assert c.id not in dup.folded_ids(found)
+
+    def test_the_stronger_edge_wins_whatever_the_input_order(self):
+        rows = list(self.trio())
+        rng = random.Random(633)
+        for _ in range(6):
+            rng.shuffle(rows)
+            assert [g.ids for g in dup.groups(rows)] == [
+                tuple(sorted(r.id for r in rows if r.id != rows_c_id(rows)))
+            ]
+
+
+def rows_c_id(rows):
+    return next(r.id for r in rows if r.cadastral_reference and r.url.endswith("/d"))
+
+
 class TestNoQuadraticCrossProduct:
     def test_three_thousand_rows_that_only_share_municipality_and_price(self):
         import time
