@@ -25,6 +25,7 @@ here. Nothing in these files was rewritten in the move.
 | [owner-review.md](owner-review.md) | The owner's review, timeline, cadastre and attachments | 1437–1630 |
 | [taste.md](taste.md) | The taste profile | 1631–1700 |
 | [favorite-similarity.md](favorite-similarity.md) | Similar to the favorites | 1701–1829 |
+| [duplicates.md](duplicates.md) | Publications of the same home: tiers, the veto, the owner's links | 2026-11-10 |
 | [reference-data.md](reference-data.md) | Committed reference data | 1830–1861 |
 | [google-spend.md](google-spend.md) | Google spend: flags, the one door, the cap | 1901–2124 |
 | [free-sources.md](free-sources.md) | Free sources: Overpass, OpenTopoData, Catastro, and the lookup budgets | 2125–2346 |

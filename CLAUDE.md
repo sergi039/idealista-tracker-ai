@@ -169,6 +169,12 @@ pytest tests/ --cov=app --cov-report=html    # coverage report
 - There is no SQL twin: the reading is Python once per request and the clause and the sort key are derived from it; the loader reads JSON leaves as text, never a CAST; a known cut always narrows, favorites or none, disclosed with a clear link built from `_clear_filters_url`; under the Favorites switch the disclosure counts with the switch lifted; one rounding rule, one decimal; `sort=similarity` is offered only with a favorite somewhere.
 - Galicia's two favorites' plot sits under a dossier key, so the plot component is dormant there until the column is filled by a hand-set writer with a source note, not by a bare UPDATE.
 
+### Publications of the same home → docs/rules/duplicates.md
+
+- **Which rows are publications of one home is a reading, not a column** (#633, `services/property_duplicates.py`): `confirmed` / `probable` / `possible`, computed on read with no SQL twin; a missing fact abstains and never vetoes; `possible` is never grouped; an idealista `area` is never evidence (108 of 118 are exactly 150.00, #645); two different unit-level cadastral references veto; rows are never merged or deleted.
+- **The owner's word outranks the rule, in one table with one writer**: `property_duplicate_link` (migration 029), `set_link` locks both property rows `FOR UPDATE` in id order, commits inside and has no `commit=False`; an owner `same` joins first and passes a veto (the evidence records `vetoed_by`), an owner `different` can never share a group, even through another row; `groups_with_links` is how links enter the rule.
+- The detail-page panel is bounded (three `LIMIT`ed lookups inside the subscription plus the row's links) and the single form route `POST /properties/<id>/duplicate-link` is its only door; no list folding yet.
+
 ### Reference data → docs/rules/reference-data.md
 
 - **Four reference files are committed on purpose, and `.gitignore` re-includes them one at a time** (`data/*` plus `!data/<file>`, never `data/`); a missing file reads as `no_reference_data`, never as an empty landscape; `utils/backfill_quality_of_life.py` is free.

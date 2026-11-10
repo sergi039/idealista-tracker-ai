@@ -47,6 +47,7 @@ from services import taste_recommendation
 from services import recommendation_feedback
 from services import recommendation_duplicates
 from services import favorite_similarity
+from services import property_duplicates
 from services.coordinate_quality import shared_coordinate_peers
 from services import advertiser
 from services.hazard_service import (
@@ -2701,6 +2702,9 @@ def property_detail(property_id):
             # because the list is capped -- see UNIVERSE-001.
             shared_coordinate_ids=shared_coordinate_ids,
             shared_coordinate_population=shared_coordinate_population,
+            # Bounded: three indexed lookups inside this row's subscription
+            # plus the rows it is linked to (services/property_duplicates.py).
+            duplicate_publications=property_duplicates.publications_for(prop),
         )
     except HTTPException:
         raise
@@ -4139,6 +4143,120 @@ def set_review(property_id):
     else:
         flash("Cleared: this listing is undecided again.", "success")
     return redirect(url_for("main.property_detail", property_id=property_id))
+
+
+DUPLICATE_PANEL_ANCHOR = "duplicates-panel"
+_DUPLICATE_DECISIONS = {
+    "same": property_duplicates.VERDICT_SAME,
+    "different": property_duplicates.VERDICT_DIFFERENT,
+    "clear": None,
+}
+
+
+def _resolve_listing_reference(prop, reference):
+    """The one listing in `prop`'s subscription that an id or a link names.
+
+    Returns ``(row, flash_key)``: exactly one of them is None. Reads the
+    reference with the listing search box's own functions
+    (`utils/listing_search.py`), so a link means here what it means there.
+    """
+    from utils import listing_search
+
+    clause = listing_search.listing_reference_clause(Property, reference)
+    if clause is None:
+        return None, "dup_flash_unresolved"
+    found = (
+        Property.query.filter(
+            Property.search_profile_id == prop.search_profile_id,
+            Property.id != prop.id,
+            clause,
+        )
+        .order_by(Property.id)
+        .limit(2)
+        .all()
+    )
+    if not found:
+        return None, "dup_flash_unresolved"
+    if len(found) > 1:
+        return None, "dup_flash_ambiguous"
+    return found[0], None
+
+
+@main_bp.route("/properties/<int:property_id>/duplicate-link", methods=["POST"])
+@limiter.limit("30 per minute")
+def set_duplicate_link(property_id):
+    """The owner's word on a pair: same home, different home, or undo.
+
+    The one form route for `services.property_duplicates.set_link`. The other
+    listing arrives as `other_id` (a button in the panel) or as `other_ref`
+    (an id or a link typed into the "link another listing" box). Nothing is
+    merged or deleted; the pair is recorded and the rule reads it.
+    """
+    prop = db.get_or_404(Property, property_id)
+
+    def back(message_key, category):
+        flash(t(message_key), category)
+        return redirect(
+            url_for(
+                "main.property_detail",
+                property_id=property_id,
+                _anchor=DUPLICATE_PANEL_ANCHOR,
+            )
+        )
+
+    decision_name = (request.form.get("decision") or "").strip().lower()
+    if decision_name not in _DUPLICATE_DECISIONS:
+        return back("dup_flash_bad_request", "error")
+    decision = _DUPLICATE_DECISIONS[decision_name]
+
+    raw_id = (request.form.get("other_id") or "").strip()
+    raw_ref = (request.form.get("other_ref") or "").strip()
+    if raw_id:
+        if not raw_id.isascii() or not raw_id.isdecimal() or len(raw_id) > 9:
+            return back("dup_flash_bad_request", "error")
+        other = db.session.get(Property, int(raw_id))
+        if other is None or other.id == prop.id:
+            return back("dup_flash_unresolved", "error")
+    elif raw_ref:
+        other, problem = _resolve_listing_reference(prop, raw_ref)
+        if other is None:
+            return back(problem, "error")
+    else:
+        return back("dup_flash_bad_request", "error")
+
+    # Pairs are judged inside one subscription; clearing a link that already
+    # exists is allowed from anywhere.
+    if decision is not None and (
+        prop.search_profile_id is None
+        or other.search_profile_id != prop.search_profile_id
+    ):
+        return back("dup_flash_other_subscription", "error")
+
+    try:
+        result = property_duplicates.set_link(
+            prop.id, other.id, verdict=decision, source="owner"
+        )
+    except property_duplicates.LinkError as exc:
+        # Fixed strings written in the service; safe to show.
+        flash(str(exc), "error")
+        return redirect(
+            url_for(
+                "main.property_detail",
+                property_id=property_id,
+                _anchor=DUPLICATE_PANEL_ANCHOR,
+            )
+        )
+
+    if not result["changed"]:
+        return back("dup_flash_unchanged", "success")
+    return back(
+        {
+            "same": "dup_flash_same",
+            "different": "dup_flash_different",
+            None: "dup_flash_cleared",
+        }[decision],
+        "success",
+    )
 
 
 @main_bp.route("/properties/<int:property_id>/activity", methods=["POST"])
