@@ -597,7 +597,7 @@
                             <div>
                                 <span class="badge text-bg-secondary">{{ listing_source_label(listing_source_for(_other)) }}</span>
                                 <a href="{{ url_for('main.property_detail', property_id=_other.id) }}">{{ _other.title or ('#' ~ _other.id) }}</a>
-                                {% if _other.url %}<a href="{{ _other.url }}" rel="noopener noreferrer" target="_blank" class="small ms-1">{{ t('dup_open_listing') }}</a>{% endif %}
+                                {% set _href = _other.url|safe_external_url %}{% if _href %}<a href="{{ _href }}" rel="noopener noreferrer" target="_blank" class="small ms-1">{{ t('dup_open_listing') }}</a>{% elif _other.url %}<span class="small ms-1 text-body-secondary">{{ _other.url|truncate(60) }}</span>{% endif %}
                                 {% if _other.price %}<span class="text-success ms-2">€{{ "{:,.0f}".format(_other.price|float) }}</span>{% endif %}
                             </div>
                             <strong class="small" data-duplicate-tier="{{ _link.verdict if _link else (_pub.tier or 'none') }}">{{ t(_tier_key) }}</strong>

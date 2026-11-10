@@ -831,10 +831,14 @@ def set_link(
                 raise LinkError("that listing does not exist")
 
         existing = db.session.execute(
-            select(PropertyDuplicateLink).where(
+            select(PropertyDuplicateLink)
+            .where(
                 PropertyDuplicateLink.property_low_id == low,
                 PropertyDuplicateLink.property_high_id == high,
             )
+            # Under the locks, and never from the identity map: this session
+            # may hold a link another session has since changed or deleted.
+            .execution_options(populate_existing=True)
         ).scalar_one_or_none()
 
         if verdict is None:

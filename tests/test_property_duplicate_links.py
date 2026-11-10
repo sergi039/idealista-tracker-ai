@@ -622,3 +622,104 @@ def test_the_checks_refuse_what_the_writer_never_writes(app, profile, values):
     with pytest.raises(IntegrityError):
         db.session.commit()
     db.session.rollback()
+
+
+class TestAStaleSessionDoesNotWin:
+    def test_a_second_session_sees_the_committed_link_not_its_own_copy(
+        self, app, profile
+    ):
+        from sqlalchemy.orm import Session
+
+        a, b = possible_pair(profile)
+        a_id, b_id = a.id, b.id
+        dup.set_link(a_id, b_id, verdict="same")
+        engine = db.engine
+
+        # Session B reads the link into its identity map and keeps it.
+        stale = Session(engine)
+        held = stale.execute(select(PropertyDuplicateLink)).scalar_one()
+        assert held.verdict == "same"
+
+        # Session A (the app's) commits a change.
+        dup.set_link(a_id, b_id, verdict="different")
+
+        # B writes through the one writer, on the same pair, opposite order.
+        original = db.session
+        try:
+            db.session = stale  # the writer reads `db.session`
+            result = dup.set_link(b_id, a_id, verdict="same")
+        finally:
+            db.session = original
+            stale.close()
+        assert result["changed"] is True
+        db.session.expire_all()
+        assert link_rows()[0].verdict == "same"
+
+    def test_a_delete_after_another_session_changed_it_still_deletes(
+        self, app, profile
+    ):
+        from sqlalchemy.orm import Session
+
+        a, b = possible_pair(profile)
+        a_id, b_id = a.id, b.id
+        dup.set_link(a_id, b_id, verdict="same")
+        stale = Session(db.engine)
+        stale.execute(select(PropertyDuplicateLink)).scalar_one()
+        dup.set_link(a_id, b_id, verdict=None)
+        original = db.session
+        try:
+            db.session = stale
+            result = dup.set_link(a_id, b_id, verdict=None)
+        finally:
+            db.session = original
+            stale.close()
+        assert result["changed"] is False
+        assert PropertyDuplicateLink.query.count() == 0
+
+
+class TestExternalLinks:
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "javascript:alert(1)",
+            "JaVaScRiPt:alert(1)",
+            " javascript:alert(1)",
+            "data:text/html,<script>alert(1)</script>",
+            "//evil.example/x",
+            "https:///nohost",
+            "https://a.example/" + "x" * 3000,
+        ],
+    )
+    def test_the_panel_renders_no_href_for_an_unsafe_url(self, client, profile, bad):
+        a = yae(profile, 1, price=1)
+        b = foto(profile, 2, price=2)
+        db.session.execute(
+            Property.__table__.update().where(Property.id == b.id).values(url=bad)
+        )
+        db.session.commit()
+        dup.set_link(a.id, b.id, verdict="same")
+        body = client.get(f"/properties/{a.id}").get_data(as_text=True)
+        assert f'data-duplicate-id="{b.id}"' in body
+        panel = body.split('id="duplicates-panel"', 1)[1].split("</ul>", 1)[0]
+        assert 'rel="noopener noreferrer" target="_blank"' not in panel
+        assert 'href="javascript' not in panel.lower()
+        assert 'href="data:' not in panel.lower()
+        assert 'href="//' not in panel
+
+    def test_a_normal_https_url_still_links(self, client, profile):
+        a = yae(profile, 1, price=1)
+        b = foto(profile, 2, price=2)
+        dup.set_link(a.id, b.id, verdict="same")
+        panel = (
+            client.get(f"/properties/{a.id}")
+            .get_data(as_text=True)
+            .split('id="duplicates-panel"', 1)[1]
+        )
+        assert 'href="https://www.fotocasa.es/es/comprar/vivienda/x/2/d"' in panel
+
+    def test_stored_text_in_the_panel_is_escaped(self, client, profile):
+        a = yae(profile, 1, price=1)
+        b = foto(profile, 2, price=2, title="<img src=x onerror=alert(1)>")
+        dup.set_link(a.id, b.id, verdict="same", note="<script>x</script>")
+        body = client.get(f"/properties/{a.id}").get_data(as_text=True)
+        assert "<img src=x onerror" not in body
