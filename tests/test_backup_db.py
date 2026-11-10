@@ -178,3 +178,44 @@ def test_script_does_not_read_env_file():
     text = SCRIPT.read_text()
     assert "/.env" not in text and "source .env" not in text
     assert os.access(SCRIPT, os.R_OK)
+
+
+@pytest.mark.parametrize("keep", ["0", "00", "000"])
+def test_a_retention_of_zero_is_refused_before_anything_is_deleted(env, keep):
+    e, dest = env
+    assert run(e).returncode == 0
+    before = dumps(dest)
+
+    result = run(e, IDEALISTA_BACKUP_KEEP=keep)
+
+    assert result.returncode == 2
+    assert dumps(dest) == before
+
+
+def test_a_leading_zero_retention_is_read_as_decimal(env):
+    e, dest = env
+    for _ in range(2):
+        assert run(e, IDEALISTA_BACKUP_KEEP="08").returncode == 0
+        time.sleep(1.1)
+    assert len(dumps(dest)) == 2
+
+
+def test_an_interrupted_dump_leaves_no_temp_file(env):
+    e, dest = env
+    proc = subprocess.Popen(
+        ["/bin/bash", str(SCRIPT)],
+        env={**e, "STUB_SLEEP": "3"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    deadline = time.time() + 10
+    while time.time() < deadline and not list(dest.glob(".idealista-tmp.*")):
+        time.sleep(0.05)
+    assert list(dest.glob(".idealista-tmp.*")), "the dump never started"
+
+    proc.terminate()
+    proc.wait(timeout=45)
+
+    assert proc.returncode != 0
+    assert not list(dest.glob(".idealista-tmp.*"))
+    assert dumps(dest) == []

@@ -64,8 +64,15 @@ if [[ $# -gt 0 ]]; then
 fi
 
 case "$keep" in
-    ''|*[!0-9]*|0) echo "IDEALISTA_BACKUP_KEEP must be a positive integer, got '$keep'" >&2; exit 2 ;;
+    ''|*[!0-9]*) echo "IDEALISTA_BACKUP_KEEP must be a positive integer, got '$keep'" >&2; exit 2 ;;
 esac
+# Base 10 on purpose: "00" passes the digit check and is zero, "08" is an
+# octal error. A retention of zero would rotate out the dump just made.
+keep=$((10#$keep))
+if (( keep < 1 )); then
+    echo "IDEALISTA_BACKUP_KEEP must be a positive integer, got '$keep'" >&2
+    exit 2
+fi
 
 mkdir -p "$dest"
 chmod 700 "$dest"
@@ -78,6 +85,12 @@ write_status() { # name, content
 }
 
 tmp_dump=""
+# A dump interrupted half-way (SIGTERM from launchd, a closed session) must
+# not stay behind as a file that looks like work in progress forever.
+cleanup() { [[ -n "$tmp_dump" ]] && rm -f "$tmp_dump"; return 0; }
+trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
 fail() {
     local reason="$1"
     [[ -n "$tmp_dump" ]] && rm -f "$tmp_dump"
