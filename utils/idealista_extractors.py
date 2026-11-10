@@ -431,6 +431,13 @@ _SINGLE_LISTING_RE = re.compile(
 )
 
 
+_LISTING_COUNT_RE = re.compile(
+    r"(?<![\d.,])(\d{1,4})\s+(?:nuevos?\s+|new\s+)?(?:anuncios?|listings?)\b"
+    r"|(?<![\d.,])(?:anuncios?|listings?)\s+(?:nuevos?\s+|new\s+)?(\d{1,4})\b",
+    re.IGNORECASE,
+)
+
+
 def single_listing_mail(text: Optional[str]) -> bool:
     """Whether the e-mail text states it is about exactly one listing.
 
@@ -441,7 +448,14 @@ def single_listing_mail(text: Optional[str]) -> bool:
     """
     if not text:
         return False
-    return _SINGLE_LISTING_RE.search(_strip_html(text)) is not None
+    plain = _strip_html(text)
+    # Any count above one anywhere outranks a "1 anuncio" elsewhere: listing
+    # prose can say "dos viviendas en 1 anuncio" under a header that announced
+    # two listings, and the header is the one that is about the mail.
+    for match in _LISTING_COUNT_RE.finditer(plain):
+        if int(match.group(1) or match.group(2)) > 1:
+            return False
+    return _SINGLE_LISTING_RE.search(plain) is not None
 
 
 def extract_card_area_m2(

@@ -343,3 +343,19 @@ class TestSingleListingMail:
     )
     def test_anything_else_is_not(self, text):
         assert single_listing_mail(text) is False
+
+
+def test_a_count_above_one_outranks_a_later_one_anuncio_in_the_prose():
+    """A two-listing header, then listing prose that happens to say
+    '1 anuncio': the mail is not about one listing (#645 review)."""
+    text = (
+        "Hola, X, 2 anuncios nuevos con tus criterios. Casa A 320.000 € 4 hab. "
+        "Consultar detalles. Casa B 320.000 € 3 hab. 90 m². "
+        "Dos viviendas en 1 anuncio."
+    )
+    assert single_listing_mail(text) is False
+
+
+def test_a_listing_id_is_not_read_as_a_count():
+    text = "Hola, X, 1 anuncio recién publicado con tus criterios. Anuncio 112188391."
+    assert single_listing_mail(text) is True
