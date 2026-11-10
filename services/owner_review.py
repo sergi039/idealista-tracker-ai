@@ -531,6 +531,7 @@ def set_review(
     action: Optional[str] = None,
     due_on: Optional[date] = None,
     keep_action: bool = False,
+    keep_reason: bool = False,
 ) -> Dict[str, Any]:
     """Record the decision and the outstanding action. The one writer.
 
@@ -552,6 +553,11 @@ def set_review(
     into hidden inputs — and a form opened before another tab set the action
     then erased it on save (the implementation review's reproduction). A
     stale snapshot cannot erase what it never carries.
+
+    `keep_reason=True` is the same promise for the reason sentence, for the
+    caller that only decides (the list row's three buttons, #630): the stored
+    reason is re-read under the lock and written back, so pressing a button
+    never erases a sentence the owner typed on the detail page.
     """
     from app import db
 
@@ -580,6 +586,8 @@ def set_review(
             # stale.
             action = prop.next_action
             due_on = prop.next_action_due_on
+        if keep_reason:
+            reason = prop.owner_verdict_reason
         result = _apply_review_locked(
             prop, decision=wanted, reason=reason, action=action, due_on=due_on
         )

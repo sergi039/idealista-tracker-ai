@@ -50,6 +50,21 @@ mutation rather than by review:
   `services/enrichment_write.py` already says. SQLite has no row lock to
   observe, so the test asserts the *call and its position* and says in its
   docstring what it therefore does not prove.
+* **The decision can be written from a list row, through one JSON endpoint and
+  still one writer** (#630): `POST /api/property/<id>/review` with
+  `{"decision": "interested" | "waiting" | "rejected" | null}` calls
+  `set_review(..., keep_action=True, keep_reason=True)`. Both `keep_*` values
+  are re-read from the row **under the lock**, so a press never erases a reason
+  typed on the detail page and a list opened before another tab set an action
+  cannot erase that either. `null` writes NULL (`undecided`, never `rejected`);
+  a repeat of the current decision writes no event; the response says `state`,
+  `changed` and `hidden` (would `hidden_by_rejection` now hide the row). The
+  buttons write immediately (`static/js/owner-decision.js`, not a delayed
+  write: a decision must survive fast navigation), Undo re-sends the previous
+  decision, no count is decremented on the page, and under `verdict=undecided`
+  the "next" link is repointed at the current page because the queue shifted.
+  The endpoint and strings are on one `#owner-decision-config` element, not
+  per row.
 * **A verdict event carries the whole review state**, not a from/to pair: a
   changed reason or a moved due date under an unchanged decision is a real
   change and a pair loses it. Pressing Save twice writes one entry -- and
