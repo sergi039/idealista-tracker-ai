@@ -95,6 +95,10 @@ class PropertyIMAPService:
         # its portal and PORTAL_MAX_CONSECUTIVE_REFUSALS stops that portal's
         # fetching for the rest of the run.
         self._portal_refusals: Dict[str, int] = {}
+        # Ids of rows whose slow, free enrichment waits for the end of the
+        # run; None outside run_ingestion(), where a new row is enriched in
+        # full on the spot. See `_run_deferred_enrichment`.
+        self._deferred_enrichment: Optional[List[int]] = None
         # What MAX_EMAILS_PER_RUN left behind, or None when it did not bite.
         # Set by get_idealista_emails(), read by run_ingestion() so a capped
         # run says so instead of looking like a complete one.
@@ -924,6 +928,24 @@ class PropertyIMAPService:
                 )
                 db.session.rollback()
 
+        if self._deferred_enrichment is not None:
+            # Scored now on what is already known, so the row is usable in
+            # the list at once; scored again once the free pass has run.
+            self._score_new_property(prop)
+            self._deferred_enrichment.append(prop.id)
+            return
+        self._finish_new_property(prop)
+
+    def _finish_new_property(self, prop: Property) -> None:
+        """The slow, free half of a new row's enrichment, then its score.
+
+        Three paced Overpass round trips of about half a minute each on the
+        public instance: measured 2026-11-10 at ~95 s a listing, during which
+        every later email in the batch waited unsaved. So `run_ingestion`
+        defers this half until the mail is stored and the cursor has moved
+        (`_run_deferred_enrichment`); a caller outside a run still gets it
+        inline.
+        """
         # The free pass: OSM amenities (#152), quality of life
         # (#275) and the sea-view verdict. Ingestion ran the paid
         # enrichers and skipped these, so every new row arrived
@@ -967,19 +989,47 @@ class PropertyIMAPService:
                 )
                 db.session.rollback()
 
-        if getattr(Config, "AUTO_PROPERTY_SCORING", False):
-            try:
-                from services.property_scoring_service import (
-                    PropertyScoringService,
-                )
+        self._score_new_property(prop)
 
-                scoring_service = PropertyScoringService()
-                scoring_service.calculate_for_property(prop, commit=True)
-            except Exception as scoring_error:
+    @staticmethod
+    def _score_new_property(prop: Property) -> None:
+        if not getattr(Config, "AUTO_PROPERTY_SCORING", False):
+            return
+        try:
+            from services.property_scoring_service import (
+                PropertyScoringService,
+            )
+
+            PropertyScoringService().calculate_for_property(prop, commit=True)
+        except Exception as scoring_error:
+            logger.warning(
+                "Property scoring failed for %s: %s",
+                prop.id,
+                scoring_error,
+            )
+            db.session.rollback()
+
+    def _run_deferred_enrichment(self) -> None:
+        """Give every row this run created the slow half it was owed.
+
+        Runs after the run's history row is written, so the mail is stored,
+        the cursor is past it and the run reads as finished before the first
+        Overpass request leaves. A process killed in here loses only
+        enrichment the free backfills restore (`utils/backfill_osm_amenities`,
+        `backfill_hazards`, `backfill_sea_view`, `backfill_quality_of_life`),
+        never a listing.
+        """
+        ids, self._deferred_enrichment = self._deferred_enrichment or [], None
+        for property_id in ids:
+            try:
+                prop = db.session.get(Property, property_id)
+                if prop is not None:
+                    self._finish_new_property(prop)
+            except Exception as deferred_error:
                 logger.warning(
-                    "Property scoring failed for %s: %s",
-                    prop.id,
-                    scoring_error,
+                    "Deferred enrichment failed for %s: %s",
+                    property_id,
+                    deferred_error,
                 )
                 db.session.rollback()
 
@@ -1288,6 +1338,7 @@ class PropertyIMAPService:
         try:
             self._uid_cursor = None
             self._portal_refusals = {}
+            self._deferred_enrichment = []
             # `_truncation` and `_fetch_error` are deliberately NOT reset here:
             # `get_idealista_emails` is their only writer and resets them at its
             # top, and a second reset makes each individually unfalsifiable --
@@ -1596,6 +1647,7 @@ class PropertyIMAPService:
                 (datetime.now(timezone.utc) - start_time).total_seconds()
             )
             db.session.commit()
+            self._run_deferred_enrichment()
             return processed_count
 
         except Exception as e:
@@ -1607,6 +1659,7 @@ class PropertyIMAPService:
                 (datetime.now(timezone.utc) - start_time).total_seconds()
             )
             db.session.commit()
+            self._run_deferred_enrichment()
             return 0
 
     def run_full_sync(self) -> int:
