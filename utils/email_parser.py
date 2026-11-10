@@ -85,7 +85,9 @@ class EmailParser:
             extracted_data = {
                 "title": self._extract_title(full_text),
                 "price": self._extract_price(full_text),
-                "area": self._extract_area(full_text),
+                # Body only: the subject carries the saved-search name, whose
+                # "150m2" is a filter, not this listing's size (#645).
+                "area": self._extract_area(body),
                 "url": self._extract_url(full_text),
                 "municipality": self._extract_municipality(full_text),
                 "description": self._clean_description(body),
