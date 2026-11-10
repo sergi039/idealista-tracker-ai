@@ -54,6 +54,7 @@ def test_two_real_sentences_still_split():
         "Casa bonita",
         "Parcela pequeña",
         "Sin jardín",
+        "sí",
     ]
 
 
@@ -65,7 +66,7 @@ def test_semicolon_still_marks_a_heading_carry_over():
 
 
 def test_cyrillic_and_spanish_letters_count_as_letters():
-    assert taste_preferences.is_meaningful_clause("дом") is False
+    assert taste_preferences.is_meaningful_clause("дом")
     assert taste_preferences.is_meaningful_clause("дома")
     assert taste_preferences.is_meaningful_clause("jardín")
     assert taste_preferences.is_meaningful_clause("за 300")
@@ -154,3 +155,27 @@ def test_block_is_absent_when_nothing_real_is_left(app):
     body = page.get_data(as_text=True)
     assert page.status_code == 200
     assert 'id="recommendation-unapplied-preferences"' not in body
+
+
+@pytest.mark.parametrize("word", ["mar", "luz", "сад", "вид", "jardín", "well-kept"])
+def test_a_short_real_word_is_still_a_preference(word):
+    assert taste_preferences.is_meaningful_clause(word)
+
+
+@pytest.mark.parametrize("fragment", ["com)", "08", "example50", "(", "a", "x.y"])
+def test_a_stray_fragment_is_not_a_preference(fragment):
+    assert not taste_preferences.is_meaningful_clause(fragment)
+
+
+def test_short_items_of_a_semicolon_list_all_survive():
+    clauses = [text for text, _ in taste_preferences._segments("jardín; mar; luz.")]
+    assert clauses == ["jardín", "mar", "luz"]
+
+
+def test_a_long_run_of_dots_is_scanned_in_linear_time():
+    import time
+
+    text = "." * 200_000 + "x"
+    started = time.perf_counter()
+    taste_preferences._segments(text)
+    assert time.perf_counter() - started < 2.0

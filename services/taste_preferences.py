@@ -82,16 +82,19 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 # A clause needs at least this many letters (any script) to be a preference;
 # anything with fewer is punctuation or a number, not owner wording ("за 300"
-# is the shortest real one).  A lone unspaced token must carry more, because a
-# stray piece of an address or domain (``com)``) is not a sentence.
+# is the shortest real one).  A lone unspaced token must be a word -- letters,
+# hyphen, apostrophe -- because a stray piece of an address or domain
+# (``com)``, ``example50``) is not owner wording, while ``mar`` and ``сад`` are.
 MIN_CLAUSE_LETTERS = 2
-MIN_LONE_TOKEN_LETTERS = 4
+_LONE_WORD_EXTRAS = "-'’"
 
 # A full stop, "!" or "?" ends a clause only at the end of a word: followed by
 # whitespace or the end of the text (optionally after closing brackets or
 # quotes).  Inside a token (``a.b``, ``1.5``, ``08.11.2026``, ``x@y.com``,
 # ``https://x.y/z``) it is part of the token.  A semicolon always ends one.
-_BOUNDARY = re.compile(r"""[.!?]+[)\]»"']*(?=\s|$)|;""")
+# The lookbehind starts a match only at the first mark of a run, so a long run
+# of dots before a letter is scanned once rather than once per dot.
+_BOUNDARY = re.compile(r"""(?<![.!?])[.!?]+[)\]»"']*(?=\s|$)|;""")
 
 
 def is_meaningful_clause(text: object) -> bool:
@@ -101,7 +104,9 @@ def is_meaningful_clause(text: object) -> bool:
     letters = sum(1 for char in text if char.isalpha())
     if letters < MIN_CLAUSE_LETTERS:
         return False
-    return len(text.split()) > 1 or letters >= MIN_LONE_TOKEN_LETTERS
+    if len(text.split()) > 1:
+        return True
+    return all(char.isalpha() or char in _LONE_WORD_EXTRAS for char in text.strip())
 
 
 def _segments(reason: str) -> list[tuple[str, bool]]:
