@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 # unknown id stays a 404 (issue #136).
 from werkzeug.exceptions import HTTPException
 from models import Land, LandHistory, SyncHistory, AiAnalysisVariant
+from services.sync_history_status import display_state
 from services.enrich_budget import poll_timeout_ms
 from services.ingest_policy import ingest_verdict
 from services.listing_verification import read_verdict as listing_verdict
@@ -3284,7 +3285,7 @@ def get_stats():
                 "price_updated": getattr(last_sync, "price_updated_count", 0) or 0,
                 "expired": getattr(last_sync, "expired_count", 0) or 0,
                 "total_emails": last_sync.total_emails_found,
-                "status": last_sync.status,
+                "status": display_state(last_sync),
                 "completed_at": last_sync.completed_at.isoformat()
                 if last_sync.completed_at
                 else None,

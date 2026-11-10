@@ -75,7 +75,7 @@
 {%- endmacro %}
 
 {% macro sort_header(key, label, base_args, current_filters) -%}
-    <a href="{{ url_for('main.properties', **dict(base_args, sort=key, order='asc' if current_filters.sort_by == key and current_filters.order == 'desc' else 'desc', page=current_filters.page)) }}"
+    <a href="{{ url_for('main.properties', **dict(base_args, sort=key, order='asc' if current_filters.sort_by == key and current_filters.order == 'desc' else 'desc', page=1)) }}"
        class="lands-th-link text-decoration-none d-flex align-items-center">
         {{ label }}{{ sort_icon(key, current_filters.sort_by, current_filters.order) }}
     </a>
@@ -1614,7 +1614,7 @@
     <th class="col-actions" scope="col">{{ t('workspace_decision') }}</th>
 </tr></thead><tbody>
                                     {% for p in properties %}
-                                        <tr class="property-row {% if p.listing_status in ('removed', 'sold') %}listing-inactive{% endif %}"
+                                        <tr id="listing-{{ p.id }}" class="property-row {% if p.listing_status in ('removed', 'sold') %}listing-inactive{% endif %}"
                                             data-listing-status="{{ listing_verdict_for(p).state }}">
                                             <td class="lands-title-col col-title">
     {% set _row_photos = photos_for(p) %}
@@ -1829,7 +1829,7 @@
                     {# Two per row from the tablet breakpoint up: the container
                        is no longer capped at 720px there, and one card spanning
                        the whole width just stretches the same content. #}
-                    <div class="col-md-6 col-xl-4 mb-4" data-recommendation-card data-listing-status="{{ listing_verdict_for(p).state }}">
+                    <div id="listing-{{ p.id }}" class="col-md-6 col-xl-4 mb-4 listing-anchor" data-recommendation-card data-listing-status="{{ listing_verdict_for(p).state }}">
                         <div class="card h-100 property-card {% if p.listing_status in ('removed', 'sold') %}listing-inactive-card{% endif %}"
                              data-property-id="{{ p.id }}" style="overflow: hidden;">
                             {% set _card_photos = photos_for(p) %}

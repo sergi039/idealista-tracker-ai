@@ -643,6 +643,15 @@
     white-space: normal;
 }
 
+/* A listing row/card is the target of the detail page's back link
+   (`#listing-<id>`, issue #630). Nothing is sticky at the top today (the
+   topbar is 3rem and scrolls away); the offset keeps the row clear of it and
+   of the notification stack (top: 4.5rem) if either ever pins. */
+.property-row,
+.listing-anchor {
+    scroll-margin-top: var(--ui-anchor-offset);
+}
+
 /* Only rendered in the width band that drops the coords column. */
 .property-row-municipality {
     display: none;

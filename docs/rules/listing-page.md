@@ -116,10 +116,20 @@ is the long form. The short form:
 - **Provenance decides what is remembered**, by the same marker
   `utils/listing_status_scope.py` reads: the page's own form and every link it
   draws carry `mode` and `view_type`, so such a request is a choice and is
-  remembered verbatim minus `page`. A cross-page link, a `/municipalities`
+  remembered verbatim, `page` included. A cross-page link, a `/municipalities`
   drill-down or a hand-typed URL carries neither, is a visit, and changes
   nothing. The reveal link a listing page draws is one of the page's own but
   names one row, so it says `remember=off`.
+- **The page is remembered too** (owner, 2026-11-10, issue #630: returning
+  from a listing opened page 1 at the top and he lost his place -- one measured
+  reason he stopped reviewing). Page 1 is never stored (absence is the first
+  page). Any change of filter, sort, mode, view or subscription carries no
+  `page` (the filter form has no page field; `sort_header` says `page=1`), so
+  it lands on page 1; only the pagination links name a page. A remembered page
+  past the last is clamped to the last page by `properties()`. Every row and
+  card has `id="listing-<id>"` (`scroll-margin-top: var(--ui-anchor-offset)`)
+  and the detail page's back link ends with that fragment, which a browser
+  keeps across the redirect to the memory.
 - **A bare `/properties` redirects to the memory**, so the address bar says
   what the page shows. Without a session it renders as before: the deploy's
   render check curls it cookie-less and still gets its 200.

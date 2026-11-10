@@ -9,6 +9,7 @@ from utils.email_headers import decode_header_value
 from utils.email_parser import EmailParser
 from utils.uid_cursor import UidBatchCursor, read_uid_file, write_uid_file
 from models import Land, LandHistory, SyncHistory
+from services.sync_history_status import STATUS_RUNNING
 from app import db
 from config import Config
 
@@ -492,7 +493,10 @@ class IMAPService:
 
         # Create sync history record
         sync_history = SyncHistory(
-            sync_type=sync_type, backend="imap", started_at=start_time
+            sync_type=sync_type,
+            backend="imap",
+            started_at=start_time,
+            status=STATUS_RUNNING,
         )
         db.session.add(sync_history)
         db.session.commit()
