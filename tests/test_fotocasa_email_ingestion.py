@@ -578,6 +578,75 @@ class TestHeldMailDoesNotBlockNewMail:
 
             assert _held(uid_file) == [2]
 
+    def test_an_email_half_stored_on_its_retry_stays_on_the_list(
+        self, app, uid_file, imap, monkeypatch
+    ):
+        """Two listings in one email: storing the first must not release the
+        email while the second is still refused."""
+        first = "https://www.fotocasa.es/es/comprar/terreno/aviles/x/19028091/d"
+        second = "https://www.fotocasa.es/es/comprar/terreno/aviles/x/19028092/d"
+        self._block(monkeypatch)
+        imap.payloads = {1: _alert_email("Alerta: 2 anuncios nuevos", [first, second])}
+
+        with app.app_context():
+            _service().run_ingestion(sync_type="test")
+            assert _held(uid_file) == [1]
+
+            monkeypatch.setattr(
+                fotocasa_source,
+                "fetch_listing",
+                lambda url, session=None: (
+                    _real_listing(url)
+                    if url == first
+                    else FotocasaListing(url=url, refusal=REFUSAL_BLOCKED)
+                ),
+            )
+
+    def test_retries_never_take_the_whole_batch(self, app, uid_file, imap, monkeypatch):
+        self._block(monkeypatch)
+        imap.payloads = {1: self._alert(1)}
+
+        with app.app_context():
+            _service().run_ingestion(sync_type="test")
+            assert _held(uid_file) == [1]
+
+            monkeypatch.setattr(
+                fotocasa_source,
+                "fetch_listing",
+                lambda url, session=None: _real_listing(url),
+            )
+            imap.payloads[2] = self._alert(2)
+            service = _service()
+            service.max_emails = 1
+            assert service.run_ingestion(sync_type="test") == 1
+            assert service.last_seen_uid == 2
+
+    def test_new_mail_is_tried_before_the_retries(
+        self, app, uid_file, imap, monkeypatch
+    ):
+        """Held emails that still refuse must not spend the portal's refusal
+        allowance before a new email with a working page is tried."""
+        self._block(monkeypatch)
+        imap.payloads = {n: self._alert(n) for n in (1, 2, 3)}
+
+        with app.app_context():
+            _service().run_ingestion(sync_type="test")
+            assert _held(uid_file) == [1, 2, 3]
+
+            monkeypatch.setattr(
+                fotocasa_source,
+                "fetch_listing",
+                lambda url, session=None: (
+                    _real_listing(url)
+                    if url.endswith("19028094/d")
+                    else FotocasaListing(url=url, refusal=REFUSAL_BLOCKED)
+                ),
+            )
+            imap.payloads[4] = self._alert(4)
+
+            assert _service().run_ingestion(sync_type="test") == 1
+            assert _held(uid_file) == [1, 2, 3]
+
     def test_the_run_says_what_is_waiting(self, app, uid_file, imap, monkeypatch):
         from models import SyncHistory
 

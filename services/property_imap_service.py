@@ -109,10 +109,15 @@ class PropertyIMAPService:
         self._portal_refusals: Dict[str, int] = {}
         # Emails that could not be stored and wait for a retry instead of
         # holding the cursor; loaded by get_idealista_emails(). `_held_now` is
-        # what this run put (or kept) there, so a later success for the same
+        # what failed in this run, so a later success for the same
         # UID -- another listing of the same email -- cannot release it.
         self._held: Optional[HeldUids] = None
         self._held_now: set[int] = set()
+        # Held UIDs something of which was stored this run. Released only at
+        # the end of the run and only if nothing of the same email failed: one
+        # email can carry several listings, and releasing it at the first one
+        # stored would lose the second if that one failed or the run died.
+        self._release_candidates: set[int] = set()
         # Ids of rows whose slow, free enrichment waits for the end of the
         # run; None outside run_ingestion(), where a new row is enriched in
         # full on the spot. See `_run_deferred_enrichment`.
@@ -312,12 +317,20 @@ class PropertyIMAPService:
         if uid in self._held_now:
             return
         if self._held is not None and uid in self._held:
-            try:
-                self._held.release([uid])
-            except Exception as e:
-                # Still listed, so it is retried once more and deduplicated.
-                logger.error("Failed to release held UID %s: %s", uid, e)
+            self._release_candidates.add(uid)
         self._pass_uid(uid)
+
+    def _release_stored_held_uids(self) -> None:
+        """Take off the retry list what this run stored in full."""
+        stored = sorted(self._release_candidates - self._held_now)
+        self._release_candidates = set()
+        if not stored or self._held is None:
+            return
+        try:
+            self._held.release(stored)
+        except Exception as e:
+            # Still listed, so it is retried once more and deduplicated.
+            logger.error("Failed to release held UIDs %s: %s", stored, e)
 
     def _pass_uid(self, uid: Any) -> None:
         cursor = self._uid_cursor
@@ -335,6 +348,9 @@ class PropertyIMAPService:
         """
         if uid is None or self._held is None:
             return
+        # Before the write, not after it: an email that failed is never
+        # released this run, whether or not recording the failure worked.
+        self._held_now.add(uid)
         try:
             self._held.hold(int(uid), reason)
         except Exception as e:
@@ -344,7 +360,6 @@ class PropertyIMAPService:
                 e,
             )
             return
-        self._held_now.add(uid)
         logger.warning("UID %s waits for a retry (%s)", uid, reason)
         self._pass_uid(uid)
 
@@ -583,6 +598,7 @@ class PropertyIMAPService:
                 # them. One the mailbox no longer answers for is gone.
                 self._held = HeldUids(self._held_file_path())
                 self._held_now = set()
+                self._release_candidates = set()
                 in_mailbox = set(uids)
                 if in_mailbox:
                     gone = [u for u in self._held.uids() if u not in in_mailbox]
@@ -592,7 +608,8 @@ class PropertyIMAPService:
                             gone,
                         )
                         self._held.release(gone)
-                retry_uids = self._held.due(min(HELD_RETRY_MAX_PER_RUN, limit))
+                # Never more than half the batch: new mail always has room.
+                retry_uids = self._held.due(min(HELD_RETRY_MAX_PER_RUN, limit // 2))
 
                 if self.last_seen_uid > 0:
                     uids = [u for u in uids if u > self.last_seen_uid]
@@ -635,8 +652,11 @@ class PropertyIMAPService:
                     )
                 # The cursor tracks new mail only: a retried UID is unknown
                 # to it, so retrying can neither move nor hold the watermark.
+                # New mail goes first, so a portal that is still refusing the
+                # retries spends its refusal allowance on them last, after the
+                # new mail had its chance.
                 cursor = UidBatchCursor(uids, start=self.last_seen_uid)
-                uids = sorted([*retry_uids, *uids])
+                uids = [*uids, *retry_uids]
                 if not uids:
                     return []
 
@@ -1685,6 +1705,7 @@ class PropertyIMAPService:
                     else:
                         self._advance_uid_cursor(email_data)
 
+            self._release_stored_held_uids()
             sync_history.new_properties_added = processed_count
             sync_history.price_updated_count = price_updated_count
             sync_history.expired_count = expired_count

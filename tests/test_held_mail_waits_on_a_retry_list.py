@@ -133,3 +133,33 @@ def test_the_history_line_names_a_bounded_number_of_uids(app, monkeypatch):
     assert f"{module.HELD_UIDS_SHOWN + 4} email(s)" in history.error_message
     assert history.error_message.endswith(", ...)")
     assert f", {module.HELD_UIDS_SHOWN + 1}" not in history.error_message
+
+
+def test_an_email_half_stored_on_its_retry_is_not_released(app, monkeypatch):
+    """One email, two listings: the first is stored, the second fails and the
+    write recording that fails too. The email must still be on the list."""
+    service = PropertyIMAPService()
+    HeldUids(service._held_file_path()).hold(7, "blocked")
+    service._held = HeldUids(service._held_file_path())
+
+    def refuse(self, uid, reason):
+        raise OSError("disk full")
+
+    service._advance_uid_cursor({"uid": 7})
+    monkeypatch.setattr(HeldUids, "hold", refuse)
+    service._hold_uid(7, "its second listing could not be stored")
+    service._release_stored_held_uids()
+
+    assert HeldUids(service._held_file_path()).uids() == [7]
+
+
+def test_an_email_stored_in_full_on_its_retry_is_released(app):
+    service = PropertyIMAPService()
+    HeldUids(service._held_file_path()).hold(7, "blocked")
+    service._held = HeldUids(service._held_file_path())
+
+    service._advance_uid_cursor({"uid": 7})
+    assert HeldUids(service._held_file_path()).uids() == [7], "not before the end"
+    service._release_stored_held_uids()
+
+    assert HeldUids(service._held_file_path()).uids() == []
