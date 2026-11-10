@@ -513,6 +513,7 @@ def test_013_frees_the_label_on_a_database_that_already_holds_rows(
             LOCK_ORDER_MIGRATION,
             ROUTE_RETRY_MIGRATION,
             CATCH_ALL_HIDDEN_MIGRATION,
+            DUPLICATE_LINK_MIGRATION,
         ]
 
         # Two *identified* subscriptions may now share the label...
@@ -1742,6 +1743,7 @@ def test_017_deduplicates_existing_rows_and_adds_the_unique_constraint(
             LOCK_ORDER_MIGRATION,
             ROUTE_RETRY_MIGRATION,
             CATCH_ALL_HIDDEN_MIGRATION,
+            DUPLICATE_LINK_MIGRATION,
         ]
 
         with engine.begin() as connection:
@@ -1935,6 +1937,7 @@ def test_017_deduplicates_existing_land_variants_and_adds_the_unique_constraint(
             LOCK_ORDER_MIGRATION,
             ROUTE_RETRY_MIGRATION,
             CATCH_ALL_HIDDEN_MIGRATION,
+            DUPLICATE_LINK_MIGRATION,
         ]
 
         with engine.begin() as connection:
