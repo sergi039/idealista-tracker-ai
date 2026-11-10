@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 import re
 from dataclasses import asdict
@@ -96,6 +97,8 @@ class PropertyIMAPService:
         self.user = Config.IMAP_USER
         self.password = Config.IMAP_PASSWORD
         self.folder = Config.IMAP_FOLDER
+        # Price updates the portal handlers applied during the current run.
+        self.portal_price_updated_count = 0
         self.search_query = Config.IMAP_SEARCH_QUERY
         self.max_emails = Config.MAX_EMAILS_PER_RUN
         self.email_parser = EmailParser()
@@ -1288,6 +1291,74 @@ class PropertyIMAPService:
         self._enrich_new_property(prop)
         return True
 
+    @staticmethod
+    def _apply_price_update(
+        prop: Property,
+        new_price: Optional[float],
+        *,
+        previous_price_hint: Optional[float] = None,
+        email_date: Optional[datetime] = None,
+    ) -> bool:
+        """Apply a price read from an alert email to a row already stored.
+
+        The one writer of the price-history fields for every ingest door, so
+        the idealista branch and the portal branches cannot drift. Returns
+        True when the row changed. A missing, non-positive or non-finite
+        price changes nothing (never a zero), and neither does a price equal
+        to the stored one. The caller commits.
+        """
+        if new_price is None or not math.isfinite(new_price) or new_price <= 0:
+            return False
+
+        old_price = float(prop.price) if prop.price else None
+        if old_price is None:
+            # Backfill missing price (rare) or create a price history baseline
+            # using the hint from the email if available.
+            hint = (
+                float(previous_price_hint) if previous_price_hint is not None else None
+            )
+            prop.previous_price = hint
+            prop.price = new_price
+            if hint is not None and hint > 0:
+                price_change = new_price - hint
+                prop.price_change_amount = price_change
+                prop.price_change_percentage = (price_change / hint) * 100
+            prop.price_changed_date = datetime.now(timezone.utc)
+            prop.email_date = email_date
+            return True
+
+        if new_price == old_price:
+            return False
+
+        price_change = new_price - old_price
+        prop.previous_price = old_price
+        prop.price = new_price
+        prop.price_change_amount = price_change
+        prop.price_change_percentage = (
+            (price_change / old_price) * 100 if old_price > 0 else 0
+        )
+        prop.price_changed_date = datetime.now(timezone.utc)
+        prop.email_date = email_date
+        return True
+
+    @staticmethod
+    def _rescore_after_price_update(props: List[Property], label: Any) -> None:
+        """Rescore rows whose price just changed, when auto scoring is on."""
+        if not getattr(Config, "AUTO_PROPERTY_SCORING", False):
+            return
+        try:
+            from services.property_scoring_service import PropertyScoringService
+
+            scoring_service = PropertyScoringService()
+            for prop in props:
+                scoring_service.calculate_for_property(prop, commit=False)
+        except Exception as scoring_error:
+            logger.warning(
+                "Property scoring failed after price update for %s: %s",
+                label,
+                scoring_error,
+            )
+
     def _ingest_yaencontre_email(
         self,
         email_data: Dict[str, Any],
@@ -1313,12 +1384,22 @@ class PropertyIMAPService:
             listing_id = card.get("listing_id")
             if not listing_id:
                 continue
-            if (
-                fotocasa_import.existing_by_listing_id(
-                    int(listing_id), yaencontre_source.SOURCE_NAME
-                )
-                is not None
-            ):
+            known = fotocasa_import.existing_by_listing_id(
+                int(listing_id), yaencontre_source.SOURCE_NAME
+            )
+            if known is not None:
+                # The card carries the price with no fetch, so a repeat alert
+                # is the only signal a changed asking price will ever get.
+                if self._apply_price_update(
+                    known,
+                    card.get("price"),
+                    email_date=self._parse_email_received_at(
+                        email_data.get("email_received_at")
+                    ),
+                ):
+                    self._rescore_after_price_update([known], known.id)
+                    db.session.commit()
+                    self.portal_price_updated_count += 1
                 continue
             if self._create_portal_row(
                 dict(card),
@@ -1426,6 +1507,7 @@ class PropertyIMAPService:
 
         processed_count = 0
         price_updated_count = 0
+        self.portal_price_updated_count = 0
         expired_count = 0
         sale_only = SettingsService.get_sale_only()
         excluded_categories = self._excluded_categories()
@@ -1566,62 +1648,18 @@ class PropertyIMAPService:
                             if idealista_id and prop.idealista_property_id is None:
                                 prop.idealista_property_id = idealista_id
 
-                            old_price = float(prop.price) if prop.price else None
-                            if old_price is None:
-                                # Backfill missing price (rare) or create a price history baseline
-                                # using the hint from the email if available.
-                                hint = (
-                                    float(previous_price_hint)
-                                    if previous_price_hint is not None
-                                    else None
-                                )
-                                prop.previous_price = hint
-                                prop.price = new_price
-                                if hint is not None and hint > 0:
-                                    price_change = new_price - hint
-                                    prop.price_change_amount = price_change
-                                    prop.price_change_percentage = (
-                                        price_change / hint
-                                    ) * 100
-                                prop.price_changed_date = datetime.now(timezone.utc)
-                                prop.email_date = email_date_obj
+                            if self._apply_price_update(
+                                prop,
+                                new_price,
+                                previous_price_hint=previous_price_hint,
+                                email_date=email_date_obj,
+                            ):
                                 any_updated = True
-                                continue
-
-                            if new_price == old_price:
-                                continue
-
-                            price_change = new_price - old_price
-                            price_change_percentage = (
-                                (price_change / old_price) * 100 if old_price > 0 else 0
-                            )
-
-                            prop.previous_price = old_price
-                            prop.price = new_price
-                            prop.price_change_amount = price_change
-                            prop.price_change_percentage = price_change_percentage
-                            prop.price_changed_date = datetime.now(timezone.utc)
-                            prop.email_date = email_date_obj
-                            any_updated = True
 
                         if any_updated:
-                            if getattr(Config, "AUTO_PROPERTY_SCORING", False):
-                                try:
-                                    from services.property_scoring_service import (
-                                        PropertyScoringService,
-                                    )
-
-                                    scoring_service = PropertyScoringService()
-                                    for prop in existing:
-                                        scoring_service.calculate_for_property(
-                                            prop, commit=False
-                                        )
-                                except Exception as scoring_error:
-                                    logger.warning(
-                                        "Property scoring failed after price update for %s: %s",
-                                        idealista_id or url,
-                                        scoring_error,
-                                    )
+                            self._rescore_after_price_update(
+                                existing, idealista_id or url
+                            )
                             db.session.commit()
                             price_updated_count += 1
                             continue
@@ -1707,7 +1745,9 @@ class PropertyIMAPService:
 
             self._release_stored_held_uids()
             sync_history.new_properties_added = processed_count
-            sync_history.price_updated_count = price_updated_count
+            sync_history.price_updated_count = (
+                price_updated_count + self.portal_price_updated_count
+            )
             sync_history.expired_count = expired_count
             # `partial` is this table's existing word for "did what it could",
             # and a capped run is exactly that: the mail it did not read is
