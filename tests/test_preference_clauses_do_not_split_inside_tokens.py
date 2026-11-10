@@ -179,3 +179,8 @@ def test_a_long_run_of_dots_is_scanned_in_linear_time():
     started = time.perf_counter()
     taste_preferences._segments(text)
     assert time.perf_counter() - started < 2.0
+
+
+def test_spanish_opening_marks_do_not_cost_a_preference():
+    clauses = [text for text, _ in taste_preferences._segments("Jardín; ¡luz! ¿Mar?")]
+    assert clauses == ["Jardín", "luz", "Mar"]

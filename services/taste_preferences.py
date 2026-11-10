@@ -126,7 +126,9 @@ def _segments(reason: str) -> list[tuple[str, bool]]:
     pieces.append((text[start:], False))
     parts: list[tuple[str, bool]] = []
     for raw, semicolon in pieces:
-        part = raw.strip(" -")
+        # Spanish opens an exclamation or a question with its own mark; the
+        # closing one was the boundary, so the opening one goes with it.
+        part = raw.strip(" -¡¿")
         # A heading can carry over a list separated with a semicolon, but
         # it must not turn a later sentence's factual observation into a
         # preference.
