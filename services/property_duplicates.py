@@ -29,9 +29,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Sequence, Set, Tuple
 from urllib.parse import urlsplit
+
+from sqlalchemy import and_, or_, select
 
 from services import coordinate_quality, owner_review
 from services.cadastre_service import normalize_reference
@@ -42,6 +45,7 @@ from services.property_location_service import (
 from services.recommendation_duplicates import CONFIRMED_ALIASES
 from services.yaencontre_source import listing_id_from_url
 from utils.idealista_extractors import extract_idealista_property_id
+from utils.listing_search import listing_id_clause
 from utils.listing_source import (
     FOTOCASA,
     IDEALISTA,
@@ -91,6 +95,14 @@ PORTAL_ORDER: Tuple[str, ...] = (IDEALISTA, FOTOCASA, YAENCONTRE, MILANUNCIOS)
 SOURCE_SEED = "seed"
 SOURCE_SHARED_ID = "shared_listing_id"
 SOURCE_CADASTRE = "cadastral_reference"
+SOURCE_OWNER = "owner_link"
+
+# The owner's word on a pair (table `property_duplicate_link`, migration 029).
+VERDICT_SAME = "same"
+VERDICT_DIFFERENT = "different"
+LINK_VERDICTS = (VERDICT_SAME, VERDICT_DIFFERENT)
+LINK_SOURCES = ("owner", "seed")
+MAX_NOTE_LENGTH = 500
 
 _YAENCONTRE_EMAIL_ID = re.compile(r"^yaencontre:(\d+)$")
 _COUNTRY_TAIL = re.compile(r",\s*spain\s*$", re.IGNORECASE)
@@ -500,8 +512,10 @@ class _Union:
             item = self.parent[item]
         return item
 
-    def _allowed(self, a: int, b: int) -> bool:
-        if len(self.refs[a] | self.refs[b]) > 1:
+    def _allowed(self, a: int, b: int, *, force: bool = False) -> bool:
+        # `force` is the owner's own `same`: it outranks a cadastral veto, but
+        # never the owner's own `different`.
+        if not force and len(self.refs[a] | self.refs[b]) > 1:
             return False
         small, large = sorted((a, b), key=lambda r: len(self.members[r]))
         return not any(
@@ -509,12 +523,12 @@ class _Union:
             for member in self.members[small]
         )
 
-    def join(self, left: int, right: int) -> bool:
+    def join(self, left: int, right: int, *, force: bool = False) -> bool:
         """Merge the two components; False if that would join a vetoed pair."""
         a, b = self.find(left), self.find(right)
         if a == b:
             return True
-        if not self._allowed(a, b):
+        if not self._allowed(a, b, force=force):
             return False
         # The larger member set is kept, so a long chain copies each member a
         # logarithmic number of times rather than once per join; the lower id
@@ -586,6 +600,7 @@ def groups(
     tiers: Sequence[str] = GROUPABLE_TIERS,
     found_edges: Optional[List[Edge]] = None,
     forbidden_pairs: Iterable[Tuple[int, int]] = (),
+    owner_same_pairs: Iterable[Tuple[int, int]] = (),
     refused: Optional[List[Edge]] = None,
 ) -> List[Group]:
     """Connected components over `tiers`; `possible` is never groupable.
@@ -595,6 +610,12 @@ def groups(
     injected `forbidden_pairs`. Edges are applied strongest tier first, then by
     ids; an edge whose join would put a vetoed pair together is skipped (the
     weaker one loses) and appended to `refused` if given, so it stays visible.
+
+    `owner_same_pairs` are the owner's "same home" decisions: confirmed edges
+    with source ``owner_link``, applied before every rule edge and allowed to
+    outrank a cadastral veto, but not a pair in `forbidden_pairs` (the owner's
+    "different"): that join is refused and reported like any other. A pair
+    with an end outside `rows` is ignored.
     """
     unknown = [t for t in tiers if t not in GROUPABLE_TIERS]
     if unknown:
@@ -611,10 +632,21 @@ def groups(
         for component in _probable_components(by_id, probable):
             used.extend(component)
 
+    owner_edges = [
+        Edge(a, b, CONFIRMED, ((SOURCE_OWNER, MET, VERDICT_SAME),))
+        for a, b in sorted({_ordered(x, y) for x, y in owner_same_pairs if x != y})
+        if a in by_id and b in by_id
+    ]
+    owner_keys = {(e.a, e.b) for e in owner_edges}
+    used = [e for e in used if (e.a, e.b) not in owner_keys]
+
     union = _Union(by_id, forbidden_pairs)
     accepted: List[Edge] = []
-    for e in sorted(used, key=lambda e: (e.tier != CONFIRMED, e.a, e.b)):
-        if union.join(e.a, e.b):
+    ranked = [(0, e) for e in owner_edges] + [
+        (1, e) for e in sorted(used, key=lambda e: (e.tier != CONFIRMED, e.a, e.b))
+    ]
+    for rank, e in ranked:
+        if union.join(e.a, e.b, force=rank == 0):
             accepted.append(e)
         elif refused is not None:
             refused.append(e)
@@ -633,6 +665,27 @@ def groups(
     ]
     result.sort(key=lambda g: g.ids)
     return result
+
+
+def _ordered(a: int, b: int) -> Tuple[int, int]:
+    return (a, b) if a < b else (b, a)
+
+
+def groups_with_links(
+    rows: Iterable[Any], links: "Links", **kwargs: Any
+) -> List[Group]:
+    """`groups` with the owner's decisions applied.
+
+    Owner `same` pairs join first; owner `different` pairs are forbidden, so
+    they can never share a group, directly or through an intermediate row.
+    """
+    forbidden = list(kwargs.pop("forbidden_pairs", ())) + sorted(links.different_pairs)
+    return groups(
+        rows,
+        forbidden_pairs=forbidden,
+        owner_same_pairs=links.same_pairs,
+        **kwargs,
+    )
 
 
 # --- representative and folding ---------------------------------------------
@@ -693,3 +746,313 @@ def folded_ids(
             if row.id != keep.id and protection(row, activity) is None:
                 folded.add(row.id)
     return folded
+
+
+# --- the owner's decisions ---------------------------------------------------
+#
+# `property_duplicate_link` (migration 029) holds the owner's word on a pair:
+# "same" or "different". `set_link` is the ONE writer. Nothing here merges,
+# folds or deletes a listing.
+
+
+class LinkError(ValueError):
+    """A rejected link write. The route turns it into a flash, never a 500."""
+
+
+@dataclass(frozen=True)
+class Links:
+    """The owner's decisions over a set of rows, as ordered (low, high) pairs."""
+
+    same_pairs: FrozenSet[Tuple[int, int]] = frozenset()
+    different_pairs: FrozenSet[Tuple[int, int]] = frozenset()
+
+    def __len__(self) -> int:
+        return len(self.same_pairs) + len(self.different_pairs)
+
+
+def _property_id(value: Any, what: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise LinkError(f"{what} is not a listing id")
+    return value
+
+
+def set_link(
+    a_id: int,
+    b_id: int,
+    *,
+    verdict: Optional[str],
+    note: Optional[str] = None,
+    source: str = "owner",
+) -> Dict[str, Any]:
+    """Record, change or clear the owner's word on one pair. The one writer.
+
+    ``verdict`` is ``"same"``, ``"different"`` or ``None``; ``None`` deletes the
+    link and so restores the computed reading. The pair is stored ordered
+    (low < high) and both property rows are locked ``FOR UPDATE`` in id order,
+    so two concurrent calls on one pair, in either argument order, queue
+    instead of deadlocking, and the second sees the first's row.
+
+    It owns its transaction, with no ``commit=False`` mode (the stance of
+    ``owner_review.set_review``): a lock whose release the callee cannot see is
+    worse than the race it was taken against.
+
+    The stored ``evidence`` is the rule's ``explain`` output at decision time.
+    A ``same`` over a cadastral veto is allowed -- the owner outranks the rule
+    -- and the evidence records ``vetoed_by``, so the override is never silent.
+    """
+    from app import db
+    from models import Property, PropertyDuplicateLink
+
+    a_id = _property_id(a_id, "the first listing")
+    b_id = _property_id(b_id, "the second listing")
+    if a_id == b_id:
+        raise LinkError("a listing cannot be linked to itself")
+    if verdict is not None and verdict not in LINK_VERDICTS:
+        raise LinkError("the decision must be 'same' or 'different'")
+    if source not in LINK_SOURCES:
+        raise LinkError("unknown source of a link")
+    clean_note = (note or "").strip() or None
+    if clean_note is not None and len(clean_note) > MAX_NOTE_LENGTH:
+        raise LinkError(f"the note is longer than {MAX_NOTE_LENGTH} characters")
+    if db.session.new or db.session.dirty or db.session.deleted:
+        # This function ends the transaction on every exit, so anything else
+        # in flight would be committed or discarded wholesale.
+        raise LinkError("a link write needs a session with nothing pending")
+
+    low, high = _ordered(a_id, b_id)
+    try:
+        # One statement per row, ascending: the lock order is the id order
+        # whatever order the caller named them in.
+        for property_id in (low, high):
+            locked = db.session.execute(
+                select(Property.id).where(Property.id == property_id).with_for_update()
+            ).scalar_one_or_none()
+            if locked is None:
+                raise LinkError("that listing does not exist")
+
+        existing = db.session.execute(
+            select(PropertyDuplicateLink).where(
+                PropertyDuplicateLink.property_low_id == low,
+                PropertyDuplicateLink.property_high_id == high,
+            )
+        ).scalar_one_or_none()
+
+        if verdict is None:
+            changed = existing is not None
+            if existing is not None:
+                db.session.delete(existing)
+            db.session.commit()
+            return {"changed": changed, "verdict": None, "low": low, "high": high}
+
+        if (
+            existing is not None
+            and existing.verdict == verdict
+            and existing.source == source
+            and existing.note == clean_note
+        ):
+            db.session.rollback()  # release the locks; nothing changed
+            return {"changed": False, "verdict": verdict, "low": low, "high": high}
+
+        rows = {
+            row.id: row
+            for row in db.session.execute(
+                select(Property)
+                .where(Property.id.in_((low, high)))
+                .execution_options(populate_existing=True)
+            ).scalars()
+        }
+        evidence = explain(rows[low], rows[high])
+        if existing is None:
+            existing = PropertyDuplicateLink(property_low_id=low, property_high_id=high)
+            db.session.add(existing)
+        existing.verdict = verdict
+        existing.source = source
+        existing.note = clean_note
+        existing.evidence = evidence
+        existing.decided_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        db.session.commit()
+        return {
+            "changed": True,
+            "verdict": verdict,
+            "low": low,
+            "high": high,
+            "vetoed_by": evidence.get("vetoed_by"),
+        }
+    except Exception:
+        db.session.rollback()
+        raise
+
+
+def links_for(property_id: int) -> List[Any]:
+    """Every link that names this row, ordered by the other end."""
+    from models import PropertyDuplicateLink
+
+    return (
+        PropertyDuplicateLink.query.filter(
+            or_(
+                PropertyDuplicateLink.property_low_id == property_id,
+                PropertyDuplicateLink.property_high_id == property_id,
+            )
+        )
+        .order_by(
+            PropertyDuplicateLink.property_low_id,
+            PropertyDuplicateLink.property_high_id,
+        )
+        .all()
+    )
+
+
+_IN_CHUNK = 500
+
+
+def load_links(ids: Iterable[int]) -> Links:
+    """The owner's decisions between rows of `ids` (both ends must be in it)."""
+    from models import PropertyDuplicateLink
+
+    wanted = sorted({int(i) for i in ids})
+    members = set(wanted)
+    same: Set[Tuple[int, int]] = set()
+    different: Set[Tuple[int, int]] = set()
+    for start in range(0, len(wanted), _IN_CHUNK):
+        chunk = wanted[start : start + _IN_CHUNK]
+        for link in PropertyDuplicateLink.query.filter(
+            PropertyDuplicateLink.property_low_id.in_(chunk)
+        ):
+            if link.property_high_id not in members:
+                continue
+            pair = (link.property_low_id, link.property_high_id)
+            (same if link.verdict == VERDICT_SAME else different).add(pair)
+    return Links(frozenset(same), frozenset(different))
+
+
+# --- the detail page's panel -------------------------------------------------
+
+# Each index lookup is capped; a subscription's own twins are a handful.
+CANDIDATE_LIMIT = 100
+
+_SIGNAL_ORDER = ("listing_id", SOURCE_SEED, SOURCE_CADASTRE)
+
+
+def _id_clause(model: Any, listing_ids: Iterable[int]):
+    clauses = []
+    for n in sorted(set(listing_ids)):
+        clauses.append(listing_id_clause(model, n))
+        clauses.extend(
+            [
+                model.source_email_id == f"yaencontre:{n}",
+                model.url.ilike(f"%inmueble-%-{n}"),
+                model.url.ilike(f"%inmueble-%-{n}/%"),
+                model.url.ilike(f"%inmueble-%-{n}?%"),
+            ]
+        )
+    return or_(*clauses)
+
+
+def _related_listing_ids(row: Any) -> Set[int]:
+    """The row's own listing id and every id the seed table ties to it."""
+    key = listing_id(row)
+    if key is None:
+        return set()
+    reference = _seed_reference(key)
+    related = {key[1]}
+    for alias, target in CONFIRMED_ALIASES.items():
+        if reference in (alias, target) or _seed_reference(alias) == reference:
+            related.update((alias[1], target[1]))
+    return related
+
+
+def candidate_rows(prop: Any) -> List[Any]:
+    """Rows that could be this one's twins, from indexed lookups only.
+
+    Bounded: three queries, each limited to `CANDIDATE_LIMIT`, all inside the
+    row's own subscription -- the three-field block (price and built area),
+    the shared / seeded listing id, and the same unit-level cadastral
+    reference. The rule decides; these queries only narrow.
+    """
+    from models import Property
+
+    if prop.search_profile_id is None:
+        return []
+    scope = [
+        Property.search_profile_id == prop.search_profile_id,
+        Property.id != prop.id,
+    ]
+    found: Dict[int, Any] = {}
+
+    def take(clause: Any) -> None:
+        query = Property.query.filter(*scope, clause).order_by(Property.id)
+        for row in query.limit(CANDIDATE_LIMIT):
+            found[row.id] = row
+
+    area, row_prices = built_area(prop), prices(prop)
+    if area is not None and row_prices:
+        take(
+            and_(
+                Property.area.between(area - 0.005, area + 0.005),
+                or_(
+                    Property.price.in_(row_prices),
+                    Property.previous_price.in_(row_prices),
+                ),
+            )
+        )
+    ids = _related_listing_ids(prop)
+    if ids:
+        take(_id_clause(Property, ids))
+    reference = unit_reference(prop)
+    if reference is not None:
+        take(Property.cadastral_reference == reference)
+    return list(found.values())
+
+
+def met_signals(explanation: Dict[str, Any]) -> List[str]:
+    """Names of the signals that were met, identity ones first."""
+    signals = explanation["signals"]
+    met = [n for n, s in signals.items() if s["status"] == MET]
+    return sorted(
+        met, key=lambda n: _SIGNAL_ORDER.index(n) if n in _SIGNAL_ORDER else 9
+    )
+
+
+def publications_for(prop: Any) -> List[Dict[str, Any]]:
+    """The other publications of this home, for the detail page's panel.
+
+    Bounded by `candidate_rows` plus the rows this one is linked to. Each item:
+    ``row``, ``tier`` (None when only the owner links them), ``explanation``,
+    ``met`` (names of the signals met), ``link`` (the owner's stored link or None). Strongest tier first.
+    """
+    from models import Property
+
+    links = {
+        (
+            link.property_high_id
+            if link.property_low_id == prop.id
+            else link.property_low_id
+        ): link
+        for link in links_for(prop.id)
+    }
+    by_id = {row.id: row for row in candidate_rows(prop)}
+    missing = [i for i in links if i not in by_id]
+    if missing:
+        for row in Property.query.filter(Property.id.in_(missing)):
+            by_id[row.id] = row
+
+    items = []
+    for other_id, other in by_id.items():
+        low, high = (prop, other) if prop.id < other.id else (other, prop)
+        tier, signals = _evaluate(low, high)
+        link = links.get(other_id)
+        if tier is None and link is None:
+            continue
+        explanation = _explanation(low.id, high.id, tier, signals)
+        items.append(
+            {
+                "row": other,
+                "tier": tier,
+                "explanation": explanation,
+                "met": met_signals(explanation),
+                "link": link,
+            }
+        )
+    rank = {name: i for i, name in enumerate(TIERS)}
+    items.sort(key=lambda item: (rank.get(item["tier"], len(TIERS)), item["row"].id))
+    return items

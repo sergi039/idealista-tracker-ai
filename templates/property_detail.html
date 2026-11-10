@@ -564,6 +564,87 @@
             </div>
         </details>
 
+        {# Other publications of this home (#633): the rule's reading
+           (services/property_duplicates.py) for THIS row within its
+           subscription, plus the owner's own links. Bounded server-side; no
+           script. Absent when there is nothing to show. Nothing here merges or
+           deletes a listing. #}
+        {% if duplicate_publications is defined and duplicate_publications %}
+        <div class="card mb-4" id="duplicates-panel">
+            <div class="card-header py-2">
+                <h2 class="h6 mb-0">
+                    <i class="fas fa-clone me-2 text-primary"></i>{{ t('dup_title') }}
+                </h2>
+            </div>
+            <div class="card-body py-2">
+                <p class="small text-body-secondary mb-2">{{ t('dup_intro') }}</p>
+                <ul class="list-unstyled mb-2">
+                {% for _pub in duplicate_publications %}
+                    {% set _other = _pub.row %}
+                    {% set _link = _pub.link %}
+                    {% if _link and _link.verdict == 'same' %}
+                        {% set _tier_key = 'dup_tier_owner_same' %}
+                    {% elif _link %}
+                        {% set _tier_key = 'dup_tier_owner_different' %}
+                    {% elif _pub.tier %}
+                        {% set _tier_key = 'dup_tier_' ~ _pub.tier %}
+                    {% else %}
+                        {% set _tier_key = 'dup_tier_none' %}
+                    {% endif %}
+                    {% set _met = _pub.met %}
+                    <li class="border-top pt-2 mt-2" data-duplicate-id="{{ _other.id }}">
+                        <div class="d-flex flex-wrap justify-content-between gap-2">
+                            <div>
+                                <span class="badge text-bg-secondary">{{ listing_source_label(listing_source_for(_other)) }}</span>
+                                <a href="{{ url_for('main.property_detail', property_id=_other.id) }}">{{ _other.title or ('#' ~ _other.id) }}</a>
+                                {% if _other.url %}<a href="{{ _other.url }}" rel="noopener noreferrer" target="_blank" class="small ms-1">{{ t('dup_open_listing') }}</a>{% endif %}
+                                {% if _other.price %}<span class="text-success ms-2">€{{ "{:,.0f}".format(_other.price|float) }}</span>{% endif %}
+                            </div>
+                            <strong class="small" data-duplicate-tier="{{ _link.verdict if _link else (_pub.tier or 'none') }}">{{ t(_tier_key) }}</strong>
+                        </div>
+                        <div class="small text-body-secondary">
+                            {{ t('dup_because') }}:
+                            {% if _met %}{% for _name in _met %}{{ t('dup_signal_' ~ _name) }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}{{ t('dup_nothing_matched') }}{% endif %}
+                        </div>
+                        {% if _pub.explanation.vetoed_by %}
+                        <div class="small text-warning-emphasis"><i class="fas fa-triangle-exclamation me-1"></i>{{ t('dup_vetoed') }}</div>
+                        {% endif %}
+                        <form method="post" action="{{ url_for('main.set_duplicate_link', property_id=property.id) }}" class="d-flex flex-wrap gap-1 mt-1">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                            <input type="hidden" name="other_id" value="{{ _other.id }}"/>
+                            {% if not _link or _link.verdict != 'same' %}
+                            <button type="submit" name="decision" value="same" class="btn btn-sm btn-outline-success">{{ t('dup_same_home') }}</button>
+                            {% endif %}
+                            {% if not _link or _link.verdict != 'different' %}
+                            <button type="submit" name="decision" value="different" class="btn btn-sm btn-outline-danger">{{ t('dup_different_home') }}</button>
+                            {% endif %}
+                            {% if _link %}
+                            <button type="submit" name="decision" value="clear" class="btn btn-sm btn-outline-secondary">{{ t('dup_undo') }}</button>
+                            {% endif %}
+                        </form>
+                    </li>
+                {% endfor %}
+                </ul>
+            </div>
+        </div>
+        {% endif %}
+
+        {# The pair the rule missed: link another listing of this subscription
+           by its id or link. Always offered (a missed pair is exactly when the
+           panel above is empty), one copy. #}
+        {% if property.search_profile_id %}
+        <details class="mb-4" id="duplicates-link">
+            <summary class="small">{{ t('dup_link_label') }}</summary>
+            <form method="post" action="{{ url_for('main.set_duplicate_link', property_id=property.id) }}" class="d-flex flex-wrap gap-1 mt-2">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                <label class="visually-hidden" for="duplicates-link-ref">{{ t('dup_link_label') }}</label>
+                <input type="text" class="form-control form-control-sm w-auto flex-grow-1" id="duplicates-link-ref" name="other_ref" maxlength="500" required placeholder="{{ t('dup_link_placeholder') }}"/>
+                <button type="submit" name="decision" value="same" class="btn btn-sm btn-outline-success">{{ t('dup_same_home') }}</button>
+                <button type="submit" name="decision" value="different" class="btn btn-sm btn-outline-danger">{{ t('dup_different_home') }}</button>
+            </form>
+        </details>
+        {% endif %}
+
         {# Likeness to the subscription's favorites
            (services/favorite_similarity.py): the row's nearest favorite, the
            facts the number rests on and where its location came from -- the

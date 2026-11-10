@@ -82,6 +82,14 @@ ROUTING_MIGRATION = "025_add_profile_routing_and_criteria"
 LOCK_ORDER_MIGRATION = "026_canonicalize_locks_in_id_order"
 ROUTE_RETRY_MIGRATION = "027_retry_route_resolution_on_stale_read"
 CATCH_ALL_HIDDEN_MIGRATION = "028_catch_all_never_hidden"
+DUPLICATE_LINK_MIGRATION = "029_create_property_duplicate_link"
+DUPLICATE_LINK_CHECKS = {
+    "ck_property_duplicate_link_order",
+    "ck_property_duplicate_link_verdict",
+    "ck_property_duplicate_link_source",
+}
+DUPLICATE_LINK_UNIQUE = "ux_property_duplicate_link_pair"
+DUPLICATE_LINK_INDEX = "ix_property_duplicate_link_property_high_id"
 PROPERTY_VARIANT_UNIQUE_CONSTRAINT = (
     "ux_property_ai_analysis_variants_property_provider"
 )
@@ -3709,3 +3717,334 @@ def test_stale_settings_save_cannot_reactivate_a_removed_subscription(
         assert source.is_active is False, "Stale settings reactivated a removed search"
         assert source.description == "Retained"
     assert responses == [(302, "/profiles?view=technical")]
+
+
+def _migrated(postgres_url):
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+    finally:
+        engine.dispose()
+
+
+def _duplicate_link_apps(postgres_url, monkeypatch, count=1):
+    """`count` Flask apps over the migrated throwaway database."""
+    from tests import setup_test_environment
+
+    setup_test_environment()
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    from config import Config as _Config
+
+    monkeypatch.setattr(_Config, "DATABASE_URL", postgres_url)
+    monkeypatch.setattr(_Config, "SQLALCHEMY_DATABASE_URI", postgres_url, raising=False)
+    from app import create_app
+
+    apps = [create_app() for _ in range(count)]
+    for application in apps:
+        application.config["TESTING"] = True
+    return apps
+
+
+def _make_properties(application, count):
+    from models import Property
+
+    with application.app_context():
+        rows = [
+            Property(source_email_id=f"dup-link:{n}", title=f"Row {n}")
+            for n in range(count)
+        ]
+        db.session.add_all(rows)
+        db.session.commit()
+        ids = [row.id for row in rows]
+        db.session.remove()
+    return ids
+
+
+def _duplicate_link_count(engine, low, high):
+    with engine.connect() as connection:
+        return connection.execute(
+            text(
+                "SELECT count(*) FROM property_duplicate_link "
+                "WHERE property_low_id = :l AND property_high_id = :h"
+            ),
+            {"l": low, "h": high},
+        ).scalar_one()
+
+
+def test_029_the_table_and_its_constraints_exist_and_bite(postgres_url):
+    """Every rule of the table is the database's, not only the writer's.
+
+    `property_duplicate_link` holds the owner's word on a pair. The CHECKs make
+    (3, 7) and (7, 3) one pair, the UNIQUE makes it one row, and the FKs let a
+    deleted listing take its links with it. Refusals are matched by constraint
+    NAME so a NOT NULL cannot be mistaken for the CHECK (the 028 lesson).
+    """
+    from sqlalchemy.exc import IntegrityError as PgIntegrityError
+
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+        inspector = inspect(engine)
+        table = "property_duplicate_link"
+        assert DUPLICATE_LINK_CHECKS <= {
+            c["name"] for c in inspector.get_check_constraints(table)
+        }
+        assert DUPLICATE_LINK_UNIQUE in {
+            c["name"] for c in inspector.get_unique_constraints(table)
+        }
+        assert DUPLICATE_LINK_INDEX in {i["name"] for i in inspector.get_indexes(table)}
+        foreign_keys = inspector.get_foreign_keys(table)
+        assert {fk["constrained_columns"][0] for fk in foreign_keys} == {
+            "property_low_id",
+            "property_high_id",
+        }
+        assert all(fk["referred_table"] == "properties" for fk in foreign_keys)
+        assert all(
+            (fk.get("options") or {}).get("ondelete") == "CASCADE"
+            for fk in foreign_keys
+        ), "ON DELETE CASCADE must be declared on both ends"
+
+        with engine.begin() as connection:
+            first = _insert_property(connection, source_email_id="dup:1")
+            second = _insert_property(connection, source_email_id="dup:2")
+        low, high = sorted((first, second))
+        insert = (
+            "INSERT INTO property_duplicate_link "
+            "(property_low_id, property_high_id, verdict{extra}) "
+            "VALUES (:l, :h, :v{values})"
+        )
+
+        def _refused(constraint, low_id, high_id, verdict="same", extra="", values=""):
+            with pytest.raises(PgIntegrityError) as refused:
+                with engine.begin() as connection:
+                    connection.execute(
+                        text(insert.format(extra=extra, values=values)),
+                        {"l": low_id, "h": high_id, "v": verdict},
+                    )
+            assert constraint in str(refused.value), repr(refused.value)
+
+        _refused("ck_property_duplicate_link_order", high, low)
+        _refused("ck_property_duplicate_link_order", low, low)
+        _refused("ck_property_duplicate_link_verdict", low, high, verdict="maybe")
+        _refused(
+            "ck_property_duplicate_link_source",
+            low,
+            high,
+            extra=", source",
+            values=", 'robot'",
+        )
+
+        with engine.begin() as connection:
+            connection.execute(
+                text(insert.format(extra="", values="")),
+                {"l": low, "h": high, "v": "same"},
+            )
+            row = connection.execute(
+                text(
+                    "SELECT source, note, evidence, decided_at, "
+                    "decided_at <= (NOW() AT TIME ZONE 'UTC') + interval '1 minute' "
+                    "FROM property_duplicate_link"
+                )
+            ).one()
+        assert row[0] == "owner" and row[1] is None and row[2] is None
+        assert row[3] is not None and row[4] is True
+
+        _refused(DUPLICATE_LINK_UNIQUE, low, high, verdict="different")
+
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM properties WHERE id = :i"), {"i": low})
+        assert _duplicate_link_count(engine, low, high) == 0, "the cascade did not run"
+    finally:
+        engine.dispose()
+
+
+def test_029_is_idempotent_and_the_constraints_survive_a_second_run(postgres_url):
+    from sqlalchemy.exc import IntegrityError as PgIntegrityError
+
+    engine = create_engine(postgres_url)
+    try:
+        from migrations.runner import run_migrations
+
+        run_migrations(engine)
+        with engine.begin() as connection:
+            first = _insert_property(connection, source_email_id="dup:i1")
+            second = _insert_property(connection, source_email_id="dup:i2")
+            low, high = sorted((first, second))
+            connection.execute(
+                text(
+                    "INSERT INTO property_duplicate_link "
+                    "(property_low_id, property_high_id, verdict) "
+                    "VALUES (:l, :h, 'same')"
+                ),
+                {"l": low, "h": high},
+            )
+        sql = (MIGRATIONS_DIR / f"{DUPLICATE_LINK_MIGRATION}.sql").read_text(
+            encoding="utf-8"
+        )
+        for _ in range(2):
+            with engine.begin() as connection:
+                connection.exec_driver_sql(sql)
+        assert _duplicate_link_count(engine, low, high) == 1, "re-running lost a row"
+        with pytest.raises(PgIntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO property_duplicate_link "
+                        "(property_low_id, property_high_id, verdict) "
+                        "VALUES (:l, :h, 'different')"
+                    ),
+                    {"l": low, "h": high},
+                )
+    finally:
+        engine.dispose()
+
+
+def test_029_set_link_actually_runs_on_postgres(postgres_url, monkeypatch):
+    """The two-row `FOR UPDATE`, the upsert and the JSON evidence, on PostgreSQL.
+
+    The lock is `select(id).with_for_update()` per row, never an aggregate
+    (`.with_for_update().count()` is refused by PostgreSQL and tolerated by
+    SQLite -- the 025 crasher). This calls the real writer against a real
+    server.
+    """
+    from models import PropertyDuplicateLink
+    from services import property_duplicates as dup
+
+    _migrated(postgres_url)
+    (application,) = _duplicate_link_apps(postgres_url, monkeypatch)
+    first, second = _make_properties(application, 2)
+    with application.app_context():
+        assert db.session.get_bind().dialect.name == "postgresql"
+        assert dup.set_link(second, first, verdict="same", note="n")["changed"]
+        link = PropertyDuplicateLink.query.one()
+        assert (link.property_low_id, link.property_high_id) == (first, second)
+        assert link.evidence["a"] == first and "signals" in link.evidence
+        assert link.decided_at is not None
+
+        assert dup.set_link(first, second, verdict="different")["changed"]
+        assert PropertyDuplicateLink.query.one().verdict == "different"
+        assert dup.load_links([first, second]).different_pairs == {(first, second)}
+        assert [link.verdict for link in dup.links_for(first)] == ["different"]
+
+        assert dup.set_link(first, second, verdict=None)["changed"]
+        assert PropertyDuplicateLink.query.count() == 0
+        with pytest.raises(dup.LinkError):
+            dup.set_link(first, 10**8, verdict="same")
+        db.session.remove()
+
+
+def test_029_set_link_waits_for_the_row_lock_it_takes(postgres_url, monkeypatch):
+    """A holder of the property row blocks `set_link`; releasing lets it finish.
+
+    This is the proof the writer really locks the rows: an observer sees the
+    writer waiting on a lock (`pg_stat_activity.wait_event_type = 'Lock'`)
+    while another connection holds the higher row, and no link exists until
+    the holder lets go.
+    """
+    import threading
+
+    from services import property_duplicates as dup
+
+    _migrated(postgres_url)
+    (application,) = _duplicate_link_apps(postgres_url, monkeypatch)
+    low, high = _make_properties(application, 2)
+    engine = create_engine(postgres_url)
+    errors = {}
+
+    def _writer():
+        try:
+            with application.app_context():
+                dup.set_link(high, low, verdict="same")
+                db.session.remove()
+        except BaseException as exc:  # noqa: BLE001 -- surfaced via `errors`
+            errors["writer"] = exc
+
+    writer = threading.Thread(target=_writer)
+    try:
+        with engine.connect() as holder:
+            holder_tx = holder.begin()
+            holder.execute(
+                text("SELECT id FROM properties WHERE id = :i FOR UPDATE"), {"i": high}
+            )
+            writer.start()
+            deadline = time.monotonic() + 10
+            waiting = False
+            while time.monotonic() < deadline and not waiting:
+                with engine.connect() as observer:
+                    waiting = observer.execute(
+                        text(
+                            "SELECT EXISTS(SELECT 1 FROM pg_stat_activity "
+                            "WHERE datname = current_database() "
+                            "AND wait_event_type = 'Lock')"
+                        )
+                    ).scalar()
+                time.sleep(0.02)
+            assert waiting, "set_link never waited on the property row lock"
+            assert _duplicate_link_count(engine, low, high) == 0
+            holder_tx.rollback()
+        writer.join(15)
+        assert not writer.is_alive() and not errors
+        assert _duplicate_link_count(engine, low, high) == 1
+    finally:
+        if writer.ident:
+            writer.join(15)
+        engine.dispose()
+
+
+def test_029_concurrent_set_link_in_opposite_order_finishes_with_one_row(
+    postgres_url, monkeypatch
+):
+    """Two writers naming one pair in opposite order cannot deadlock.
+
+    Both take the lower id first whatever order they were given, so they queue.
+    Ten rounds, each released by a barrier so the two really overlap; a
+    deadlock would surface as an OperationalError in `errors` or a hung join.
+    """
+    import threading
+
+    from services import property_duplicates as dup
+
+    _migrated(postgres_url)
+    app_a, app_b = _duplicate_link_apps(postgres_url, monkeypatch, count=2)
+    low, high = _make_properties(app_a, 2)
+    engine = create_engine(postgres_url)
+    errors = {}
+    barrier = threading.Barrier(2)
+
+    def _run(name, application, first, second, verdict, rounds):
+        try:
+            with application.app_context():
+                for _ in range(rounds):
+                    barrier.wait(timeout=15)
+                    dup.set_link(first, second, verdict=verdict)
+                db.session.remove()
+        except BaseException as exc:  # noqa: BLE001 -- surfaced via `errors`
+            errors[name] = exc
+            barrier.abort()
+
+    try:
+        for _ in range(10):
+            barrier = threading.Barrier(2)
+            threads = [
+                threading.Thread(target=_run, args=("a", app_a, low, high, "same", 1)),
+                threading.Thread(
+                    target=_run, args=("b", app_b, high, low, "different", 1)
+                ),
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(30)
+            assert not any(t.is_alive() for t in threads), "a writer hung"
+            assert not errors, errors
+            assert _duplicate_link_count(engine, low, high) == 1
+            with app_a.app_context():
+                dup.set_link(low, high, verdict=None)
+                db.session.remove()
+            assert _duplicate_link_count(engine, low, high) == 0
+    finally:
+        engine.dispose()
