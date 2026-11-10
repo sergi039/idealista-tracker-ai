@@ -65,6 +65,19 @@ mutation rather than by review:
   the "next" link is repointed at the current page because the queue shifted.
   The endpoint and strings are on one `#owner-decision-config` element, not
   per row.
+* **New and Reviewed are the existing `verdict` select, not a new surface**
+  (#630): "New" is `undecided`; "Reviewed" is the filter-only alias `decided`
+  (interested OR waiting OR rejected), a sibling of `DECISION_ALL`, never stored
+  in `owner_verdict`, never accepted by `set_review` or the row API (400).
+  `decision_filter_clause` (SQL, definite, never NULL) and
+  `matches_decision_filter` (Python) are twins. The rejected hide lifts for it
+  (`HIDE_LIFTED_BY`, the one place `apply_rejected_hide` reads), so Reviewed does
+  not silently omit the rejected rows and the disclosure line is absent. The
+  counts are measured over the page's own selection with the verdict clause left
+  off; Reviewed is counted by the same clause, not summed in the template. The
+  select lives in the always-visible first row of `#filters-card`, is drawn
+  whenever the page has any row, and a bare `/properties` is unchanged: the
+  owner picks New once and the filter memory keeps it.
 * **A verdict event carries the whole review state**, not a from/to pair: a
   changed reason or a moved due date under an unchanged decision is a real
   change and a pair loses it. Pressing Save twice writes one entry -- and

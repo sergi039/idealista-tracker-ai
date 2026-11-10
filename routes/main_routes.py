@@ -1473,12 +1473,18 @@ def _owner_verdict_choices(base_query, applied=""):
     rows = base_query.with_entities(state, func.count()).group_by(state)
     counts = {key: total for key, total in rows.all() if key}
 
+    # "Reviewed" is measured by the very clause that selects it, not summed.
+    decided_clause = owner_review.decision_filter_clause(
+        Property, owner_review.DECISION_DECIDED
+    )
+    counts[owner_review.DECISION_DECIDED] = base_query.filter(decided_clause).count()
+
     choices = owner_review.decision_options(counts)
     if applied and applied not in {choice["value"] for choice in choices}:
         choices.append(
             {
                 "value": applied,
-                "label_key": owner_review.decision_label_key(applied),
+                "label_key": owner_review.decision_filter_label_key(applied),
                 "count": 0,
             }
         )

@@ -1252,9 +1252,16 @@ class TestTheList:
             assert int(chip.group(2)) == len(opened)
             assert ids["neighbour"] not in opened
         # A counted dropdown option opens exactly what it counts.
+        # The municipality select, not "the first counted option": the verdict
+        # switch (New / Reviewed, #630) now sits earlier in the form and is
+        # counted too.
+        municipality_select = body[body.index('id="municipality"') :]
+        municipality_select = municipality_select[
+            : municipality_select.index("</select>")
+        ]
         options = re.findall(
             r'<option value="([^"]+)"[^>]*>\s*([^<(]+?)\s*\((\d+)\)\s*</option>',
-            body,
+            municipality_select,
         )
         assert options, "the page drew no counted option"
         value, _label, count = options[0]

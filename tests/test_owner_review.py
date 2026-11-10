@@ -182,6 +182,50 @@ class TestTheTwoReadingsAgree:
                 assert owner_review.read_action(row, TODAY)["state"] == state
             assert len(selected) == len([r for r in ROWS if r[3] == state])
 
+    def test_reviewed_is_the_three_decided_states_both_ways(self, app, profile):
+        """`decided` (#630): SQL and Python agree row by row over all four
+        stored states, NULL, blank and an unknown spelling included."""
+        rows = {}
+        for name, columns, _, _ in ROWS:
+            rows[name] = _prop(profile, name, **columns)
+        rows["blank"] = _prop(profile, "blank", owner_verdict="  ")
+        rows["null"] = _prop(profile, "null", owner_verdict=None)
+        db.session.commit()
+
+        clause = owner_review.decision_filter_clause(
+            Property, owner_review.DECISION_DECIDED
+        )
+        in_sql = {row.id for row in Property.query.filter(clause).all()}
+        # Definite: the negation selects exactly the rest, NULL rows included.
+        not_in_sql = {row.id for row in Property.query.filter(~clause).all()}
+        assert in_sql | not_in_sql == {row.id for row in rows.values()}
+        assert not in_sql & not_in_sql
+
+        for name, row in rows.items():
+            twin = owner_review.matches_decision_filter(row, "decided")
+            assert (row.id in in_sql) is twin, name
+            assert twin is (
+                owner_review.read_decision(row)["state"]
+                in ("interested", "waiting", "rejected")
+            ), name
+        assert not owner_review.matches_decision_filter(rows["null"], "decided")
+        assert not owner_review.matches_decision_filter(rows["blank"], "decided")
+
+        # New and Reviewed partition the table.
+        new_ids = {
+            row.id
+            for row in Property.query.filter(
+                owner_review.decision_filter_clause(Property, "undecided")
+            )
+        }
+        assert new_ids | in_sql == {row.id for row in rows.values()}
+        assert not new_ids & in_sql
+
+    def test_decided_is_a_filter_alias_never_a_state(self, app):
+        assert "decided" not in owner_review.DECISION_STATES
+        assert "decided" not in owner_review.DECIDED_STATES
+        assert owner_review.read_decision_filter("Decided") == ("decided", True)
+
     def test_a_verdict_nobody_defined_reads_as_undecided_both_ways(self, app, profile):
         """Towards "nobody decided", never towards a decision nobody made.
 
