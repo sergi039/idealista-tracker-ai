@@ -332,8 +332,11 @@ _CARD_LABELS = (
 )
 # Whole words, longest first: "4 habitaciones" must not stop at "4 hab".
 _CARD_COUNT = rf"(?<![\d.,])\d{{1,2}}\s*(?:{_CARD_LABELS})\b\.?"
+# A price drop writes the old price (no space before the euro sign), an arrow
+# with the percentage, then the new price: "325.000€ ↓4% 312.000 € 910 €/m²".
+_CARD_ARROW = r"[↓↑⬇⬆▼▲]\s*\d{1,3}(?:[.,]\d{1,2})?\s*%"
 _CARD_PREFIX_RE = re.compile(
-    rf"(?:{_PRICE_AMOUNT}\s*){{1,2}}"
+    rf"{_PRICE_AMOUNT}\s*(?:{_CARD_ARROW}\s*)?(?:{_PRICE_AMOUNT}\s*)?"
     rf"(?:{_PRICE_NUMBER}\s*€\s*/\s*m[²2]\s*)?"
     rf"(?:{_CARD_COUNT}\s*){{0,3}}",
     re.IGNORECASE,
@@ -366,36 +369,93 @@ def _card_scope(text: str, idealista_property_id: Optional[int]) -> str:
     return text[tag if tag >= 0 else start : end]
 
 
-def extract_card_blocks_m2(
+def extract_card_price_blocks_m2(
     text: str, idealista_property_id: Optional[int] = None
-) -> List[Optional[float]]:
-    """One entry per price block, in reading order: its area, or None.
+) -> List[Tuple[Optional[float], Optional[float]]]:
+    """One (price, area) per price block, in reading order.
 
-    A price block is the card shape (prices, unit price, room counts). The
-    area read for it is the figure that DIRECTLY follows that shape, so a unit
-    price ("1.013 €/m²"), a later "parcela 1.200 m²" or a year is never it, and
-    a block whose area is missing yields None rather than the next block's.
-    Where a card states two m2 figures, the built one directly follows the
-    room counts and is the one returned; a plot figure elsewhere is ignored
-    (the stored descriptions show only that one adjacent figure).
+    A price block is the card shape: an asking price (or old price, arrow and
+    percentage, new price), a unit price, room counts. Its price is the LAST
+    amount in the block (the new price of a price drop). Its area is the figure
+    that DIRECTLY follows that shape, so a unit price ("1.013 €/m²"), a later
+    "parcela 1.200 m²" or a year is never it, and a block whose area is
+    missing yields None rather than the next block's. Where a card states two
+    m2 figures, the built one directly follows the room counts and is the one
+    returned (the stored descriptions show only that one adjacent figure).
+    Separators are read per grammar, so English "1,500 m2" is 1500 and
+    "58,000 €" is 58000, like Spanish "1.500 m²".
     """
     if not text:
         return []
     plain = _strip_html(_card_scope(text, idealista_property_id))
-    blocks: List[Optional[float]] = []
+    blocks: List[Tuple[Optional[float], Optional[float]]] = []
     pos = 0
     while True:
         prefix = _CARD_PREFIX_RE.search(plain, pos)
         if prefix is None:
             return blocks
+        amounts = [
+            _parse_number_groups(m.groups())
+            for m in re.finditer(_PRICE_AMOUNT, prefix.group(0), re.IGNORECASE)
+        ]
+        price = amounts[-1] if amounts else None
         area = _CARD_AREA_RE.match(plain, prefix.end())
         if area is None:
-            blocks.append(None)
+            blocks.append((price, None))
             pos = max(prefix.end(), prefix.start() + 1)
             continue
         parsed = _parse_number_groups(area.groups())
-        blocks.append(parsed if parsed and parsed > _AREA_SANITY_FLOOR else None)
+        blocks.append(
+            (price, parsed if parsed and parsed > _AREA_SANITY_FLOOR else None)
+        )
         pos = area.end()
+
+
+def extract_card_blocks_m2(
+    text: str, idealista_property_id: Optional[int] = None
+) -> List[Optional[float]]:
+    """The area of each price block, in reading order (None where unstated)."""
+    return [a for _, a in extract_card_price_blocks_m2(text, idealista_property_id)]
+
+
+# "Hola, <name>, 1 anuncio recién publicado con tus criterios" / "Hello <name>,
+# 1 new listing that matches your search criteria": the count is anchored (no
+# digit, dot or comma before the 1) so "11 anuncios" and "21 new listings" are
+# not it. The English price-drop notice is single by construction. A Spanish
+# price-drop wording has not been established from stored mail and is
+# deliberately unsupported: such a mail reads as "no statement".
+_SINGLE_LISTING_RE = re.compile(
+    r"(?<![\d.,])1\s+(?:nuevo\s+|new\s+)?(?:anuncio|listing)\b"
+    r"|\bthe\s+price\s+of\s+this\s+listing\s+has\s+dropped\b",
+    re.IGNORECASE,
+)
+
+
+_LISTING_COUNT_RE = re.compile(
+    r"(?<![\d.,])(\d{1,4})\s+(?:nuevos?\s+|new\s+)?(?:anuncios?|listings?)\b"
+    r"|(?<![\d.,])(?:anuncios?|listings?)\s+(?:nuevos?\s+|new\s+)?(\d{1,4})\b",
+    re.IGNORECASE,
+)
+
+
+def single_listing_mail(text: Optional[str]) -> bool:
+    """Whether the e-mail text states it is about exactly one listing.
+
+    The one home of that question. Which card belongs to a row cannot be told
+    in a mail that holds several listings (the same price proves nothing), so
+    anything that recovers a figure from stored text asks this first. No
+    statement means False.
+    """
+    if not text:
+        return False
+    plain = _strip_html(text)
+    # Any count above one anywhere outranks a "1 anuncio" elsewhere: listing
+    # prose can say "dos viviendas en 1 anuncio" under a header that announced
+    # two listings, and the header is the one that is about the mail.
+    for match in _LISTING_COUNT_RE.finditer(plain):
+        if int(match.group(1) or match.group(2)) > 1:
+            return False
+    return _SINGLE_LISTING_RE.search(plain) is not None
 
 
 def extract_card_area_m2(

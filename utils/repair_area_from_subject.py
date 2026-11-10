@@ -21,15 +21,15 @@ ingestion uses:
                built/plot, which the card figure does not change.
 * `confirmed`  the card states the stored figure itself (a genuine 150):
                the row is left alone.
-* `unstated`   the card states no area: `area = NULL`, and `area_type` goes
+* `unstated`   the card (every block at the row's own price) states no area: `area = NULL`, and `area_type` goes
                from `built` (which only ever meant "an area exists") to
                `unknown`. `plot` stays `plot`: that records what the listing
                is, and `reconcile_area_type` enforces it for land.
 
-Three more answers are reported and never written: `ambiguous` (the first card
-states an area and a later card in the same description states a different
-one), `no_description` and `no_card` (no price block to read). The row's card
-is the FIRST price block; a later block never supplies its area.
+Three more answers are reported and never written: `ambiguous` (two blocks at the
+row's own price state different areas), `no_description` and `no_card` (no
+block at the row's price, or the row has none). The row's card
+is found by its price; a block at another price never supplies an area.
 
 It writes only `area` and `area_type`: never `enrichment`, never a score. It
 does NOT rescore; the last lines list the changed ids so the scores can be
@@ -66,7 +66,11 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
-from utils.idealista_extractors import extract_area_figures_m2, extract_card_blocks_m2
+from utils.idealista_extractors import (
+    extract_area_figures_m2,
+    extract_card_price_blocks_m2,
+    single_listing_mail,
+)
 from utils.inflight import inflight
 from utils.listing_source import IDEALISTA, source_of
 
@@ -124,32 +128,55 @@ def diagnose(prop: Any) -> Tuple[str, Optional[float], Optional[str]]:
     """(outcome, new_area, new_area_type) for a row that is in scope.
 
     The stored description is the whole e-mail's text with the anchors cut out
-    (`_clean_description`), so it can hold several cards and has no links to
-    tell them apart. The row is the FIRST listing of its e-mail (ingestion
-    emits only the first link), so its card is the FIRST price block: that
-    block's area, or none -- never a later block's. Later blocks can only make
-    the answer `ambiguous`, never supply it. A description that does carry
-    listing links is scoped to the row's own card by the shared extractor.
+    (`_clean_description`): a PREHEADER that repeats the price and a teaser
+    (no area), then the greeting and the real card, and possibly further cards.
+    So the row's card is found by its PRICE, not by position: every price
+    block whose price equals the row's own stored `price` (the new price, for
+    a price drop) counts, and no other block ever supplies an area -- card 222
+    at another price cannot repair row 111. Among the same-price blocks: one
+    distinct area is the answer, none is `unstated`, several different ones
+    are `ambiguous`. No block at the row's price (or a row without a price) is
+    `no_card`. A description that does not state it is about exactly one
+    listing (`single_listing_mail`) is `ambiguous` whatever its blocks say.
+    The room counts of same-price blocks are not exposed by the block parser,
+    so no guard compares them. A description that does carry listing links is scoped to the
+    row's own card by the shared extractor.
     """
     description = (prop.description or "").strip()
     old = (_num(prop.area), prop.area_type)
     if not description:
         return (NO_DESCRIPTION, *old)
+    price = _num(prop.price)
+    if price is None:
+        return (NO_CARD, *old)
     own_id = prop.idealista_property_id if "/inmueble/" in description else None
-    blocks = extract_card_blocks_m2(description, idealista_property_id=own_id)
+    blocks = [
+        (p, a)
+        for p, a in extract_card_price_blocks_m2(
+            description, idealista_property_id=own_id
+        )
+        if p is not None and _same(p, price)
+    ]
     if not blocks:
         return (NO_CARD, *old)
-    first = blocks[0]
-    if first is None:
+    # A price matches the row's card only when the mail holds one listing; in a
+    # mail with several, a later card at the same price would pass for it.
+    if not single_listing_mail(description):
+        return (AMBIGUOUS, *old)
+    distinct: List[float] = []
+    for _, a in blocks:
+        if a is not None and not any(_same(a, d) for d in distinct):
+            distinct.append(a)
+    if len(distinct) > 1:
+        return (AMBIGUOUS, *old)
+    if not distinct:
         new_type = prop.area_type
         if (prop.area_type or "").strip().lower() == "built":
             new_type = "unknown"
         return UNSTATED, None, new_type
-    if any(b is not None and not _same(b, first) for b in blocks[1:]):
-        return (AMBIGUOUS, *old)
-    if _same(first, prop.area):
+    if _same(distinct[0], prop.area):
         return (CONFIRMED, *old)
-    return RECOVERED, first, prop.area_type
+    return RECOVERED, distinct[0], prop.area_type
 
 
 def _entry(prop: Any) -> Optional[Dict[str, Any]]:
