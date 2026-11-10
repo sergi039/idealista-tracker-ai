@@ -48,8 +48,9 @@ it is still what the report showed; otherwise it is skipped and named. Phase 2
 replaces the file with the final record: each row `written` (old and written
 values) or `skipped` (with the reason). `restore` acts on `written` rows only,
 by compare-and-swap against the values this repair wrote; a snapshot still in
-phase `planned` (the run died) is restored the same way against the planned
-values, row by row.
+phase `planned` (the run died) is restored from the write journal
+`<snapshot>.journal` only; planned rows missing from it are reported, not
+written (see `restore`).
 
 No network. Run it on the mini, after `tools/backfill_status.sh` says idle.
 """
@@ -192,6 +193,35 @@ def _write_snapshot(payload: Dict[str, Any], path: str) -> None:
     os.replace(tmp, path)
 
 
+def _journal_path(snapshot_path: str) -> str:
+    return snapshot_path + ".journal"
+
+
+def _journal_append(handle, record: Dict[str, Any]) -> None:
+    """One JSON line per committed row, on disk before the next row starts."""
+    handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    handle.flush()
+    os.fsync(handle.fileno())
+
+
+def _read_journal(path: str) -> Tuple[Dict[int, Dict[str, Any]], int]:
+    """({id: record}, unreadable_line_count). A torn line is counted, not guessed."""
+    records: Dict[int, Dict[str, Any]] = {}
+    unreadable = 0
+    if not os.path.exists(path):
+        return records, unreadable
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+                records[int(record["id"])] = record
+            except (ValueError, KeyError, TypeError):
+                unreadable += 1
+    return records, unreadable
+
+
 def _locked(prop_id: int):
     from app import db
     from models import Property
@@ -224,6 +254,11 @@ def repair(apply: bool = False, snapshot_path: str = "") -> Dict[str, Any]:
             raise FileExistsError(
                 f"snapshot {snapshot_path} already exists; it holds an earlier "
                 "run's restore data. Choose a new path."
+            )
+        if os.path.exists(_journal_path(snapshot_path)):
+            raise FileExistsError(
+                f"journal {_journal_path(snapshot_path)} already exists; "
+                "choose a new snapshot path."
             )
 
     plan = _plan()
@@ -260,7 +295,8 @@ def repair(apply: bool = False, snapshot_path: str = "") -> Dict[str, Any]:
     summary["snapshot"] = snapshot_path
 
     final: List[Dict[str, Any]] = []
-    with inflight("repair_area_from_subject", resumable=True):
+    journal = open(_journal_path(snapshot_path), "x", encoding="utf-8")
+    with journal, inflight("repair_area_from_subject", resumable=True):
         for entry in todo:
             prop = _locked(entry["id"])
             # The whole scope is re-evaluated on the locked row: the subject,
@@ -287,6 +323,16 @@ def repair(apply: bool = False, snapshot_path: str = "") -> Dict[str, Any]:
             prop.area = entry["new_area"]
             prop.area_type = entry["new_area_type"]
             db.session.commit()
+            _journal_append(
+                journal,
+                {
+                    "id": entry["id"],
+                    "old_area": entry["old_area"],
+                    "old_area_type": entry["old_area_type"],
+                    "written_area": entry["new_area"],
+                    "written_area_type": entry["new_area_type"],
+                },
+            )
             summary["written"].append(entry["id"])
             final.append(
                 {
@@ -307,40 +353,63 @@ def restore(path: str, apply: bool = False) -> Dict[str, Any]:
     """Compare-and-swap, row by row, against what THIS repair wrote.
 
     A `final` snapshot is acted on for its `written` rows only; `skipped` rows
-    were never touched. A snapshot still in phase `planned` (the run died
-    mid-way) is read against the planned new values: a row holding them goes
-    back, a row still holding its old values was never written, and anything
-    else was changed by someone else and is left alone.
+    were never touched.
+
+    A snapshot still in phase `planned` (the run died before the final record)
+    cannot say which rows were written: planned values alone also match a row
+    somebody else corrected to the same figure. So it acts ONLY on rows in the
+    write journal (`<snapshot>.journal`, one fsynced line per committed row),
+    by compare-and-swap against the journaled written values. A planned row
+    absent from the journal is never written by restore; it is reported as
+    `not_journaled` with its current values. That is also the rare case of a
+    process that died between a row's commit and its journal line: such a row
+    may hold the repaired value, and it is left as it is for a person to
+    judge. A journal line that cannot be parsed (a torn last line) is ignored
+    and counted in `unreadable_journal_lines`, never guessed.
     """
     from app import db
 
     with open(path, encoding="utf-8") as handle:
         payload = json.load(handle)
 
+    rows = payload.get("rows") or []
+    unreadable = 0
+    not_journaled: List[Dict[str, Any]] = []
+    if payload.get("phase") == "planned":
+        journal, unreadable = _read_journal(_journal_path(path))
+        targets = []
+        for entry in rows:
+            record = journal.get(entry["id"])
+            if record is None:
+                prop = _locked(entry["id"])
+                not_journaled.append(
+                    {
+                        "id": entry["id"],
+                        "current_area": _num(prop.area) if prop else None,
+                        "current_area_type": prop.area_type if prop else None,
+                    }
+                )
+                db.session.rollback()
+                continue
+            targets.append({**record, "status": "written"})
+    else:
+        targets = [e for e in rows if e.get("status") == "written"]
+
     restored: List[int] = []
     changed_since: List[int] = []
-    never_written: List[int] = []
     missing: List[int] = []
-    for entry in payload.get("rows") or []:
-        if entry.get("status") not in ("written", "planned"):
-            continue
+    for entry in targets:
         prop = _locked(entry["id"])
         if prop is None:
             missing.append(entry["id"])
             continue
-        wrote_area = entry.get("written_area", entry["new_area"])
-        wrote_type = entry.get("written_area_type", entry["new_area_type"])
-        holds_new = _same(prop.area, wrote_area) and prop.area_type == wrote_type
-        holds_old = (
-            _same(prop.area, entry["old_area"])
-            and prop.area_type == entry["old_area_type"]
+        holds_written = (
+            _same(prop.area, entry["written_area"])
+            and prop.area_type == entry["written_area_type"]
         )
-        if not holds_new:
+        if not holds_written:
             db.session.rollback()
-            if entry["status"] == "planned" and holds_old:
-                never_written.append(entry["id"])
-            else:
-                changed_since.append(entry["id"])
+            changed_since.append(entry["id"])
             continue
         if apply:
             prop.area = entry["old_area"]
@@ -353,7 +422,8 @@ def restore(path: str, apply: bool = False) -> Dict[str, Any]:
         "applied": bool(apply),
         "restored": restored,
         "changed_since_repair": changed_since,
-        "never_written": never_written,
+        "not_journaled": not_journaled,
+        "unreadable_journal_lines": unreadable,
         "missing": missing,
     }
 

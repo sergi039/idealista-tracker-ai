@@ -117,7 +117,10 @@ def test_apply_writes_the_outcomes_and_a_snapshot(rows, tmp_path):
         rows["plot"]: (150.0, "plot"),
     }
     assert sorted(outcome["written"]) == sorted(r["id"] for r in saved["rows"])
-    assert sorted(p.name for p in tmp_path.iterdir() if p.is_file()) == ["snap.json"]
+    assert sorted(p.name for p in tmp_path.iterdir() if p.is_file()) == [
+        "snap.json",
+        "snap.json.journal",
+    ]
 
 
 def test_apply_without_a_snapshot_path_refuses_before_writing(rows):
@@ -261,27 +264,125 @@ def test_the_plan_is_on_disk_before_the_first_write(rows, tmp_path, monkeypatch)
     assert {r["status"] for r in seen["rows"]} == {"planned"}
 
 
-def test_a_planned_snapshot_is_restored_row_by_row(rows, tmp_path):
-    """Finding 4: the run died mid-way; one row written, one never reached."""
-    snap = tmp_path / "s.json"
+def _planned_snapshot(snap):
     todo = [e for e in tool._plan() if e["outcome"] in tool.WRITES]
     snap.write_text(
         json.dumps(
             {"phase": "planned", "rows": [{**e, "status": "planned"} for e in todo]}
         )
     )
-    prop = db.session.get(Property, rows["recovered"])
-    prop.area = 316  # written before the crash
-    db.session.get(Property, rows["unstated"]).area = 77  # someone else's
+    return {e["id"]: e for e in todo}
+
+
+def _journal_line(entry):
+    return json.dumps(
+        {
+            "id": entry["id"],
+            "old_area": entry["old_area"],
+            "old_area_type": entry["old_area_type"],
+            "written_area": entry["new_area"],
+            "written_area_type": entry["new_area_type"],
+        }
+    )
+
+
+def test_an_independent_correction_survives_an_interrupted_run(
+    rows, tmp_path, monkeypatch
+):
+    """Plan 150 -> 316; someone sets 316; the lock skips it; the run dies."""
+    real_plan = tool._plan
+
+    def plan_then_correct():
+        plan = real_plan()
+        db.session.get(Property, rows["recovered"]).area = 316
+        db.session.commit()
+        return plan
+
+    monkeypatch.setattr(tool, "_plan", plan_then_correct)
+    snap = tmp_path / "s.json"
+    real_final = tool._write_snapshot
+
+    def die_before_final(payload, path):
+        if payload["phase"] == "final":
+            raise KeyboardInterrupt
+        real_final(payload, path)
+
+    monkeypatch.setattr(tool, "_write_snapshot", die_before_final)
+    with pytest.raises(KeyboardInterrupt):
+        tool.repair(apply=True, snapshot_path=str(snap))
+    assert json.loads(snap.read_text())["phase"] == "planned"
+
+    done = tool.restore(str(snap), apply=True)
+
+    assert _state(rows["recovered"]) == (316.0, "built")
+    assert rows["recovered"] in [r["id"] for r in done["not_journaled"]]
+    assert sorted(done["restored"]) == sorted([rows["unstated"], rows["plot"]])
+    assert _state(rows["unstated"]) == (150.0, "built")
+
+
+def test_an_interrupted_run_restores_exactly_the_journaled_rows(rows, tmp_path):
+    snap = tmp_path / "s.json"
+    planned = _planned_snapshot(snap)
+    journaled = [rows["recovered"], rows["unstated"]]
+    (tmp_path / "s.json.journal").write_text(
+        "\n".join(_journal_line(planned[i]) for i in journaled) + "\n"
+    )
+    for i in journaled:
+        prop = db.session.get(Property, i)
+        prop.area = planned[i]["new_area"]
+        prop.area_type = planned[i]["new_area_type"]
     db.session.commit()
 
     done = tool.restore(str(snap), apply=True)
 
-    assert done["restored"] == [rows["recovered"]]
-    assert rows["unstated"] in done["changed_since_repair"]
-    assert rows["plot"] in done["never_written"]
+    assert sorted(done["restored"]) == sorted(journaled)
+    assert [r["id"] for r in done["not_journaled"]] == [rows["plot"]]
     assert _state(rows["recovered"]) == (150.0, "built")
-    assert _state(rows["unstated"]) == (77.0, "built")
+    assert _state(rows["unstated"]) == (150.0, "built")
+    assert _state(rows["plot"]) == (150.0, "plot")
+
+
+def test_a_torn_last_journal_line_is_ignored_and_reported(rows, tmp_path):
+    snap = tmp_path / "s.json"
+    planned = _planned_snapshot(snap)
+    rid = rows["recovered"]
+    (tmp_path / "s.json.journal").write_text(
+        _journal_line(planned[rid]) + '\n{"id": ' + str(rows["unstated"]) + ', "old_a'
+    )
+    prop = db.session.get(Property, rid)
+    prop.area = 316
+    db.session.get(Property, rows["unstated"]).area = None
+    db.session.commit()
+
+    done = tool.restore(str(snap), apply=True)
+
+    assert done["restored"] == [rid]
+    assert done["unreadable_journal_lines"] == 1
+    assert rows["unstated"] in [r["id"] for r in done["not_journaled"]]
+    assert _state(rows["unstated"]) == (None, "built")
+
+
+def test_apply_refuses_when_the_journal_path_exists(rows, tmp_path):
+    snap = tmp_path / "s.json"
+    (tmp_path / "s.json.journal").write_text("earlier")
+
+    with pytest.raises(FileExistsError):
+        tool.repair(apply=True, snapshot_path=str(snap))
+
+    assert not snap.exists()
+    assert _state(rows["recovered"]) == (150.0, "built")
+
+
+def test_a_full_run_journals_every_written_row(rows, tmp_path):
+    snap = tmp_path / "s.json"
+    outcome = tool.repair(apply=True, snapshot_path=str(snap))
+    lines = (tmp_path / "s.json.journal").read_text().splitlines()
+
+    assert sorted(json.loads(line)["id"] for line in lines) == sorted(
+        outcome["written"]
+    )
+    tool.restore(str(snap), apply=True)
+    assert _state(rows["recovered"]) == (150.0, "built")
 
 
 def test_a_row_whose_subject_vanished_before_the_lock_is_not_written(
