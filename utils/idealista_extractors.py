@@ -326,10 +326,12 @@ def extract_area_m2(text: str) -> Optional[float]:
 # "99,000 € 309 €/m² 5 bed. 320 m2"): one or two asking prices (a price change
 # states old and new), an optional unit price, up to three room/bath counts,
 # then the area.
-_CARD_COUNT = (
-    r"\d{1,2}\s*(?:hab\.?|habitaciones|dorm\.?|dormitorios|bed\.?|beds|"
-    r"bedrooms?|ba[ñn]os?|baths?\.?|bathrooms?)"
+_CARD_LABELS = (
+    r"habitaciones|habitaci[oó]n|habs|hab|dormitorios|dormitorio|dorm|"
+    r"bedrooms|bedroom|beds|bed|ba[ñn]os|ba[ñn]o|bathrooms|bathroom|baths|bath"
 )
+# Whole words, longest first: "4 habitaciones" must not stop at "4 hab".
+_CARD_COUNT = rf"(?<![\d.,])\d{{1,2}}\s*(?:{_CARD_LABELS})\b\.?"
 _CARD_PREFIX_RE = re.compile(
     rf"(?:{_PRICE_AMOUNT}\s*){{1,2}}"
     rf"(?:{_PRICE_NUMBER}\s*€\s*/\s*m[²2]\s*)?"
@@ -343,16 +345,18 @@ _LISTING_LINK_RE = re.compile(r"/inmueble/(\d+)", re.IGNORECASE)
 def _card_scope(text: str, idealista_property_id: Optional[int]) -> str:
     """The part of an e-mail that belongs to one listing.
 
-    With a single listing (or no id) that is the whole text. With several,
-    it runs from the listing's own link to the first link of another listing,
-    so a card with no area can never borrow the next card's figure.
+    With an id the card STARTS at the listing's own link and ENDS at the first
+    link of another listing (or the end of the body): nothing before the link
+    -- a "your search" summary -- is ever read, and a card with no area cannot
+    borrow the next card's. If the id's link is not in the text there is no
+    card to read and the scope is empty. Without an id the text is taken as
+    given: that is a stored description, which has no links (anchors are cut
+    out of it by `_clean_description`).
     """
     if idealista_property_id is None:
         return text
-    links = [(m.start(), m.group(1)) for m in _LISTING_LINK_RE.finditer(text)]
     own = str(idealista_property_id)
-    if not any(i != own for _, i in links):
-        return text
+    links = [(m.start(), m.group(1)) for m in _LISTING_LINK_RE.finditer(text)]
     starts = [pos for pos, i in links if i == own]
     if not starts:
         return ""
@@ -362,40 +366,49 @@ def _card_scope(text: str, idealista_property_id: Optional[int]) -> str:
     return text[tag if tag >= 0 else start : end]
 
 
-def extract_card_areas_m2(
+def extract_card_blocks_m2(
     text: str, idealista_property_id: Optional[int] = None
-) -> List[float]:
-    """Every area a listing card states, in reading order (usually one).
+) -> List[Optional[float]]:
+    """One entry per price block, in reading order: its area, or None.
 
-    The single home of the card reading: ingestion calls it on the e-mail body,
-    `utils/repair_area_from_subject.py` on the stored description.
+    A price block is the card shape (prices, unit price, room counts). The
+    area read for it is the figure that DIRECTLY follows that shape, so a unit
+    price ("1.013 €/m²"), a later "parcela 1.200 m²" or a year is never it, and
+    a block whose area is missing yields None rather than the next block's.
+    Where a card states two m2 figures, the built one directly follows the
+    room counts and is the one returned; a plot figure elsewhere is ignored
+    (the stored descriptions show only that one adjacent figure).
     """
     if not text:
         return []
     plain = _strip_html(_card_scope(text, idealista_property_id))
-    found: List[float] = []
+    blocks: List[Optional[float]] = []
     pos = 0
     while True:
         prefix = _CARD_PREFIX_RE.search(plain, pos)
         if prefix is None:
-            break
+            return blocks
         area = _CARD_AREA_RE.match(plain, prefix.end())
-        if area is not None:
-            parsed = _parse_number_groups(area.groups())
-            if parsed is not None and parsed > _AREA_SANITY_FLOOR:
-                found.append(parsed)
-            pos = area.end()
-        else:
+        if area is None:
+            blocks.append(None)
             pos = max(prefix.end(), prefix.start() + 1)
-    return found
+            continue
+        parsed = _parse_number_groups(area.groups())
+        blocks.append(parsed if parsed and parsed > _AREA_SANITY_FLOOR else None)
+        pos = area.end()
 
 
 def extract_card_area_m2(
     text: str, idealista_property_id: Optional[int] = None
 ) -> Optional[float]:
-    """The first area the listing card states, or None when it states none."""
-    areas = extract_card_areas_m2(text, idealista_property_id)
-    return areas[0] if areas else None
+    """The area the listing's FIRST price block states, or None.
+
+    Only the first block: a first card with no area is None, never the second
+    card's figure. The single home of the card reading: ingestion calls it on
+    the e-mail body, `utils/repair_area_from_subject.py` on the description.
+    """
+    blocks = extract_card_blocks_m2(text, idealista_property_id)
+    return blocks[0] if blocks else None
 
 
 def extract_area_figures_m2(text: str) -> List[float]:

@@ -84,6 +84,7 @@ def test_a_report_writes_nothing(rows):
         "unstated": 2,
         "ambiguous": 0,
         "no_description": 0,
+        "no_card": 0,
     }
     assert {k: _state(v) for k, v in rows.items()} == before
     assert outcome["applied"] is False
@@ -177,3 +178,167 @@ def test_several_different_cards_are_reported_and_never_written(app, tmp_path):
 
     assert outcome["counts"]["ambiguous"] == 1
     assert _state(pid) == (150.0, "built")
+
+
+def test_a_card_without_an_area_never_borrows_the_next_cards(app, tmp_path):
+    """Finding 3: card 111 has no area, card 222 states 90."""
+    pid = _row(
+        11,
+        description="320.000 € 4 hab. Chalet B 99.000 € 3 hab. 90 m²",
+        area=150,
+    )
+    tool.repair(apply=True, snapshot_path=str(tmp_path / "s.json"))
+
+    assert _state(pid) == (None, "unknown")
+
+
+def test_a_description_with_links_is_read_by_the_rows_own_card(app, tmp_path):
+    pid = _row(
+        12,
+        description=(
+            "Tu búsqueda 350.000 € 150 m² /inmueble/12/ 320.000 € 4 hab. 316 m² "
+            "/inmueble/99/ 99.000 € 3 hab. 90 m²"
+        ),
+        area=150,
+    )
+    tool.repair(apply=True, snapshot_path=str(tmp_path / "s.json"))
+
+    assert _state(pid) == (316.0, "built")
+
+
+def test_a_description_with_no_price_block_is_not_written(app, tmp_path):
+    pid = _row(13, description="Chalet con vistas. Consulte al anunciante.")
+    outcome = tool.repair(apply=True, snapshot_path=str(tmp_path / "s.json"))
+
+    assert outcome["counts"]["no_card"] == 1
+    assert _state(pid) == (150.0, "built")
+
+
+def test_a_skipped_row_is_not_restored_over_an_independent_correction(
+    rows, tmp_path, monkeypatch
+):
+    """Finding 4: another writer sets the planned value before the lock."""
+    real_plan = tool._plan
+
+    def plan_then_correct():
+        plan = real_plan()
+        db.session.get(Property, rows["recovered"]).area = 316
+        db.session.commit()
+        return plan
+
+    monkeypatch.setattr(tool, "_plan", plan_then_correct)
+    snap = tmp_path / "s.json"
+    tool.repair(apply=True, snapshot_path=str(snap))
+
+    saved = json.loads(snap.read_text())
+    status = {r["id"]: r["status"] for r in saved["rows"]}
+    assert saved["phase"] == "final"
+    assert status[rows["recovered"]] == "skipped"
+    written = [r for r in saved["rows"] if r["status"] == "written"]
+    assert all("written_area" in r for r in written)
+
+    tool.restore(str(snap), apply=True)
+
+    assert _state(rows["recovered"]) == (316.0, "built")
+    assert _state(rows["unstated"]) == (150.0, "built")
+
+
+def test_the_plan_is_on_disk_before_the_first_write(rows, tmp_path, monkeypatch):
+    """Finding 4: phase one exists, marked planned, when the first row changes."""
+    snap = tmp_path / "s.json"
+    seen = {}
+    real_locked = tool._locked
+
+    def spy(prop_id):
+        if "phase" not in seen:
+            seen.update(json.loads(snap.read_text()))
+        return real_locked(prop_id)
+
+    monkeypatch.setattr(tool, "_locked", spy)
+    tool.repair(apply=True, snapshot_path=str(snap))
+
+    assert seen["phase"] == "planned"
+    assert {r["status"] for r in seen["rows"]} == {"planned"}
+
+
+def test_a_planned_snapshot_is_restored_row_by_row(rows, tmp_path):
+    """Finding 4: the run died mid-way; one row written, one never reached."""
+    snap = tmp_path / "s.json"
+    todo = [e for e in tool._plan() if e["outcome"] in tool.WRITES]
+    snap.write_text(
+        json.dumps(
+            {"phase": "planned", "rows": [{**e, "status": "planned"} for e in todo]}
+        )
+    )
+    prop = db.session.get(Property, rows["recovered"])
+    prop.area = 316  # written before the crash
+    db.session.get(Property, rows["unstated"]).area = 77  # someone else's
+    db.session.commit()
+
+    done = tool.restore(str(snap), apply=True)
+
+    assert done["restored"] == [rows["recovered"]]
+    assert rows["unstated"] in done["changed_since_repair"]
+    assert rows["plot"] in done["never_written"]
+    assert _state(rows["recovered"]) == (150.0, "built")
+    assert _state(rows["unstated"]) == (77.0, "built")
+
+
+def test_a_row_whose_subject_vanished_before_the_lock_is_not_written(
+    rows, tmp_path, monkeypatch
+):
+    """Finding 5: the full scope is re-evaluated under the lock."""
+    real_plan = tool._plan
+
+    def plan_then_blank():
+        plan = real_plan()
+        db.session.get(Property, rows["recovered"]).email_subject = ""
+        db.session.commit()
+        return plan
+
+    monkeypatch.setattr(tool, "_plan", plan_then_blank)
+    outcome = tool.repair(apply=True, snapshot_path=str(tmp_path / "s.json"))
+
+    assert rows["recovered"] in outcome["skipped_changed"]
+    assert _state(rows["recovered"]) == (150.0, "built")
+
+
+def test_a_changed_description_changes_the_outcome_and_the_row_is_skipped(
+    rows, tmp_path, monkeypatch
+):
+    real_plan = tool._plan
+
+    def plan_then_edit():
+        plan = real_plan()
+        db.session.get(Property, rows["recovered"]).description = "320.000 € 4 hab."
+        db.session.commit()
+        return plan
+
+    monkeypatch.setattr(tool, "_plan", plan_then_edit)
+    outcome = tool.repair(apply=True, snapshot_path=str(tmp_path / "s.json"))
+
+    assert rows["recovered"] in outcome["skipped_changed"]
+    assert _state(rows["recovered"]) == (150.0, "built")
+
+
+def test_an_existing_snapshot_is_never_overwritten(rows, tmp_path):
+    """Finding 6."""
+    snap = tmp_path / "s.json"
+    snap.write_text("earlier run")
+
+    with pytest.raises(FileExistsError):
+        tool.repair(apply=True, snapshot_path=str(snap))
+
+    assert snap.read_text() == "earlier run"
+    assert _state(rows["recovered"]) == (150.0, "built")
+
+
+def test_the_command_line_refuses_an_existing_snapshot(rows, tmp_path):
+    snap = tmp_path / "s.json"
+    snap.write_text("earlier run")
+
+    with pytest.raises(SystemExit) as exit_info:
+        tool.main(["--apply", "--snapshot", str(snap)])
+
+    assert exit_info.value.code != 0
+    assert snap.read_text() == "earlier run"

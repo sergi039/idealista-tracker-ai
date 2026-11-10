@@ -22,7 +22,7 @@ from tests.test_last_seen_uid_cursor import _FakeIMAPClient, _make_service
 from utils.email_parser import EmailParser
 from utils.idealista_extractors import (
     extract_card_area_m2,
-    extract_card_areas_m2,
+    extract_card_blocks_m2,
     extract_price,
 )
 
@@ -67,7 +67,7 @@ class TestTheCardReading:
 
     def test_a_search_summary_figure_is_not_a_card_figure(self):
         body = f"Tu búsqueda: costa 150 m2 o más. {SPANISH_CARD}"
-        assert extract_card_areas_m2(body) == [316.0]
+        assert extract_card_blocks_m2(body) == [316.0]
 
     def test_each_listing_gets_its_own_card(self):
         body = (
@@ -130,6 +130,85 @@ def _ingest(service, raw: bytes) -> list[dict]:
     emails = service.get_idealista_emails()
     assert len(emails) == 1
     return emails
+
+
+class TestRoomLabels:
+    @pytest.mark.parametrize(
+        "counts",
+        [
+            "4 hab.",
+            "4 habs.",
+            "4 habitación",
+            "4 habitaciones",
+            "4 dorm.",
+            "4 dormitorio",
+            "4 dormitorios",
+            "4 bed.",
+            "4 beds",
+            "4 bedroom",
+            "4 bedrooms",
+            "2 baño",
+            "2 baños",
+            "2 bath",
+            "2 baths",
+            "2 bathrooms",
+            "4 habitaciones 2 baños",
+        ],
+    )
+    def test_every_label_spelling_is_a_whole_word(self, counts):
+        assert extract_card_area_m2(f"320.000 € {counts} 316 m²") == 316.0
+
+    def test_a_year_is_not_a_room_count_or_an_area(self):
+        assert extract_card_area_m2("Año 2019. 320.000 € 4 hab. 316 m²") == 316.0
+        assert extract_card_area_m2("320.000 € 4 hab. Año 2019") is None
+        assert extract_card_area_m2("320.000 € 2019 hab. 316 m²") is None
+
+
+class TestWhatIsNeverTheArea:
+    def test_the_unit_price_is_not_an_area(self):
+        assert extract_card_area_m2("320.000 € 1.013 €/m²") is None
+        assert extract_card_area_m2("320.000 € 1.013 €/m² 4 hab.") is None
+
+    def test_the_built_figure_beside_the_rooms_wins_over_a_plot_figure(self):
+        card = "320.000 € 4 hab. 316 m² parcela 1.200 m²"
+
+        assert extract_card_blocks_m2(card) == [316.0]
+        assert extract_card_area_m2(card) == 316.0
+
+    def test_a_plot_listing_returns_its_only_figure(self):
+        assert extract_card_area_m2("59.000 € 118 €/m² 1.200 m² de parcela") == 1200.0
+
+    def test_a_blocks_missing_area_is_none_not_the_next_blocks(self):
+        text = "320.000 € 4 hab. Chalet B 99.000 € 3 hab. 90 m²"
+
+        assert extract_card_blocks_m2(text) == [None, 90.0]
+        assert extract_card_area_m2(text) is None
+
+
+class TestTheCardStartsAtItsOwnLink:
+    SUMMARY = "Tu búsqueda: 350.000 € 150 m² "
+
+    def test_nothing_before_the_listing_link_is_read(self):
+        body = (
+            f'{self.SUMMARY}<a href="https://www.idealista.com/inmueble/111/">'
+            "Chalet</a> 320.000 € 4 hab. 316 m²"
+        )
+
+        assert extract_card_area_m2(body, idealista_property_id=111) == 316.0
+
+    def test_a_summary_before_a_card_without_an_area_is_not_the_area(self):
+        body = (
+            f'{self.SUMMARY}<a href="https://www.idealista.com/inmueble/111/">'
+            "Chalet</a> 320.000 € 4 hab."
+        )
+
+        assert extract_card_area_m2(body, idealista_property_id=111) is None
+
+    def test_a_listing_whose_link_is_not_in_the_body_reads_nothing(self):
+        body = f"{self.SUMMARY} 320.000 € 4 hab. 316 m²"
+
+        assert extract_card_area_m2(body, idealista_property_id=111) is None
+        assert extract_card_area_m2(body, idealista_property_id=999) is None
 
 
 class TestThePipeline:
