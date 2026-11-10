@@ -943,6 +943,27 @@
                                    aria-label="{{ t('search') }}"
                                    placeholder="{{ t('search_properties') }}">
                         </div>
+                    {# The owner's queue switch (#630): New = undecided, Reviewed =
+                       the filter-only alias `decided` (never stored). It sits in
+                       the always-visible first row because it is the main
+                       switch now, and it is drawn whenever the page has any
+                       row, even if all are undecided. Counts come from the
+                       page's own selection (_owner_verdict_choices). #}
+                    {% if verdicts %}
+                    <label class="properties-queue-switch">{{ t('workspace_verdict') }}<select class="form-select form-select-sm properties-filter-select" id="verdict" name="verdict"
+                            aria-label="{{ t('workspace_verdict') }}">
+                        <option value="">{{ t('owner_verdict_default') }}</option>
+                        <option value="all" {{ 'selected' if current_filters.verdict == 'all' }}>{{ t('owner_verdict_all') }}</option>
+                        {% for choice in verdicts %}
+                            <option value="{{ choice.value }}"
+                                    {{ 'selected' if current_filters.verdict == choice.value }}>
+                                {{ t(choice.label_key) }} ({{ choice.count }})
+                            </option>
+                        {% endfor %}
+                    </select></label>
+                    {% elif current_filters.verdict %}
+                        <input type="hidden" name="verdict" value="{{ current_filters.verdict }}"/>
+                    {% endif %}
                         <button type="submit" class="btn btn-primary btn-sm">{{ t('apply') }}</button>
                     </div>
                     <details class="workspace-advanced-filters" id="additional-filters">
@@ -1034,41 +1055,6 @@
                     </select></label>
                     {% elif current_filters.advertiser %}
                         <input type="hidden" name="advertiser" value="{{ current_filters.advertiser }}"/>
-                    {% endif %}
-
-                    {# What the owner decided. `undecided` is offered like any
-                       other state -- it is most of this table, and leaving it
-                       out would make the three decided counts read as a tally
-                       of the whole page rather than of the part somebody has
-                       judged. Same reading as the badge, so an option's count
-                       and the badges it selects cannot disagree
-                       (services/owner_review.py). #}
-                    {# `> 1` as before, PLUS the one case the old guard would
-                       have broken: when every row on the page is hidden by the
-                       rejected rule, `verdicts` holds only `rejected` and that
-                       lone option IS the way back, so deleting it would leave
-                       the page no way to undo its own hide. Relaxing the guard
-                       to `{% if verdicts %}` outright was the first attempt and
-                       it put a useless one-option select on every page holding
-                       a single verdict state (caught by
-                       tests/test_owner_review_propagation.py). And the empty
-                       value no longer means "all" -- it is the hide -- so it
-                       says so, and `all` is spelled out beside it
-                       (services/owner_review.DECISION_ALL). #}
-                    {% if verdicts|length > 1 or (verdicts and rejected_hidden_count) %}
-                    <label>{{ t('workspace_verdict') }}<select class="form-select form-select-sm properties-filter-select" id="verdict" name="verdict"
-                            aria-label="{{ t('workspace_verdict') }}">
-                        <option value="">{{ t('owner_verdict_default') }}</option>
-                        <option value="all" {{ 'selected' if current_filters.verdict == 'all' }}>{{ t('owner_verdict_all') }}</option>
-                        {% for choice in verdicts %}
-                            <option value="{{ choice.value }}"
-                                    {{ 'selected' if current_filters.verdict == choice.value }}>
-                                {{ t(choice.label_key) }}{% if choice.count %} ({{ choice.count }}){% endif %}
-                            </option>
-                        {% endfor %}
-                    </select></label>
-                    {% elif current_filters.verdict %}
-                        <input type="hidden" name="verdict" value="{{ current_filters.verdict }}"/>
                     {% endif %}
 
                     {# Whether something is still outstanding, and whether it is

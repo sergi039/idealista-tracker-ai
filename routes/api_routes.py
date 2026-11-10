@@ -1915,7 +1915,7 @@ def get_properties():
             query,
             Property,
             verdict_raw,
-            count_hidden=(verdict_value not in (owner_review.DECISION_ALL, "rejected")),
+            count_hidden=(verdict_value not in owner_review.HIDE_LIFTED_BY),
         )
 
         # Sorting allow-list

@@ -143,6 +143,10 @@ class TestTheEndpoint:
             {"decision": ""},
             {"decision": 1},
             {"decision": "REJECTED"},
+            # Filter-only aliases (#630) are never a stored decision.
+            {"decision": "decided"},
+            {"decision": "all"},
+            {"decision": "undecided"},
             {},
             [],
             "rejected",
