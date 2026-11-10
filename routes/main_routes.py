@@ -48,6 +48,7 @@ from services import recommendation_feedback
 from services import recommendation_duplicates
 from services import favorite_similarity
 from services import property_duplicates
+from services import duplicate_fold
 from services.coordinate_quality import shared_coordinate_peers
 from services import advertiser
 from services.hazard_service import (
@@ -974,6 +975,9 @@ def _empty_state_scope(
         if total:
             return total, url_for("main.properties", **args), True
         args.update(mode="combined", sort=DEFAULT_PROPERTY_SORT)
+    # The link states neither duplicate parameter, so the page it lands on
+    # folds, and the number offered has to be the folded one (#633).
+    query, _ = duplicate_fold.fold_query(query, duplicate_fold.Params())
     return query.count(), url_for("main.properties", **args), False
 
 
@@ -1725,6 +1729,10 @@ def properties():
         # (services/favorite_similarity.py). Kept as typed: an unknown value
         # narrows nothing and the control re-renders on its default.
         similar_filter = request.args.get("similar", "")
+        # Publications of the same home (#633): `duplicates=show` lifts the
+        # fold, `duplicate_of=<id>` shows one group unfolded. Both are
+        # filter-only; neither is a filter-bar dimension.
+        fold_params = duplicate_fold.read_params(request.args)
         # The filter bar as one mapping, for `_apply_filter_bar`: the page's
         # rows and every count beside its controls run the same function.
         bar = {
@@ -1917,6 +1925,27 @@ def properties():
             query, Property, verdict_filter, count_hidden=True
         )
 
+        # Publications of the same home fold into one row (#633). This is the
+        # LAST thing that narrows the selection and runs before every count
+        # beside the result count and before pagination, so page size, page
+        # count, sort and each "K of N" line are about the rows shown. The
+        # Recommendations collection computes its groups after its own
+        # selection instead (below), because it decides which rows are
+        # eligible at all, and does not drop rows by this rule.
+        wants_recommendation_collection = (
+            mode == "recommendation" or sort_by == "recommendation"
+        )
+        # The Recommendations collection keeps its own grouping and is not
+        # folded on top of it (`duplicate_fold.for_collection`).
+        effective_fold_params = duplicate_fold.for_collection(
+            fold_params, wants_recommendation_collection
+        )
+        duplicate_fold_result = None
+        if not wants_recommendation_collection:
+            query, duplicate_fold_result = duplicate_fold.fold_query(
+                query, effective_fold_params
+            )
+
         # What the same subscription selection holds *without* the filter bar
         # -- the number the "clear filters" link lands on, so the count line
         # can say "23 of 511" instead of presenting a narrowed set as the
@@ -1965,6 +1994,11 @@ def properties():
             # `CLEARED_NOT_ABSENT`, so the page that link lands on hides the
             # rejected ones too. M has to be counted the way that page counts.
             scope_query, _ = owner_review.apply_rejected_hide(scope_query, Property, "")
+            # The clear link states neither duplicate parameter, so the page
+            # it lands on folds: M is counted folded (#633).
+            scope_query, _ = duplicate_fold.fold_query(
+                scope_query, duplicate_fold.Params()
+            )
             filter_bar_scope_total = scope_query.count()
 
         # How much of what the page is about to draw was ever verified against
@@ -2154,6 +2188,9 @@ def properties():
                     recommendation_profile_summary,
                     similarity_ctx,
                 )
+            )
+            query, duplicate_fold_result = duplicate_fold.fold_query(
+                query, effective_fold_params
             )
 
         # Sorting (safe allow-list). An unknown sort -- an old /lands bookmark
@@ -2411,6 +2448,17 @@ def properties():
             # late is handed this value; a template calling `date.today()` per
             # row would disagree with the query that selected the rows.
             review_today=review_today,
+            # Publications of the same home (#633): the groups of this page's
+            # selection (member id -> group), how many rows the fold dropped
+            # from this request, whether it was skipped for size, and the two
+            # parameters as the request read them.
+            duplicate_groups=duplicate_fold_result.groups,
+            duplicates_folded_count=duplicate_fold.folded_count(
+                duplicate_fold_result, effective_fold_params
+            ),
+            duplicates_skipped=duplicate_fold_result.skipped,
+            duplicates_skipped_limit=duplicate_fold.FOLD_MAX_ROWS,
+            fold_params=fold_params,
             **filter_options,
             current_filters={
                 # A list, so `url_for` repeats the parameter instead of
@@ -2433,6 +2481,8 @@ def properties():
                 "criteria": criteria_filter,
                 "favorites": favorites_filter,
                 "hide_removed": hide_removed_filter,
+                "duplicates": duplicate_fold.SHOW_VALUE if fold_params.show else "",
+                "duplicate_of": fold_params.raw_of,
                 "sort_by": sort_by,
                 "order": sort_order,
                 "mode": "recommendation" if wants_recommendation_ranking else mode,
@@ -5115,7 +5165,28 @@ def map_view():
                     profile_summary,
                     None,
                 )
+        # One pin per group (#633): the same fold as the list over the map's
+        # own selection (located, live rows), with the same two parameters. A
+        # focused id always wins -- it is never folded away.
+        map_fold_params = duplicate_fold.for_collection(
+            duplicate_fold.read_params(request.args), recommendation_map
+        )
+        # Read through the record so the List View link carries them back.
+        filters.get(duplicate_fold.PARAM_SHOW)
+        filters.get(duplicate_fold.PARAM_OF)
+        query, map_fold = duplicate_fold.fold_query(
+            query,
+            map_fold_params,
+            keep_ids=(focus_id,) if focus_id is not None else (),
+        )
+        duplicates_folded_count = duplicate_fold.folded_count(map_fold, map_fold_params)
         props = query.all()
+
+        duplicates_reveal_url = None
+        if duplicates_folded_count:
+            reveal_args = rebuilt_from(request.args, drop=(duplicate_fold.PARAM_OF,))
+            reveal_args[duplicate_fold.PARAM_SHOW] = duplicate_fold.SHOW_VALUE
+            duplicates_reveal_url = url_for("main.map_view", **reveal_args)
 
         # The lift, in the only control this page has — a link. Same URL,
         # criteria=all: `rebuilt_from` keeps the profile selection, the
@@ -5280,6 +5351,8 @@ def map_view():
             criteria_reveal_url=criteria_reveal_url,
             rejected_hidden_count=rejected_hidden_count,
             rejected_reveal_url=rejected_reveal_url,
+            duplicates_folded_count=duplicates_folded_count,
+            duplicates_reveal_url=duplicates_reveal_url,
         )
 
     except Exception:
@@ -6367,6 +6440,17 @@ def export_properties_csv():
                 query, profile_data, profile_summary, similarity_ctx
             )
 
+        # The same fold as the page this file is taken from (#633), over the
+        # same selection and with the same two parameters; the export link
+        # forwards them. Rows carry their group so the file can be re-grouped.
+        query, duplicate_fold_result = duplicate_fold.fold_query(
+            query,
+            duplicate_fold.for_collection(
+                duplicate_fold.read_params(request.args),
+                wants_recommendation_ranking,
+            ),
+        )
+
         # Same ordering as /properties, tiebreaker included: the export link
         # forwards whatever the page is sorted by, so an allow-list that does
         # not know a value would hand back the same rows in another order.
@@ -6605,6 +6689,13 @@ def export_properties_csv():
             "Similarity Compared On",
             "Similarity Location Basis",
             "Created At",
+            # Publications of the same home (#633). Size 1 and the other two
+            # empty for a row that is nobody's twin; `duplicate_member_ids` is
+            # every member of the group in the selection, sorted, space
+            # separated.
+            "duplicate_group_size",
+            "duplicate_member_ids",
+            "duplicate_tier",
         ]
 
         travel_headers = []
@@ -6648,6 +6739,7 @@ def export_properties_csv():
             # the context the filter above was built from -- so the column and
             # the row set it explains cannot be answers to two questions.
             criteria_row = subscription_criteria.row_verdict(prop, criteria_ctx)
+            duplicate_note = duplicate_fold_result.annotation(prop.id)
             # The export's one similarity reading, per row.
             similarity_row = (
                 similarity_ctx.read(prop.id)
@@ -6730,6 +6822,9 @@ def export_properties_csv():
                 " ".join(similarity_row.get("compared") or []),
                 similarity_row.get("geography_basis") or "",
                 prop.created_at.isoformat() if prop.created_at else "",
+                duplicate_note["duplicate_group_size"],
+                " ".join(str(i) for i in duplicate_note["duplicate_member_ids"]),
+                duplicate_note["duplicate_tier"],
             ]
 
             travel = prop.travel if isinstance(prop.travel, dict) else {}

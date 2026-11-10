@@ -325,7 +325,14 @@ def test_recommendations_group_portal_aliases(selection):
     # The alias remains accessible from its own portal filter and in the catalog.
     page_ids, csv_ids = _page_and_export(client, **params, source="yaencontre")
     assert page_ids == csv_ids == [alias_id]
+    # The catalog folds the three publications of one home into its
+    # reference (#633: the five seed pairs are `confirmed`), page and export
+    # agreeing; `duplicates=show` is the way back to all three.
     page_ids, csv_ids = _page_and_export(client, mode="combined")
+    assert reference.id in page_ids
+    assert {alias_id, seaia.id}.isdisjoint(page_ids)
+    assert set(page_ids) == set(csv_ids)
+    page_ids, csv_ids = _page_and_export(client, mode="combined", duplicates="show")
     assert {reference.id, alias_id, seaia.id} <= set(page_ids) == set(csv_ids)
 
     # A canonical advert that needs verification cannot hide a confirmed alias.

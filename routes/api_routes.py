@@ -22,6 +22,7 @@ from services import advertiser
 from services import owner_review
 from services import subscription_criteria
 from services import favorite_similarity
+from services import duplicate_fold
 from services import listing_attribute_filters
 from services import taste_service
 from utils.listing_source import source_filter_clause
@@ -1918,6 +1919,23 @@ def get_properties():
             count_hidden=(verdict_value not in owner_review.HIDE_LIFTED_BY),
         )
 
+        # Publications of the same home (#633): the fold `/properties` applies,
+        # over this endpoint's own selection and with the same two
+        # parameters. Before `total` and the subscription mix, so the scope
+        # block describes the population the page is cut from.
+        duplicate_params = duplicate_fold.read_params(
+            {
+                duplicate_fold.PARAM_SHOW: filters.get(duplicate_fold.PARAM_SHOW),
+                duplicate_fold.PARAM_OF: filters.get(duplicate_fold.PARAM_OF),
+            }
+        )
+        query, duplicate_fold_result = duplicate_fold.fold_query(
+            query, duplicate_params
+        )
+        duplicates_folded = duplicate_fold.folded_count(
+            duplicate_fold_result, duplicate_params
+        )
+
         # Sorting allow-list
         sort_columns = {
             "created_at": Property.created_at,
@@ -1981,6 +1999,7 @@ def get_properties():
                     if similarity_row
                     else favorite_similarity.STATE_NO_REFERENCE
                 )
+                data.update(duplicate_fold_result.annotation(p.id))
                 properties_data.append(data)
         else:
             properties_data = []
@@ -2054,6 +2073,7 @@ def get_properties():
                         "updated_at": p.updated_at.isoformat()
                         if p.updated_at
                         else None,
+                        **duplicate_fold_result.annotation(p.id),
                     }
                 )
 
@@ -2160,6 +2180,25 @@ def get_properties():
                 "pass verdict=all (or verdict=rejected) to include them. A "
                 "favorited listing, or one carrying an outstanding action, is "
                 "never hidden."
+            )
+
+        # The fold, said out loud on the same terms as the two hides above:
+        # only when something was withheld, and the way back is named.
+        if duplicates_folded:
+            notes.append(
+                f"duplicates: {duplicates_folded} publication(s) of the same "
+                "homes are folded into one row each and are not counted in "
+                "`total`; pass duplicates=show to include them, or "
+                "duplicate_of=<id> to see one group. A favorite, a decided "
+                "listing, one with an outstanding action or a timeline entry "
+                "is never folded. Each row carries duplicate_group_size, "
+                "duplicate_member_ids and duplicate_tier."
+            )
+        elif duplicate_fold_result.skipped:
+            notes.append(
+                "duplicates: this selection is larger than "
+                f"{duplicate_fold.FOLD_MAX_ROWS} listings, so publications of "
+                "the same home were not folded."
             )
 
         # The similarity cut, said out loud: what the rows were measured
@@ -2275,6 +2314,15 @@ def get_properties():
                     "verdict_applied": verdict_value or "default",
                     "verdict_recognized": verdict_recognised,
                     "rejected_hidden_by_default": rejected_hidden,
+                    # Publications of the same home folded out of `total`
+                    # (#633): 0 when none, `null` when the fold was skipped
+                    # for size or lifted by duplicates=show / duplicate_of.
+                    "duplicates_folded": (
+                        duplicates_folded
+                        if duplicate_params.folding
+                        and not duplicate_fold_result.skipped
+                        else None
+                    ),
                     # `offset` only: the page size is already here as `cap`,
                     # and one fact under two names in one object is what this
                     # block exists to stop happening between objects.

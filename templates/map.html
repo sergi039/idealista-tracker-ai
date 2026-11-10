@@ -72,6 +72,15 @@
                 &middot; <a href="{{ rejected_reveal_url }}">{{ t('show_them') }}</a>
             </div>
         {% endif %}
+        {# One pin per home (#633): publications of the same home are folded,
+           disclosed the way the two hides above are. #}
+        {% if duplicates_folded_count %}
+            <div class="alert alert-light border py-2 px-3 small text-body-secondary" id="map-duplicates-folded-note"
+                 title="{{ t('dup_fold_line_title') }}">
+                <i class="fas fa-clone me-1"></i>{{ tn('dup_fold_line', duplicates_folded_count) }}
+                &middot; <a href="{{ duplicates_reveal_url }}">{{ t('show_them') }}</a>
+            </div>
+        {% endif %}
 
         {# The caller asked for one listing and the map does not hold it. The
            script below falls back to fitting every marker, which is

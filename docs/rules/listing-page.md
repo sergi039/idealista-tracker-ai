@@ -142,3 +142,7 @@ is the long form. The short form:
   markers before it becomes a redirect, so there is no redirect loop.
 
 Tests: `tests/test_filters_are_remembered.py`.
+
+## Publications of the same home are folded (#633)
+
+**The list folds publications of the same home** (#633, `docs/rules/duplicates.md`): one disclosure line beside the count with the one reveal link (`duplicates=show`), one badge on the row with "show all" (`duplicate_of=<id>`); no control exists in the filter bar for it, so "every control exists exactly once" holds.

@@ -93,6 +93,14 @@ NOT_A_FILTER = {
     "recommendation_scope": "recommendation subcollection, outside the catalog API",
     "active_mode": "derived from the applied sort, never sent",
     "view_type": "cards or table",
+    "duplicates": (
+        "how the fold of same-home publications is read, not what a row is: "
+        "swept across list, CSV, API and map in test_duplicates_fold_on_the_list.py"
+    ),
+    "duplicate_of": (
+        "one group shown unfolded: swept across list, CSV, API and map in "
+        "test_duplicates_fold_on_the_list.py"
+    ),
 }
 
 
