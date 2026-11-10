@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from app import db
 from config import Config
 from models import Property, SyncHistory
+from services.sync_history_status import STATUS_RUNNING
 from utils.email_headers import decode_header_value
 from utils.google_spend import (
     CAP_INGEST_GEOCODE,
@@ -1419,7 +1420,10 @@ class PropertyIMAPService:
     def run_ingestion(self, sync_type: str = "incremental") -> int:
         start_time = datetime.now(timezone.utc)
         sync_history = SyncHistory(
-            sync_type=sync_type, backend="imap", started_at=start_time
+            sync_type=sync_type,
+            backend="imap",
+            started_at=start_time,
+            status=STATUS_RUNNING,
         )
         db.session.add(sync_history)
         db.session.commit()

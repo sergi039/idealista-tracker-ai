@@ -905,8 +905,12 @@ window.IdealistaApp = {
                         }
                         statsWrapper.appendChild(document.createTextNode(')'));
 
-                        // Handle null or invalid completed_at
-                        if (sync.completed_at) {
+                        // A run that is still going, or died, has no finish time to show
+                        if (sync.status === 'running' || sync.status === 'interrupted') {
+                            const label = sync.status === 'running' ? 'Sync running ' : 'Sync interrupted ';
+                            lastSyncElement.appendChild(document.createTextNode(label));
+                            lastSyncElement.appendChild(statsWrapper);
+                        } else if (sync.completed_at) {
                             const date = new Date(sync.completed_at);
                             if (!isNaN(date.getTime()) && date.getFullYear() > 1970) {
                                 const dateStr = date.toLocaleDateString();
