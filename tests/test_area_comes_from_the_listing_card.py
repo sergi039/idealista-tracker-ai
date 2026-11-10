@@ -23,6 +23,7 @@ from utils.email_parser import EmailParser
 from utils.idealista_extractors import (
     extract_card_area_m2,
     extract_card_blocks_m2,
+    extract_card_price_blocks_m2,
     extract_price,
 )
 
@@ -130,6 +131,48 @@ def _ingest(service, raw: bytes) -> list[dict]:
     emails = service.get_idealista_emails()
     assert len(emails) == 1
     return emails
+
+
+class TestRealPriceDropAndEnglishCards:
+    """Verbatim card texts from real alert e-mails (2026-11-10)."""
+
+    @pytest.mark.parametrize(
+        "card, expected",
+        [
+            (
+                "fotos Casa o chalet independiente en Baris, Carballo 325.000€ "
+                "↓4% 312.000 € 910 €/m² 6 hab. 357 m² Chalet independiente en "
+                "venta en Carballo, ",
+                357.0,
+            ),
+            (
+                "Ver 32 fotos Casa o chalet independiente en Valga 85.000€ ↓12% "
+                "75.000 € 518 €/m² 3 hab. 164 m² Se vende casa para reformar ",
+                164.0,
+            ),
+            (
+                "Casa o chalet independiente en Camino dos Vilares, San "
+                "Mateo-Castro-O ... 169.710 € 606 €/m² 3 hab. 280 m² PRECIO DE "
+                "REMATE ",
+                280.0,
+            ),
+            ("Casa en Foo 325.000€ ↑4% 338.000 € 910 €/m² 6 hab. 357 m² x", 357.0),
+            ("Casa en Foo 325.000€ ↓4,5% 310.000 € 910 €/m² 6 hab. 357 m² x", 357.0),
+            ("Casa en Foo 325.000€ ↓4.5% 310.000 € 3 hab. 1.357 m² x", 1357.0),
+            # English separators: comma groups thousands
+            ("58,000 € 1,500 m2 Developed plot ? NEW BUILDING PLOT", 1500.0),
+        ],
+    )
+    def test_the_card_area_is_read(self, card, expected):
+        assert extract_card_area_m2(card) == expected
+
+    def test_the_block_price_is_the_new_price(self):
+        blocks = extract_card_price_blocks_m2(
+            "325.000€ ↓4% 312.000 € 910 €/m² 6 hab. 357 m²"
+        )
+
+        assert blocks == [(312000.0, 357.0)]
+        assert extract_card_price_blocks_m2("58,000 € 1,500 m2") == [(58000.0, 1500.0)]
 
 
 class TestRoomLabels:

@@ -12,6 +12,7 @@ from app import create_app, db
 from models import Property
 from tests import setup_test_environment
 from utils import repair_area_from_subject as tool
+from utils.idealista_extractors import extract_price
 
 SUBJECT = "¡Nuevo chalet en tu búsqueda: Rias Bajas costa - 350k - 150m2!"
 URL = "https://www.idealista.com/inmueble/{}/"
@@ -36,8 +37,20 @@ def _inflight_in_tmp(tmp_path, monkeypatch):
     monkeypatch.setattr(inflight_module, "INFLIGHT_DIRNAME", str(tmp_path / "inflight"))
 
 
-def _row(n, *, description, subject=SUBJECT, area=150, area_type="built", url=None):
+def _row(
+    n,
+    *,
+    description,
+    subject=SUBJECT,
+    area=150,
+    area_type="built",
+    url=None,
+    price="first",
+):
+    if price == "first":  # the row's price is the description's first amount
+        price = extract_price(description.split("€")[0] + "€")
     prop = Property(
+        price=price,
         source_email_id=f"imap_{n}",
         idealista_property_id=n,
         url=url or URL.format(n),
@@ -175,8 +188,10 @@ def test_restore_puts_values_back_and_refuses_a_row_changed_after(rows, tmp_path
     assert _state(rows["plot"]) == (150.0, "plot")
 
 
-def test_several_different_cards_are_reported_and_never_written(app, tmp_path):
-    pid = _row(9, description="320.000 € 4 hab. 316 m² 99.000 € 3 hab. 90 m²", area=150)
+def test_two_blocks_at_the_rows_price_with_different_areas_are_ambiguous(app, tmp_path):
+    pid = _row(
+        9, description="320.000 € 4 hab. 316 m² 320.000 € 3 hab. 90 m²", area=150
+    )
     outcome = tool.repair(apply=True, snapshot_path=str(tmp_path / "s.json"))
 
     assert outcome["counts"]["ambiguous"] == 1
@@ -203,6 +218,7 @@ def test_a_description_with_links_is_read_by_the_rows_own_card(app, tmp_path):
             "/inmueble/99/ 99.000 € 3 hab. 90 m²"
         ),
         area=150,
+        price=320000,
     )
     tool.repair(apply=True, snapshot_path=str(tmp_path / "s.json"))
 
@@ -443,3 +459,94 @@ def test_the_command_line_refuses_an_existing_snapshot(rows, tmp_path):
 
     assert exit_info.value.code != 0
     assert snap.read_text() == "earlier run"
+
+
+# --- real shapes found on production data (2026-11-10) ----------------------
+
+PREHEADER_3943 = (
+    "Alertas Casa o chalet independiente en Cornazo - Rubianes, Vilagarcía de "
+    "Arousa 320.000 € . Os presentamos esta vivienda unifamiliar situada en un "
+    "entorno residencial tranquilo, … Una propiedad que combina amplitu... "
+    "Hola, Sergioalicante, 1 anuncio recién publicado con tus criterios "
+    "320.000 € 1.013 €/m² 4 hab. 316 m² Os presentamos esta vivienda unifamiliar s"
+)
+PREHEADER_3848 = (
+    "Alertas Casa o chalet independiente en Redondela 299.000 € . SE VENDE CASA "
+    "VIVIENDA EN CESANTES - … - 5 HABITACIONES - 2 COCINAS - COMEDOR - 3 BAÑOS "
+    "- 1... Hola, Sergioalicante, 1 anuncio recién publicado con tus criterios "
+    "299.000 € 1.634 €/m² 5 hab. 183 m² SE VENDE CASA "
+)
+PREHEADER_1537 = (
+    "Alertas Casa o chalet independiente en Lugar Costenla, 31, Carballo "
+    "349.000 € . Cuando vengas a visitarla … Hola, Sergioalicante, 1 anuncio "
+    "recién publicado con tus criterios 349.000 € 1.058 €/m² 4 hab. 330 m² "
+    "Cuando vengas "
+)
+ENGLISH_407 = (
+    "Hello Sergioalicante, 1 new listing that matches your search criteria "
+    "58,000 € 1,500 m2 Developed plot ? NEW BUILDING PLOT FOR SALE IN TIÑANA, "
+)
+
+
+@pytest.mark.parametrize(
+    "n, description, price, area, area_type, expected",
+    [
+        (3943, PREHEADER_3943, 320000, 150, "built", (316.0, "built")),
+        (3848, PREHEADER_3848, 299000, 150, "built", (183.0, "built")),
+        (1537, PREHEADER_1537, 349000, 150, "built", (330.0, "built")),
+        (407, ENGLISH_407, 58000, 1000, "plot", (1500.0, "plot")),
+    ],
+)
+def test_real_preheader_descriptions_recover_the_cards_area(
+    app, tmp_path, n, description, price, area, area_type, expected
+):
+    pid = _row(
+        n,
+        description=description,
+        price=price,
+        area=area,
+        area_type=area_type,
+        subject="Nuevo en tu búsqueda: costa - 150m2 - 1000m2",
+    )
+    outcome = tool.repair(apply=True, snapshot_path=str(tmp_path / "s.json"))
+
+    assert outcome["counts"]["recovered"] == 1
+    assert _state(pid) == expected
+
+
+def test_a_block_at_another_price_never_supplies_the_area(app, tmp_path):
+    """Card 222 at 99.000 € cannot repair row 111 at 320.000 €."""
+    pid = _row(
+        111,
+        price=320000,
+        description=(
+            "320.000 € . teaser Hola 320.000 € 4 hab. Chalet B 99.000 € 3 hab. 90 m²"
+        ),
+    )
+    outcome = tool.repair(apply=True, snapshot_path=str(tmp_path / "s.json"))
+
+    assert outcome["counts"]["unstated"] == 1
+    assert _state(pid) == (None, "unknown")
+
+
+def test_a_row_with_no_block_at_its_price_is_no_card(app, tmp_path):
+    other = _row(21, price=500000, description="320.000 € 4 hab. 316 m²")
+    nothing = _row(22, price=None, description="320.000 € 4 hab. 316 m²")
+    outcome = tool.repair(apply=True, snapshot_path=str(tmp_path / "s.json"))
+
+    assert outcome["counts"]["no_card"] == 2
+    assert _state(other) == (150.0, "built")
+    assert _state(nothing) == (150.0, "built")
+
+
+def test_a_price_drop_description_matches_on_the_new_price(app, tmp_path):
+    pid = _row(
+        23,
+        price=312000,
+        description=(
+            "Hola 325.000€ ↓4% 312.000 € 910 €/m² 6 hab. 357 m² Chalet independiente"
+        ),
+    )
+    tool.repair(apply=True, snapshot_path=str(tmp_path / "s.json"))
+
+    assert _state(pid) == (357.0, "built")
