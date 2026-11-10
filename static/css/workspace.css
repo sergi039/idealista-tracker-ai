@@ -111,10 +111,10 @@
 .app-workspace .properties-coverage { font-size: 0.75rem; margin-bottom: var(--ui-space-3); }
 .app-workspace .properties-coverage > summary { font-size: 0.75rem; padding-block: var(--ui-space-1); }
 .workspace-data-table { width: 100%; table-layout: fixed; }
-.workspace-data-table .col-title { width: 48%; min-width: 0; }
+.workspace-data-table .col-title { width: 46%; min-width: 0; }
 .workspace-data-table .col-price { width: 16%; min-width: 0; }
 .workspace-data-table .col-score { width: 23%; min-width: 0; }
-.workspace-data-table .col-actions { width: 13%; min-width: 0; }
+.workspace-data-table .col-actions { width: 15%; min-width: 0; }
 .app-workspace .workspace-data-table > thead > tr > th { padding: var(--ui-space-3) var(--ui-space-4); border-bottom-width: 1px; text-transform: uppercase; }
 .app-workspace .workspace-data-table > tbody > tr > td { padding: var(--ui-space-3) var(--ui-space-3); vertical-align: top; background: var(--ui-surface); overflow-wrap: anywhere; font-size: 0.8125rem; }
 .workspace-property-summary { display: flex; gap: var(--ui-space-4); align-items: flex-start; }
@@ -156,6 +156,13 @@
 .workspace-secondary-scores .badge { font-size: 0.75rem !important; display: inline-flex !important; background: var(--ui-canvas) !important; color: var(--ui-muted) !important; }
 .workspace-owner-decision { text-align: right; font-size: 0.75rem; line-height: 1.5; color: var(--ui-muted); white-space: normal; overflow-wrap: anywhere; }
 .workspace-owner-decision .badge { font-size: inherit; white-space: normal; }
+.owner-decision-buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: var(--ui-space-1); margin-bottom: var(--ui-space-2); }
+.owner-decision-buttons .btn-group { flex-wrap: nowrap; }
+.owner-decision-buttons .btn { font-size: 0.75rem; padding-inline: var(--ui-space-2); }
+.owner-decision-buttons .owner-decision-undo { padding-inline: var(--ui-space-1); }
+.card-footer .owner-decision-buttons { justify-content: flex-start; margin-bottom: 0; }
+.owner-decided { opacity: 0.8; }
+.owner-decision-unconfirmed { color: var(--ui-warning); font-size: 0.75rem; }
 .workspace-owner-actions { display: flex; justify-content: flex-end; gap: var(--ui-space-2); margin-bottom: var(--ui-space-2); }
 .workspace-owner-actions .btn { font-size: 0.75rem; }
 .property-favorite-btn { width: var(--ui-control-height); min-height: var(--ui-control-height); flex-shrink: 0; }
@@ -175,10 +182,10 @@
     .workspace-sidebar .offcanvas-body { display: flex; }
     .workspace-collapse { display: none !important; }
     .workspace-topbar-title { display: none; }
-    .workspace-data-table .col-title { width: 44%; }
+    .workspace-data-table .col-title { width: 40%; }
     .workspace-data-table .col-price { width: 16%; }
-    .workspace-data-table .col-score { width: 23%; }
-    .workspace-data-table .col-actions { width: 17%; }
+    .workspace-data-table .col-score { width: 22%; }
+    .workspace-data-table .col-actions { width: 22%; }
     .workspace-photo { flex-basis: 4.5rem; width: 4.5rem; }
     .workspace-photo .listing-thumb { width: 4.5rem; height: 4.5rem; }
     .workspace-property-summary { gap: var(--ui-space-2); }

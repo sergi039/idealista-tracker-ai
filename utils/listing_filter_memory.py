@@ -19,8 +19,14 @@ What is remembered is decided by provenance, not by content, for the reason
 `utils/listing_status_scope.py` gives: the page's own form and every link it
 draws carry `mode` and `view_type`, and nothing else does. A request carrying
 them is the owner *choosing* on the page and is remembered verbatim -- filters,
-subscription selection, sort, mode, view -- minus the page number, which is
-where the reader was rather than what they asked for. A request carrying
+subscription selection, sort, mode, view -- and the page number with them
+(owner, 2026-11-10, issue #630: returning from a listing opened page 1 at the
+top and the owner lost his place, one measured reason he stopped reviewing).
+Page 1 is never stored: absence means the first page. Every control that
+changes what is shown (the filter form, sort, tab, mode, view, subscription
+links) carries no page, so a change lands on page 1 and the stale page dies
+with the old state; only the pagination links name a page. A remembered page
+past the last one is clamped by `properties()` to the last page. A request carrying
 neither (a cross-page link from `/profiles` or `/map`, a hand-typed URL, the
 `/municipalities` drill-downs) is a visit and changes nothing. A link that is
 one of the page's own but names one row rather than a standing state -- the
@@ -63,9 +69,11 @@ REMEMBER_PARAM = "remember"
 REMEMBER_OFF = "off"
 REMEMBER_FORGET = "forget"
 
-# Never stored: the page number is a position, and the parameter above is an
-# instruction to this module, not a state of the page.
-NOT_REMEMBERED = frozenset({"page", REMEMBER_PARAM})
+# Never stored: the parameter above is an instruction to this module, not a
+# state of the page. The page number is stored (see the docstring) but only
+# when it is a position past the first, see `_stored_pair`.
+NOT_REMEMBERED = frozenset({REMEMBER_PARAM})
+PAGE_PARAM = "page"
 
 # The signed session cookie holds everything the app keeps per browser in
 # about 4 KB; a state past this is forgotten, never truncated.
@@ -92,7 +100,7 @@ def redirect_query(args: Mapping[str, Any], session: MutableMapping[str, Any]):
 
 
 def remember(session: MutableMapping[str, Any], args: Mapping[str, Any]) -> None:
-    """Store this request's query as the memory, page number dropped.
+    """Store this request's query as the memory, page 1 dropped.
 
     Empty values are dropped too: an empty select is what the form submits for
     "no filter", and an empty value is read as absent everywhere in these
@@ -102,7 +110,7 @@ def remember(session: MutableMapping[str, Any], args: Mapping[str, Any]) -> None
     pairs = [
         (key, value)
         for key, value in _pairs(args)
-        if key not in NOT_REMEMBERED and value != ""
+        if key not in NOT_REMEMBERED and _stored_pair(key, value)
     ]
     query = urlencode(pairs)
     if not query or len(query) > MAX_STORED_CHARS:
@@ -125,7 +133,7 @@ def recall(session: MutableMapping[str, Any]) -> str | None:
     pairs = [
         (key, value)
         for key, value in parse_qsl(stored, keep_blank_values=False)
-        if key not in NOT_REMEMBERED
+        if key not in NOT_REMEMBERED and _stored_pair(key, value)
     ]
     if not pairs or not submitted_by_the_filter_form(dict(pairs)):
         forget(session)
@@ -133,8 +141,29 @@ def recall(session: MutableMapping[str, Any]) -> str | None:
     return urlencode(pairs)
 
 
+# A page number longer than this is not a page (10^7 pages of listings).
+MAX_PAGE_DIGITS = 7
+
+
 def forget(session: MutableMapping[str, Any]) -> None:
     session.pop(SESSION_KEY, None)
+
+
+def _stored_pair(key: str, value: str) -> bool:
+    """Empty values are absent; a page is kept only as a number past the first
+    (`page=1`, `page=0`, `page=abc` all mean the first page, which is absence)."""
+    if value == "":
+        return False
+    if key == PAGE_PARAM:
+        # Bounded before conversion: Python refuses to turn a string of
+        # thousands of digits into an int, and no listing has that many pages.
+        return (
+            len(value) <= MAX_PAGE_DIGITS
+            and value.isascii()
+            and value.isdigit()
+            and int(value) > 1
+        )
+    return True
 
 
 def _pairs(args: Mapping[str, Any]) -> list[tuple[str, str]]:

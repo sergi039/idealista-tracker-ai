@@ -2545,6 +2545,71 @@ def set_recommendation_vote(property_id):
     return jsonify(state)
 
 
+@api_bp.route("/property/<int:property_id>/review", methods=["GET"])
+@limiter.limit("60 per minute")
+def get_property_review(property_id):
+    """Read the stored decision, for a client whose write got no answer (#630).
+
+    A timed-out POST is uncertain, not failed: the row's script asks here what
+    the server holds before it says anything. Read-only -- no lock, no event.
+    """
+    from models import Property
+
+    prop = db.get_or_404(Property, property_id)
+    return jsonify(success=True, state=owner_review.read_decision(prop)["state"])
+
+
+@api_bp.route("/property/<int:property_id>/review", methods=["POST"])
+@limiter.limit("60 per minute")
+def set_property_review(property_id):
+    """Decide a listing from its row in the list (#630).
+
+    The JSON twin of `main.set_review`, for the three buttons in a list row and
+    nothing else. It is NOT a second writer: it calls
+    `owner_review.set_review`, which owns the lock, the event and the
+    transaction. The row only decides, so the stored reason and the stored
+    outstanding action are kept (`keep_reason`, `keep_action`), re-read under
+    the row lock -- a press must never erase what the owner typed on the
+    detail page. `null` clears to NULL, which reads `undecided`, never
+    `rejected`. A repeat of the current decision writes no event (the service
+    compares the whole state).
+    """
+    from models import Property
+
+    payload = request.get_json(silent=True)
+    if (
+        not isinstance(payload, dict)
+        or "decision" not in payload
+        or (
+            payload["decision"] is not None
+            and payload["decision"] not in owner_review.DECIDED_STATES
+        )
+    ):
+        return jsonify(success=False, error="Invalid decision"), 400
+    prop = db.get_or_404(Property, property_id)
+    try:
+        result = owner_review.set_review(
+            prop,
+            decision=payload["decision"],
+            keep_action=True,
+            keep_reason=True,
+        )
+    except owner_review.ReviewError:
+        logger.warning(
+            "row decision refused for property %s", property_id, exc_info=True
+        )
+        return jsonify(success=False, error="The decision could not be saved"), 409
+    except Exception:
+        logger.exception("row decision failed for property %s", property_id)
+        return jsonify(success=False, error="The decision could not be saved"), 500
+    return jsonify(
+        success=True,
+        state=owner_review.read_decision(prop)["state"],
+        changed=bool(result["changed"]),
+        hidden=owner_review.hidden_by_rejection(prop),
+    )
+
+
 @api_bp.route("/property/<int:property_id>/enrich", methods=["POST"])
 @limiter.limit("10 per minute")
 def manual_property_enrichment(property_id: int):

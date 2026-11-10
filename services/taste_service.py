@@ -794,6 +794,20 @@ def _model_basis(signals: List[Dict[str, Any]]) -> str:
     ).hexdigest()
 
 
+def _unapplied_clauses(clauses: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Clauses the page lists as "not used yet": real wording only.
+
+    Profiles stored before the clause splitter stopped cutting inside tokens
+    still hold fragments such as ``com)``; they are filtered here too.
+    """
+    return [
+        clause
+        for clause in clauses
+        if clause.get("mapping_state") != "executable"
+        and taste_preferences.is_meaningful_clause(clause.get("text"))
+    ]
+
+
 def _recommendation_source(signals: List[Dict[str, Any]]) -> Dict[str, Any]:
     """One source snapshot for model builds and deterministic feedback refreshes."""
     usable = [signal for signal in signals if signal["usable"]]
@@ -1031,11 +1045,7 @@ def recommendation_profile_state(
             "mapped_clause_count": sum(
                 1 for clause in clauses if clause.get("mapping_state") == "executable"
             ),
-            "unapplied_clauses": [
-                clause
-                for clause in clauses
-                if clause.get("mapping_state") != "executable"
-            ],
+            "unapplied_clauses": _unapplied_clauses(clauses),
         }
     source = profile_data.get("source") if isinstance(profile_data, dict) else None
     if (
@@ -1072,9 +1082,7 @@ def recommendation_profile_state(
         "mapped_clause_count": sum(
             1 for clause in clauses if clause.get("mapping_state") == "executable"
         ),
-        "unapplied_clauses": [
-            clause for clause in clauses if clause.get("mapping_state") != "executable"
-        ],
+        "unapplied_clauses": _unapplied_clauses(clauses),
     }
 
 

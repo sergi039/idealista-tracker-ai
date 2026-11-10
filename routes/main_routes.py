@@ -4076,8 +4076,12 @@ def set_review(property_id):
 
     One dedicated route validating a small closed set, flashing a result and
     redirecting -- the `set_advertiser` / `set_pool_absence` idiom, and on
-    `main_bp`, so the form carries a CSRF token. There is no JSON twin: the
-    form submits the owner decision and redirects back to its visible result.
+    `main_bp`, so the form carries a CSRF token. This is the detail page's
+    form, which manages reason and action too. The list row's three buttons
+    (#630) use the one JSON twin, `api.set_property_review`
+    (`POST /api/property/<id>/review`); it is not a second writer -- it calls
+    the same `owner_review.set_review` with `keep_action` and `keep_reason`, so
+    a press never erases what is typed here.
 
     Both fields are submitted together because they are edited together, and
     because `services.owner_review.set_review` records one event describing the
