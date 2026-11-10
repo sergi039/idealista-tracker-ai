@@ -238,7 +238,7 @@ class TestCsrf:
 
 def _pressed(html, prop_id):
     block = re.search(
-        rf'data-owner-decision data-property-id="{prop_id}">(.*?)data-owner-decision-status',
+        rf'data-owner-decision data-owner-decision-id="{prop_id}">(.*?)data-owner-decision-status',
         html,
         re.S,
     )
@@ -259,7 +259,7 @@ class TestTheList:
         response = client.get(f"/properties?view_type={view_type}&verdict=all")
         assert response.status_code == 200
         html = response.get_data(as_text=True)
-        assert html.count("data-owner-decision data-property-id=") == 3
+        assert html.count("data-owner-decision data-owner-decision-id=") == 3
         assert _pressed(html, rows[0].id) == [
             ("interested", "true"),
             ("waiting", "false"),
@@ -288,7 +288,7 @@ class TestTheList:
         for view_type in ("list", "cards"):
             response = client.get(f"/properties?view_type={view_type}")
             assert response.status_code == 200
-            assert "data-owner-decision data-property-id=" in response.get_data(
+            assert "data-owner-decision data-owner-decision-id=" in response.get_data(
                 as_text=True
             )
 

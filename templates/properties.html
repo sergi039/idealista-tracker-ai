@@ -306,7 +306,7 @@
    assistive technology only. #}
 {% macro owner_decision_buttons(p, show_text=False) -%}
 {%- set _d = owner_decision_for(p) -%}
-<div class="owner-decision-buttons" data-owner-decision data-property-id="{{ p.id }}"><div class="btn-group btn-group-sm" role="group" aria-label="{{ t('owner_decision_group') }} · {{ p.title or p.id }}">
+<div class="owner-decision-buttons" data-owner-decision data-owner-decision-id="{{ p.id }}"><div class="btn-group btn-group-sm" role="group" aria-label="{{ t('owner_decision_group') }} · {{ p.title or p.id }}">
 {%- for _state, _symbol in [('interested', 'thumbs-up'), ('waiting', 'clock'), ('rejected', 'thumbs-down')] -%}
 <button type="button" class="btn btn-outline-secondary{{ ' active' if _d.state == _state }}" data-decision="{{ _state }}" aria-pressed="{{ 'true' if _d.state == _state else 'false' }}">{{ icon(_symbol) }}<span{% if not show_text %} class="visually-hidden"{% endif %}>{{ ' ' if show_text }}{{ t('owner_decision_' ~ _state) }}</span></button>
 {%- endfor -%}

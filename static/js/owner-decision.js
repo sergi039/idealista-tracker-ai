@@ -175,7 +175,7 @@
     async function post(control, wanted) {
         let response;
         try {
-            response = await window.csrfFetch(urlFor(control.dataset.propertyId), {
+            response = await window.csrfFetch(urlFor(control.dataset.ownerDecisionId), {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({decision: wanted}),
@@ -200,7 +200,7 @@
     // One read of the stored decision; undefined when it cannot be had.
     async function readStored(control) {
         try {
-            const response = await window.csrfFetch(urlFor(control.dataset.propertyId), {
+            const response = await window.csrfFetch(urlFor(control.dataset.ownerDecisionId), {
                 method: 'GET',
                 signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
             });
