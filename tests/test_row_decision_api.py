@@ -183,6 +183,38 @@ class TestTheEndpoint:
         assert "secret" not in response.get_data(as_text=True)
 
 
+class TestReadingTheStoredDecision:
+    """GET is how the row reconciles after a write that got no answer."""
+
+    @pytest.mark.parametrize(
+        "stored,expected",
+        [
+            (None, "undecided"),
+            ("interested", "interested"),
+            ("waiting", "waiting"),
+            ("rejected", "rejected"),
+        ],
+    )
+    def test_it_reports_the_stored_state(self, app, client, profile, stored, expected):
+        row = _prop(profile, f"get-{stored}", owner_verdict=stored)
+        response = client.get(f"/api/property/{row.id}/review")
+        assert response.status_code == 200
+        assert response.get_json() == {"success": True, "state": expected}
+
+    def test_an_unknown_id_is_a_404(self, app, client):
+        assert client.get("/api/property/999999/review").status_code == 404
+
+    def test_it_writes_nothing(self, app, client, profile):
+        row = _prop(profile, "get-readonly")
+        owner_review.set_review(row, decision="waiting", reason="r")
+        before = _verdict_events(row.id)
+        client.get(f"/api/property/{row.id}/review")
+        db.session.expire_all()
+        stored = db.session.get(Property, row.id)
+        assert (stored.owner_verdict, stored.owner_verdict_reason) == ("waiting", "r")
+        assert _verdict_events(row.id) == before == 1
+
+
 class TestCsrf:
     def test_a_post_without_a_token_is_refused_and_writes_nothing(self):
         application = _make_app(csrf=True)

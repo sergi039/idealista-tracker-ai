@@ -162,6 +162,7 @@
 .owner-decision-buttons .owner-decision-undo { padding-inline: var(--ui-space-1); }
 .card-footer .owner-decision-buttons { justify-content: flex-start; margin-bottom: 0; }
 .owner-decided { opacity: 0.8; }
+.owner-decision-unconfirmed { color: var(--ui-warning); font-size: 0.75rem; }
 .workspace-owner-actions { display: flex; justify-content: flex-end; gap: var(--ui-space-2); margin-bottom: var(--ui-space-2); }
 .workspace-owner-actions .btn { font-size: 0.75rem; }
 .property-favorite-btn { width: var(--ui-control-height); min-height: var(--ui-control-height); flex-shrink: 0; }

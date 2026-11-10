@@ -2545,6 +2545,20 @@ def set_recommendation_vote(property_id):
     return jsonify(state)
 
 
+@api_bp.route("/property/<int:property_id>/review", methods=["GET"])
+@limiter.limit("60 per minute")
+def get_property_review(property_id):
+    """Read the stored decision, for a client whose write got no answer (#630).
+
+    A timed-out POST is uncertain, not failed: the row's script asks here what
+    the server holds before it says anything. Read-only -- no lock, no event.
+    """
+    from models import Property
+
+    prop = db.get_or_404(Property, property_id)
+    return jsonify(success=True, state=owner_review.read_decision(prop)["state"])
+
+
 @api_bp.route("/property/<int:property_id>/review", methods=["POST"])
 @limiter.limit("60 per minute")
 def set_property_review(property_id):

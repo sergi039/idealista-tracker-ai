@@ -46,6 +46,9 @@ ALLOWED: Dict[str, Tuple[str, ...]] = {
         "set TEST_DATABASE_URL_POSTGRES to a throwaway PostgreSQL server",
     ),
     "tests/test_inflight_marker.py": ("no /proc here",),
+    # The row-decision script's pure logic runs under node, which CI does not
+    # provision (tests/js_harness.py); skipped only when node is missing.
+    "tests/test_owner_decision_logic.py": ("node executable not found",),
     # The escape hatch of the network guard (#307/#308). Deliberate, and
     # indistinguishable from an accidental one by its text -- see the module
     # docstring above and tests/test_network_guard_is_installed.py.

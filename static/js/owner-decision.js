@@ -6,12 +6,69 @@
 // survive a fast click on a listing link. Undo is therefore a second write of
 // the previous decision (null when the row was undecided).
 (() => {
+    const STATES = ['interested', 'waiting', 'rejected'];
+    const REQUEST_TIMEOUT_MS = 12000;
+    const QUEUE_FILTER = 'undecided';
+
+    // `undecided` on the wire and null in the DOM are the same fact.
+    const normalize = (state) => (STATES.includes(state) ? state : null);
+
+    // --- pure decisions (no DOM; exercised under node by
+    // tests/test_owner_decision_logic.py) ---------------------------------
+
+    // What a row shows after a write.
+    //   outcome 'ok'          the POST answered 2xx; serverState is its state
+    //   outcome 'http_error'  a definite 4xx/5xx: the write did not happen
+    //   outcome 'uncertain'   timeout / network error / unreadable answer: the
+    //                         write may or may not have committed, so the
+    //                         caller read the server (serverState) or could not
+    //                         (serverState === undefined)
+    // kind: 'saved' | 'failed' | 'not_saved' | 'unconfirmed'. `unconfirmed`
+    // carries no state: it is NOT undecided and must not be drawn as such.
+    function settleAfterWrite(outcome, previous, serverState, wanted) {
+        if (outcome === 'http_error') {
+            return {kind: 'failed', state: normalize(previous)};
+        }
+        if (outcome === 'ok') {
+            return {kind: 'saved', state: normalize(serverState)};
+        }
+        if (serverState === undefined) {
+            return {kind: 'unconfirmed', state: undefined};
+        }
+        const state = normalize(serverState);
+        return {kind: state === normalize(wanted) ? 'saved' : 'not_saved', state};
+    }
+
+    // Where "next" should point. Under verdict=undecided the page is a queue:
+    // a row that went from undecided to decided leaves it, so every later row
+    // shifts up and the server-rendered "next" (page N+1 of the OLD queue)
+    // would skip rows; the unseen rows now begin on the current page. Only
+    // that move counts. A row already decided at load that is changed leaves
+    // the queue unchanged, and one that is CLEARED joins the queue at its
+    // sorted place, which can only push later rows down by one: "next" then
+    // repeats a row at worst, it never skips one, so it is left alone. With no
+    // such row (all undone) the original link is exactly right again.
+    function nextLinkTarget(originalHref, currentHref, movedOutCount) {
+        return movedOutCount > 0 ? currentHref : originalHref;
+    }
+
+    // Did this row's membership of the undecided queue change since load?
+    function leftTheQueue(initialState, state) {
+        return normalize(initialState) === null && normalize(state) !== null;
+    }
+
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = {settleAfterWrite, nextLinkTarget, leftTheQueue};
+    }
+    if (typeof document === 'undefined') return;
+
+    // --- DOM -------------------------------------------------------------
+
     const config = document.getElementById('owner-decision-config');
     if (!config) return;
 
-    const STATES = ['interested', 'waiting', 'rejected'];
-    const REQUEST_TIMEOUT_MS = 12000;
-    const DEFAULT_STATE_EXPR = 'undecided';
+    const initialStates = new Map(); // control -> state at load
+    const movedOut = new Set(); // controls that left the undecided queue
 
     const urlFor = (id) => config.dataset.urlTemplate.replace('/0/', `/${encodeURIComponent(id)}/`);
 
@@ -46,76 +103,139 @@
         return undo;
     }
 
+    function warning(control) {
+        let note = control.querySelector('[data-owner-decision-unconfirmed]');
+        if (!note) {
+            note = document.createElement('span');
+            note.className = 'owner-decision-unconfirmed';
+            note.setAttribute('data-owner-decision-unconfirmed', '');
+            note.hidden = true;
+            note.textContent = config.dataset.unconfirmed || '';
+            control.appendChild(note);
+        }
+        return note;
+    }
+
+    // While a write is in flight or unconfirmed nothing else may be sent for
+    // the row: two writes would race.
+    function setLocked(control, locked) {
+        for (const element of control.querySelectorAll('button')) {
+            element.disabled = locked;
+            if (locked) element.setAttribute('aria-disabled', 'true');
+            else element.removeAttribute('aria-disabled');
+        }
+        control.dataset.busy = locked ? '1' : '0';
+        if (locked) control.setAttribute('aria-busy', 'true');
+        else control.removeAttribute('aria-busy');
+    }
+
     // Draws a state on the row. Pure presentation: no counts are touched and
-    // nothing reloads; the owner's list stays where it is.
+    // nothing reloads. `undefined` is "unknown": nothing pressed, not decided.
     function draw(control, state) {
+        const unknown = state === undefined;
         for (const button of control.querySelectorAll('[data-decision]')) {
-            const pressed = button.dataset.decision === state;
+            const pressed = !unknown && button.dataset.decision === state;
             button.setAttribute('aria-pressed', String(pressed));
             button.classList.toggle('active', pressed);
         }
+        warning(control).hidden = !unknown;
         const row = control.closest('.property-row, .listing-anchor');
         if (!row) return;
-        row.classList.toggle('owner-decided', state !== null);
+        row.classList.toggle('owner-decided', !unknown && state !== null);
         // The server-rendered badge describes the state at load time; once
         // the owner has pressed anything it can only be stale.
         for (const badge of row.querySelectorAll('[data-owner-badge]')) badge.hidden = true;
-        for (const note of row.querySelectorAll('[data-owner-undecided]')) note.hidden = state !== null;
+        for (const note of row.querySelectorAll('[data-owner-undecided]')) note.hidden = unknown || state !== null;
     }
 
-    // Under `verdict=undecided` the page is a queue: deciding a row removes it
-    // from the result set, so every later row shifts up by the rows just
-    // decided. The server-rendered "next" link still points at page N+1 of the
-    // old queue and would skip those rows; the page the owner is on is where
-    // the unseen rows now begin.
-    function repairNextLink() {
-        if (new URLSearchParams(window.location.search).get('verdict') !== DEFAULT_STATE_EXPR) return;
+    function syncNextLink() {
+        if (new URLSearchParams(window.location.search).get('verdict') !== QUEUE_FILTER) return;
         for (const link of document.querySelectorAll('a[rel="next"]')) {
-            link.setAttribute('href', window.location.href);
+            // Remembered once, from the server-rendered link.
+            if (!link.dataset.ownerOriginalHref) link.dataset.ownerOriginalHref = link.getAttribute('href') || '';
+            link.setAttribute('href', nextLinkTarget(link.dataset.ownerOriginalHref, window.location.href, movedOut.size));
         }
     }
 
-    async function write(control, wanted) {
-        const response = await window.csrfFetch(urlFor(control.dataset.propertyId), {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({decision: wanted}),
-            keepalive: true,
-            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-        });
-        if (!response.ok) throw new Error('Decision request failed');
-        const result = await response.json();
-        if (!result || result.success !== true) throw new Error('Decision was not saved');
-        return result;
+    function recordMembership(control, state) {
+        if (leftTheQueue(initialStates.get(control), state)) movedOut.add(control);
+        else movedOut.delete(control);
+        syncNextLink();
+    }
+
+    // Resolves {outcome, state}; never rejects. A response that arrived with an
+    // error status is definite; no response at all is not.
+    async function post(control, wanted) {
+        let response;
+        try {
+            response = await window.csrfFetch(urlFor(control.dataset.propertyId), {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({decision: wanted}),
+                keepalive: true,
+                signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+            });
+        } catch {
+            return {outcome: 'uncertain'};
+        }
+        if (!response.ok) return {outcome: 'http_error'};
+        try {
+            const result = await response.json();
+            if (result && result.success === true) {
+                return {outcome: 'ok', state: result.state, changed: result.changed === true};
+            }
+        } catch {
+            // fall through: a 2xx we could not read says nothing reliable.
+        }
+        return {outcome: 'uncertain'};
+    }
+
+    // One read of the stored decision; undefined when it cannot be had.
+    async function readStored(control) {
+        try {
+            const response = await window.csrfFetch(urlFor(control.dataset.propertyId), {
+                method: 'GET',
+                signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+            });
+            if (!response.ok) return undefined;
+            const result = await response.json();
+            return result && result.success === true ? normalize(result.state) : undefined;
+        } catch {
+            return undefined;
+        }
     }
 
     async function decide(control, wanted, isUndo) {
         if (control.dataset.busy === '1') return;
+        if (!initialStates.has(control)) initialStates.set(control, currentState(control));
         const previous = currentState(control);
         const undo = undoButton(control);
-        control.dataset.busy = '1';
-        control.setAttribute('aria-busy', 'true');
-        draw(control, wanted);
         undo.hidden = true;
-        try {
-            const result = await write(control, wanted);
-            const saved = STATES.includes(result.state) ? result.state : null;
-            draw(control, saved);
-            announce(control, saved
-                ? (config.dataset.saved || '%s').replace('%s', labelFor(control, saved))
+        draw(control, wanted);
+        setLocked(control, true);
+        let attempt = await post(control, wanted);
+        let stored = attempt.state;
+        if (attempt.outcome === 'uncertain') stored = await readStored(control);
+        const settled = settleAfterWrite(attempt.outcome, previous, stored, wanted);
+        draw(control, settled.state);
+        if (settled.kind === 'unconfirmed') {
+            // Stay locked: whatever the row would say next could be wrong.
+            announce(control, config.dataset.unconfirmed || '');
+            return;
+        }
+        recordMembership(control, settled.state);
+        if (settled.kind === 'saved') {
+            announce(control, settled.state
+                ? (config.dataset.saved || '%s').replace('%s', labelFor(control, settled.state))
                 : config.dataset.cleared || '');
-            if (!isUndo && result.changed) {
+            if (!isUndo && settled.state !== previous) {
                 undo.dataset.restore = previous === null ? '' : previous;
                 undo.hidden = false;
             }
-            if (result.changed) repairNextLink();
-        } catch {
-            draw(control, previous);
+        } else {
             announce(control, config.dataset.error || '');
-        } finally {
-            control.dataset.busy = '0';
-            control.removeAttribute('aria-busy');
         }
+        setLocked(control, false);
     }
 
     document.addEventListener('click', (event) => {
