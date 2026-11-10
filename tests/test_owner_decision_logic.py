@@ -28,11 +28,14 @@ def test_a_timed_out_write_that_committed_reads_as_saved(tmp_path):
     assert result == {"kind": "saved", "state": "interested"}
 
 
-def test_a_timed_out_write_that_did_not_commit_reads_as_not_saved(tmp_path):
+def test_a_timed_out_write_the_server_does_not_show_yet_is_unconfirmed(tmp_path):
+    """The read may have run before the write committed: the old state on
+    the server does not prove the write failed."""
     result = _run(
         "m.settleAfterWrite('uncertain', null, 'undecided', 'waiting')", tmp_path
     )
-    assert result == {"kind": "not_saved", "state": None}
+    assert result["kind"] == "unconfirmed"
+    assert "state" not in result or result["state"] is None
 
 
 def test_an_unreadable_server_is_unconfirmed_and_never_undecided(tmp_path):

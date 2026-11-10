@@ -23,7 +23,7 @@
     //                         write may or may not have committed, so the
     //                         caller read the server (serverState) or could not
     //                         (serverState === undefined)
-    // kind: 'saved' | 'failed' | 'not_saved' | 'unconfirmed'. `unconfirmed`
+    // kind: 'saved' | 'failed' | 'unconfirmed'. `unconfirmed`
     // carries no state: it is NOT undecided and must not be drawn as such.
     function settleAfterWrite(outcome, previous, serverState, wanted) {
         if (outcome === 'http_error') {
@@ -35,8 +35,15 @@
         if (serverState === undefined) {
             return {kind: 'unconfirmed', state: undefined};
         }
+        // The server showing the wanted decision proves the write landed.
+        // The server showing anything else proves nothing: the write may
+        // still be waiting on the row lock and commit a moment after this
+        // read. So that case is unconfirmed too, never "not saved".
         const state = normalize(serverState);
-        return {kind: state === normalize(wanted) ? 'saved' : 'not_saved', state};
+        if (state === normalize(wanted)) {
+            return {kind: 'saved', state};
+        }
+        return {kind: 'unconfirmed', state: undefined};
     }
 
     // Where "next" should point. Under verdict=undecided the page is a queue:
