@@ -27,6 +27,7 @@
     --ui-radius-panel: 0.625rem;
     --ui-control-height: 2.5rem;
     --ui-nav-width: 13rem;
+    --ui-anchor-offset: 4.5rem;
 }
 
 [data-bs-theme="dark"] {
