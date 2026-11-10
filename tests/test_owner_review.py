@@ -556,3 +556,62 @@ class TestTheLogIsNotEditableAsANote:
         db.session.add(note)
         db.session.commit()
         assert note.snapshot is None
+
+
+class TestKeepReason:
+    """`keep_reason` is `keep_action` for the sentence the owner typed (#630)."""
+
+    def test_a_decision_without_keep_reason_still_replaces_the_reason(
+        self, app, profile
+    ):
+        row = _prop(profile, "reason-default")
+        owner_review.set_review(row, decision="waiting", reason="typed on the page")
+        owner_review.set_review(row, decision="rejected")
+        assert row.owner_verdict_reason is None
+
+    def test_keep_reason_survives_decide_and_clear(self, app, profile):
+        row = _prop(profile, "reason-kept")
+        owner_review.set_review(row, decision="waiting", reason="typed on the page")
+        owner_review.set_review(row, decision="rejected", keep_reason=True)
+        assert row.owner_verdict == "rejected"
+        assert row.owner_verdict_reason == "typed on the page"
+        owner_review.set_review(row, decision=None, keep_reason=True)
+        assert row.owner_verdict is None
+        assert row.owner_verdict_reason == "typed on the page"
+
+    def test_keep_reason_ignores_what_the_caller_passed(self, app, profile):
+        row = _prop(profile, "reason-stale")
+        owner_review.set_review(row, decision="waiting", reason="current")
+        owner_review.set_review(
+            row, decision="interested", reason="stale snapshot", keep_reason=True
+        )
+        assert row.owner_verdict_reason == "current"
+
+    def test_keep_action_and_keep_reason_together_change_only_the_decision(
+        self, app, profile
+    ):
+        row = _prop(profile, "both-kept")
+        owner_review.set_review(
+            row,
+            decision="waiting",
+            reason="why",
+            action="call",
+            due_on=date(2026, 9, 20),
+        )
+        result = owner_review.set_review(
+            row, decision="interested", keep_action=True, keep_reason=True
+        )
+        assert result["changed"] is True
+        assert (row.next_action, row.next_action_due_on) == ("call", date(2026, 9, 20))
+        assert row.owner_verdict_reason == "why"
+        events = PropertyActivity.query.filter_by(kind="verdict").all()
+        assert len(events) == 2
+
+    def test_a_repeat_with_keep_flags_records_nothing(self, app, profile):
+        row = _prop(profile, "repeat")
+        owner_review.set_review(row, decision="rejected", reason="r")
+        result = owner_review.set_review(
+            row, decision="rejected", keep_action=True, keep_reason=True
+        )
+        assert result["changed"] is False
+        assert PropertyActivity.query.filter_by(kind="verdict").count() == 1

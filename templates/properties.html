@@ -297,11 +297,27 @@
    "interested; call the architect on Friday". It needs the page's one date --
    never its own, or this badge and the filter that selected the row would
    disagree at midnight. #}
+{# The three-button decision control in a list row (#630). Markup only: the
+   endpoint and every sentence live once on #owner-decision-config, and
+   static/js/owner-decision.js handles the presses by delegation. The pressed
+   button is the stored decision (`owner_decision_for`, the one reading), so a
+   reload and a press agree. Labels are icon plus text; `show_text` makes the
+   text visible where there is room (the card), otherwise it is read by
+   assistive technology only. #}
+{% macro owner_decision_buttons(p, show_text=False) -%}
+{%- set _d = owner_decision_for(p) -%}
+<div class="owner-decision-buttons" data-owner-decision data-property-id="{{ p.id }}"><div class="btn-group btn-group-sm" role="group" aria-label="{{ t('owner_decision_group') }} · {{ p.title or p.id }}">
+{%- for _state, _symbol in [('interested', 'thumbs-up'), ('waiting', 'clock'), ('rejected', 'thumbs-down')] -%}
+<button type="button" class="btn btn-outline-secondary{{ ' active' if _d.state == _state }}" data-decision="{{ _state }}" aria-pressed="{{ 'true' if _d.state == _state else 'false' }}">{{ icon(_symbol) }}<span{% if not show_text %} class="visually-hidden"{% endif %}>{{ ' ' if show_text }}{{ t('owner_decision_' ~ _state) }}</span></button>
+{%- endfor -%}
+</div><span class="visually-hidden" role="status" data-owner-decision-status></span></div>
+{%- endmacro %}
+
 {% macro owner_review_badges(p, review_today) -%}
     {% set _d = owner_decision_for(p) %}
     {% set _classes = {'interested': 'success', 'waiting': 'warning', 'rejected': 'danger'} %}
     {% if _d.decided %}
-        <span class="badge bg-{{ _classes.get(_d.state, 'secondary') }} fw-normal"
+        <span class="badge bg-{{ _classes.get(_d.state, 'secondary') }} fw-normal" data-owner-badge
               {% if _d.reason %}title="{{ _d.reason }}"{% endif %}>
             {{ t(owner_decision_label_key(_d.state)) }}
         </span>
@@ -1600,6 +1616,15 @@
 
         <!-- Properties Display -->
         {% if properties %}
+            {# One copy of the endpoint and the sentences for every row's
+               decision buttons: repeating them per row would add them to a
+               page that is already large. #}
+            <div id="owner-decision-config" hidden
+                 data-url-template="{{ url_for('api.set_property_review', property_id=0) }}"
+                 data-undo="{{ t('owner_decision_undo') }}"
+                 data-saved="{{ t('owner_decision_saved') }}"
+                 data-cleared="{{ t('owner_decision_cleared') }}"
+                 data-error="{{ t('owner_decision_error') }}"></div>
             {% if view_type == 'list' %}
             <!-- List View (Table) -->
             <div id="properties-list-view" class="view-container">
@@ -1614,7 +1639,7 @@
     <th class="col-actions" scope="col">{{ t('workspace_decision') }}</th>
 </tr></thead><tbody>
                                     {% for p in properties %}
-                                        <tr id="listing-{{ p.id }}" class="property-row {% if p.listing_status in ('removed', 'sold') %}listing-inactive{% endif %}"
+                                        <tr id="listing-{{ p.id }}" class="property-row {% if p.listing_status in ('removed', 'sold') %}listing-inactive{% endif %}{% if owner_decision_for(p).decided %} owner-decided{% endif %}"
                                             data-listing-status="{{ listing_verdict_for(p).state }}">
                                             <td class="lands-title-col col-title">
     {% set _row_photos = photos_for(p) %}
@@ -1807,9 +1832,10 @@
                                                        style="font-size: 1.1rem; cursor: pointer;"></i>
                                                 </button><a class="btn btn-outline-secondary" href="{{ url_for('main.property_detail', property_id=p.id) }}">{{ t('workspace_open') }}</a></div>
     {{ recommendation_vote(p, active_mode == 'recommendation') }}
+    {{ owner_decision_buttons(p) }}
     {% set _decision = owner_decision_for(p) %}
     {{ owner_review_badges(p, review_today) }}
-    {% if not _decision.decided %}<span>{{ t('workspace_not_decided') }}</span>{% endif %}
+    <span data-owner-undecided{{ ' hidden' if _decision.decided }}>{{ t('workspace_not_decided') }}</span>
     {% set _action = owner_action_for(p, review_today) %}
     {% if _action.state != 'none' %}<div class="mt-2">{{ _action.action }}{% if _action.due_on %}<br>{{ _action.due_on.strftime('%d %b %Y') }}{% endif %}</div>{% endif %}
 </div></td>
@@ -1829,7 +1855,7 @@
                     {# Two per row from the tablet breakpoint up: the container
                        is no longer capped at 720px there, and one card spanning
                        the whole width just stretches the same content. #}
-                    <div id="listing-{{ p.id }}" class="col-md-6 col-xl-4 mb-4 listing-anchor" data-recommendation-card data-listing-status="{{ listing_verdict_for(p).state }}">
+                    <div id="listing-{{ p.id }}" class="col-md-6 col-xl-4 mb-4 listing-anchor{% if owner_decision_for(p).decided %} owner-decided{% endif %}" data-recommendation-card data-listing-status="{{ listing_verdict_for(p).state }}">
                         <div class="card h-100 property-card {% if p.listing_status in ('removed', 'sold') %}listing-inactive-card{% endif %}"
                              data-property-id="{{ p.id }}" style="overflow: hidden;">
                             {% set _card_photos = photos_for(p) %}
@@ -1999,7 +2025,8 @@
                             </div>
 
                             <!-- Card Footer with Actions -->
-                            <div class="card-footer d-flex justify-content-between align-items-center">
+                            <div class="card-footer d-flex flex-wrap justify-content-between align-items-center gap-2">
+                                <div class="w-100">{{ owner_decision_buttons(p, true) }}</div>
                                 <div class="d-flex gap-2">
                                     {% if p.location_lat is not none and p.location_lon is not none %}
                                         {# Same as the table view: `focus` alone is not enough,
@@ -2164,6 +2191,7 @@
 
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/recommendation-vote.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/owner-decision.js') }}" defer></script>
 <script>
     // Subscription menu (issue #104). Progressive enhancement only: the
     // server reads the ticked checkboxes on its own, so with JavaScript off
