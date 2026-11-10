@@ -312,6 +312,111 @@ def extract_area_m2(text: str) -> Optional[float]:
     return candidates[0][2]
 
 
+# --- The area a listing's own card states (issue #645) ---------------------
+#
+# An alert e-mail's SUBJECT carries the owner's saved-search NAME ("... Rias
+# Bajas costa - 350k - 150m2!"), so `extract_area_m2(subject)` returned the
+# search's filter, and 109 stored rows read 150 m2 whatever the card said. The
+# body-wide `extract_area_m2` is no safer in principle: nothing shows the body
+# never echoes the search name or a "your search" summary. So the card is read
+# by its SHAPE -- the figure that follows the price block -- and a card that
+# states no area yields None, never a figure from elsewhere in the e-mail.
+#
+# Shape (stored descriptions: "320.000 € 1.013 €/m² 4 hab. 316 m²",
+# "99,000 € 309 €/m² 5 bed. 320 m2"): one or two asking prices (a price change
+# states old and new), an optional unit price, up to three room/bath counts,
+# then the area.
+_CARD_COUNT = (
+    r"\d{1,2}\s*(?:hab\.?|habitaciones|dorm\.?|dormitorios|bed\.?|beds|"
+    r"bedrooms?|ba[ñn]os?|baths?\.?|bathrooms?)"
+)
+_CARD_PREFIX_RE = re.compile(
+    rf"(?:{_PRICE_AMOUNT}\s*){{1,2}}"
+    rf"(?:{_PRICE_NUMBER}\s*€\s*/\s*m[²2]\s*)?"
+    rf"(?:{_CARD_COUNT}\s*){{0,3}}",
+    re.IGNORECASE,
+)
+_CARD_AREA_RE = re.compile(rf"{_AREA_NUMBER}\s*m[²2]", re.IGNORECASE)
+_LISTING_LINK_RE = re.compile(r"/inmueble/(\d+)", re.IGNORECASE)
+
+
+def _card_scope(text: str, idealista_property_id: Optional[int]) -> str:
+    """The part of an e-mail that belongs to one listing.
+
+    With a single listing (or no id) that is the whole text. With several,
+    it runs from the listing's own link to the first link of another listing,
+    so a card with no area can never borrow the next card's figure.
+    """
+    if idealista_property_id is None:
+        return text
+    links = [(m.start(), m.group(1)) for m in _LISTING_LINK_RE.finditer(text)]
+    own = str(idealista_property_id)
+    if not any(i != own for _, i in links):
+        return text
+    starts = [pos for pos, i in links if i == own]
+    if not starts:
+        return ""
+    start = starts[0]
+    end = next((pos for pos, i in links if pos > start and i != own), len(text))
+    tag = text.rfind("<", 0, start)
+    return text[tag if tag >= 0 else start : end]
+
+
+def extract_card_areas_m2(
+    text: str, idealista_property_id: Optional[int] = None
+) -> List[float]:
+    """Every area a listing card states, in reading order (usually one).
+
+    The single home of the card reading: ingestion calls it on the e-mail body,
+    `utils/repair_area_from_subject.py` on the stored description.
+    """
+    if not text:
+        return []
+    plain = _strip_html(_card_scope(text, idealista_property_id))
+    found: List[float] = []
+    pos = 0
+    while True:
+        prefix = _CARD_PREFIX_RE.search(plain, pos)
+        if prefix is None:
+            break
+        area = _CARD_AREA_RE.match(plain, prefix.end())
+        if area is not None:
+            parsed = _parse_number_groups(area.groups())
+            if parsed is not None and parsed > _AREA_SANITY_FLOOR:
+                found.append(parsed)
+            pos = area.end()
+        else:
+            pos = max(prefix.end(), prefix.start() + 1)
+    return found
+
+
+def extract_card_area_m2(
+    text: str, idealista_property_id: Optional[int] = None
+) -> Optional[float]:
+    """The first area the listing card states, or None when it states none."""
+    areas = extract_card_areas_m2(text, idealista_property_id)
+    return areas[0] if areas else None
+
+
+def extract_area_figures_m2(text: str) -> List[float]:
+    """Every m2 figure anywhere in a text (a search name, a subject).
+
+    Not a reading of a listing: it only answers "does this text contain that
+    number as an area", which is how the #645 repair recognises a stored area
+    that was copied from an e-mail subject.
+    """
+    if not text:
+        return []
+    plain = _strip_html(text)
+    figures: set = set()
+    for pattern in _AREA_PATTERNS:
+        for m in re.finditer(pattern, plain, re.IGNORECASE):
+            parsed = _parse_number_groups(m.groups())
+            if parsed is not None and parsed > _AREA_SANITY_FLOOR:
+                figures.add(parsed)
+    return sorted(figures)
+
+
 def _strip_html(value: str) -> str:
     """Best-effort HTML-to-text for small snippets."""
     if not value:

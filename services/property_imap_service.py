@@ -37,7 +37,7 @@ from utils.uid_cursor import (
     write_uid_file,
 )
 from utils.idealista_extractors import (
-    extract_area_m2,
+    extract_card_area_m2,
     extract_idealista_property_id,
     extract_listing_title,
     extract_municipality_from_title,
@@ -830,12 +830,19 @@ class PropertyIMAPService:
                         if is_price_change:
                             old_price_hint, new_price_hint = extract_price_change(body)
 
+                        # The subject carries the owner's saved-search NAME
+                        # ("... costa - 350k - 150m2!"), not this listing's
+                        # facts, so the body is read first for the price and
+                        # the area comes from the listing's own card only
+                        # (#645). A card that states none leaves it None.
                         price = (
                             new_price_hint
-                            or extract_price(subject)
                             or extract_price(body)
+                            or extract_price(subject)
                         )
-                        area = extract_area_m2(subject) or extract_area_m2(body)
+                        area = extract_card_area_m2(
+                            body, idealista_property_id=idealista_id
+                        )
                         attrs = extract_property_attributes(
                             body
                         ) or extract_property_attributes(subject)
