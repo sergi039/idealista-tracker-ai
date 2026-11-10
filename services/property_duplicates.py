@@ -516,7 +516,10 @@ class _Union:
             return True
         if not self._allowed(a, b):
             return False
-        keep, drop = min(a, b), max(a, b)
+        # The larger member set is kept, so a long chain copies each member a
+        # logarithmic number of times rather than once per join; the lower id
+        # breaks a tie, which keeps the result independent of input order.
+        keep, drop = sorted((a, b), key=lambda r: (-len(self.members[r]), r))
         self.parent[drop] = keep
         self.members[keep] |= self.members.pop(drop)
         self.refs[keep] |= self.refs.pop(drop)
