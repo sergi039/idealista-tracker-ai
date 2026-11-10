@@ -80,20 +80,53 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
+# A clause needs at least this many letters (any script) to be a preference;
+# anything with fewer is punctuation or a number, not owner wording ("за 300"
+# is the shortest real one).  A lone unspaced token must carry more, because a
+# stray piece of an address or domain (``com)``) is not a sentence.
+MIN_CLAUSE_LETTERS = 2
+MIN_LONE_TOKEN_LETTERS = 4
+
+# A full stop, "!" or "?" ends a clause only at the end of a word: followed by
+# whitespace or the end of the text (optionally after closing brackets or
+# quotes).  Inside a token (``a.b``, ``1.5``, ``08.11.2026``, ``x@y.com``,
+# ``https://x.y/z``) it is part of the token.  A semicolon always ends one.
+_BOUNDARY = re.compile(r"""[.!?]+[)\]»"']*(?=\s|$)|;""")
+
+
+def is_meaningful_clause(text: object) -> bool:
+    """Whether ``text`` carries enough letters to be a preference at all."""
+    if not isinstance(text, str):
+        return False
+    letters = sum(1 for char in text if char.isalpha())
+    if letters < MIN_CLAUSE_LETTERS:
+        return False
+    return len(text.split()) > 1 or letters >= MIN_LONE_TOKEN_LETTERS
+
+
 def _segments(reason: str) -> list[tuple[str, bool]]:
+    """The one clause splitter: ``(clause, ended_by_semicolon)`` pairs.
+
+    Commas stay because dossier clauses commonly carry one fact plus its
+    qualification.  Pieces that are not meaningful clauses are dropped.
+    """
     text = re.sub(r"\s+", " ", reason).strip()
     if not text:
         return []
-    # Semicolon and sentence boundaries are significant; commas stay because
-    # dossier clauses commonly carry one fact plus its qualification.
+    pieces: list[tuple[str, bool]] = []
+    start = 0
+    for match in _BOUNDARY.finditer(text):
+        pieces.append((text[start : match.start()], match.group() == ";"))
+        start = match.end()
+    pieces.append((text[start:], False))
     parts: list[tuple[str, bool]] = []
-    for match in re.finditer(r"([^.!?;]+)([.!?;]?)", text):
-        part = match.group(1).strip(" -")
-        if part:
-            # A heading can carry over a list separated with a semicolon, but
-            # it must not turn a later sentence's factual observation into a
-            # preference.
-            parts.append((part, match.group(2) == ";"))
+    for raw, semicolon in pieces:
+        part = raw.strip(" -")
+        # A heading can carry over a list separated with a semicolon, but
+        # it must not turn a later sentence's factual observation into a
+        # preference.
+        if is_meaningful_clause(part):
+            parts.append((part, semicolon))
     return parts
 
 
