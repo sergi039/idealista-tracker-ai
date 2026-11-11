@@ -371,11 +371,7 @@ def _recommendation_selection(
         for property_id, reading in context.readings.items()
         if property_id not in excluded_ids
         and reading["state"] not in {"reference", "rejected"}
-        and (
-            reading.get("needs_review")
-            if review
-            else reading["state"] == "candidate" and reading.get("group") == "confident"
-        )
+        and (reading.get("needs_review") if review else reading.get("recommended"))
     }
     duplicate_ids = recommendation_duplicates.duplicate_ids(
         rows,
@@ -5155,15 +5151,20 @@ def map_view():
         if recommendation_map:
             profile_data = taste_service.load_current_profile()
             profile_summary = taste_service.recommendation_profile_state(profile_data)
+            # The selection reads similarity, so the map needs the list's
+            # reading or it would draw a different collection.
+            similarity_ctx = favorite_similarity.build_context(
+                profile_ids=_similarity_scope(profile_selection)
+            )
             query, _, _ = _recommendation_selection(
-                query, profile_data, profile_summary, None, focus_id=focus_id
+                query, profile_data, profile_summary, similarity_ctx, focus_id=focus_id
             )
             if focus_property is not None:
                 query_without_profile, _, _ = _recommendation_selection(
                     query_without_profile.filter(Property.id == focus_id),
                     profile_data,
                     profile_summary,
-                    None,
+                    similarity_ctx,
                 )
         # One pin per group (#633): the same fold as the list over the map's
         # own selection (located, live rows), with the same two parameters. A

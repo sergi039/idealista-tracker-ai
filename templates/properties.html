@@ -191,13 +191,15 @@
                 {% elif state == 'candidate' %}
                     {% if reading.get('eligibility') == 'excluded' %}
                         <span class="badge text-bg-danger">{{ t('recommendation_excluded') }}</span>
-                    {% elif reading.get('group') == 'confident' %}
+                    {% elif reading.get('recommended') %}
                         <span class="badge text-bg-success">{{ t('recommendation_confirmed') }}</span>
                     {% elif reading.get('needs_review') %}
                         <span class="badge text-bg-warning">{{ t('recommendation_review') }}</span>
                     {% else %}
                         <span class="badge text-bg-secondary">{{ t('recommendation_candidate') }}</span>
                     {% endif %}
+                {% elif state == 'stale' and reading.get('recommended') %}
+                    <span class="badge text-bg-success">{{ t('recommendation_confirmed') }}</span>
                 {% elif state == 'stale' %}
                     <span class="badge text-bg-warning">{{ t('recommendation_stale') }}</span>
                 {% elif state == 'no_profile' %}
