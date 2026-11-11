@@ -115,6 +115,7 @@
 .workspace-data-table .col-price { width: 16%; min-width: 0; }
 .workspace-data-table .col-score { width: 23%; min-width: 0; }
 .workspace-data-table .col-actions { width: 15%; min-width: 0; }
+.workspace-data-table th.col-actions { text-align: right; }
 .app-workspace .workspace-data-table > thead > tr > th { padding: var(--ui-space-3) var(--ui-space-4); border-bottom-width: 1px; text-transform: uppercase; }
 .app-workspace .workspace-data-table > tbody > tr > td { padding: var(--ui-space-3) var(--ui-space-3); vertical-align: top; background: var(--ui-surface); overflow-wrap: anywhere; font-size: 0.8125rem; }
 .workspace-property-summary { display: flex; gap: var(--ui-space-4); align-items: flex-start; }
@@ -152,6 +153,7 @@
 .app-workspace .workspace-data-table .recommendation-reference-line .text-bg-success { background: var(--ui-success-soft) !important; color: var(--ui-success) !important; }
 .workspace-data-table .recommendation-evidence .badge { font-size: 0.75rem; }
 .workspace-data-table .recommendation-details > summary { font-size: 0.75rem; }
+.recommendation-vote .btn { font-size: 0.75rem; padding-inline: var(--ui-space-2); }
 .workspace-secondary-scores { margin-top: 0; font-size: 0.75rem; }
 .workspace-secondary-scores .badge { font-size: 0.75rem !important; display: inline-flex !important; background: var(--ui-canvas) !important; color: var(--ui-muted) !important; }
 .workspace-owner-decision { text-align: right; font-size: 0.75rem; line-height: 1.5; color: var(--ui-muted); white-space: normal; overflow-wrap: anywhere; }

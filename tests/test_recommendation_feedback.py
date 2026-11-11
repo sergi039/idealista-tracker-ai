@@ -1062,3 +1062,24 @@ def test_card_votes_rerank_and_hide_without_a_taste_profile(scope):
     assert endpoint in client.get(review).text
     assert feedback.has_recorded_feedback(voted)
     assert TasteProfile.query.count() == 0
+
+
+def test_list_row_keeps_the_rating_with_the_reason_and_one_decision_control(scope):
+    app, profile, rows = scope
+    TasteProfile.query.delete()
+    db.session.commit()
+    voted = rows[0]
+    page = app.test_client().get(
+        f"/properties?profile_id={profile.id}&view_type=list&mode=recommendation"
+        "&recommendation_scope=review&remember=off"
+    )
+    assert page.status_code == 200
+    row = re.search(rf'<tr id="listing-{voted.id}".*?</tr>', page.text, re.S)[0]
+    reason, decision = row.split('<td class="col-actions">')
+    endpoint = f"/api/property/{voted.id}/recommendation-vote"
+
+    assert endpoint in reason
+    assert "fa-thumbs" not in reason
+    assert endpoint not in decision
+    assert decision.count("fa-thumbs-up") == 1
+    assert decision.count("fa-thumbs-down") == 1
