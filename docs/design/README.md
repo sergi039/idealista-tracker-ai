@@ -114,6 +114,8 @@ scores. No invented match probability.
 Four groups: object/photo/municipality and important facts; price/area; reason
 or existing assessment; owner decision and next action. Keep the real decision
 and action independent. No new persistence entity is introduced by layout.
+The recommendation rating belongs to the reason group and is labelled in words;
+the decision group has one set of decision buttons.
 
 Use compact rows by default: align price, assessment and actions to the top,
 give the object the largest column, and place the closed facts disclosure under

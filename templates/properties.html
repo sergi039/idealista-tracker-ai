@@ -123,7 +123,10 @@
 {% macro recommendation_vote(property, recommendation_mode) -%}
     {% set vote = card_vote_for(property) %}
     {% if vote and (recommendation_mode or vote.answer) %}
-        <div class="mt-2" data-recommendation-vote hidden
+        {# A ranking signal, not the purchase decision: it sits with the reason
+           and says what it does in words, so it cannot read as a second copy
+           of the decision buttons. #}
+        <div class="mt-2 recommendation-vote" data-recommendation-vote hidden
              data-url="{{ url_for('api.set_recommendation_vote', property_id=property.id) }}"
              data-revision="{{ vote.revision }}" data-answer="{{ vote.answer or '' }}"
              data-refresh="{{ 'yes' if recommendation_mode else 'no' }}"
@@ -133,11 +136,9 @@
              data-error="{{ t('recommendation_vote_error') }}">
             <div class="d-flex flex-wrap gap-1" role="group" aria-label="{{ t('recommendation_vote_label') }} · {{ property.title or property.id }}">
                 {% if recommendation_mode %}
-                    {% for answer, symbol in [('yes', 'thumbs-up'), ('no', 'thumbs-down')] %}
+                    {% for answer in ['yes', 'no'] %}
                         <button type="button" class="btn btn-sm btn-outline-secondary{{ ' active' if vote.answer == answer else '' }}" data-vote="{{ answer }}"
-                                aria-pressed="{{ 'true' if vote.answer == answer else 'false' }}"
-                                aria-label="{{ t('recommendation_vote_' ~ answer) }}"
-                                title="{{ t('recommendation_vote_' ~ answer) }}">{{ icon(symbol) }}</button>
+                                aria-pressed="{{ 'true' if vote.answer == answer else 'false' }}">{{ t('recommendation_vote_' ~ answer) }}</button>
                     {% endfor %}
                 {% else %}
                     <button type="button" class="btn btn-sm btn-outline-secondary" data-vote="">
@@ -1838,6 +1839,7 @@
                                                     {{ coverage_hint(p) }}
                                                 {% endif %}
                                                 </div>{% endif %}
+    {{ recommendation_vote(p, active_mode == 'recommendation') }}
     <details class="workspace-secondary-scores"><summary>{{ t('workspace_assessment') }}</summary>
         {% if active_mode == 'recommendation' %}<div>{{ t('score') }}: {{ score_badge(p.score_total|float if p.score_total is not none else none, '') }} {{ coverage_hint(p) }}</div>{% else %}{{ recommendation_reading(_recommendation) }}{% endif %}
 {# The taste score rides beside the score in EVERY
@@ -1876,7 +1878,6 @@
                                                     <i class="fas fa-star {{ 'text-warning' if p.is_favorite else 'text-muted' }}"
                                                        style="font-size: 1.1rem; cursor: pointer;"></i>
                                                 </button><a class="btn btn-outline-secondary" href="{{ url_for('main.property_detail', property_id=p.id) }}">{{ t('workspace_open') }}</a></div>
-    {{ recommendation_vote(p, active_mode == 'recommendation') }}
     {{ owner_decision_buttons(p) }}
     {% set _decision = owner_decision_for(p) %}
     {{ owner_review_badges(p, review_today) }}
