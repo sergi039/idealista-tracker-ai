@@ -148,7 +148,7 @@ available evidence are independent; a failed refresh can still have old data.
 | failed | Failed update; disclose whether previous evidence remains |
 | none | Honest starting state, not an endless spinner or fabricated ranking |
 
-Recommended shows confirmed matches with verified requirements. Needs verification keeps listings with incomplete evidence separate. Both use the applied filters and rank before pagination. Unapplied preferences disclose their original text, source listing and reason.
+Recommended shows listings with no known conflict that are verified or read at least 70 against a positive reference. Needs verification lists every listing with incomplete evidence, including recommended ones. Both use the applied filters and rank before pagination. Unapplied preferences disclose their original text, source listing and reason.
 Refresh recommendations and retrain taste remain separate existing POSTs with
 CSRF and explicit confirmation. No paid operation on GET, tab, sort or view
 change. Preserve `unknown` versus measured absence and stale versus current
