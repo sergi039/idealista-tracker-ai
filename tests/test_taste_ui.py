@@ -403,6 +403,7 @@ class TestRecommendationSurface:
                         "conflicts": [],
                         "needs_verification": [],
                         "group": "confident",
+                        "recommended": True,
                         "rank_value": 100.0 if item.id == candidate.id else 1.0,
                     }
                     for item in items
@@ -499,6 +500,7 @@ class TestRecommendationSurface:
                         "conflicts": [],
                         "needs_verification": [],
                         "group": "confident",
+                        "recommended": True,
                         "rank_value": 100.0 if item.id == candidate.id else 1.0,
                     }
                     for item in items

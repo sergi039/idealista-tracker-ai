@@ -156,9 +156,15 @@ applicable supported measurement can enforce an explicit hard conflict; a
 claim is potential evidence, an unknown asks for verification, and an unmapped
 clause stays visible. A confirmed hard violation is omitted only from the
 recommendation mode, with a disclosed count; the row remains available in the
-catalog. Recommended requires a current profile, a supported match and
-verified requirements. Incomplete readings belong to Needs verification. The
-profile disclosure lists each unapplied clause with its source and reason.
+catalog. Recommended (owner, 2026-11-11) holds a row with no known conflict
+that either has every requirement verified or reads at least
+`RECOMMENDED_MIN_SIMILARITY` (70) against a positive reference of its own
+subscription. Unknown facts do not block it and neither does a profile waiting
+for a refresh: measured on production that day, the older rule (a current
+profile and every fact verified) left 0 of 1913 housing rows, because no row
+had its plot outline measured. Needs verification still holds every incomplete
+reading, so a recommended row with unknown facts is listed there too. The list,
+the map and the export read the same similarity. The profile disclosure lists each unapplied clause with its source and reason.
 Numeric Similar and canonical photo-facet overlap are independent
 ranking channels. The composite nearest positive reference names the photo
 facets it shares without presenting exemplar resemblance as an explicit owner

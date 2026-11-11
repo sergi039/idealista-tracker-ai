@@ -6,6 +6,7 @@ and reranker outputs, including uncertainty and scope, rather than helpers.
 """
 
 import json
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -1958,3 +1959,96 @@ def test_disagreeing_areas_preserve_unanimous_bound_verdict(
         assert conflicts[0]["hard"] is False
     elif outcome is True:
         assert matches[0]["status"] == "claimed"
+
+
+def _similar_reading(reference_id, score, state="ok"):
+    return SimpleNamespace(
+        points={},
+        read=lambda _property_id: {
+            "state": state,
+            "score": score,
+            "reference_id": reference_id,
+            "compared": ["price"],
+        },
+    )
+
+
+def _liked_reference(profile):
+    return _property(
+        profile,
+        title="liked reference",
+        is_favorite=True,
+        owner_verdict="interested",
+        owner_verdict_reason="Нравится вид на море.",
+    )
+
+
+@pytest.mark.parametrize(
+    ("score", "state", "profile_state", "expected"),
+    [
+        (70.0, "ok", "current", True),
+        (69.9, "ok", "current", False),
+        (70.0, "ok", "dirty", True),
+        (None, "ok", "current", False),
+        (95.0, "thin", "current", False),
+    ],
+    ids=["at-cut", "below-cut", "dirty-profile", "unmeasured", "thin"],
+)
+def test_similarity_recommends_a_row_with_unknown_facts(
+    app, score, state, profile_state, expected
+):
+    profile = _profile()
+    reference = _liked_reference(profile)
+    candidate = _property(profile, title="sea view never measured")
+
+    reading = taste_recommendation.build_context(
+        [candidate],
+        _compiled_profile_from_current_signals(),
+        {"state": profile_state},
+        similarity_ctx=_similar_reading(reference.id, score, state),
+    ).readings[candidate.id]
+
+    assert reading["needs_review"] is True
+    assert reading["group"] != "confident"
+    assert reading["recommended"] is expected
+
+
+def test_similarity_does_not_recommend_past_a_known_conflict(app):
+    profile = _profile()
+    reference = _liked_reference(profile)
+    _property(
+        profile,
+        title="land avoidance",
+        owner_verdict="rejected",
+        owner_verdict_reason="Никогда не хочу участок, а не дом.",
+    )
+    candidate = _property(
+        profile, title="similar land", property_category="land", area_type="built"
+    )
+
+    reading = taste_recommendation.build_context(
+        [candidate],
+        _compiled_profile_from_current_signals(),
+        {"state": "dirty"},
+        similarity_ctx=_similar_reading(reference.id, 95.0),
+    ).readings[candidate.id]
+
+    assert reading["conflicts"]
+    assert reading["recommended"] is False
+
+
+def test_a_freshly_starred_row_is_not_offered_as_a_recommendation(app):
+    profile = _profile()
+    reference = _liked_reference(profile)
+    compiled = _compiled_profile_from_current_signals()
+    starred = _property(profile, title="starred after the snapshot", is_favorite=True)
+
+    reading = taste_recommendation.build_context(
+        [starred],
+        compiled,
+        {"state": "dirty"},
+        similarity_ctx=_similar_reading(reference.id, 95.0),
+    ).readings[starred.id]
+
+    assert reading["state"] == "stale"
+    assert reading["recommended"] is False

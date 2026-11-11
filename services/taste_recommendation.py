@@ -30,6 +30,10 @@ _VISUAL_RESEMBLANCE_ASPECTS = frozenset(
     }
 )
 _NUMERIC_ASPECTS = frozenset({"house_area_m2", "plot_area_m2"})
+# How close to a positive reference a listing must read to be recommended
+# without a full set of verified facts (owner, 2026-11-11). It is the middle
+# cut of the page's own Similar filter.
+RECOMMENDED_MIN_SIMILARITY = favorite_similarity.FILTER_VALUES["70"]
 _CONTRADICTORY_VALUE_PAIRS = {
     "plot_outline": frozenset({frozenset({"notched", "regular"})}),
     "house_condition": frozenset(
@@ -642,8 +646,25 @@ def _reading(
         or bool(needs)
         or any(facet["status"] != "supported" for facet in conflicts)
     )
+    _, similarity_score, _ = _numeric_similarity(similarity_reading, reference_ids)
+    # An unknown fact does not block this reading, and neither does a profile
+    # waiting for a refresh; a known conflict does. A row the owner has just
+    # starred is a reference the snapshot has not captured yet, not a suggestion.
+    recommended = (
+        state in {"candidate", "stale"}
+        and not conflicts
+        and not getattr(prop, "is_favorite", False)
+        and (
+            group == "confident"
+            or (
+                similarity_score is not None
+                and similarity_score >= RECOMMENDED_MIN_SIMILARITY
+            )
+        )
+    )
     return {
         "state": state,
+        "recommended": recommended,
         "needs_review": needs_review,
         "group": group if state in {"candidate", "stale"} else None,
         "eligibility": (
@@ -691,6 +712,7 @@ def build_context(
                         if getattr(prop, "owner_verdict", None) == "rejected"
                         else "no_profile"
                     ),
+                    "recommended": False,
                     "needs_review": True,
                     "group": None,
                     "eligibility": (
