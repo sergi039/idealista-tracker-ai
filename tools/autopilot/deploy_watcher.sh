@@ -581,6 +581,62 @@ done <<EOF
 $(deploy_render_legacy_vars)
 EOF
 
+# --- a moved state directory needs a build that knows where it is (#639) ----
+# Once the state lives outside the checkout (IDEALISTA_DATA_DIR in .env names
+# another directory), deploying a commit that does not carry the contract - a
+# revert of #639, a branch cut before it - would bring back a docker-compose.yml
+# that binds ./data: the checkout's directory, which by then holds four
+# reference files and no mail cursor. The app would start, healthz would be
+# green, the page would render, and ingestion would re-read the mailbox from
+# the beginning.
+#
+# The tombstone readers (lib/data_dir.sh, app.py) cannot stop that deploy: they
+# are part of what such a commit removes. This check can, because it runs in
+# the watcher that is serving NOW, before the fast-forward and before the
+# handover (#293) - checkout, container and marker are all untouched, and the
+# previous build keeps serving against the moved directory. It counts as a
+# refused tick, so the stall alarm (#532) carries it to a person.
+#
+# The way to deploy such a commit is to move the state back first:
+# tools/move_data_dir.sh --rollback. After that this condition is false.
+STATE_MOVED=0
+state_phys="$(cd "$STATE_DIR" 2>/dev/null && pwd -P)" || state_phys="$STATE_DIR"
+# The directory inside the checkout, from the one file that names it.
+CHECKOUT_STATE_DIR="$("${BASH:-/bin/bash}" "${SCRIPT_DIR}/lib/data_dir.sh" --default "$REPO_DIR")" \
+    || die "cannot tell which directory is the checkout's own state directory"
+default_phys="$(cd "$CHECKOUT_STATE_DIR" 2>/dev/null && pwd -P)" || default_phys="$CHECKOUT_STATE_DIR"
+if [ "$state_phys" != "$default_phys" ]; then
+    STATE_MOVED=1
+fi
+if [ "$STATE_MOVED" = "1" ]; then
+    contract_missing=""
+    if ! git cat-file -e "${remote_sha}:tools/autopilot/lib/data_dir.sh" 2>/dev/null; then
+        contract_missing="tools/autopilot/lib/data_dir.sh is not in it"
+    else
+        # Captured, not piped into `grep -q`: under pipefail a reader that
+        # stops early turns `git show` into a SIGPIPE failure, and this gate
+        # would refuse a good commit. Comment lines do not count - the mount
+        # has to be interpolated from the variable, not merely mention it.
+        compose_at_target="$(git show "${remote_sha}:${COMPOSE_FILE}" 2>/dev/null)" || compose_at_target=""
+        if ! printf '%s\n' "$compose_at_target" | grep -v '^[[:space:]]*#' \
+            | grep -F '${IDEALISTA_DATA_DIR' >/dev/null; then
+            contract_missing="${COMPOSE_FILE} there does not mount \${IDEALISTA_DATA_DIR}"
+        fi
+    fi
+    if [ -n "$contract_missing" ]; then
+        log "REFUSING to deploy ${remote_sha:0:7}: the deployment's state is in ${STATE_DIR}, and ${contract_missing}"
+        log "  that build would mount ${CHECKOUT_STATE_DIR} instead and start with no mail cursor"
+        log "  move the state back first: tools/move_data_dir.sh --rollback - then this commit deploys normally"
+        note_refused_tick "${remote_sha:0:7} does not carry the state-directory contract while the state is moved (#639)"
+        exit 0
+    fi
+    # One resolution for the mount and for this watcher's own files: Compose is
+    # handed the directory lib/data_dir.sh resolved rather than left to parse
+    # .env a second time. With nothing configured this line is never reached
+    # and the Compose calls below are exactly what they were.
+    export IDEALISTA_DATA_DIR="$STATE_DIR"
+fi
+
 # --- checkpoint for rollback ----------------------------------------------
 if docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker tag "$IMAGE" "$ROLLBACK_TAG"
