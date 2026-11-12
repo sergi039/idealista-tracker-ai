@@ -78,6 +78,26 @@ DECISION_STATES: Tuple[str, ...] = (INTERESTED, WAITING, REJECTED, UNDECIDED)
 # same way `subscription_criteria` reads `criteria=all`.
 DECISION_ALL = "all"
 
+# The second filter-only value (#630): "Reviewed" = interested OR waiting OR
+# rejected, the other half of the "New" (= `undecided`) queue. Like
+# `DECISION_ALL` it is never stored in `owner_verdict`, never accepted by
+# `set_review` or the row API, and not in `DECISION_STATES` (which are the
+# states a row can READ as).
+DECISION_DECIDED = "decided"
+
+# Every value the verdict parameter names, and the ones that lift the
+# rejected hide: a filter that selects the rejected rows (or all of them) must
+# not then be told they are withheld.
+DECISION_FILTER_VALUES: Tuple[str, ...] = DECISION_STATES + (DECISION_DECIDED,)
+HIDE_LIFTED_BY: Tuple[str, ...] = (DECISION_ALL, REJECTED, DECISION_DECIDED)
+
+# The filter's own wording: "New" / "Reviewed", not the badge's "Not decided
+# yet". The badge keeps `decision_label_key`.
+_FILTER_LABEL_KEYS: Dict[str, str] = {
+    UNDECIDED: "owner_verdict_new",
+    DECISION_DECIDED: "owner_verdict_reviewed",
+}
+
 # --- the action -------------------------------------------------------------
 
 ACTION_NONE = "none"
@@ -120,6 +140,12 @@ def decision_label_key(state: Optional[str]) -> str:
     return _DECISION_LABEL_KEYS.get(
         (state or "").strip().lower(), _DECISION_LABEL_KEYS[UNDECIDED]
     )
+
+
+def decision_filter_label_key(value: Optional[str]) -> str:
+    """The key for a verdict FILTER value: New / Reviewed, else the badge's."""
+    wanted = (value or "").strip().lower()
+    return _FILTER_LABEL_KEYS.get(wanted) or decision_label_key(wanted)
 
 
 def action_label_key(state: Optional[str]) -> str:
@@ -337,8 +363,14 @@ def decision_filter_clause(model: Any, state: Optional[str]):
     drift into different answers to "show me the ones I rejected".
     """
     wanted = (state or "").strip().lower()
-    if wanted not in DECISION_STATES:
+    if wanted not in DECISION_FILTER_VALUES:
         return None
+    if wanted == DECISION_DECIDED:
+        # Definite, never NULL: coalesce before trim/lower, so a NULL column
+        # is a plain False here and `NOT (...)` stays safe.
+        return func.lower(func.trim(func.coalesce(model.owner_verdict, ""))).in_(
+            DECIDED_STATES
+        )
     if wanted == UNDECIDED:
         # Expressed directly rather than through the CASE so the index on
         # owner_verdict is usable: the common filter is "the ones I have not
@@ -348,6 +380,21 @@ def decision_filter_clause(model: Any, state: Optional[str]):
             func.lower(func.trim(model.owner_verdict)).notin_(DECIDED_STATES),
         )
     return func.lower(func.trim(func.coalesce(model.owner_verdict, ""))) == wanted
+
+
+def matches_decision_filter(record: Any, state: Optional[str]) -> bool:
+    """The Python twin of `decision_filter_clause`, branch for branch.
+
+    True when the row is selected by `state`; an unrecognised value selects
+    everything, the way the clause's `None` does.
+    """
+    wanted = (state or "").strip().lower()
+    if wanted not in DECISION_FILTER_VALUES:
+        return True
+    read = read_decision(record)["state"]
+    if wanted == DECISION_DECIDED:
+        return read in DECIDED_STATES
+    return read == wanted
 
 
 def read_decision_filter(raw: Any) -> Tuple[str, bool]:
@@ -364,7 +411,7 @@ def read_decision_filter(raw: Any) -> Tuple[str, bool]:
     wanted = (raw or "").strip().lower()
     if wanted == DECISION_ALL:
         return DECISION_ALL, True
-    if wanted in DECISION_STATES:
+    if wanted in DECISION_FILTER_VALUES:
         return wanted, True
     return "", not wanted
 
@@ -420,7 +467,9 @@ def apply_rejected_hide(query, model: Any, raw_value: Any, count_hidden: bool = 
     lifted, so a caller cannot render "0 hidden" where the answer is "nothing
     was hidden from you".
 
-    The hide lifts for `all` and for `rejected` itself. That second one is not
+    The hide lifts for `all`, for `decided` (Reviewed includes the rejected
+    rows; omitting them would make the queue lie) and for `rejected` itself
+    (`HIDE_LIFTED_BY`). That second one is not
     a convenience: the Verdict filter IS the way back this design offers, and a
     filter that names the rejected listings and then opens "0 properties found"
     would re-render its own link — the `/map?focus=1457` loop `open_action_
@@ -431,7 +480,7 @@ def apply_rejected_hide(query, model: Any, raw_value: Any, count_hidden: bool = 
     together at every call site.
     """
     value, _ = read_decision_filter(raw_value)
-    if value in (DECISION_ALL, REJECTED):
+    if value in HIDE_LIFTED_BY:
         return query, None
     hidden = (
         query.filter(rejected_hidden_expression(model)).count()
@@ -452,6 +501,27 @@ def action_filter_clause(
 
 
 def decision_options(counts: Dict[str, int]) -> List[Dict[str, Any]]:
+    # `counts` may carry `decided` (the "Reviewed" count, measured with
+    # `decision_filter_clause` by the caller, not summed here). The switch is
+    # offered as New then Reviewed, whenever the page holds any row at all.
+    switch = [
+        {
+            "value": value,
+            "label_key": decision_filter_label_key(value),
+            "count": counts.get(value, 0),
+        }
+        for value in (UNDECIDED, DECISION_DECIDED)
+    ]
+    if not any(choice["count"] for choice in switch):
+        return _decision_state_options(counts)
+    return switch + [
+        choice
+        for choice in _decision_state_options(counts)
+        if choice["value"] != UNDECIDED
+    ]
+
+
+def _decision_state_options(counts: Dict[str, int]) -> List[Dict[str, Any]]:
     """The decisions to offer, with their counts.
 
     `undecided` is offered whenever it holds anything, unlike a state a
@@ -461,7 +531,7 @@ def decision_options(counts: Dict[str, int]) -> List[Dict[str, Any]]:
     return [
         {
             "value": state,
-            "label_key": decision_label_key(state),
+            "label_key": decision_filter_label_key(state),
             "count": counts.get(state, 0),
         }
         for state in DECISION_STATES
@@ -531,6 +601,7 @@ def set_review(
     action: Optional[str] = None,
     due_on: Optional[date] = None,
     keep_action: bool = False,
+    keep_reason: bool = False,
 ) -> Dict[str, Any]:
     """Record the decision and the outstanding action. The one writer.
 
@@ -552,6 +623,11 @@ def set_review(
     into hidden inputs — and a form opened before another tab set the action
     then erased it on save (the implementation review's reproduction). A
     stale snapshot cannot erase what it never carries.
+
+    `keep_reason=True` is the same promise for the reason sentence, for the
+    caller that only decides (the list row's three buttons, #630): the stored
+    reason is re-read under the lock and written back, so pressing a button
+    never erases a sentence the owner typed on the detail page.
     """
     from app import db
 
@@ -580,6 +656,8 @@ def set_review(
             # stale.
             action = prop.next_action
             due_on = prop.next_action_due_on
+        if keep_reason:
+            reason = prop.owner_verdict_reason
         result = _apply_review_locked(
             prop, decision=wanted, reason=reason, action=action, due_on=due_on
         )

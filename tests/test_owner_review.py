@@ -182,6 +182,50 @@ class TestTheTwoReadingsAgree:
                 assert owner_review.read_action(row, TODAY)["state"] == state
             assert len(selected) == len([r for r in ROWS if r[3] == state])
 
+    def test_reviewed_is_the_three_decided_states_both_ways(self, app, profile):
+        """`decided` (#630): SQL and Python agree row by row over all four
+        stored states, NULL, blank and an unknown spelling included."""
+        rows = {}
+        for name, columns, _, _ in ROWS:
+            rows[name] = _prop(profile, name, **columns)
+        rows["blank"] = _prop(profile, "blank", owner_verdict="  ")
+        rows["null"] = _prop(profile, "null", owner_verdict=None)
+        db.session.commit()
+
+        clause = owner_review.decision_filter_clause(
+            Property, owner_review.DECISION_DECIDED
+        )
+        in_sql = {row.id for row in Property.query.filter(clause).all()}
+        # Definite: the negation selects exactly the rest, NULL rows included.
+        not_in_sql = {row.id for row in Property.query.filter(~clause).all()}
+        assert in_sql | not_in_sql == {row.id for row in rows.values()}
+        assert not in_sql & not_in_sql
+
+        for name, row in rows.items():
+            twin = owner_review.matches_decision_filter(row, "decided")
+            assert (row.id in in_sql) is twin, name
+            assert twin is (
+                owner_review.read_decision(row)["state"]
+                in ("interested", "waiting", "rejected")
+            ), name
+        assert not owner_review.matches_decision_filter(rows["null"], "decided")
+        assert not owner_review.matches_decision_filter(rows["blank"], "decided")
+
+        # New and Reviewed partition the table.
+        new_ids = {
+            row.id
+            for row in Property.query.filter(
+                owner_review.decision_filter_clause(Property, "undecided")
+            )
+        }
+        assert new_ids | in_sql == {row.id for row in rows.values()}
+        assert not new_ids & in_sql
+
+    def test_decided_is_a_filter_alias_never_a_state(self, app):
+        assert "decided" not in owner_review.DECISION_STATES
+        assert "decided" not in owner_review.DECIDED_STATES
+        assert owner_review.read_decision_filter("Decided") == ("decided", True)
+
     def test_a_verdict_nobody_defined_reads_as_undecided_both_ways(self, app, profile):
         """Towards "nobody decided", never towards a decision nobody made.
 
@@ -556,3 +600,62 @@ class TestTheLogIsNotEditableAsANote:
         db.session.add(note)
         db.session.commit()
         assert note.snapshot is None
+
+
+class TestKeepReason:
+    """`keep_reason` is `keep_action` for the sentence the owner typed (#630)."""
+
+    def test_a_decision_without_keep_reason_still_replaces_the_reason(
+        self, app, profile
+    ):
+        row = _prop(profile, "reason-default")
+        owner_review.set_review(row, decision="waiting", reason="typed on the page")
+        owner_review.set_review(row, decision="rejected")
+        assert row.owner_verdict_reason is None
+
+    def test_keep_reason_survives_decide_and_clear(self, app, profile):
+        row = _prop(profile, "reason-kept")
+        owner_review.set_review(row, decision="waiting", reason="typed on the page")
+        owner_review.set_review(row, decision="rejected", keep_reason=True)
+        assert row.owner_verdict == "rejected"
+        assert row.owner_verdict_reason == "typed on the page"
+        owner_review.set_review(row, decision=None, keep_reason=True)
+        assert row.owner_verdict is None
+        assert row.owner_verdict_reason == "typed on the page"
+
+    def test_keep_reason_ignores_what_the_caller_passed(self, app, profile):
+        row = _prop(profile, "reason-stale")
+        owner_review.set_review(row, decision="waiting", reason="current")
+        owner_review.set_review(
+            row, decision="interested", reason="stale snapshot", keep_reason=True
+        )
+        assert row.owner_verdict_reason == "current"
+
+    def test_keep_action_and_keep_reason_together_change_only_the_decision(
+        self, app, profile
+    ):
+        row = _prop(profile, "both-kept")
+        owner_review.set_review(
+            row,
+            decision="waiting",
+            reason="why",
+            action="call",
+            due_on=date(2026, 9, 20),
+        )
+        result = owner_review.set_review(
+            row, decision="interested", keep_action=True, keep_reason=True
+        )
+        assert result["changed"] is True
+        assert (row.next_action, row.next_action_due_on) == ("call", date(2026, 9, 20))
+        assert row.owner_verdict_reason == "why"
+        events = PropertyActivity.query.filter_by(kind="verdict").all()
+        assert len(events) == 2
+
+    def test_a_repeat_with_keep_flags_records_nothing(self, app, profile):
+        row = _prop(profile, "repeat")
+        owner_review.set_review(row, decision="rejected", reason="r")
+        result = owner_review.set_review(
+            row, decision="rejected", keep_action=True, keep_reason=True
+        )
+        assert result["changed"] is False
+        assert PropertyActivity.query.filter_by(kind="verdict").count() == 1

@@ -251,3 +251,33 @@ branch cut before the squash landed carries the same file as an unrelated
 `add/add`, and the resolution is your version, since it is the squashed one
 plus whatever you fixed since — verify that by diffing the two rather than
 assuming it.
+
+## Nightly database dump (#640)
+
+The database is in a named Docker volume on Docker Desktop's disk image, on an
+external SSD that Time Machine excludes. `tools/backup_db.sh`, run by the
+LaunchAgent `com.idealista.db-backup` at 03:30 local time, writes a verified
+`pg_dump --format=custom` to `~/IdealistaRank-backups/daily/` -- the internal
+disk, which Time Machine does cover.
+
+- A dump counts only after it is non-empty and `pg_restore --list` reads it;
+  then it is renamed to `idealista-YYYYMMDDTHHMMSSZ.dump` (mode 600). A failed
+  dump is deleted and rotates nothing. The newest `IDEALISTA_BACKUP_KEEP`
+  (14) are kept; `pre-merge-*.dump` and other files are never touched.
+- Status for a health check: `last_success` and `last_failure` beside the dumps
+  (UTC timestamp, then file name and size or the reason). A run refused by the
+  lock (exit 75) writes neither. A stopped `idealista-db` fails; it is not started.
+- Log: `data/db-backup.launchd.log`.
+
+Install on the mini (paths in the plist are the production checkout):
+
+```bash
+cp tools/com.idealista.db-backup.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.idealista.db-backup.plist
+launchctl kickstart gui/$UID/com.idealista.db-backup   # optional first run now
+launchctl bootout gui/$UID/com.idealista.db-backup     # to remove
+```
+
+Verify a dump (lists it, never restores): `bash tools/backup_db.sh --verify FILE`.
+Restore is the manual command in `MIGRATION_RUNBOOK.md` /
+`tools/backup_attachments.sh`: `docker exec -i idealista-db pg_restore -U idealista -d idealista_universal --clean < FILE`.

@@ -23,7 +23,12 @@ import services.property_imap_service as property_imap_module
 from services.imap_service import IMAPService
 from services.property_imap_service import PropertyIMAPService
 from tests import setup_test_environment
-from utils.uid_cursor import UidBatchCursor, read_uid_file, write_uid_file
+from utils.uid_cursor import (
+    HeldUids,
+    UidBatchCursor,
+    read_uid_file,
+    write_uid_file,
+)
 
 INTERNAL_DATE = datetime(2026, 1, 15, 9, 0, tzinfo=timezone.utc)
 
@@ -106,6 +111,10 @@ def uid_file(tmp_path, monkeypatch):
     return path
 
 
+def _held(uid_file) -> list:
+    return HeldUids(str(uid_file) + ".held.json").uids()
+
+
 def _make_service(monkeypatch) -> PropertyIMAPService:
     monkeypatch.setattr(
         "services.property_imap_service.IMAPClient", _FakeIMAPClient, raising=True
@@ -135,7 +144,7 @@ def _mute_land_enrichment(monkeypatch):
 
 
 def test_cursor_stops_at_the_email_whose_commit_failed(app, uid_file, monkeypatch):
-    """UID 2 fails to commit for real, so the cursor may not pass UID 1."""
+    """UID 2 fails to commit for real: it waits for a retry, and is not lost."""
     Config.AUTO_TRAVEL_ENRICHMENT = False
     Config.AUTO_PROPERTY_SCORING = False
 
@@ -159,23 +168,22 @@ def test_cursor_stops_at_the_email_whose_commit_failed(app, uid_file, monkeypatc
         assert Property.query.filter_by(source_email_id="imap_1").one_or_none()
         assert Property.query.filter_by(source_email_id="imap_3").one_or_none()
 
-        # The cursor must not step over UID 2: it was fetched but never stored.
-        assert read_uid_file(str(uid_file)) == 1
-        assert service.last_seen_uid == 1
+        # UID 2 was fetched but never stored: it is on the retry list, and the
+        # cursor is past the batch so the next run reads new mail.
+        assert _held(uid_file) == [2]
+        assert read_uid_file(str(uid_file)) == 3
+        assert service.last_seen_uid == 3
 
-        # Second run, after the collision is cleared: the lost emails come back.
+        # Second run, after the collision is cleared: the held email comes back.
         db.session.delete(blocker)
-        db.session.commit()
-        Property.query.filter_by(source_email_id="imap_3").delete()
         db.session.commit()
 
         second = _make_service(monkeypatch)
-        assert second.last_seen_uid == 1
         second.run_ingestion(sync_type="test")
 
-        assert _FakeIMAPClient.fetched_uids == [2, 3]
+        assert _FakeIMAPClient.fetched_uids == [2]
         assert Property.query.filter_by(source_email_id="imap_2").one_or_none()
-        assert Property.query.filter_by(source_email_id="imap_3").one_or_none()
+        assert _held(uid_file) == []
         assert read_uid_file(str(uid_file)) == 3
 
 
@@ -332,9 +340,12 @@ class TestParsingFailureHoldsTheCursor:
     one odd email - therefore advanced the cursor past a real listing and lost
     it permanently: issue #24 again, one layer further in.
 
-    Both services must instead hold the cursor behind the failing email so the
-    next run re-reads it. A permanently broken email keeps the cursor parked and
-    logs why, which is the trade #24 chose: visibly stuck beats silently lost.
+    The lands service holds the cursor behind the failing email so the next run
+    re-reads it. The property service used to as well, and one permanently
+    failing email then kept every later one unread (measured 2026-11-10: 273
+    emails behind one blocked fotocasa page); it now parks the email on a retry
+    list, lets the cursor pass and says so in the run's history line. Neither
+    loses the email.
     """
 
     def test_property_pipeline_holds_the_cursor_at_a_raising_email(
@@ -368,9 +379,10 @@ class TestParsingFailureHoldsTheCursor:
                 Property.query.filter_by(source_email_id="imap_2").one_or_none() is None
             )
 
-            # UID 2 raised, so the cursor may not pass UID 1 - not 2, and not 3.
-            assert read_uid_file(str(uid_file)) == 1
-            assert service.last_seen_uid == 1
+            # UID 2 raised: it waits for a retry and the cursor is past it.
+            assert _held(uid_file) == [2]
+            assert read_uid_file(str(uid_file)) == 3
+            assert service.last_seen_uid == 3
 
         # Once the transient failure is gone the email comes back and lands.
         with app.app_context():
@@ -382,11 +394,11 @@ class TestParsingFailureHoldsTheCursor:
             _FakeIMAPClient.fetched_uids = []
 
             second = _make_service(monkeypatch)
-            assert second.last_seen_uid == 1
             second.run_ingestion(sync_type="test")
 
-            assert _FakeIMAPClient.fetched_uids == [2, 3]
+            assert _FakeIMAPClient.fetched_uids == [2]
             assert Property.query.filter_by(source_email_id="imap_2").one_or_none()
+            assert _held(uid_file) == []
             assert read_uid_file(str(uid_file)) == 3
 
     def test_property_pipeline_logs_the_traceback_when_it_parks_the_cursor(
@@ -427,7 +439,7 @@ class TestParsingFailureHoldsTheCursor:
         parked = [
             record
             for record in caplog.records
-            if "holding last_seen_uid" in record.getMessage()
+            if "it waits for a retry" in record.getMessage()
         ]
         assert len(parked) == 1, caplog.text
 

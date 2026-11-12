@@ -511,6 +511,41 @@ class TestTheComparablePoolNamesItself:
         assert meta["peers_matched"] == 6
         assert meta["peers_cap"] == 2
 
+    def test_a_capped_pool_is_the_same_pool_every_time(self, app):
+        """A ceiling with no order is whatever the table hands over first.
+
+        Measured on production 2026-11-10: `q.limit(600).all()` with no
+        `ORDER BY`, a scope holding 634-1057 rows, and every rescoring pass
+        moved the value score of a few untouched rows by 1/6 of a point per
+        swapped peer. The capped pool is the newest listings, by id.
+        """
+        from services.property_comparables import collect_comparables
+
+        live, _, _ = _profiles()
+        subject = _listing(
+            "order_subject",
+            live.id,
+            area=1000,
+            property_category="land",
+            property_subtype="plot",
+        )
+        peers = [
+            _listing(
+                f"order_peer_{index}",
+                live.id,
+                area=1000,
+                property_category="land",
+                property_subtype="plot",
+            )
+            for index in range(6)
+        ]
+        newest = sorted(peer.id for peer in peers)[-2:]
+
+        rows, meta = collect_comparables(subject, category="land", min_peers=1, limit=2)
+
+        assert sorted(row.id for row in rows) == newest
+        assert meta["peers_matched"] == 6
+
     def test_a_subject_with_no_subscription_compares_against_everything(self, app):
         """The other branch of `profile_scope`, and the reason it is named.
 

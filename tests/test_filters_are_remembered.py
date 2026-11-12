@@ -124,7 +124,7 @@ def test_a_bare_page_returns_to_the_last_state_chosen_on_it(client, listings):
     assert recalled["mode"] == "recommendation"
     assert recalled["recommendation_scope"] == "review"
     assert recalled["view_type"] == "list"
-    assert "page" not in recalled, "a page number is where the reader was, not a filter"
+    assert "page" not in recalled, "page=1 is the first page: absence, never stored"
     assert "search" not in recalled, "an empty value is not a filter"
 
     landed = client.get(response.headers["Location"])
@@ -220,3 +220,144 @@ def test_an_oversized_choice_is_forgotten_not_truncated(client, listings):
     assert response.status_code == 200
     bare = client.get("/properties")
     assert bare.status_code == 200, "a state that does not fit leaves no memory"
+
+
+# --- The page is remembered too (owner, 2026-11-10, issue #630) -------------
+
+PAGED = (
+    "/properties?mode=combined&view_type=list&per_page=10&sort=created_at&order=desc"
+)
+
+
+@pytest.fixture
+def many(app):
+    """Twenty-five live houses: three pages at ten per page."""
+    with app.app_context():
+        profile = SearchProfile(
+            name="Paged",
+            is_active=True,
+            is_default=True,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add(profile)
+        db.session.commit()
+        for index in range(25):
+            db.session.add(
+                Property(
+                    source_email_id=f"paged_{index}",
+                    title=f"Paged {index:02d}",
+                    municipality="Bergondo",
+                    property_category="housing",
+                    property_subtype="house",
+                    price=200000 + index,
+                    url=f"https://www.idealista.com/inmueble/80{index:03d}/",
+                    search_profile_id=profile.id,
+                    listing_status="active",
+                )
+            )
+        db.session.commit()
+
+
+def _titles(body: str) -> set[str]:
+    return set(re.findall(r"Paged \d\d", body))
+
+
+def test_a_pagination_click_is_remembered_and_recalled(client, many):
+    assert client.get(f"{PAGED}&page=2").status_code == 200
+
+    response = client.get("/properties")
+    assert response.status_code == 302
+    assert _query(response.headers["Location"])["page"] == "2"
+    landed = client.get(response.headers["Location"])
+    assert landed.status_code == 200
+    assert len(_titles(landed.get_data(as_text=True))) == 10
+
+
+def test_page_one_is_never_stored(client, many):
+    client.get(f"{PAGED}&page=2")
+    client.get(f"{PAGED}&page=1")
+    recalled = _query(client.get("/properties").headers["Location"])
+    assert "page" not in recalled
+
+
+def test_a_filter_change_lands_on_page_one(client, many):
+    """The form has no page field and the sort header names page 1, so the
+    request that follows a change never carries the old page."""
+    body = client.get(f"{PAGED}&page=3").get_data(as_text=True)
+    form = re.search(r'<form[^>]*id="filter-form".*?</form>', body, re.S).group(0)
+    assert 'name="page"' not in form
+    sort_links = re.findall(r'href="([^"]*)"\s+class="lands-th-link', body)
+    assert sort_links
+    for href in sort_links:
+        assert _query(unescape(href)).get("page") == "1", href
+
+    changed = client.get(f"{PAGED}&sort=price&order=asc")
+    assert changed.status_code == 200
+    recalled = _query(client.get("/properties").headers["Location"])
+    assert "page" not in recalled
+    assert recalled["sort"] == "price"
+
+
+def test_clear_forgets_the_page(client, many):
+    client.get(f"{PAGED}&page=3")
+    assert client.get("/properties?remember=forget").status_code == 302
+    bare = client.get("/properties")
+    assert bare.status_code == 200
+
+
+def test_a_remembered_page_past_the_end_shows_the_last_page(client, many):
+    response = client.get(f"{PAGED}&page=99")
+    assert response.status_code == 200
+    assert len(_titles(response.get_data(as_text=True))) == 5
+
+    with client.session_transaction() as session:
+        session[listing_filter_memory.SESSION_KEY] = PAGED.split("?")[1] + "&page=99"
+    followed = client.get(client.get("/properties").headers["Location"])
+    assert followed.status_code == 200
+    assert len(_titles(followed.get_data(as_text=True))) == 5
+
+
+def test_a_hand_typed_junk_page_is_not_stored(client, many):
+    for junk in ("0", "-3", "abc", "1"):
+        client.get(f"{PAGED}&page={junk}")
+        recalled = _query(client.get("/properties").headers["Location"])
+        assert "page" not in recalled, junk
+
+
+@pytest.mark.parametrize("view", ["list", "cards"])
+def test_every_row_carries_its_anchor(app, client, many, view):
+    body = client.get(
+        f"/properties?mode=combined&view_type={view}&per_page=10"
+    ).get_data(as_text=True)
+    with app.app_context():
+        ids = [p.id for p in Property.query.all()]
+    anchors = set(re.findall(r'id="listing-(\d+)"', body))
+    assert len(anchors) == 10
+    assert anchors <= {str(i) for i in ids}
+
+
+def test_the_back_link_returns_to_the_row(app, client, many):
+    with app.app_context():
+        prop_id = Property.query.first().id
+    body = client.get(f"/properties/{prop_id}").get_data(as_text=True)
+    assert re.search(
+        rf'href="/properties#listing-{prop_id}"[^>]*>\s*<i class="fas fa-arrow-left',
+        body,
+    ), "the back link must end with the row's fragment"
+
+
+def test_an_absurdly_long_page_number_is_ignored_not_an_error(client, many):
+    """Python refuses to convert thousands of digits to an int; the page must
+    render and the junk must not be stored (#630 review)."""
+    response = client.get("/properties?mode=combined&view_type=list&page=" + "9" * 5000)
+    assert response.status_code == 200
+
+    recalled = client.get("/properties")
+    assert "page=" not in (recalled.headers.get("Location") or "")
+
+
+def test_the_page_rule_itself_refuses_an_overlong_number_without_raising():
+    from utils import listing_filter_memory
+
+    assert listing_filter_memory._stored_pair("page", "9" * 5000) is False
+    assert listing_filter_memory._stored_pair("page", "12") is True

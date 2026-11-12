@@ -197,3 +197,30 @@ def source_options(counts: Dict[str, int]) -> List[Dict[str, Any]]:
         for source in SOURCES
         if counts.get(source, 0) > 0
     ]
+
+
+MAX_EXTERNAL_URL_LENGTH = 2048
+_EXTERNAL_SCHEMES = frozenset({"http", "https"})
+
+
+def safe_external_url(url: Optional[str]) -> Optional[str]:
+    """The URL if it is safe to put in an `href`, else None (#633).
+
+    Jinja's autoescape keeps `javascript:` and `data:` executable in an href,
+    so a stored portal URL is linked only when it is a bounded http(s) URL
+    with a host. Exposed to templates as the `safe_external_url` filter; a row
+    that fails is shown as text.
+    """
+    raw = (url or "").strip()
+    if not raw or len(raw) > MAX_EXTERNAL_URL_LENGTH:
+        return None
+    if any(ord(ch) < 33 or ord(ch) == 127 for ch in raw):
+        return None  # whitespace / control characters, which browsers strip
+    try:
+        parts = urlsplit(raw)
+        host = parts.hostname
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in _EXTERNAL_SCHEMES or not host:
+        return None
+    return raw

@@ -69,13 +69,19 @@ def world(app):
     db.session.add(profile)
     db.session.commit()
 
+    created = []
+
     def mk(slug, **kwargs):
+        created.append(slug)
         row = Property(
             source_email_id=f"rej:{slug}",
             title=f"Casa {slug}",
             municipality="Malpica de Bergantiños",
             search_profile_id=profile.id,
-            price=200000,
+            # A distinct asking price per row: five rows with one price, one
+            # area and one point are, by #633's rule, five publications of
+            # one home, and the list would fold them. These are five homes.
+            price=200000 + 1000 * len(created),
             area=200,
             # Coordinates, because the map can only withhold a row it could
             # otherwise have plotted -- its count is about markers, not rows.
@@ -150,6 +156,7 @@ class TestTheReading:
             (None, "", True),
             ("all", "all", True),
             ("rejected", "rejected", True),
+            ("decided", "decided", True),
             ("interested", "interested", True),
             ("  ALL  ", "all", True),
             ("banana", "", False),
@@ -170,7 +177,7 @@ class TestTheReading:
     def test_lifting_reports_no_count_rather_than_zero(self, app, world):
         """`None`, never 0: a caller must not render "0 hidden" where the
         answer is "nothing was hidden from you"."""
-        for raw in ("all", "rejected"):
+        for raw in ("all", "rejected", "decided"):
             _query, hidden = owner_review.apply_rejected_hide(
                 Property.query, Property, raw, count_hidden=True
             )
@@ -227,7 +234,7 @@ class TestEverySurface:
 
 
 class TestTheWayBack:
-    @pytest.mark.parametrize("value", ["all", "rejected"])
+    @pytest.mark.parametrize("value", ["all", "rejected", "decided"])
     def test_naming_the_verdict_lifts_the_hide(self, client, world, value):
         body = client.get(
             f"/properties?profile_id={world['pid']}&verdict={value}"
@@ -391,3 +398,125 @@ def test_the_way_back_survives_a_page_whose_every_row_is_hidden(app, client):
     select = select[: select.index("</select>")]
     assert 'value="rejected"' in select, "the page kept no way to undo its own hide"
     assert 'value="all"' in select
+
+
+class TestNewAndReviewed:
+    """#630: the existing verdict select is the owner's queue switch."""
+
+    @staticmethod
+    def _select(body):
+        select = body[body.index('id="verdict"') :]
+        return select[: select.index("</select>")]
+
+    def test_reviewed_lifts_the_hide_and_shows_every_decided_row(self, client, world):
+        body = client.get(
+            f"/properties?profile_id={world['pid']}&verdict=decided"
+        ).get_data(as_text=True)
+
+        ids = world["ids"]
+        assert _shown(body) >= {
+            ids["rejected"],
+            ids["rejected_favorite"],
+            ids["rejected_actioned"],
+            ids["interested"],
+        }
+        assert ids["undecided"] not in _shown(body)
+        assert _count(body) == 4
+        assert 'id="rejected-hidden-coverage"' not in body
+        assert "Rejected: 1 hidden" not in body
+
+    def test_new_is_the_undecided_rows(self, client, world):
+        body = client.get(
+            f"/properties?profile_id={world['pid']}&verdict=undecided"
+        ).get_data(as_text=True)
+
+        assert _shown(body) >= {world["ids"]["undecided"]}
+        assert _count(body) == 1
+
+    def test_the_select_reads_new_and_reviewed_with_counts(self, client, world):
+        select = self._select(
+            client.get(f"/properties?profile_id={world['pid']}").get_data(as_text=True)
+        )
+
+        assert re.search(r'value="undecided"[^>]*>\s*New \(1\)', select), select
+        assert re.search(r'value="decided"[^>]*>\s*Reviewed \(4\)', select), select
+
+    def test_the_select_is_drawn_when_every_row_is_undecided(self, client, world):
+        Property.query.update({"owner_verdict": None})
+        db.session.commit()
+
+        body = client.get(f"/properties?profile_id={world['pid']}").get_data(
+            as_text=True
+        )
+        select = self._select(body)
+
+        assert re.search(r'value="undecided"[^>]*>\s*New \(5\)', select), select
+        assert re.search(r'value="decided"[^>]*>\s*Reviewed \(0\)', select), select
+
+    def test_the_select_sits_in_the_first_row_of_the_form_once(self, client, world):
+        body = client.get(f"/properties?profile_id={world['pid']}").get_data(
+            as_text=True
+        )
+
+        assert body.count('id="verdict"') == 1
+        form = body[body.index('id="filter-form"') :]
+        assert form.index('id="verdict"') < form.index('id="additional-filters"')
+        assert form.index('id="verdict"') < form.index("</form>")
+
+    @pytest.mark.parametrize(
+        "value, label", [("undecided", "New"), ("decided", "Reviewed")]
+    )
+    def test_the_chip_reads_the_label_not_the_slug(self, client, world, value, label):
+        body = client.get(
+            f"/properties?profile_id={world['pid']}&verdict={value}"
+        ).get_data(as_text=True)
+
+        chip = re.search(r'<a class="filter-chip"[^>]*><span>([^<]*)</span>', body)
+        assert chip and chip.group(1).endswith(f": {label}"), chip
+
+    def test_the_csv_takes_reviewed(self, client, world):
+        body = client.get(
+            f"/properties/export.csv?profile_id={world['pid']}&verdict=decided"
+        ).get_data(as_text=True)
+
+        for slug in ("rejected_favorite", "rejected_actioned", "interested"):
+            assert f"Casa {slug}" in body
+        assert "Casa undecided" not in body
+        assert "Casa rejected," in body or "Casa rejected\r" in body
+
+    def test_the_api_takes_reviewed(self, client, world):
+        payload = client.get(
+            f"/api/properties?profile_id={world['pid']}&verdict=decided"
+        ).get_json()
+
+        ids = {row["id"] for row in payload["properties"]}
+        assert ids == {
+            world["ids"][k]
+            for k in (
+                "rejected",
+                "rejected_favorite",
+                "rejected_actioned",
+                "interested",
+            )
+        }
+        assert payload["scope"]["verdict_applied"] == "decided"
+        assert not payload["scope"]["rejected_hidden_by_default"]
+
+    def test_the_map_takes_reviewed(self, client, world):
+        body = client.get(f"/map?profile_id={world['pid']}&verdict=decided").get_data(
+            as_text=True
+        )
+
+        assert f'"id": {world["ids"]["rejected"]}' in body
+        assert f'"id": {world["ids"]["undecided"]}' not in body
+
+    def test_an_unknown_value_still_narrows_and_discloses(self, client, world):
+        body = client.get(
+            f"/properties?profile_id={world['pid']}&verdict=banana"
+        ).get_data(as_text=True)
+
+        assert world["ids"]["rejected"] not in _shown(body)
+        assert _count(body) == 4
+
+    def test_a_bare_cookieless_page_renders(self, client, world):
+        assert client.get("/properties").status_code == 200

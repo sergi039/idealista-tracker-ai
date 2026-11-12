@@ -16,10 +16,12 @@ The pieces here fix the three parts of that bug in one place:
   mid-batch failure leaves the unprocessed tail to be re-fetched next run.
 """
 
+import json
 import logging
 import os
 import tempfile
-from typing import Iterable, Optional
+from datetime import datetime, timezone
+from typing import Dict, Iterable, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,10 @@ def read_uid_file(path: str) -> Optional[int]:
 
 def write_uid_file(path: str, uid: int) -> None:
     """Persist ``uid`` to ``path`` atomically (temp file + fsync + os.replace)."""
+    _write_atomically(path, str(int(uid)))
+
+
+def _write_atomically(path: str, text: str) -> None:
     directory = os.path.dirname(path) or "."
     os.makedirs(directory, exist_ok=True)
 
@@ -61,7 +67,7 @@ def write_uid_file(path: str, uid: int) -> None:
     )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(str(int(uid)))
+            f.write(text)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, path)
@@ -130,3 +136,87 @@ class UidBatchCursor:
             self._position += 1
 
         return advanced
+
+
+class HeldUids:
+    """Emails that could not be stored, waiting for another try.
+
+    One refused email used to hold the cursor behind it, and every later run
+    re-read the same oldest batch and never reached new mail: measured on
+    production 2026-11-10, a fotocasa page that answered "blocked" for UID
+    494344 kept 273 newer emails unread. The email still must not be lost, so
+    it moves here -- the cursor passes it and each run retries a bounded number
+    of the least recently tried.
+
+    A missing file is an empty list; an unreadable one raises, for the reason
+    `read_uid_file` does: reading it as empty would forget every held email
+    without a signal.
+    """
+
+    def __init__(self, path: str):
+        self.path = path
+        self._entries: Dict[int, Dict[str, object]] = {}
+        if not path or not os.path.exists(path):
+            return
+        with open(path, "r", encoding="utf-8") as f:
+            raw = f.read().strip()
+        if not raw:
+            return
+        try:
+            data = json.loads(raw)
+            self._entries = {int(uid): dict(entry) for uid, entry in data.items()}
+        except (ValueError, TypeError, AttributeError) as e:
+            raise ValueError(f"held-UID file {path} is not readable") from e
+
+    def __contains__(self, uid: object) -> bool:
+        return uid in self._entries
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def uids(self) -> List[int]:
+        return sorted(self._entries)
+
+    def due(self, limit: int) -> List[int]:
+        """Up to ``limit`` held UIDs, least recently tried first."""
+        ordered = sorted(
+            self._entries,
+            key=lambda uid: (str(self._entries[uid].get("last_attempt_at")), uid),
+        )
+        return sorted(ordered[: max(0, int(limit))])
+
+    def hold(self, uid: int, reason: str) -> None:
+        """Record one more failed try of ``uid`` and persist; raises on failure."""
+        now = datetime.now(timezone.utc).isoformat()
+        previous = self._entries.get(uid)
+        entry = dict(previous or {"first_held_at": now, "attempts": 0})
+        entry["attempts"] = int(entry.get("attempts") or 0) + 1
+        entry["last_attempt_at"] = now
+        entry["reason"] = reason
+        self._entries[uid] = entry
+        try:
+            self._save()
+        except BaseException:
+            if previous is None:
+                del self._entries[uid]
+            else:
+                self._entries[uid] = previous
+            raise
+
+    def release(self, uids: Iterable[int]) -> None:
+        """Forget ``uids`` (stored at last, or gone from the mailbox)."""
+        gone = [uid for uid in uids if uid in self._entries]
+        if not gone:
+            return
+        kept = dict(self._entries)
+        for uid in gone:
+            del self._entries[uid]
+        try:
+            self._save()
+        except BaseException:
+            self._entries = kept
+            raise
+
+    def _save(self) -> None:
+        payload = {str(uid): self._entries[uid] for uid in sorted(self._entries)}
+        _write_atomically(self.path, json.dumps(payload, indent=1))

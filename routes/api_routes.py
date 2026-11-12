@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 # unknown id stays a 404 (issue #136).
 from werkzeug.exceptions import HTTPException
 from models import Land, LandHistory, SyncHistory, AiAnalysisVariant
+from services.sync_history_status import display_state
 from services.enrich_budget import poll_timeout_ms
 from services.ingest_policy import ingest_verdict
 from services.listing_verification import read_verdict as listing_verdict
@@ -21,6 +22,7 @@ from services import advertiser
 from services import owner_review
 from services import subscription_criteria
 from services import favorite_similarity
+from services import duplicate_fold
 from services import listing_attribute_filters
 from services import taste_service
 from utils.listing_source import source_filter_clause
@@ -1914,7 +1916,24 @@ def get_properties():
             query,
             Property,
             verdict_raw,
-            count_hidden=(verdict_value not in (owner_review.DECISION_ALL, "rejected")),
+            count_hidden=(verdict_value not in owner_review.HIDE_LIFTED_BY),
+        )
+
+        # Publications of the same home (#633): the fold `/properties` applies,
+        # over this endpoint's own selection and with the same two
+        # parameters. Before `total` and the subscription mix, so the scope
+        # block describes the population the page is cut from.
+        duplicate_params = duplicate_fold.read_params(
+            {
+                duplicate_fold.PARAM_SHOW: filters.get(duplicate_fold.PARAM_SHOW),
+                duplicate_fold.PARAM_OF: filters.get(duplicate_fold.PARAM_OF),
+            }
+        )
+        query, duplicate_fold_result = duplicate_fold.fold_query(
+            query, duplicate_params
+        )
+        duplicates_folded = duplicate_fold.folded_count(
+            duplicate_fold_result, duplicate_params
         )
 
         # Sorting allow-list
@@ -1980,6 +1999,7 @@ def get_properties():
                     if similarity_row
                     else favorite_similarity.STATE_NO_REFERENCE
                 )
+                data.update(duplicate_fold_result.annotation(p.id))
                 properties_data.append(data)
         else:
             properties_data = []
@@ -2053,6 +2073,7 @@ def get_properties():
                         "updated_at": p.updated_at.isoformat()
                         if p.updated_at
                         else None,
+                        **duplicate_fold_result.annotation(p.id),
                     }
                 )
 
@@ -2159,6 +2180,25 @@ def get_properties():
                 "pass verdict=all (or verdict=rejected) to include them. A "
                 "favorited listing, or one carrying an outstanding action, is "
                 "never hidden."
+            )
+
+        # The fold, said out loud on the same terms as the two hides above:
+        # only when something was withheld, and the way back is named.
+        if duplicates_folded:
+            notes.append(
+                f"duplicates: {duplicates_folded} publication(s) of the same "
+                "homes are folded into one row each and are not counted in "
+                "`total`; pass duplicates=show to include them, or "
+                "duplicate_of=<id> to see one group. A favorite, a decided "
+                "listing, one with an outstanding action or a timeline entry "
+                "is never folded. Each row carries duplicate_group_size, "
+                "duplicate_member_ids and duplicate_tier."
+            )
+        elif duplicate_fold_result.skipped:
+            notes.append(
+                "duplicates: this selection is larger than "
+                f"{duplicate_fold.FOLD_MAX_ROWS} listings, so publications of "
+                "the same home were not folded."
             )
 
         # The similarity cut, said out loud: what the rows were measured
@@ -2274,6 +2314,15 @@ def get_properties():
                     "verdict_applied": verdict_value or "default",
                     "verdict_recognized": verdict_recognised,
                     "rejected_hidden_by_default": rejected_hidden,
+                    # Publications of the same home folded out of `total`
+                    # (#633): 0 when none, `null` when the fold was skipped
+                    # for size or lifted by duplicates=show / duplicate_of.
+                    "duplicates_folded": (
+                        duplicates_folded
+                        if duplicate_params.folding
+                        and not duplicate_fold_result.skipped
+                        else None
+                    ),
                     # `offset` only: the page size is already here as `cap`,
                     # and one fact under two names in one object is what this
                     # block exists to stop happening between objects.
@@ -2542,6 +2591,71 @@ def set_recommendation_vote(property_id):
     except recommendation_feedback.StaleCardVote:
         return jsonify(error="The card changed. Reload to vote again."), 409
     return jsonify(state)
+
+
+@api_bp.route("/property/<int:property_id>/review", methods=["GET"])
+@limiter.limit("60 per minute")
+def get_property_review(property_id):
+    """Read the stored decision, for a client whose write got no answer (#630).
+
+    A timed-out POST is uncertain, not failed: the row's script asks here what
+    the server holds before it says anything. Read-only -- no lock, no event.
+    """
+    from models import Property
+
+    prop = db.get_or_404(Property, property_id)
+    return jsonify(success=True, state=owner_review.read_decision(prop)["state"])
+
+
+@api_bp.route("/property/<int:property_id>/review", methods=["POST"])
+@limiter.limit("60 per minute")
+def set_property_review(property_id):
+    """Decide a listing from its row in the list (#630).
+
+    The JSON twin of `main.set_review`, for the three buttons in a list row and
+    nothing else. It is NOT a second writer: it calls
+    `owner_review.set_review`, which owns the lock, the event and the
+    transaction. The row only decides, so the stored reason and the stored
+    outstanding action are kept (`keep_reason`, `keep_action`), re-read under
+    the row lock -- a press must never erase what the owner typed on the
+    detail page. `null` clears to NULL, which reads `undecided`, never
+    `rejected`. A repeat of the current decision writes no event (the service
+    compares the whole state).
+    """
+    from models import Property
+
+    payload = request.get_json(silent=True)
+    if (
+        not isinstance(payload, dict)
+        or "decision" not in payload
+        or (
+            payload["decision"] is not None
+            and payload["decision"] not in owner_review.DECIDED_STATES
+        )
+    ):
+        return jsonify(success=False, error="Invalid decision"), 400
+    prop = db.get_or_404(Property, property_id)
+    try:
+        result = owner_review.set_review(
+            prop,
+            decision=payload["decision"],
+            keep_action=True,
+            keep_reason=True,
+        )
+    except owner_review.ReviewError:
+        logger.warning(
+            "row decision refused for property %s", property_id, exc_info=True
+        )
+        return jsonify(success=False, error="The decision could not be saved"), 409
+    except Exception:
+        logger.exception("row decision failed for property %s", property_id)
+        return jsonify(success=False, error="The decision could not be saved"), 500
+    return jsonify(
+        success=True,
+        state=owner_review.read_decision(prop)["state"],
+        changed=bool(result["changed"]),
+        hidden=owner_review.hidden_by_rejection(prop),
+    )
 
 
 @api_bp.route("/property/<int:property_id>/enrich", methods=["POST"])
@@ -3284,7 +3398,7 @@ def get_stats():
                 "price_updated": getattr(last_sync, "price_updated_count", 0) or 0,
                 "expired": getattr(last_sync, "expired_count", 0) or 0,
                 "total_emails": last_sync.total_emails_found,
-                "status": last_sync.status,
+                "status": display_state(last_sync),
                 "completed_at": last_sync.completed_at.isoformat()
                 if last_sync.completed_at
                 else None,

@@ -2,6 +2,9 @@
 # Project browser commands always execute on the owner's MacBook.
 set -euo pipefail
 
+# The Playwright CLI release installed in the MacBook's npx cache.
+PLAYWRIGHT_CLI_VERSION=0.1.23
+
 session="${IDEALISTA_BROWSER_SESSION:-idealista-${CODEX_THREAD_ID:-manual}}"
 if [[ ! "$session" =~ ^[a-zA-Z0-9_-]+$ ]]; then
   echo "Invalid IDEALISTA_BROWSER_SESSION; use letters, digits, _ or -." >&2
@@ -32,8 +35,13 @@ elif [[ "$1" == --check-route ]]; then
   remote+='hostname; /usr/bin/curl --fail --silent --show-error --max-time 8 -o /dev/null -w "idealista_tunnel_http=%{http_code}\n" http://127.0.0.1:5001/properties'
 else
   remote+='mkdir -p /Users/ss/Library/Caches/IdealistaRank/browser; cd /Users/ss/Library/Caches/IdealistaRank/browser; exec '
+  # An unpinned package makes npx ask the registry for the newest release;
+  # once that is newer than the MacBook's cache, --no-install refuses every
+  # command. Pin the installed version and resolve it from the cache alone
+  # (--offline); upgrading is a deliberate edit of this line.
   command=(/usr/bin/env PATH=/opt/homebrew/bin:/usr/bin:/bin
-    /opt/homebrew/bin/npx --no-install --package @playwright/cli
+    /opt/homebrew/bin/npx --offline --no-install
+    --package "@playwright/cli@$PLAYWRIGHT_CLI_VERSION"
     playwright-cli "-s=$session" "$@")
   if [[ "$1" == open ]]; then
     command+=(--browser chrome --headed --idle-timeout 600000)

@@ -42,6 +42,8 @@
     'action': current_filters.action or None,
     'favorites': 'on' if current_filters.favorites else None,
     'hide_removed': 'on' if current_filters.hide_removed else None,
+    'duplicates': current_filters.duplicates or None,
+    'duplicate_of': current_filters.duplicate_of or None,
     'mode': current_filters.mode,
     'recommendation_scope': current_filters.recommendation_scope or None,
     'view_type': current_filters.view_type,
@@ -75,7 +77,7 @@
 {%- endmacro %}
 
 {% macro sort_header(key, label, base_args, current_filters) -%}
-    <a href="{{ url_for('main.properties', **dict(base_args, sort=key, order='asc' if current_filters.sort_by == key and current_filters.order == 'desc' else 'desc', page=current_filters.page)) }}"
+    <a href="{{ url_for('main.properties', **dict(base_args, sort=key, order='asc' if current_filters.sort_by == key and current_filters.order == 'desc' else 'desc', page=1)) }}"
        class="lands-th-link text-decoration-none d-flex align-items-center">
         {{ label }}{{ sort_icon(key, current_filters.sort_by, current_filters.order) }}
     </a>
@@ -121,7 +123,10 @@
 {% macro recommendation_vote(property, recommendation_mode) -%}
     {% set vote = card_vote_for(property) %}
     {% if vote and (recommendation_mode or vote.answer) %}
-        <div class="mt-2" data-recommendation-vote hidden
+        {# A ranking signal, not the purchase decision: it sits with the reason
+           and says what it does in words, so it cannot read as a second copy
+           of the decision buttons. #}
+        <div class="mt-2 recommendation-vote" data-recommendation-vote hidden
              data-url="{{ url_for('api.set_recommendation_vote', property_id=property.id) }}"
              data-revision="{{ vote.revision }}" data-answer="{{ vote.answer or '' }}"
              data-refresh="{{ 'yes' if recommendation_mode else 'no' }}"
@@ -131,11 +136,9 @@
              data-error="{{ t('recommendation_vote_error') }}">
             <div class="d-flex flex-wrap gap-1" role="group" aria-label="{{ t('recommendation_vote_label') }} · {{ property.title or property.id }}">
                 {% if recommendation_mode %}
-                    {% for answer, symbol in [('yes', 'thumbs-up'), ('no', 'thumbs-down')] %}
+                    {% for answer in ['yes', 'no'] %}
                         <button type="button" class="btn btn-sm btn-outline-secondary{{ ' active' if vote.answer == answer else '' }}" data-vote="{{ answer }}"
-                                aria-pressed="{{ 'true' if vote.answer == answer else 'false' }}"
-                                aria-label="{{ t('recommendation_vote_' ~ answer) }}"
-                                title="{{ t('recommendation_vote_' ~ answer) }}">{{ icon(symbol) }}</button>
+                                aria-pressed="{{ 'true' if vote.answer == answer else 'false' }}">{{ t('recommendation_vote_' ~ answer) }}</button>
                     {% endfor %}
                 {% else %}
                     <button type="button" class="btn btn-sm btn-outline-secondary" data-vote="">
@@ -188,13 +191,15 @@
                 {% elif state == 'candidate' %}
                     {% if reading.get('eligibility') == 'excluded' %}
                         <span class="badge text-bg-danger">{{ t('recommendation_excluded') }}</span>
-                    {% elif reading.get('group') == 'confident' %}
+                    {% elif reading.get('recommended') %}
                         <span class="badge text-bg-success">{{ t('recommendation_confirmed') }}</span>
                     {% elif reading.get('needs_review') %}
                         <span class="badge text-bg-warning">{{ t('recommendation_review') }}</span>
                     {% else %}
                         <span class="badge text-bg-secondary">{{ t('recommendation_candidate') }}</span>
                     {% endif %}
+                {% elif state == 'stale' and reading.get('recommended') %}
+                    <span class="badge text-bg-success">{{ t('recommendation_confirmed') }}</span>
                 {% elif state == 'stale' %}
                     <span class="badge text-bg-warning">{{ t('recommendation_stale') }}</span>
                 {% elif state == 'no_profile' %}
@@ -248,6 +253,34 @@
     {% endif %}
 {%- endmacro %}
 
+{# Publications of the same home (#633). Drawn on a row whose group has a
+   member the fold withdraws from the list: one badge saying how many
+   publications there are, the other portals as links (through
+   `safe_external_url`; a URL that fails is plain text), and "show all", which
+   opens exactly that group unfolded. The tooltip states the decision rule: a
+   decision is recorded on one row only. #}
+{% macro duplicate_badge(p, groups, base_args, current_filters) -%}
+    {% set g = (groups or {}).get(p.id) %}
+    {% if g and g.folded_ids %}
+        <span class="badge bg-body-tertiary text-body-secondary border fw-normal duplicate-group-badge"
+              data-duplicate-group-size="{{ g.size }}" data-duplicate-tier="{{ g.tier }}"
+              title="{{ t('dup_fold_badge_title') }}" aria-label="{{ tn('dup_fold_publications', g.size) }}. {{ t('dup_fold_badge_title') }}">
+            <i class="fas fa-clone me-1"></i>{{ tn('dup_fold_publications', g.size) }}{% if g.withdrawn %} &middot; {{ t('dup_fold_withdrawn')|format(g.withdrawn) }}{% endif %}
+        </span>
+        <span class="small duplicate-group-links">
+            {% for other in g.others(p.id) %}{% if other.href %}<a href="{{ other.href|safe_external_url }}" rel="noopener noreferrer" target="_blank">{{ other.portal_label }}</a>{% else %}<span class="text-body-secondary">{{ other.portal_label }}</span>{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}
+            &middot; <a class="duplicate-show-all" href="{{ url_for('main.properties', **dict(base_args, duplicate_of=g.representative_id, duplicates=None, page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">{{ t('dup_fold_show_all') }}</a>
+        </span>
+    {% endif %}
+{%- endmacro %}
+
+{% macro duplicate_price_range(p, groups) -%}
+    {% set g = (groups or {}).get(p.id) %}
+    {% if g and g.folded_ids and g.price_range %}
+        <div class="small text-body-secondary duplicate-price-range" title="{{ t('dup_fold_price_range_title') }}">{{ '{:,.0f}'.format(g.price_range[0]) }}&ndash;{{ '{:,.0f}'.format(g.price_range[1]) }}€</div>
+    {% endif %}
+{%- endmacro %}
+
 {% macro subscription_badge(p, profile_names) -%}
     {% set name = profile_names.get(p.search_profile_id) if p.search_profile_id else None %}
     <span class="badge bg-body-tertiary text-body-secondary border fw-normal property-subscription-badge">
@@ -297,11 +330,27 @@
    "interested; call the architect on Friday". It needs the page's one date --
    never its own, or this badge and the filter that selected the row would
    disagree at midnight. #}
+{# The three-button decision control in a list row (#630). Markup only: the
+   endpoint and every sentence live once on #owner-decision-config, and
+   static/js/owner-decision.js handles the presses by delegation. The pressed
+   button is the stored decision (`owner_decision_for`, the one reading), so a
+   reload and a press agree. Labels are icon plus text; `show_text` makes the
+   text visible where there is room (the card), otherwise it is read by
+   assistive technology only. #}
+{% macro owner_decision_buttons(p, show_text=False) -%}
+{%- set _d = owner_decision_for(p) -%}
+<div class="owner-decision-buttons" data-owner-decision data-owner-decision-id="{{ p.id }}"><div class="btn-group btn-group-sm" role="group" aria-label="{{ t('owner_decision_group') }} · {{ p.title or p.id }}">
+{%- for _state, _symbol in [('interested', 'thumbs-up'), ('waiting', 'clock'), ('rejected', 'thumbs-down')] -%}
+<button type="button" class="btn btn-outline-secondary{{ ' active' if _d.state == _state }}" data-decision="{{ _state }}" aria-pressed="{{ 'true' if _d.state == _state else 'false' }}">{{ icon(_symbol) }}<span{% if not show_text %} class="visually-hidden"{% endif %}>{{ ' ' if show_text }}{{ t('owner_decision_' ~ _state) }}</span></button>
+{%- endfor -%}
+</div><span class="visually-hidden" role="status" data-owner-decision-status></span></div>
+{%- endmacro %}
+
 {% macro owner_review_badges(p, review_today) -%}
     {% set _d = owner_decision_for(p) %}
     {% set _classes = {'interested': 'success', 'waiting': 'warning', 'rejected': 'danger'} %}
     {% if _d.decided %}
-        <span class="badge bg-{{ _classes.get(_d.state, 'secondary') }} fw-normal"
+        <span class="badge bg-{{ _classes.get(_d.state, 'secondary') }} fw-normal" data-owner-badge
               {% if _d.reason %}title="{{ _d.reason }}"{% endif %}>
             {{ t(owner_decision_label_key(_d.state)) }}
         </span>
@@ -893,7 +942,7 @@
         </div>
 
 
-        {% set applied_filter_keys = [('search', 'search'), ('category', 'type'), ('municipality', 'municipality'), ('subtype', 'workspace_subtype'), ('source', 'source'), ('advertiser', 'workspace_seller'), ('verdict', 'workspace_verdict'), ('action', 'next_action'), ('sea_view', 'workspace_sea'), ('build', 'workspace_build'), ('sea_dist', 'workspace_distance'), ('measured', 'workspace_measured'), ('criteria', 'workspace_criteria'), ('similar', 'workspace_similar'), ('inv_metr', 'workspace_investment')] %}
+        {% set applied_filter_keys = [('search', 'search'), ('category', 'type'), ('municipality', 'municipality'), ('subtype', 'workspace_subtype'), ('source', 'source'), ('advertiser', 'workspace_seller'), ('verdict', 'workspace_verdict'), ('action', 'next_action'), ('sea_view', 'workspace_sea'), ('build', 'workspace_build'), ('sea_dist', 'workspace_distance'), ('measured', 'workspace_measured'), ('criteria', 'workspace_criteria'), ('similar', 'workspace_similar'), ('inv_metr', 'workspace_investment'), ('duplicates', 'workspace_duplicates'), ('duplicate_of', 'workspace_duplicate_of')] %}
         {% set applied = namespace(count=0) %}
         {% for key, label_key in applied_filter_keys if key != 'search' and base_args.get(key) %}
             {% set applied.count = applied.count + 1 %}
@@ -915,6 +964,15 @@
                     {% if current_filters.favorites %}
                         <input type="hidden" name="favorites" value="on">
                     {% endif %}
+                    {# The fold's two parameters have no control in the form
+                       (the reveal is one link beside the count); they travel
+                       so pressing Apply does not turn them off unseen. #}
+                    {% if current_filters.duplicates %}
+                        <input type="hidden" name="duplicates" value="{{ current_filters.duplicates }}">
+                    {% endif %}
+                    {% if current_filters.duplicate_of %}
+                        <input type="hidden" name="duplicate_of" value="{{ current_filters.duplicate_of }}">
+                    {% endif %}
                     {% if current_filters.hide_removed %}
                         <input type="hidden" name="hide_removed" value="on">
                     {% endif %}
@@ -927,6 +985,27 @@
                                    aria-label="{{ t('search') }}"
                                    placeholder="{{ t('search_properties') }}">
                         </div>
+                    {# The owner's queue switch (#630): New = undecided, Reviewed =
+                       the filter-only alias `decided` (never stored). It sits in
+                       the always-visible first row because it is the main
+                       switch now, and it is drawn whenever the page has any
+                       row, even if all are undecided. Counts come from the
+                       page's own selection (_owner_verdict_choices). #}
+                    {% if verdicts %}
+                    <label class="properties-queue-switch">{{ t('workspace_verdict') }}<select class="form-select form-select-sm properties-filter-select" id="verdict" name="verdict"
+                            aria-label="{{ t('workspace_verdict') }}">
+                        <option value="">{{ t('owner_verdict_default') }}</option>
+                        <option value="all" {{ 'selected' if current_filters.verdict == 'all' }}>{{ t('owner_verdict_all') }}</option>
+                        {% for choice in verdicts %}
+                            <option value="{{ choice.value }}"
+                                    {{ 'selected' if current_filters.verdict == choice.value }}>
+                                {{ t(choice.label_key) }} ({{ choice.count }})
+                            </option>
+                        {% endfor %}
+                    </select></label>
+                    {% elif current_filters.verdict %}
+                        <input type="hidden" name="verdict" value="{{ current_filters.verdict }}"/>
+                    {% endif %}
                         <button type="submit" class="btn btn-primary btn-sm">{{ t('apply') }}</button>
                     </div>
                     <details class="workspace-advanced-filters" id="additional-filters">
@@ -1018,41 +1097,6 @@
                     </select></label>
                     {% elif current_filters.advertiser %}
                         <input type="hidden" name="advertiser" value="{{ current_filters.advertiser }}"/>
-                    {% endif %}
-
-                    {# What the owner decided. `undecided` is offered like any
-                       other state -- it is most of this table, and leaving it
-                       out would make the three decided counts read as a tally
-                       of the whole page rather than of the part somebody has
-                       judged. Same reading as the badge, so an option's count
-                       and the badges it selects cannot disagree
-                       (services/owner_review.py). #}
-                    {# `> 1` as before, PLUS the one case the old guard would
-                       have broken: when every row on the page is hidden by the
-                       rejected rule, `verdicts` holds only `rejected` and that
-                       lone option IS the way back, so deleting it would leave
-                       the page no way to undo its own hide. Relaxing the guard
-                       to `{% if verdicts %}` outright was the first attempt and
-                       it put a useless one-option select on every page holding
-                       a single verdict state (caught by
-                       tests/test_owner_review_propagation.py). And the empty
-                       value no longer means "all" -- it is the hide -- so it
-                       says so, and `all` is spelled out beside it
-                       (services/owner_review.DECISION_ALL). #}
-                    {% if verdicts|length > 1 or (verdicts and rejected_hidden_count) %}
-                    <label>{{ t('workspace_verdict') }}<select class="form-select form-select-sm properties-filter-select" id="verdict" name="verdict"
-                            aria-label="{{ t('workspace_verdict') }}">
-                        <option value="">{{ t('owner_verdict_default') }}</option>
-                        <option value="all" {{ 'selected' if current_filters.verdict == 'all' }}>{{ t('owner_verdict_all') }}</option>
-                        {% for choice in verdicts %}
-                            <option value="{{ choice.value }}"
-                                    {{ 'selected' if current_filters.verdict == choice.value }}>
-                                {{ t(choice.label_key) }}{% if choice.count %} ({{ choice.count }}){% endif %}
-                            </option>
-                        {% endfor %}
-                    </select></label>
-                    {% elif current_filters.verdict %}
-                        <input type="hidden" name="verdict" value="{{ current_filters.verdict }}"/>
                     {% endif %}
 
                     {# Whether something is still outstanding, and whether it is
@@ -1313,7 +1357,7 @@
                        export never re-derives a default the page has already
                        resolved. #}
                     <a class="dropdown-item"
-                       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, verdict=current_filters.verdict or None, action=current_filters.action or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, sea_dist=current_filters.sea_dist or None, build=current_filters.build or None, measured=current_filters.measured or None, similar=current_filters.similar or None, criteria=current_filters.criteria or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else 'off', mode=current_filters.mode, recommendation_scope=current_filters.recommendation_scope or None, sort=current_filters.sort_by, order=current_filters.order) }}"
+                       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, verdict=current_filters.verdict or None, action=current_filters.action or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, sea_dist=current_filters.sea_dist or None, build=current_filters.build or None, measured=current_filters.measured or None, similar=current_filters.similar or None, criteria=current_filters.criteria or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else 'off', duplicates=current_filters.duplicates or None, duplicate_of=current_filters.duplicate_of or None, mode=current_filters.mode, recommendation_scope=current_filters.recommendation_scope or None, sort=current_filters.sort_by, order=current_filters.order) }}"
                        title="Download filtered data as CSV">
                         <i class="fas fa-download me-1"></i>{{ t('export_csv') }}
                     </a>
@@ -1452,6 +1496,21 @@
                         <span id="rejected-hidden-coverage" class="text-body-secondary small"
                               title="{{ t('rejected_hidden_tooltip') }}">
                             <i class="fas fa-ban me-1"></i>{{ t('rejected_hidden_line')|format(rejected_hidden_count) }}
+                        </span>
+                    {% endif %}
+                    {# Publications of the same home folded into one row (#633):
+                       the same shape as the two hides above -- a count and the
+                       one link that reveals them. `duplicates=show` is the only
+                       reveal; there is no second control. #}
+                    {% if duplicates_folded_count is defined and duplicates_folded_count %}
+                        <span id="duplicates-folded-coverage" class="text-body-secondary small"
+                              title="{{ t('dup_fold_line_title') }}">
+                            <i class="fas fa-clone me-1"></i>{{ tn('dup_fold_line', duplicates_folded_count) }}
+                            (<a id="duplicates-show-link" href="{{ url_for('main.properties', **dict(base_args, duplicates='show', duplicate_of=None, page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">{{ t('show_them') }}</a>)
+                        </span>
+                    {% elif duplicates_skipped is defined and duplicates_skipped %}
+                        <span id="duplicates-fold-skipped" class="text-warning small">
+                            <i class="fas fa-clone me-1"></i>{{ t('dup_fold_skipped')|format(duplicates_skipped_limit) }}
                         </span>
                     {% endif %}
                     {# The taste ORDER, when it has nothing to order by. A
@@ -1600,6 +1659,16 @@
 
         <!-- Properties Display -->
         {% if properties %}
+            {# One copy of the endpoint and the sentences for every row's
+               decision buttons: repeating them per row would add them to a
+               page that is already large. #}
+            <div id="owner-decision-config" hidden
+                 data-url-template="{{ url_for('api.set_property_review', property_id=0) }}"
+                 data-undo="{{ t('owner_decision_undo') }}"
+                 data-saved="{{ t('owner_decision_saved') }}"
+                 data-cleared="{{ t('owner_decision_cleared') }}"
+                 data-error="{{ t('owner_decision_error') }}"
+                 data-unconfirmed="{{ t('owner_decision_unconfirmed') }}"></div>
             {% if view_type == 'list' %}
             <!-- List View (Table) -->
             <div id="properties-list-view" class="view-container">
@@ -1614,7 +1683,7 @@
     <th class="col-actions" scope="col">{{ t('workspace_decision') }}</th>
 </tr></thead><tbody>
                                     {% for p in properties %}
-                                        <tr class="property-row {% if p.listing_status in ('removed', 'sold') %}listing-inactive{% endif %}"
+                                        <tr id="listing-{{ p.id }}" class="property-row {% if p.listing_status in ('removed', 'sold') %}listing-inactive{% endif %}{% if owner_decision_for(p).decided %} owner-decided{% endif %}"
                                             data-listing-status="{{ listing_verdict_for(p).state }}">
                                             <td class="lands-title-col col-title">
     {% set _row_photos = photos_for(p) %}
@@ -1650,6 +1719,7 @@
                                                 <div class="workspace-property-facts">
                                                     {% if show_subscription %}{{ subscription_badge(p, profile_names) }}{% endif %}
                                     {{ source_badge(p) }}
+                                                    {{ duplicate_badge(p, duplicate_groups, base_args, current_filters) }}
                                                     {{ advertiser_badge(p) }}
 
                                                     {{ sea_view_badge(p) }}
@@ -1710,6 +1780,7 @@
 <td class="col-price">{% if p.price %}
                                                     <div>
                                                         <strong>{{ '{:,.0f}'.format(p.price|float) }}€</strong>
+                                                        {{ duplicate_price_range(p, duplicate_groups) }}
                                                         {% if p.previous_price and p.price_change_amount %}
                                                             {% if p.price_change_amount|float < 0 %}
                                                                 <div class="price-change price-reduced">
@@ -1768,6 +1839,7 @@
                                                     {{ coverage_hint(p) }}
                                                 {% endif %}
                                                 </div>{% endif %}
+    {{ recommendation_vote(p, active_mode == 'recommendation') }}
     <details class="workspace-secondary-scores"><summary>{{ t('workspace_assessment') }}</summary>
         {% if active_mode == 'recommendation' %}<div>{{ t('score') }}: {{ score_badge(p.score_total|float if p.score_total is not none else none, '') }} {{ coverage_hint(p) }}</div>{% else %}{{ recommendation_reading(_recommendation) }}{% endif %}
 {# The taste score rides beside the score in EVERY
@@ -1806,10 +1878,10 @@
                                                     <i class="fas fa-star {{ 'text-warning' if p.is_favorite else 'text-muted' }}"
                                                        style="font-size: 1.1rem; cursor: pointer;"></i>
                                                 </button><a class="btn btn-outline-secondary" href="{{ url_for('main.property_detail', property_id=p.id) }}">{{ t('workspace_open') }}</a></div>
-    {{ recommendation_vote(p, active_mode == 'recommendation') }}
+    {{ owner_decision_buttons(p) }}
     {% set _decision = owner_decision_for(p) %}
     {{ owner_review_badges(p, review_today) }}
-    {% if not _decision.decided %}<span>{{ t('workspace_not_decided') }}</span>{% endif %}
+    <span data-owner-undecided{{ ' hidden' if _decision.decided }}>{{ t('workspace_not_decided') }}</span>
     {% set _action = owner_action_for(p, review_today) %}
     {% if _action.state != 'none' %}<div class="mt-2">{{ _action.action }}{% if _action.due_on %}<br>{{ _action.due_on.strftime('%d %b %Y') }}{% endif %}</div>{% endif %}
 </div></td>
@@ -1829,7 +1901,7 @@
                     {# Two per row from the tablet breakpoint up: the container
                        is no longer capped at 720px there, and one card spanning
                        the whole width just stretches the same content. #}
-                    <div class="col-md-6 col-xl-4 mb-4" data-recommendation-card data-listing-status="{{ listing_verdict_for(p).state }}">
+                    <div id="listing-{{ p.id }}" class="col-md-6 col-xl-4 mb-4 listing-anchor{% if owner_decision_for(p).decided %} owner-decided{% endif %}" data-recommendation-card data-listing-status="{{ listing_verdict_for(p).state }}">
                         <div class="card h-100 property-card {% if p.listing_status in ('removed', 'sold') %}listing-inactive-card{% endif %}"
                              data-property-id="{{ p.id }}" style="overflow: hidden;">
                             {% set _card_photos = photos_for(p) %}
@@ -1918,6 +1990,7 @@
                                 <div class="mb-2 d-flex flex-wrap gap-1">
                                     {% if show_subscription %}{{ subscription_badge(p, profile_names) }}{% endif %}
                                     {{ source_badge(p) }}
+                                    {{ duplicate_badge(p, duplicate_groups, base_args, current_filters) }}
                                     {{ advertiser_badge(p) }}
                                                     {{ owner_review_badges(p, review_today) }}
                                     {{ sea_view_badge(p) }}
@@ -1934,6 +2007,7 @@
                                         {% if p.price %}
                                             <div>
                                                 <strong class="text-success">€{{ '{:,.0f}'.format(p.price|float) }}</strong>
+                                                {{ duplicate_price_range(p, duplicate_groups) }}
                                                 {% if p.previous_price and p.price_change_amount %}
                                                     <div class="price-change-card mt-1">
                                                         {% if p.price_change_amount|float < 0 %}
@@ -1999,7 +2073,8 @@
                             </div>
 
                             <!-- Card Footer with Actions -->
-                            <div class="card-footer d-flex justify-content-between align-items-center">
+                            <div class="card-footer d-flex flex-wrap justify-content-between align-items-center gap-2">
+                                <div class="w-100">{{ owner_decision_buttons(p, true) }}</div>
                                 <div class="d-flex gap-2">
                                     {% if p.location_lat is not none and p.location_lon is not none %}
                                         {# Same as the table view: `focus` alone is not enough,
@@ -2164,6 +2239,7 @@
 
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/recommendation-vote.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/owner-decision.js') }}" defer></script>
 <script>
     // Subscription menu (issue #104). Progressive enhancement only: the
     // server reads the ticked checkboxes on its own, so with JavaScript off

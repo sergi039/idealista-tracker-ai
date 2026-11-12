@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 import re
 from dataclasses import asdict
@@ -12,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from app import db
 from config import Config
 from models import Property, SyncHistory
+from services.sync_history_status import STATUS_RUNNING
 from utils.email_headers import decode_header_value
 from utils.google_spend import (
     CAP_INGEST_GEOCODE,
@@ -28,9 +30,14 @@ from services.settings_service import SettingsService
 from services.search_profile_service import SearchProfileService
 from services.property_classification_service import PropertyClassificationService
 from utils.email_parser import EmailParser
-from utils.uid_cursor import UidBatchCursor, read_uid_file, write_uid_file
+from utils.uid_cursor import (
+    HeldUids,
+    UidBatchCursor,
+    read_uid_file,
+    write_uid_file,
+)
 from utils.idealista_extractors import (
-    extract_area_m2,
+    extract_card_area_m2,
     extract_idealista_property_id,
     extract_listing_title,
     extract_municipality_from_title,
@@ -44,6 +51,13 @@ from utils.idealista_extractors import (
 )
 
 logger = logging.getLogger(__name__)
+
+# How many held emails one run retries, least recently tried first. Small on
+# purpose: a portal that is refusing answers three times and the run stops
+# asking it, so a long list must not crowd new mail out of the batch.
+HELD_RETRY_MAX_PER_RUN = 20
+# How many held UIDs the run's history line names before it says "...".
+HELD_UIDS_SHOWN = 10
 
 # Fotocasa serves its "SENTIMOS LA INTERRUPCIÓN" page with a 200 after a
 # handful of closely spaced requests (measured 2026-08-17 during the
@@ -84,6 +98,8 @@ class PropertyIMAPService:
         self.user = Config.IMAP_USER
         self.password = Config.IMAP_PASSWORD
         self.folder = Config.IMAP_FOLDER
+        # Price updates the portal handlers applied during the current run.
+        self.portal_price_updated_count = 0
         self.search_query = Config.IMAP_SEARCH_QUERY
         self.max_emails = Config.MAX_EMAILS_PER_RUN
         self.email_parser = EmailParser()
@@ -95,6 +111,21 @@ class PropertyIMAPService:
         # its portal and PORTAL_MAX_CONSECUTIVE_REFUSALS stops that portal's
         # fetching for the rest of the run.
         self._portal_refusals: Dict[str, int] = {}
+        # Emails that could not be stored and wait for a retry instead of
+        # holding the cursor; loaded by get_idealista_emails(). `_held_now` is
+        # what failed in this run, so a later success for the same
+        # UID -- another listing of the same email -- cannot release it.
+        self._held: Optional[HeldUids] = None
+        self._held_now: set[int] = set()
+        # Held UIDs something of which was stored this run. Released only at
+        # the end of the run and only if nothing of the same email failed: one
+        # email can carry several listings, and releasing it at the first one
+        # stored would lose the second if that one failed or the run died.
+        self._release_candidates: set[int] = set()
+        # Ids of rows whose slow, free enrichment waits for the end of the
+        # run; None outside run_ingestion(), where a new row is enriched in
+        # full on the spot. See `_run_deferred_enrichment`.
+        self._deferred_enrichment: Optional[List[int]] = None
         # What MAX_EMAILS_PER_RUN left behind, or None when it did not bite.
         # Set by get_idealista_emails(), read by run_ingestion() so a capped
         # run says so instead of looking like a complete one.
@@ -276,6 +307,9 @@ class PropertyIMAPService:
             logger.error("Failed to save last UID: %s", e)
             return False
 
+    def _held_file_path(self) -> str:
+        return self._uid_file_path() + ".held.json"
+
     def _advance_uid_cursor(self, email_data: Dict[str, Any]) -> None:
         """Mark one email's UID as done and persist the resulting watermark.
 
@@ -283,12 +317,55 @@ class PropertyIMAPService:
         needed no write at all), so the persisted cursor can never step over an
         email whose rows never landed.
         """
+        uid = email_data.get("uid")
+        if uid in self._held_now:
+            return
+        if self._held is not None and uid in self._held:
+            self._release_candidates.add(uid)
+        self._pass_uid(uid)
+
+    def _release_stored_held_uids(self) -> None:
+        """Take off the retry list what this run stored in full."""
+        stored = sorted(self._release_candidates - self._held_now)
+        self._release_candidates = set()
+        if not stored or self._held is None:
+            return
+        try:
+            self._held.release(stored)
+        except Exception as e:
+            # Still listed, so it is retried once more and deduplicated.
+            logger.error("Failed to release held UIDs %s: %s", stored, e)
+
+    def _pass_uid(self, uid: Any) -> None:
         cursor = self._uid_cursor
         if cursor is None:
             return
-        if cursor.resolve(email_data.get("uid")) and cursor.watermark > 0:
+        if cursor.resolve(uid) and cursor.watermark > 0:
             if self._save_last_seen_uid(cursor.watermark):
                 self.last_seen_uid = cursor.watermark
+
+    def _hold_uid(self, uid: Any, reason: str) -> None:
+        """Park an email that could not be stored, and let the cursor pass it.
+
+        The retry list is written first: if that write fails the cursor stays
+        behind the email, which is the old behaviour and loses nothing.
+        """
+        if uid is None or self._held is None:
+            return
+        # Before the write, not after it: an email that failed is never
+        # released this run, whether or not recording the failure worked.
+        self._held_now.add(uid)
+        try:
+            self._held.hold(int(uid), reason)
+        except Exception as e:
+            logger.error(
+                "Failed to record held UID %s; the cursor stays behind it: %s",
+                uid,
+                e,
+            )
+            return
+        logger.warning("UID %s waits for a retry (%s)", uid, reason)
+        self._pass_uid(uid)
 
     def _decode_header_value(self, value: str) -> str:
         return decode_header_value(value)
@@ -520,8 +597,28 @@ class PropertyIMAPService:
                     client.select_folder(self.folder or "INBOX", readonly=True)
                     uids = client.search(["ALL"])
 
+                # Held emails first, a bounded number of them: they are older
+                # than the cursor by definition and no search past it finds
+                # them. One the mailbox no longer answers for is gone.
+                self._held = HeldUids(self._held_file_path())
+                self._held_now = set()
+                self._release_candidates = set()
+                in_mailbox = set(uids)
+                if in_mailbox:
+                    gone = [u for u in self._held.uids() if u not in in_mailbox]
+                    if gone:
+                        logger.warning(
+                            "Held UIDs %s are no longer in the mailbox; dropped",
+                            gone,
+                        )
+                        self._held.release(gone)
+                # Never more than half the batch: new mail always has room.
+                retry_uids = self._held.due(min(HELD_RETRY_MAX_PER_RUN, limit // 2))
+
                 if self.last_seen_uid > 0:
                     uids = [u for u in uids if u > self.last_seen_uid]
+                uids = [u for u in uids if u not in retry_uids]
+                new_limit = limit - len(retry_uids)
 
                 # Oldest first, and that is not the defect it looks like.
                 # `UidBatchCursor.watermark` advances only through *contiguous*
@@ -537,7 +634,7 @@ class PropertyIMAPService:
                 # to the sync history and to the page that renders it. #98, in
                 # the ingest: an absence of measurement drawn as a measurement.
                 matched = sorted(uids)
-                uids = matched[:limit]
+                uids = matched[:new_limit]
                 if len(matched) > len(uids):
                     self._truncation = {
                         "matched": len(matched),
@@ -557,11 +654,17 @@ class PropertyIMAPService:
                         self._truncation["oldest_left_uid"],
                         self._truncation["newest_left_uid"],
                     )
+                # The cursor tracks new mail only: a retried UID is unknown
+                # to it, so retrying can neither move nor hold the watermark.
+                # New mail goes first, so a portal that is still refusing the
+                # retries spends its refusal allowance on them last, after the
+                # new mail had its chance.
+                cursor = UidBatchCursor(uids, start=self.last_seen_uid)
+                uids = [*uids, *retry_uids]
                 if not uids:
                     return []
 
                 fetch_data = client.fetch(uids, ["RFC822", "INTERNALDATE"])
-                cursor = UidBatchCursor(uids, start=self.last_seen_uid)
                 self._uid_cursor = cursor
 
                 for uid in uids:
@@ -727,12 +830,19 @@ class PropertyIMAPService:
                         if is_price_change:
                             old_price_hint, new_price_hint = extract_price_change(body)
 
+                        # The subject carries the owner's saved-search NAME
+                        # ("... costa - 350k - 150m2!"), not this listing's
+                        # facts, so the body is read first for the price and
+                        # the area comes from the listing's own card only
+                        # (#645). A card that states none leaves it None.
                         price = (
                             new_price_hint
-                            or extract_price(subject)
                             or extract_price(body)
+                            or extract_price(subject)
                         )
-                        area = extract_area_m2(subject) or extract_area_m2(body)
+                        area = extract_card_area_m2(
+                            body, idealista_property_id=idealista_id
+                        )
                         attrs = extract_property_attributes(
                             body
                         ) or extract_property_attributes(subject)
@@ -790,11 +900,11 @@ class PropertyIMAPService:
                     except Exception:
                         failed = True
                         logger.error(
-                            "Failed to process UID %s - holding last_seen_uid "
-                            "behind it so the email is re-read next run",
+                            "Failed to process UID %s - it waits for a retry",
                             uid,
                             exc_info=True,
                         )
+                        self._hold_uid(uid, "the email could not be parsed")
                     finally:
                         if not emitted and not failed:
                             self._advance_uid_cursor({"uid": uid})
@@ -924,6 +1034,24 @@ class PropertyIMAPService:
                 )
                 db.session.rollback()
 
+        if self._deferred_enrichment is not None:
+            # Scored now on what is already known, so the row is usable in
+            # the list at once; scored again once the free pass has run.
+            self._score_new_property(prop)
+            self._deferred_enrichment.append(prop.id)
+            return
+        self._finish_new_property(prop)
+
+    def _finish_new_property(self, prop: Property) -> None:
+        """The slow, free half of a new row's enrichment, then its score.
+
+        Three paced Overpass round trips of about half a minute each on the
+        public instance: measured 2026-11-10 at ~95 s a listing, during which
+        every later email in the batch waited unsaved. So `run_ingestion`
+        defers this half until the mail is stored and the cursor has moved
+        (`_run_deferred_enrichment`); a caller outside a run still gets it
+        inline.
+        """
         # The free pass: OSM amenities (#152), quality of life
         # (#275) and the sea-view verdict. Ingestion ran the paid
         # enrichers and skipped these, so every new row arrived
@@ -967,19 +1095,47 @@ class PropertyIMAPService:
                 )
                 db.session.rollback()
 
-        if getattr(Config, "AUTO_PROPERTY_SCORING", False):
-            try:
-                from services.property_scoring_service import (
-                    PropertyScoringService,
-                )
+        self._score_new_property(prop)
 
-                scoring_service = PropertyScoringService()
-                scoring_service.calculate_for_property(prop, commit=True)
-            except Exception as scoring_error:
+    @staticmethod
+    def _score_new_property(prop: Property) -> None:
+        if not getattr(Config, "AUTO_PROPERTY_SCORING", False):
+            return
+        try:
+            from services.property_scoring_service import (
+                PropertyScoringService,
+            )
+
+            PropertyScoringService().calculate_for_property(prop, commit=True)
+        except Exception as scoring_error:
+            logger.warning(
+                "Property scoring failed for %s: %s",
+                prop.id,
+                scoring_error,
+            )
+            db.session.rollback()
+
+    def _run_deferred_enrichment(self) -> None:
+        """Give every row this run created the slow half it was owed.
+
+        Runs after the run's history row is written, so the mail is stored,
+        the cursor is past it and the run reads as finished before the first
+        Overpass request leaves. A process killed in here loses only
+        enrichment the free backfills restore (`utils/backfill_osm_amenities`,
+        `backfill_hazards`, `backfill_sea_view`, `backfill_quality_of_life`),
+        never a listing.
+        """
+        ids, self._deferred_enrichment = self._deferred_enrichment or [], None
+        for property_id in ids:
+            try:
+                prop = db.session.get(Property, property_id)
+                if prop is not None:
+                    self._finish_new_property(prop)
+            except Exception as deferred_error:
                 logger.warning(
-                    "Property scoring failed for %s: %s",
-                    prop.id,
-                    scoring_error,
+                    "Deferred enrichment failed for %s: %s",
+                    property_id,
+                    deferred_error,
                 )
                 db.session.rollback()
 
@@ -1143,6 +1299,74 @@ class PropertyIMAPService:
         self._enrich_new_property(prop)
         return True
 
+    @staticmethod
+    def _apply_price_update(
+        prop: Property,
+        new_price: Optional[float],
+        *,
+        previous_price_hint: Optional[float] = None,
+        email_date: Optional[datetime] = None,
+    ) -> bool:
+        """Apply a price read from an alert email to a row already stored.
+
+        The one writer of the price-history fields for every ingest door, so
+        the idealista branch and the portal branches cannot drift. Returns
+        True when the row changed. A missing, non-positive or non-finite
+        price changes nothing (never a zero), and neither does a price equal
+        to the stored one. The caller commits.
+        """
+        if new_price is None or not math.isfinite(new_price) or new_price <= 0:
+            return False
+
+        old_price = float(prop.price) if prop.price else None
+        if old_price is None:
+            # Backfill missing price (rare) or create a price history baseline
+            # using the hint from the email if available.
+            hint = (
+                float(previous_price_hint) if previous_price_hint is not None else None
+            )
+            prop.previous_price = hint
+            prop.price = new_price
+            if hint is not None and hint > 0:
+                price_change = new_price - hint
+                prop.price_change_amount = price_change
+                prop.price_change_percentage = (price_change / hint) * 100
+            prop.price_changed_date = datetime.now(timezone.utc)
+            prop.email_date = email_date
+            return True
+
+        if new_price == old_price:
+            return False
+
+        price_change = new_price - old_price
+        prop.previous_price = old_price
+        prop.price = new_price
+        prop.price_change_amount = price_change
+        prop.price_change_percentage = (
+            (price_change / old_price) * 100 if old_price > 0 else 0
+        )
+        prop.price_changed_date = datetime.now(timezone.utc)
+        prop.email_date = email_date
+        return True
+
+    @staticmethod
+    def _rescore_after_price_update(props: List[Property], label: Any) -> None:
+        """Rescore rows whose price just changed, when auto scoring is on."""
+        if not getattr(Config, "AUTO_PROPERTY_SCORING", False):
+            return
+        try:
+            from services.property_scoring_service import PropertyScoringService
+
+            scoring_service = PropertyScoringService()
+            for prop in props:
+                scoring_service.calculate_for_property(prop, commit=False)
+        except Exception as scoring_error:
+            logger.warning(
+                "Property scoring failed after price update for %s: %s",
+                label,
+                scoring_error,
+            )
+
     def _ingest_yaencontre_email(
         self,
         email_data: Dict[str, Any],
@@ -1168,12 +1392,22 @@ class PropertyIMAPService:
             listing_id = card.get("listing_id")
             if not listing_id:
                 continue
-            if (
-                fotocasa_import.existing_by_listing_id(
-                    int(listing_id), yaencontre_source.SOURCE_NAME
-                )
-                is not None
-            ):
+            known = fotocasa_import.existing_by_listing_id(
+                int(listing_id), yaencontre_source.SOURCE_NAME
+            )
+            if known is not None:
+                # The card carries the price with no fetch, so a repeat alert
+                # is the only signal a changed asking price will ever get.
+                if self._apply_price_update(
+                    known,
+                    card.get("price"),
+                    email_date=self._parse_email_received_at(
+                        email_data.get("email_received_at")
+                    ),
+                ):
+                    self._rescore_after_price_update([known], known.id)
+                    db.session.commit()
+                    self.portal_price_updated_count += 1
                 continue
             if self._create_portal_row(
                 dict(card),
@@ -1274,13 +1508,17 @@ class PropertyIMAPService:
     def run_ingestion(self, sync_type: str = "incremental") -> int:
         start_time = datetime.now(timezone.utc)
         sync_history = SyncHistory(
-            sync_type=sync_type, backend="imap", started_at=start_time
+            sync_type=sync_type,
+            backend="imap",
+            started_at=start_time,
+            status=STATUS_RUNNING,
         )
         db.session.add(sync_history)
         db.session.commit()
 
         processed_count = 0
         price_updated_count = 0
+        self.portal_price_updated_count = 0
         expired_count = 0
         sale_only = SettingsService.get_sale_only()
         excluded_categories = self._excluded_categories()
@@ -1288,6 +1526,7 @@ class PropertyIMAPService:
         try:
             self._uid_cursor = None
             self._portal_refusals = {}
+            self._deferred_enrichment = []
             # `_truncation` and `_fetch_error` are deliberately NOT reset here:
             # `get_idealista_emails` is their only writer and resets them at its
             # top, and a second reset makes each individually unfalsifiable --
@@ -1297,6 +1536,7 @@ class PropertyIMAPService:
 
             for email_data in emails:
                 email_failed = False
+                hold_reason = "its listing page could not be read"
                 try:
                     profile_id = email_data.get("search_profile_id")
                     deal_type = (email_data.get("deal_type") or "sale").strip().lower()
@@ -1419,62 +1659,18 @@ class PropertyIMAPService:
                             if idealista_id and prop.idealista_property_id is None:
                                 prop.idealista_property_id = idealista_id
 
-                            old_price = float(prop.price) if prop.price else None
-                            if old_price is None:
-                                # Backfill missing price (rare) or create a price history baseline
-                                # using the hint from the email if available.
-                                hint = (
-                                    float(previous_price_hint)
-                                    if previous_price_hint is not None
-                                    else None
-                                )
-                                prop.previous_price = hint
-                                prop.price = new_price
-                                if hint is not None and hint > 0:
-                                    price_change = new_price - hint
-                                    prop.price_change_amount = price_change
-                                    prop.price_change_percentage = (
-                                        price_change / hint
-                                    ) * 100
-                                prop.price_changed_date = datetime.now(timezone.utc)
-                                prop.email_date = email_date_obj
+                            if self._apply_price_update(
+                                prop,
+                                new_price,
+                                previous_price_hint=previous_price_hint,
+                                email_date=email_date_obj,
+                            ):
                                 any_updated = True
-                                continue
-
-                            if new_price == old_price:
-                                continue
-
-                            price_change = new_price - old_price
-                            price_change_percentage = (
-                                (price_change / old_price) * 100 if old_price > 0 else 0
-                            )
-
-                            prop.previous_price = old_price
-                            prop.price = new_price
-                            prop.price_change_amount = price_change
-                            prop.price_change_percentage = price_change_percentage
-                            prop.price_changed_date = datetime.now(timezone.utc)
-                            prop.email_date = email_date_obj
-                            any_updated = True
 
                         if any_updated:
-                            if getattr(Config, "AUTO_PROPERTY_SCORING", False):
-                                try:
-                                    from services.property_scoring_service import (
-                                        PropertyScoringService,
-                                    )
-
-                                    scoring_service = PropertyScoringService()
-                                    for prop in existing:
-                                        scoring_service.calculate_for_property(
-                                            prop, commit=False
-                                        )
-                                except Exception as scoring_error:
-                                    logger.warning(
-                                        "Property scoring failed after price update for %s: %s",
-                                        idealista_id or url,
-                                        scoring_error,
-                                    )
+                            self._rescore_after_price_update(
+                                existing, idealista_id or url
+                            )
                             db.session.commit()
                             price_updated_count += 1
                             continue
@@ -1540,6 +1736,7 @@ class PropertyIMAPService:
                     self._enrich_new_property(prop)
                 except Exception as e:
                     email_failed = True
+                    hold_reason = f"storing it failed ({type(e).__name__})"
                     logger.error(
                         "Failed to process email %s: %s",
                         email_data.get("source_email_id"),
@@ -1548,20 +1745,20 @@ class PropertyIMAPService:
                     db.session.rollback()
                     continue
                 finally:
-                    # The cursor may only pass an email whose DB work landed;
-                    # a failed one holds it back so the next run re-fetches the
-                    # unprocessed tail (issue #24).
+                    # The cursor may only pass an email whose DB work landed
+                    # (issue #24) or one parked for a retry: a failed email
+                    # must be neither lost nor allowed to keep every later one
+                    # unread behind it.
                     if email_failed:
-                        logger.error(
-                            "Holding last_seen_uid at %s: email %s was not persisted",
-                            self.last_seen_uid,
-                            email_data.get("source_email_id"),
-                        )
+                        self._hold_uid(email_data.get("uid"), hold_reason)
                     else:
                         self._advance_uid_cursor(email_data)
 
+            self._release_stored_held_uids()
             sync_history.new_properties_added = processed_count
-            sync_history.price_updated_count = price_updated_count
+            sync_history.price_updated_count = (
+                price_updated_count + self.portal_price_updated_count
+            )
             sync_history.expired_count = expired_count
             # `partial` is this table's existing word for "did what it could",
             # and a capped run is exactly that: the mail it did not read is
@@ -1591,11 +1788,26 @@ class PropertyIMAPService:
                 )
             else:
                 sync_history.status = "completed"
+            # A run that left an email waiting did not finish its mail, and
+            # `completed` would say it had.
+            held = self._held.uids() if self._held is not None else []
+            if held and sync_history.status != "failed":
+                shown = ", ".join(str(u) for u in held[:HELD_UIDS_SHOWN])
+                more = "" if len(held) <= HELD_UIDS_SHOWN else ", ..."
+                waiting = (
+                    f"{len(held)} email(s) could not be stored and wait for a "
+                    f"retry (UIDs {shown}{more})"
+                )
+                sync_history.status = "partial"
+                sync_history.error_message = "; ".join(
+                    part for part in (sync_history.error_message, waiting) if part
+                )
             sync_history.completed_at = datetime.now(timezone.utc)
             sync_history.sync_duration = int(
                 (datetime.now(timezone.utc) - start_time).total_seconds()
             )
             db.session.commit()
+            self._run_deferred_enrichment()
             return processed_count
 
         except Exception as e:
@@ -1607,6 +1819,7 @@ class PropertyIMAPService:
                 (datetime.now(timezone.utc) - start_time).total_seconds()
             )
             db.session.commit()
+            self._run_deferred_enrichment()
             return 0
 
     def run_full_sync(self) -> int:

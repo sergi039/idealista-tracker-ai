@@ -31,6 +31,7 @@ import pytest
 
 from app import create_app, db
 from config import Config
+from utils.uid_cursor import HeldUids
 from models import Property, SearchProfile
 from services import (
     advertiser,
@@ -116,6 +117,10 @@ def app(monkeypatch):
         app.config["DEFAULT_PROFILE_ID"] = profile.id
         yield app
         db.drop_all()
+
+
+def _held(uid_file) -> list:
+    return HeldUids(str(uid_file) + ".held.json").uids()
 
 
 @pytest.fixture
@@ -391,7 +396,7 @@ class TestMilanunciosIngestion:
             service = _service()
             assert service.run_ingestion(sync_type="test") == 0
             assert Property.query.count() == 0
-            assert service.last_seen_uid == 0, "held for the next run"
+            assert _held(uid_file) == [1], "held for the next run"
 
     def test_a_gone_or_demand_ad_is_consumed(self, app, uid_file, imap, monkeypatch):
         monkeypatch.setattr(

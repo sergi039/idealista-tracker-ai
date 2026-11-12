@@ -220,6 +220,26 @@ def listing_id_clause(model: Any, listing_id: int):
     )
 
 
+def listing_reference_clause(model: Any, search_query: Optional[str]):
+    """Only the rows a pasted id or link NAMES, else None.
+
+    The id and URL halves of `listing_search_clause`, without its text columns:
+    for a caller that has to resolve one listing ("link another listing by id
+    or URL", #633) and must not match on a word in a description.
+    """
+    read = interpret_search(search_query)
+    if read is None:
+        return None
+    clauses: List[Any] = []
+    if read.listing_id is not None:
+        clauses.append(listing_id_clause(model, read.listing_id))
+    if read.url_fragment:
+        clauses.append(
+            model.url.ilike(f"%{_escape_like(read.url_fragment)}%", escape=_LIKE_ESCAPE)
+        )
+    return or_(*clauses) if clauses else None
+
+
 def listing_search_clause(model: Any, search_query: Optional[str]):
     """The listing search box, as one SQLAlchemy clause (None when empty).
 

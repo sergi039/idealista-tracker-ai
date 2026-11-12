@@ -20,7 +20,7 @@ import pytest
 
 from app import create_app, db
 from models import Property, SearchProfile
-from services import taste_service
+from services import taste_recommendation, taste_service
 from tests import setup_test_environment
 
 
@@ -209,6 +209,46 @@ def test_recommendation_map_keeps_the_collection_and_returns_to_it(
     assert 'aria-current="true"' in re.search(rf'<a id="{tab}"[^>]+>', returned.text)[0]
 
 
+@pytest.mark.parametrize("dirty", [False, True], ids=["current", "dirty-profile"])
+def test_a_similar_row_with_unknown_facts_is_on_every_recommended_surface(
+    selection, dirty
+):
+    client, rows = selection
+    reference = db.session.get(Property, rows["reference"])
+    close = Property(
+        source_email_id="recommendation-export:close",
+        title="close to the favorite",
+        search_profile_id=reference.search_profile_id,
+        property_category="residential",
+        property_subtype="house",
+        area_type="built",
+        area=178,
+        price=395000,
+        municipality="Laxe",
+        location_lat=43.21,
+        location_lon=-8.91,
+    )
+    db.session.add(close)
+    if dirty:
+        reference.owner_verdict_reason += " Хочу тишину."
+    db.session.commit()
+    expected = {rows["matching"], close.id}
+
+    page_ids, csv_ids = _page_and_export(
+        client, mode="recommendation", sort="price", order="asc"
+    )
+    assert set(page_ids) == set(csv_ids) == expected
+
+    page = client.get(
+        "/properties?profile_id=all&municipality=Laxe&view_type=list"
+        "&mode=recommendation&sort=price&order=asc"
+    )
+    assert "Earlier recommendation" not in page.text
+    map_page = client.get(_href(page.text, "view-map-btn"))
+    markers = json.loads(re.search(r"const markers = (\[.*?\]);", map_page.text)[1])
+    assert {marker["id"] for marker in markers} == expected
+
+
 def test_review_tab_exports_incomplete_listings_and_discloses_unapplied_rules(
     selection,
 ):
@@ -226,8 +266,13 @@ def test_review_tab_exports_incomplete_listings_and_discloses_unapplied_rules(
     assert page_ids == csv_ids == [rows["unknown"]]
 
 
-def test_strict_empty_state_links_to_unmeasured_and_counts_its_clear_target(selection):
+def test_strict_empty_state_links_to_unmeasured_and_counts_its_clear_target(
+    selection, monkeypatch
+):
     client, rows = selection
+    # Similarity would keep a recommendation after the filters are cleared;
+    # this is the case where none remains and the link falls back to the catalog.
+    monkeypatch.setattr(taste_recommendation, "RECOMMENDED_MIN_SIMILARITY", 101.0)
     reference = db.session.get(Property, rows["reference"])
     reference.search_profile.criteria = {"min_house_m2": 150, "min_plot_m2": 700}
     db.session.commit()
@@ -325,7 +370,14 @@ def test_recommendations_group_portal_aliases(selection):
     # The alias remains accessible from its own portal filter and in the catalog.
     page_ids, csv_ids = _page_and_export(client, **params, source="yaencontre")
     assert page_ids == csv_ids == [alias_id]
+    # The catalog folds the three publications of one home into its
+    # reference (#633: the five seed pairs are `confirmed`), page and export
+    # agreeing; `duplicates=show` is the way back to all three.
     page_ids, csv_ids = _page_and_export(client, mode="combined")
+    assert reference.id in page_ids
+    assert {alias_id, seaia.id}.isdisjoint(page_ids)
+    assert set(page_ids) == set(csv_ids)
+    page_ids, csv_ids = _page_and_export(client, mode="combined", duplicates="show")
     assert {reference.id, alias_id, seaia.id} <= set(page_ids) == set(csv_ids)
 
     # A canonical advert that needs verification cannot hide a confirmed alias.

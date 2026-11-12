@@ -67,6 +67,27 @@ def isolated_portal_test_route(monkeypatch):
     monkeypatch.setattr(ListingStatusService, "REFUSED_SOURCES", frozenset())
 
 
+@pytest.fixture(autouse=True)
+def isolated_uid_cursor(monkeypatch, tmp_path_factory):
+    """Every test gets its own mail cursor files, never the checkout's.
+
+    `Config.LAST_SEEN_UID_PROPERTIES_PATH` defaults to `DATA_DIR/
+    .last_seen_uid_properties`, and in the main checkout `DATA_DIR` is the
+    bind mount the deployment reads its cursor from. Any ingestion test that
+    forgot to move the path wrote the fake mailbox's last UID there: on
+    2026-11-09 the production cursor read 99, and every scheduled run re-read
+    the 200 oldest emails instead of the new ones. Redirected here, once, so
+    a new test cannot forget; a test that sets its own path still wins.
+    """
+    directory = tmp_path_factory.mktemp("uid-cursor")
+    monkeypatch.setattr(Config, "LAST_SEEN_UID_PATH", str(directory / ".last_seen_uid"))
+    monkeypatch.setattr(
+        Config,
+        "LAST_SEEN_UID_PROPERTIES_PATH",
+        str(directory / ".last_seen_uid_properties"),
+    )
+
+
 def pytest_runtest_setup(item) -> None:
     """Close every refusal breaker before every test.
 
@@ -473,6 +494,16 @@ def pytest_configure(config: pytest.Config) -> None:
         tempfile.mkdtemp(prefix="idealista-spend-ledger-"), "google_spend.jsonl"
     )
     google_spend.ledger_path = lambda: _ledger
+
+    # The mail cursor leaves `DATA_DIR` for the whole session, for the same
+    # reason and before any fixture of any scope can run. `isolated_uid_cursor`
+    # then narrows it to one directory per test; this is what a session- or
+    # module-scoped fixture sees, since those run before a function-scoped one.
+    _cursor_dir = tempfile.mkdtemp(prefix="idealista-uid-cursor-")
+    Config.LAST_SEEN_UID_PATH = os.path.join(_cursor_dir, ".last_seen_uid")
+    Config.LAST_SEEN_UID_PROPERTIES_PATH = os.path.join(
+        _cursor_dir, ".last_seen_uid_properties"
+    )
 
 
 def _skip_reason(report: Any) -> str:

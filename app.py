@@ -342,6 +342,9 @@ def create_app(testing: bool = False):
 
     app.jinja_env.globals["listing_source_for"] = source_of
     app.jinja_env.globals["listing_source_label"] = source_label
+    from utils.listing_source import safe_external_url
+
+    app.jinja_env.filters["safe_external_url"] = safe_external_url
 
     # Who is selling: the owner, or an agency. Four states, most of the answers
     # derived from the alert link the row already carries, and the badge, the
