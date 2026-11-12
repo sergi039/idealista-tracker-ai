@@ -1,20 +1,28 @@
-"""Catastro building collections: what a complete answer is, and what is not."""
+"""Real parcel/footprint calibration, refusal boundaries and locked writes."""
 
 from copy import deepcopy
+from decimal import Decimal
+import json
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 import xml.etree.ElementTree as ET
 
 import pytest
-from shapely.geometry import box
+from shapely.geometry import box, MultiPolygon
+from sqlalchemy import text
 
 from tests import setup_test_environment
 
 setup_test_environment()
+from app import create_app, db  # noqa: E402
+from models import Property  # noqa: E402
 from services import (  # noqa: E402
     cadastre_service as c,
     cadastre_locate as locate,
     neighbours_service as n,
 )
+from services.enrichment_write import EnrichmentWriteContractError  # noqa: E402
 
 # Catastro's live answers for the owner's two references (rows 969 and 1282),
 # trimmed to the buildings within 100 m, the parcel's own building and two or
@@ -24,7 +32,94 @@ DATA = Path(__file__).parent / "data" / "neighbours"
 REF = "4463719NH1946S"
 
 
-@pytest.mark.parametrize("row,reference,features", [(969, REF, 10)])
+def prop(**kwargs):
+    fields = dict(
+        id=969,
+        cadastral_reference=REF,
+        location_lat=43.5,
+        location_lon=-8.5,
+        location_accuracy="precise",
+        enrichment={},
+        municipality="Miño",
+        description="",
+        property_category="house",
+        area=100,
+        plot_area=1000,
+        area_type="built",
+        attributes={},
+        environment={},
+        travel={},
+    )
+    fields.update(kwargs)
+    return SimpleNamespace(**fields)
+
+
+def payload(p, **kwargs):
+    result = dict(
+        status="ok",
+        subject=n.subject(p),
+        source="catastro_inspire_buildings",
+        reference=REF,
+        epsg=25829,
+        searched_m=100,
+        measured_at="2026-11-04T13:00:00Z",
+        buildings_within_50m=0,
+        buildings_within_100m=0,
+        nearest_building_m=None,
+        agricultural_buildings_within_100m=0,
+        industrial_buildings_within_100m=0,
+        unknown_use_buildings_within_100m=0,
+    )
+    result.update(kwargs)
+    return result
+
+
+def _measure_reference(row, reference):
+    parcel = n._shape(
+        c._parse_gml((DATA / f"{row}_parcel.gml").read_text(), 25829)["polygons"]
+    )
+    buildings = n.parse_buildings((DATA / f"{row}_buildings.gml").read_text(), 25829)
+    return n.measure_buildings(parcel, reference, buildings)
+
+
+@pytest.mark.parametrize(
+    "row,reference,within100,nearest",
+    [(969, REF, 7, 17.8646942317), (1282, "15044A01901483", 11, 3.7759133525)],
+)
+def test_owner_reference_calibration_counts(row, reference, within100, nearest):
+    measured = _measure_reference(row, reference)
+    assert measured == dict(
+        buildings_within_50m=3,
+        buildings_within_100m=within100,
+        nearest_building_m=pytest.approx(nearest),
+        agricultural_buildings_within_100m=0,
+        industrial_buildings_within_100m=0,
+        unknown_use_buildings_within_100m=0,
+    )
+
+
+def test_distance_is_from_entire_parcel_excluding_own_not_just_centroid():
+    parcel = box(0, 0, 1000, 10)
+    buildings = [
+        dict(parcels={REF}, uses={"1_residential"}, shape=box(1, 1, 10, 5)),
+        dict(parcels={"other"}, uses={"2_agriculture"}, shape=box(1049, 0, 1055, 5)),
+        dict(parcels={"another"}, uses={"3_industrial"}, shape=box(-100, 0, -99, 2)),
+        dict(parcels={"touching"}, uses=set(), shape=box(1000, 0, 1004, 5)),
+    ]
+    result = n.measure_buildings(parcel, REF, buildings)
+    assert result == dict(
+        buildings_within_50m=2,
+        buildings_within_100m=3,
+        nearest_building_m=0,
+        agricultural_buildings_within_100m=1,
+        industrial_buildings_within_100m=1,
+        unknown_use_buildings_within_100m=1,
+    )
+
+
+@pytest.mark.parametrize(
+    "row,reference,features", [(969, REF, 10), (1282, "15044A01901483", 14)]
+)
 def test_owner_fixture_parses_every_building(row, reference, features):
     buildings = n.parse_buildings((DATA / f"{row}_buildings.gml").read_text(), 25829)
     assert len(buildings) == features
@@ -152,6 +247,57 @@ def test_wrong_crs_and_duplicate_ids_refuse():
     root.append(deepcopy(root[0]))
     with pytest.raises(c.CadastreError):
         n.parse_buildings(ET.tostring(root, encoding="unicode"), 25829)
+
+
+def test_precise_requires_unique_zero_distance_parcel(monkeypatch):
+    p = prop(cadastral_reference=None)
+    monkeypatch.setattr(
+        locate,
+        "parcels_at",
+        lambda *_: dict(status="ok", parcels=[dict(reference=REF, distance_m=0)]),
+    )
+    assert n._resolve_parcel(p)["reference"] == REF
+    monkeypatch.setattr(
+        locate,
+        "parcels_at",
+        lambda *_: dict(status="ok", parcels=[dict(reference=REF, distance_m=2)]),
+    )
+    assert n._resolve_parcel(p)["status"] == "no_parcel"
+
+
+def test_privacy_circle_never_reaches_coordinate_lookup(monkeypatch):
+    p = prop(cadastral_reference=None, location_accuracy="approximate")
+    mock = Mock(side_effect=AssertionError("privacy circle lookup"))
+    monkeypatch.setattr(locate, "parcels_at", mock)
+    assert n.NeighboursService().measure(p)["status"] == "no_parcel"
+    mock.assert_not_called()
+
+
+def test_exact_address_can_place_an_approximate_row(monkeypatch):
+    p = prop(
+        cadastral_reference=None,
+        location_accuracy="approximate",
+        enrichment={"geocoding": {"query": "Calle Real, 8, Miño"}},
+    )
+    monkeypatch.setattr(n, "_row_province", lambda _: "15")
+    monkeypatch.setattr(locate.PlaceIndex, "province", lambda *_: "A CORUÑA")
+    monkeypatch.setattr(
+        locate,
+        "streets",
+        lambda *_: {
+            "status": "ok",
+            "streets": [{"sigla": "CL", "name": "REAL", "code": "1"}],
+        },
+    )
+    found = Mock(return_value={"status": "ok", "reference": REF})
+    monkeypatch.setattr(locate, "parcel_for_address", found)
+    monkeypatch.setattr(
+        locate, "parcels_at", Mock(side_effect=AssertionError("privacy circle"))
+    )
+    assert n._resolve_parcel(p)["reference"] == REF
+    found.assert_called_once_with(
+        "A CORUÑA", "Miño", "CL", "REAL", "8", require_unique_parcel=True
+    )
 
 
 def test_address_multiple_parcels_never_selects_first(monkeypatch):
@@ -312,6 +458,197 @@ def test_address_naming_one_parcel_is_read(monkeypatch, result):
     assert (answer["status"], answer["reference"]) == (c.OK, REF)
 
 
+def test_measure_uses_shared_transport_full_buffer_and_single_attempt(monkeypatch):
+    p = prop()
+    monkeypatch.setattr(
+        n,
+        "_metric_parcel",
+        lambda _: (MultiPolygon([box(1000, 2000, 1010, 2020)]), 25829),
+    )
+    monkeypatch.setattr(c, "_cache_get", lambda _: None)
+    monkeypatch.setattr(c, "_cache_set", lambda *_: None)
+    calls = []
+    monkeypatch.setattr(c.CATASTRO_GATE, "wait", lambda: 0)
+    monkeypatch.setattr(c.CATASTRO_GATE, "mark", lambda: None)
+
+    def transport(url, **kwargs):
+        calls.append((url, kwargs, c.CATASTRO_GATE._interval()))
+        return SimpleNamespace(
+            status_code=200,
+            text='<FeatureCollection xmlns="http://www.opengis.net/wfs/2.0" numberMatched="0" numberReturned="0"/>',
+        )
+
+    monkeypatch.setattr(c.requests, "get", transport)
+    result = n.NeighboursService().measure(p)
+    assert result["status"] == "ok" and result["buildings_within_100m"] == 0
+    assert len(calls) == 1
+    assert calls[0][1]["params"]["bbox"] == "900.0,1900.0,1110.0,2120.0"
+    assert calls[0][2] == 12
+    assert c.CATASTRO_GATE._interval() == 1
+
+
+def test_refusal_never_retries_or_becomes_zero(monkeypatch):
+    monkeypatch.setattr(n, "_metric_parcel", lambda _: (box(0, 0, 10, 10), 25829))
+    monkeypatch.setattr(c, "_cache_get", lambda _: None)
+    monkeypatch.setattr(c.CATASTRO_GATE, "wait", lambda: 0)
+    monkeypatch.setattr(c.CATASTRO_GATE, "mark", lambda: None)
+    transport = Mock(return_value=SimpleNamespace(status_code=500, text=""))
+    monkeypatch.setattr(c.requests, "get", transport)
+    result = n.NeighboursService().measure(prop())
+    assert result["status"] == "unavailable" and "buildings_within_100m" not in result
+    assert transport.call_count == 1
+
+
+def test_subject_stable_for_sql_numeric_roundtrip_and_stale_on_change():
+    p = prop()
+    old = n.subject(p)
+    p.location_lat = Decimal("43.5000000")
+    p.location_lon = Decimal("-8.5000000")
+    assert n.subject(p) == old
+    p.enrichment["neighbours"] = payload(p)
+    assert n.read_verdict(p)
+    p.location_accuracy = "approximate"
+    assert n.read_verdict(p) == {}
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("buildings_within_50m", True),
+        ("nearest_building_m", 5),
+        ("unknown_use_buildings_within_100m", 1),
+        ("epsg", 4326),
+        ("source", "photo"),
+    ],
+)
+def test_malformed_stored_measurement_never_supports_descriptor(field, value):
+    p = prop()
+    p.enrichment["neighbours"] = payload(p, **{field: value})
+    assert n.read_verdict(p) == {}
+
+
+@pytest.fixture
+def app():
+    setup_test_environment()
+    app = create_app()
+    app.config["TESTING"] = True
+    with app.app_context():
+        db.create_all()
+        yield app
+        db.session.remove()
+        db.drop_all()
+
+
+def test_writer_refreshes_under_lock_and_preserves_concurrent_sibling(app, monkeypatch):
+    p = Property(
+        source_email_id="neighbours-lock",
+        cadastral_reference=REF,
+        location_lat=43.5,
+        location_lon=-8.5,
+        location_accuracy="precise",
+        enrichment={},
+    )
+    db.session.add(p)
+    db.session.commit()
+    service = n.NeighboursService()
+
+    def measure(row):
+        result = payload(row)
+        db.session.execute(
+            text("UPDATE properties SET enrichment=:e WHERE id=:i"),
+            {"e": json.dumps({"sea": {"status": "ok"}}), "i": row.id},
+        )
+        return result
+
+    monkeypatch.setattr(service, "measure", measure)
+    refresh = db.session.refresh
+    seen = []
+
+    def track(row, **kwargs):
+        seen.append(kwargs)
+        return refresh(row, **kwargs)
+
+    monkeypatch.setattr(db.session, "refresh", track)
+    service.enrich(p, commit=True)
+    assert p.enrichment["sea"] == {"status": "ok"}
+    assert p.enrichment["neighbours"]["status"] == "ok"
+    assert seen == [{"with_for_update": True}]
+
+
+def test_writer_drops_measurement_when_origin_changes_under_lock(app, monkeypatch):
+    p = Property(
+        source_email_id="neighbours-move",
+        cadastral_reference=REF,
+        location_lat=43.5,
+        location_lon=-8.5,
+        location_accuracy="precise",
+        enrichment={},
+    )
+    db.session.add(p)
+    db.session.commit()
+    service = n.NeighboursService()
+
+    def measure(row):
+        result = payload(row)
+        db.session.execute(
+            text("UPDATE properties SET location_lat=43.6 WHERE id=:i"), {"i": row.id}
+        )
+        return result
+
+    monkeypatch.setattr(service, "measure", measure)
+    result = service.enrich(p, commit=True)
+    assert (
+        result["status"] == "unavailable"
+        and result["reason"] == "subject_changed_during_lookup"
+    )
+    assert n.read_verdict(p) == {}
+
+
+def test_dirty_session_refuses_before_network(app, monkeypatch):
+    p = Property(source_email_id="neighbours-dirty", enrichment={})
+    db.session.add(p)
+    db.session.commit()
+    p.title = "pending"
+    service = n.NeighboursService()
+    mock = Mock()
+    monkeypatch.setattr(service, "measure", mock)
+    with pytest.raises(EnrichmentWriteContractError):
+        service.enrich(p, commit=True)
+    mock.assert_not_called()
+    db.session.rollback()
+
+
+def test_refusal_preserves_only_same_subject_success(app, monkeypatch):
+    p = Property(
+        source_email_id="neighbours-refusal",
+        cadastral_reference=REF,
+        location_lat=43.5,
+        location_lon=-8.5,
+        location_accuracy="precise",
+        enrichment={},
+    )
+    db.session.add(p)
+    db.session.commit()
+    p.enrichment = {"neighbours": payload(p), "sea": {"status": "ok"}}
+    db.session.commit()
+    service = n.NeighboursService()
+    monkeypatch.setattr(
+        service,
+        "measure",
+        lambda row: dict(
+            status="unavailable", subject=n.subject(row), reason="refused"
+        ),
+    )
+    result = service.enrich(p, commit=True)
+    assert result["status"] == "ok"
+    assert p.enrichment["sea"] == {"status": "ok"}
+    p.location_lat = 43.6
+    db.session.commit()
+    result = service.enrich(p, commit=True)
+    assert result["status"] == "unavailable"
+    assert n.read_verdict(p) == {}
+
+
 def test_gate_policy_is_context_local():
     from contextvars import Context
 
@@ -319,6 +656,26 @@ def test_gate_policy_is_context_local():
         assert c.CATASTRO_GATE._interval() == 12
         assert Context().run(c.CATASTRO_GATE._interval) == 1
     assert c.CATASTRO_GATE._interval() == 1
+
+
+def test_metric_parcel_uses_own_reference_point_and_refuses_wrong_reference(
+    monkeypatch,
+):
+    mapped = dict(status="ok", reference_point=(43.5, -8.5))
+    measured = c._parse_gml((DATA / "969_parcel.gml").read_text(), 25829)
+    measured["status"] = "ok"
+    calls = []
+
+    def source(fetch, *, cache_key):
+        calls.append(cache_key)
+        return mapped if len(calls) % 2 else measured
+
+    monkeypatch.setattr(c, "_source", source)
+    parcel, epsg = n._metric_parcel(REF)
+    assert epsg == 25829 and parcel.area == pytest.approx(1616.24565)
+    measured["reference"] = "15044A01901483"
+    with pytest.raises(c.CadastreError):
+        n._metric_parcel(REF)
 
 
 def test_building_cap_and_open_ring_are_refused(monkeypatch):
@@ -330,6 +687,54 @@ def test_building_cap_and_open_ring_are_refused(monkeypatch):
     )
     with pytest.raises(c.CadastreError):
         c.surface_polygons(ring)
+
+
+def test_shortlist_plan_compare_is_under_lock_after_network(app, monkeypatch):
+    p = Property(
+        source_email_id="neighbours-plan-race",
+        cadastral_reference=REF,
+        location_lat=43.5,
+        location_lon=-8.5,
+        location_accuracy="precise",
+        enrichment={},
+    )
+    db.session.add(p)
+    db.session.commit()
+    service = n.NeighboursService()
+    concurrent = payload(
+        p, buildings_within_50m=1, buildings_within_100m=1, nearest_building_m=10
+    )
+
+    def measure(row):
+        result = payload(row)
+        db.session.execute(
+            text("UPDATE properties SET enrichment=:e WHERE id=:i"),
+            {"e": json.dumps({"neighbours": concurrent}), "i": row.id},
+        )
+        # Commit emulates the other writer independently of the writer's rollback.
+        db.session.commit()
+        return result
+
+    monkeypatch.setattr(service, "measure", measure)
+    with pytest.raises(ValueError, match="plan changed during lookup"):
+        service.enrich(p, commit=True, expected_previous=None)
+    assert p.enrichment["neighbours"] == concurrent
+
+
+def test_mixed_known_and_unknown_uses_cannot_support_agricultural_absence():
+    result = n.measure_buildings(
+        box(0, 0, 10, 10),
+        REF,
+        [
+            dict(
+                parcels={"other"},
+                shape=box(20, 0, 22, 2),
+                uses={"1_residential", "unknown_use"},
+            )
+        ],
+    )
+    assert result["unknown_use_buildings_within_100m"] == 1
+    assert result["agricultural_buildings_within_100m"] == 0
 
 
 def test_unknown_collection_container_does_not_mean_no_buildings():
