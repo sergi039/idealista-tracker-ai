@@ -118,7 +118,7 @@ def test_the_watcher_keeps_its_files_where_the_state_is():
         "take every one of the watcher's files with it\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
-    assert result.stdout.count("OK: ") == 4, result.stdout
+    assert result.stdout.count("OK: ") == 6, result.stdout
 
 
 def test_moving_the_state_directory_never_leaves_the_app_down():
