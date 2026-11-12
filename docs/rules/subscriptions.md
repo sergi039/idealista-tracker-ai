@@ -139,6 +139,22 @@ things about it are load bearing:
   `utils/backfill_plot_area.py` filled 82 rows across the table (free,
   paced 30 s, and it records a measured "page states no plot" so a run
   stops re-fetching pages that already answered).
+* **A plot the listing text states is read, with its source** (#634,
+  `services/plot_text.py`). It is written to `plot_area` -- the column the SQL
+  twins read, so Python and SQL stay identical without a second input -- and
+  `enrichment["plot_from_text"]` records value, field, snippet, extractor
+  version, portal and UTC time in the same transaction (no migration). It
+  never overwrites a stated or hand-set plot, and refuses a house figure
+  ("construidos", "útiles", "de vivienda"), a cut-off one ("parcela de 6...":
+  idealista's alert text is truncated), two different figures, and anything
+  `MAX_CREDIBLE_M2` (the one credibility rule) or the `NUMERIC(10,2)` column
+  cannot hold; a refusal leaves `unknown`, never `fail`. `solar` counts only
+  as the noun "solar de N m²". Ingestion calls it after `build_property`
+  (never inside it) and, for idealista, on the row's own card only;
+  `utils/backfill_plot_from_text.py` is the dry-run-first, snapshot-backed
+  pass over stored rows and prints the before/after unknown share. Yaencontre
+  cards carry no text and its pages may not be fetched, so those rows stay
+  unknown; only the per-press cadastre can state their plot.
 * **A row the owner has judged is never hidden.** Favorited or reviewed
   beats the filter: a listing somebody already decided about must not
   vanish because a bound says so.

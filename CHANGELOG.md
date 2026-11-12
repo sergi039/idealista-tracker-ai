@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: plot read from listing text (#634)
+- `services/plot_text.py` reads a plot ("parcela de 745 m²", "finca de 2 ha")
+  from the description or the idealista card at ingestion and stores it in
+  `plot_area` with its source in `enrichment["plot_from_text"]`. It refuses
+  house figures, truncated numbers and ambiguous texts; it never overwrites a
+  stated plot. `utils/backfill_plot_from_text.py` fills stored rows (dry run
+  first, snapshot, compare-and-swap restore) and reports the unknown share.
+
 ### Fixed: owner-fit ranking and research area provenance (#591)
 - Research CSV plot figures stay in `plot_area`, never the house area. The
   dry-run repair moves only source-key-proven untouched imports, with a locked,
