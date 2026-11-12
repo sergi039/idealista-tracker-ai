@@ -20,6 +20,24 @@ must be an ancestor of `main`.
   (#634) is out of that backfill's scope, so a later page-stated plot (stronger
   evidence) never replaces the text reading. Matters only if the two differ.
 
+### An explicit negation before the plot noun that introduces the figure is not read
+
+- **Anchor:** `services/plot_text.py` (`_scan`, `_PLOT_MENTION`).
+- **What breaks, for whom:** "No tiene parcela de 300 m²" and "Sin parcela de
+  300 m²" write 300, so a row may move from `unknown` to `pass`/`fail` on a
+  plot the text denies. Found by merge_bot on #661
+  (https://github.com/sergi039/idealista-tracker-ai/pull/661#issuecomment-6828734743),
+  merged as is on the owner's command 2026-11-12; not measured on production.
+
+### A second m² figure without its own plot noun is not counted as a competing reading
+
+- **Anchor:** `services/plot_text.py` (`_scan`, the FORWARD match).
+- **What breaks, for whom:** "Parcela de 500 m² o de 900 m²" writes 500
+  although the text states two values, so the criteria verdict may rest on the
+  wrong figure. Found by merge_bot on #661
+  (https://github.com/sergi039/idealista-tracker-ai/pull/661#issuecomment-6828734743),
+  merged as is on the owner's command 2026-11-12; not measured on production.
+
 ### A plot figure introduced by a plot noun is trusted to be this home's
 
 - **Anchor:** `services/plot_text.py` (`_PLOT_MENTION`, `_scan`).
