@@ -8,10 +8,12 @@ existing cadastre client. Geometry is measured in the parcel's own metric CRS.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 import hashlib
 import json
 import math
 import re
+import sys
 import xml.etree.ElementTree as ET
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -46,10 +48,19 @@ def _text(value):
     return value if isinstance(value, str) else None
 
 
-def _real(value):
-    """A finite number; a bool, a string or NaN is not one."""
-    ok = isinstance(value, (int, float)) and not isinstance(value, bool)
-    return value if ok and math.isfinite(value) else None
+def _number(value, low, high, kinds=(int, float, Decimal)):
+    """A stored number within [low, high], else None; never raises.
+
+    A bool is not a number. The range is compared before anything converts,
+    so NaN and inf fall outside it and JSON's 10**400 never reaches float()
+    (OverflowError, #663); a Decimal NaN raises InvalidOperation instead.
+    """
+    if isinstance(value, bool) or not isinstance(value, kinds):
+        return None
+    try:
+        return value if low <= value <= high else None
+    except (ArithmeticError, TypeError, ValueError):
+        return None
 
 
 def subject(prop: Any) -> str:
@@ -358,7 +369,11 @@ def _metric_parcel(reference):
         cache_key=cadastre._cache_key(reference, 4326, "outline"),
     )
     point = mapped.get("reference_point") if mapped.get("status") == "ok" else None
-    point = [_real(n) for n in point] if isinstance(point, (list, tuple)) else []
+    point = (
+        [_number(n, -lim, lim) for n, lim in zip(point, (90, 180))]
+        if isinstance(point, (list, tuple)) and len(point) == 2
+        else []
+    )
     epsg = (
         cadastre.metric_epsg_for(*point)
         if len(point) == 2 and None not in point
@@ -379,7 +394,7 @@ def _metric_parcel(reference):
         raise cadastre.CadastreError(cadastre.MALFORMED, "different parcel returned")
     parcel = _shape(measured.get("polygons", []))
     declared = measured.get("declared_area_m2")
-    if declared is not None and _real(declared) is None:
+    if declared is not None and _number(declared, 0, sys.float_info.max) is None:
         raise cadastre.CadastreError(cadastre.MALFORMED, "unreadable parcel area")
     if not cadastre.area_agrees(parcel.area, declared):
         raise cadastre.CadastreError(cadastre.MALFORMED, "parcel area mismatch")
@@ -500,7 +515,7 @@ def _checked(block, origin):
     ):
         return {}
     counts = [
-        block.get(k)
+        _number(block.get(k), 0, MAX_FEATURES, kinds=(int,))
         for k in (
             "buildings_within_50m",
             "buildings_within_100m",
@@ -509,26 +524,19 @@ def _checked(block, origin):
             "unknown_use_buildings_within_100m",
         )
     ]
-    if any(isinstance(n, bool) or not isinstance(n, int) or n < 0 for n in counts):
+    if None in counts:
         return {}
     if counts[0] > counts[1] or any(n > counts[1] for n in counts[2:]):
         return {}
-    nearest = block.get("nearest_building_m")
+    nearest = _number(block.get("nearest_building_m"), 0, 100)
     if counts[1] == 0:
-        if nearest is not None:
+        if block.get("nearest_building_m") is not None:
             return {}
-    elif (
-        isinstance(nearest, bool)
-        or not isinstance(nearest, (int, float))
-        or not math.isfinite(nearest)
-        or not 0 <= nearest <= 100
-        or (nearest <= 50) != (counts[0] > 0)
-    ):
+    elif nearest is None or (nearest <= 50) != (counts[0] > 0):
         return {}
     if (
         cadastre.normalize_reference(_text(block.get("reference"))) is None
-        or type(block.get("epsg")) is not int
-        or block.get("epsg") not in (25829, 25830, 25831)
+        or _number(block.get("epsg"), 25829, 25831, kinds=(int,)) is None
         or not _text(block.get("measured_at"))
     ):
         return {}

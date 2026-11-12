@@ -566,6 +566,43 @@ def test_malformed_stored_measurement_never_supports_descriptor(field, value):
     assert n.read_verdict(p) == {}
 
 
+# Stored JSON a reader must refuse, never raise on (#663: 10**400 overflowed).
+JUNK = {
+    "10**400": 10**400,
+    "-1": -1,
+    "True": True,
+    "str": "3",
+    "nan": float("nan"),
+    "inf": float("inf"),
+    "json 1e999": json.loads("1e999"),
+    "Decimal NaN": Decimal("NaN"),
+    "None": None,
+    "list": [1],
+}
+
+
+@pytest.mark.parametrize("value", list(JUNK.values()), ids=list(JUNK))
+@pytest.mark.parametrize(
+    "field",
+    [
+        "buildings_within_50m",
+        "buildings_within_100m",
+        "agricultural_buildings_within_100m",
+        "industrial_buildings_within_100m",
+        "unknown_use_buildings_within_100m",
+        "nearest_building_m",
+        "epsg",
+    ],
+)
+def test_stored_number_of_wrong_kind_or_range_is_not_a_measurement(field, value):
+    p = prop()
+    near = dict(buildings_within_50m=1, buildings_within_100m=1, nearest_building_m=10)
+    p.enrichment["neighbours"] = payload(p, **near)
+    assert n.read_verdict(p)
+    p.enrichment["neighbours"] = payload(p, **{**near, field: value})
+    assert n.read_verdict(p) == {}
+
+
 @pytest.fixture
 def app():
     setup_test_environment()
@@ -720,6 +757,31 @@ def test_metric_parcel_uses_own_reference_point_and_refuses_wrong_reference(
     with pytest.raises(c.CadastreError, match="unreadable"):
         n._metric_parcel(REF)
     mapped["reference_point"] = "43,-8"
+    with pytest.raises(c.CadastreError):
+        n._metric_parcel(REF)
+
+
+PARCEL_JUNK = [
+    pytest.param(where, value, id=f"{where}-{name}")
+    for where, extra in (("lat", 91), ("lon", 181), ("declared", None))
+    for name, value in [
+        *((k, v) for k, v in JUNK.items() if k not in ("-1", "None")),
+        ("out of range", extra),
+    ]
+    if value is not None or where != "declared"  # no declared area is allowed
+]
+
+
+@pytest.mark.parametrize("where,value", PARCEL_JUNK)
+def test_parcel_number_of_wrong_kind_or_range_is_refused(monkeypatch, where, value):
+    point = {"lat": 43.5, "lon": -8.5, where: value}
+    mapped = dict(status="ok", reference_point=(point["lat"], point["lon"]))
+    measured = c._parse_gml((DATA / "969_parcel.gml").read_text(), 25829)
+    measured["status"] = "ok"
+    if where == "declared":
+        measured["declared_area_m2"] = value
+    answers = iter([mapped, measured])
+    monkeypatch.setattr(c, "_source", lambda fetch, *, cache_key: next(answers))
     with pytest.raises(c.CadastreError):
         n._metric_parcel(REF)
 
