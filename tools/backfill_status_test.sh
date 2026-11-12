@@ -12,6 +12,10 @@
 
 set -euo pipefail
 
+# The directory under test is the stub repository's own; an export inherited
+# from whoever runs this must not decide where the script looks (#639).
+unset IDEALISTA_DATA_DIR
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REAL_SCRIPT="${SCRIPT_DIR}/backfill_status.sh"
 
@@ -30,6 +34,10 @@ fail() {
 # REPO_ROOT resolution (dirname/..) lands here rather than in the real repo.
 mkdir -p "${WORK}/repo/tools" "${WORK}/repo/data/.inflight" "${WORK}/bin"
 cp "$REAL_SCRIPT" "${WORK}/repo/tools/backfill_status.sh"
+# The one reader of where the state directory is (#639). The script asks its
+# own repository's copy, so the stub root carries the real one.
+mkdir -p "${WORK}/repo/tools/autopilot/lib"
+cp "${SCRIPT_DIR}/autopilot/lib/data_dir.sh" "${WORK}/repo/tools/autopilot/lib/data_dir.sh"
 chmod +x "${WORK}/repo/tools/backfill_status.sh"
 
 cat >"${WORK}/bin/docker" <<'STUB'
@@ -297,3 +305,74 @@ rm -f "${WORK}/repo/data/.deploy_stalled"
 run_status
 grep -q "deploy chain:" "${WORK}/out" && fail "scenario 14 reported a stall after the marker was gone"
 printf 'OK: a stalled deploy chain is surfaced, and the backfill verdict is not its business\n'
+
+# --- scenario 15: the state directory comes from the one reader (#639) -------
+# tools/autopilot/lib/data_dir.sh says where the directory bound at /app/data
+# is, and today that is <repo>/data: every scenario above ran through it. What
+# the reader refuses, this tool must not paper over. IDEALISTA_DATA_DIR is not
+# read by docker-compose.yml yet, so a .env that names it is refused there -
+# and here that is "unknown" (exit 2, which blocks like busy), not a fall back
+# to either directory. The live supervisor lock in the directory the variable
+# names is the decoy: following the variable would report it.
+set_top; clear_locks; clear_markers
+STATE="${WORK}/state"
+mkdir -p "${STATE}/.inflight"
+printf 'DB_PASSWORD=x\nIDEALISTA_DATA_DIR=%s\n' "$STATE" >"${WORK}/repo/.env"
+printf '%s\n' "$$" >"${STATE}/.supervisor.idealista-app.utils.backfill_pool.lock"
+run_status
+[ "$RC" = "2" ] || fail "scenario 15: a variable Compose does not read did not answer unknown (rc=$RC)"
+grep -q "VERDICT: unknown" "${WORK}/out" || fail "scenario 15 gave no verdict line"
+grep -q "VERDICT: idle" "${WORK}/out" && fail "scenario 15 called an unresolvable state directory idle"
+grep -q "does not read the variable" "${WORK}/out" "${WORK}/err" 2>/dev/null \
+    || fail "scenario 15 did not pass on why the reader refused"
+grep -q "backfill_pool is watched" "${WORK}/out" \
+    && fail "scenario 15 followed the variable into a directory the app is not using"
+rm -f "${WORK}/repo/.env"
+printf 'OK: a state directory the reader refuses is unknown, never idle and never guessed\n'
+
+# --- scenario 15b: no answer from the reader is unknown too (#639) ------------
+# The reader is a file in the same checkout. Missing, emptied, or answering
+# something that is not an absolute path, it has said nothing about where the
+# state is - and an empty answer would turn every path this tool reads into a
+# path under `/`, where there is no lock, so the verdict would be "idle" from
+# a directory nobody keeps state in. The live supervisor lock in the stub
+# root is what such a run would fail to see.
+READER="${WORK}/repo/tools/autopilot/lib/data_dir.sh"
+set_top; clear_locks; clear_markers
+printf '%s\n' "$$" >"${WORK}/repo/data/.supervisor.idealista-app.utils.backfill_pool.lock"
+run_status
+[ "$RC" = "1" ] || fail "scenario 15b: the control run did not see the live supervisor lock (rc=$RC)"
+mv "$READER" "${READER}.real"
+run_status
+[ "$RC" = "2" ] || fail "scenario 15b: a missing reader did not answer unknown (rc=$RC)"
+grep -q "VERDICT: unknown" "${WORK}/out" || fail "scenario 15b: a missing reader gave no verdict line"
+: >"$READER"
+run_status
+[ "$RC" = "2" ] || fail "scenario 15b: a reader that answers nothing did not answer unknown (rc=$RC)"
+grep -q "not an absolute path" "${WORK}/out" || fail "scenario 15b did not say the answer was no path"
+grep -q "VERDICT: idle" "${WORK}/out" && fail "scenario 15b called an empty answer idle"
+printf '#!/bin/bash\necho data\n' >"$READER"
+run_status
+[ "$RC" = "2" ] || fail "scenario 15b: a relative answer did not answer unknown (rc=$RC)"
+grep -q "VERDICT: idle" "${WORK}/out" && fail "scenario 15b called a relative answer idle"
+mv "${READER}.real" "$READER"
+printf 'OK: a reader that is missing or answers no absolute path is unknown, never idle\n'
+
+# --- scenario 15c: a linked git worktree is not where the state is (#639) ----
+# The stack is started from one checkout. A linked worktree of the same
+# repository has a data/ of its own that no container mounts, so this tool run
+# from one would look for the supervisor lock where no supervisor writes it.
+# Git marks a linked worktree with a `.git` FILE; the checkout's is a directory.
+printf 'gitdir: /somewhere/.git/worktrees/issue-1\n' >"${WORK}/repo/.git"
+run_status
+[ "$RC" = "2" ] || fail "scenario 15c: a linked worktree did not answer unknown (rc=$RC)"
+grep -q "VERDICT: unknown" "${WORK}/out" || fail "scenario 15c gave no verdict line"
+grep -q "linked git worktree" "${WORK}/out" || fail "scenario 15c did not say why"
+rm -f "${WORK}/repo/.git"
+mkdir "${WORK}/repo/.git"
+run_status
+[ "$RC" = "1" ] || fail "scenario 15c: the checkout itself (a .git directory) was refused (rc=$RC)"
+grep -q "backfill_pool is watched" "${WORK}/out" || fail "scenario 15c: the checkout's own lock was not read"
+rmdir "${WORK}/repo/.git"
+clear_locks
+printf 'OK: a linked git worktree is unknown, and the checkout itself is still read\n'
