@@ -155,3 +155,30 @@ must be an ancestor of `main`.
   stopped feeding that ratio to the taste model as "the shape" for exactly
   this reason (see `docs/rules/taste.md`), but the page still colours it as a
   verdict.
+
+### A `mode=ro` SQLite URI inside the protected directory can still create WAL sidecars
+
+- **Anchor:** `tests/data_dir_guard.py` (`_sqlite_places`, the
+  `query == "mode=ro"` branch of the `file:` URI reading).
+- **Found 2026-11-12** by merge_bot on PR #666
+  (https://github.com/sergi039/idealista-tracker-ai/pull/666#issuecomment-6831831977),
+  the third review round; merged as is on the owner's command 2026-11-12.
+  Input: a WAL-mode database in the protected directory with no sidecar
+  files, then `sqlite3.connect("file:<dir>/db.sqlite?mode=ro", uri=True)` and
+  a `SELECT`. Reproduced on a temporary directory (Python 3.11.17, SQLite
+  3.53.1): `db.sqlite-shm` (32768 bytes) and `db.sqlite-wal` (0 bytes) appear
+  and stay after the connection closes, the database file is unchanged, and
+  the guard records no refusal.
+- **What breaks, for whom:** the guard reads that open as a read, and SQLite
+  creates the two files from C, past the audit hook. A test doing this against
+  the deployment's state directory would leave two files there that the run
+  was supposed to be unable to write. **Not reachable today, not reproduced
+  against the repository's own tests:** the production `data/` holds no SQLite
+  file (817 files checked by header and by name on the mini, 2026-11-12), no
+  tracked file is one, and nothing outside the guard and its tests opens
+  SQLite by `file:` URI.
+- **Check:** `git grep -nE 'uri=True|mode=ro|sqlite3\.connect\(' -- '*.py' ':!tests/data_dir_guard.py' ':!tests/test_data_dir_guard.py'`
+  prints nothing, and
+  `find "$(tools/autopilot/lib/data_dir.sh "$PWD")" -type f -exec sh -c 'head -c 15 "$1" | grep -q "^SQLite format 3" && echo "$1"' _ {} \;`
+  prints nothing in the main checkout on the mini. A fix treats every `file:`
+  URI naming a path inside a protected directory as a write, `mode=ro` included.

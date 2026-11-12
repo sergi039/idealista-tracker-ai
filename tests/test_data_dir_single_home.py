@@ -21,7 +21,9 @@ Pinned here:
   docker-compose.yml mounts `<checkout>/data` whether or not the variable is
   set, and over a range of compose files the reader never names a directory
   other than the one Compose would mount;
-* that the host variable can never be mistaken for the container's.
+* that the host variable can never be mistaken for the container's;
+* that a linked git worktree is refused as a root, with real git;
+* that each script already moved over asks the reader.
 """
 
 from __future__ import annotations
@@ -43,6 +45,13 @@ LIB_TEST = REPO_ROOT / "tools" / "autopilot" / "lib" / "data_dir_test.sh"
 TIMEOUT_SECONDS = 300
 
 VARIABLE = "IDEALISTA_DATA_DIR"
+
+# The host scripts moved over to the reader so far.
+CALLERS = (
+    "tools/backfill_status.sh",
+    "tools/backfill_supervisor.sh",
+    "tools/backup_attachments.sh",
+)
 
 
 def _interpreters() -> list[str]:
@@ -102,6 +111,46 @@ def test_a_checkout_resolves_to_its_own_data_directory(tmp_path):
     result = _resolve(tmp_path)
     assert result.returncode == 0, result.stderr
     assert result.stdout == f"{tmp_path}/data\n"
+
+
+def _git(*args: str, cwd: Path) -> None:
+    """Real git, deaf to this machine: no inherited GIT_* (a hook exports
+    GIT_DIR), no global or system configuration, so no hooks of the owner's."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        timeout=60,
+        env=env,
+    )
+
+
+def test_a_linked_git_worktree_is_refused_and_its_checkout_is_answered(tmp_path):
+    """The stack is started from one checkout. A linked worktree of the same
+    repository has a `data/` no container mounts, so a tool run from it would
+    look for the lock, the markers and the attachments where nothing writes
+    them. Made with real `git worktree add`, because what the reader goes by
+    is what git leaves behind: a `.git` file there, a directory in the
+    checkout."""
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    _git("init", "-q", cwd=checkout)
+    _git("commit", "-q", "--allow-empty", "-m", "root", cwd=checkout)
+    linked = tmp_path / "linked"
+    _git("worktree", "add", "-q", "--detach", str(linked), cwd=checkout)
+    (linked / "data").mkdir()
+
+    answered = _resolve(checkout)
+    assert answered.returncode == 0, answered.stderr
+    assert answered.stdout == f"{checkout}/data\n"
+
+    refused = _resolve(linked)
+    assert refused.returncode == 1, refused.stdout
+    assert refused.stdout == ""
+    assert "linked git worktree" in refused.stderr
 
 
 # --- against Compose itself ---------------------------------------------------
@@ -333,3 +382,15 @@ def test_the_container_side_is_not_fed_the_host_path():
         if line.strip().startswith("- ") and "=" in line and "DATA_DIR" in line
     ]
     assert environment_lines == [], environment_lines
+
+
+@pytest.mark.parametrize("script", CALLERS)
+def test_every_host_tool_asks_the_one_reader(script):
+    text = (REPO_ROOT / script).read_text(encoding="utf-8")
+    code = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert "lib/data_dir.sh" in code, (
+        f"{script} no longer asks tools/autopilot/lib/data_dir.sh where the "
+        "state directory is"
+    )
