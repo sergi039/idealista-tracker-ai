@@ -274,6 +274,25 @@ class TestIdealistaIngestion:
         assert rows[111].plot_area is None
         assert float(rows[111].area) == 316
 
+    def test_the_saved_search_subject_is_never_read_as_the_plot(self, service):
+        msg = EmailMessage()
+        msg["Subject"] = "¡Nuevo chalet en tu búsqueda: Galicia - parcela de 1.000 m²!"
+        msg["From"] = "Idealista <noresponder@idealista.com>"
+        msg.set_content("See the listing in your browser")
+        msg.add_alternative(
+            "<html><body>"
+            '<a href="https://www.idealista.com/inmueble/111/">Ver 3 fotos</a>'
+            "<p>250.000 € 4 hab. 316 m² Casa de piedra</p>"
+            "</body></html>",
+            subtype="html",
+        )
+        _FakeIMAPClient.payloads = {1: msg.as_bytes()}
+        service.run_ingestion(sync_type="test")
+        row = Property.query.filter_by(idealista_property_id=111).one()
+
+        assert row.plot_area is None
+        assert "plot_from_text" not in (row.enrichment or {})
+
 
 class TestApplyToProperty:
     def test_bare_land_whose_area_is_the_parcel_is_left_alone(self, app):
@@ -302,6 +321,48 @@ class TestApplyToProperty:
 
         assert block["field"] == "title"
         assert float(prop.plot_area) == 20000
+
+    def test_a_self_contradicting_source_blocks_an_agreeing_title(self, app):
+        prop = Property(source_email_id="x", area=200, area_type="built", price=1)
+
+        block = apply_to_property(
+            prop,
+            [
+                ("description", "parcela de 700 m² y finca de 900 m²"),
+                ("title", "Casa en parcela de 700 m²"),
+            ],
+            portal="x",
+        )
+
+        assert block is None
+        assert prop.plot_area is None
+
+    def test_sources_that_disagree_write_nothing(self, app):
+        prop = Property(source_email_id="x", area=200, area_type="built", price=1)
+
+        block = apply_to_property(
+            prop,
+            [
+                ("description", "parcela de 500 m²"),
+                ("title", "Casa con finca de 900 m²"),
+            ],
+            portal="x",
+        )
+
+        assert block is None
+        assert prop.plot_area is None
+
+    def test_sources_that_agree_store_the_first_field(self, app):
+        prop = Property(source_email_id="x", area=200, area_type="built", price=1)
+
+        block = apply_to_property(
+            prop,
+            [("description", "parcela de 745 m²"), ("title", "parcela de 745 m²")],
+            portal="x",
+        )
+
+        assert block["field"] == "description"
+        assert float(prop.plot_area) == 745
 
 
 def _stored(n, *, description, plot_area=None, url=None, title="Casa", enrichment=None):
@@ -360,6 +421,32 @@ class TestTheBackfill:
         assert not any(
             "plot_from_text" in (p.enrichment or {}) for p in Property.query.all()
         )
+
+    def test_an_idealista_title_is_never_read(self, app):
+        pid = _stored(
+            11,
+            description=None,
+            title="Galicia - parcela de 1.000 m²",
+            url="https://www.idealista.com/inmueble/11/",
+        )
+        prop = db.session.get(Property, pid)
+
+        assert tool.plan_row(prop)["outcome"] != "gain"
+        out = tool.report()
+        assert pid not in {p["id"] for p in out["plans"]}
+
+    def test_disagreeing_sources_are_ambiguous_and_counted(self, app):
+        pid = _stored(
+            12,
+            description="parcela de 700 m² y finca de 900 m²",
+            title="Casa en parcela de 700 m²",
+        )
+        prop = db.session.get(Property, pid)
+
+        assert tool.plan_row(prop)["outcome"] == "ambiguous"
+        out = tool.report()
+        assert out["per_portal"]["fotocasa"]["ambiguous"] == 1
+        assert pid not in {p["id"] for p in out["plans"]}
 
     def test_apply_needs_a_new_snapshot_path(self, app, rows, tmp_path):
         with pytest.raises(ValueError):

@@ -1743,10 +1743,12 @@ class PropertyIMAPService:
                     if email_data.get("photos"):
                         prop.enrichment = {"import": {"photos": email_data["photos"]}}
                     # A plot the card states in words (#634); the alert text is
-                    # truncated and the reader refuses a cut-off figure.
+                    # truncated and the reader refuses a cut-off figure. Never
+                    # the title: it may be the saved-search subject (#645),
+                    # and the card already holds the listing's own heading.
                     plot_text.apply_to_property(
                         prop,
-                        [("card", email_data.get("card_text")), ("title", prop.title)],
+                        [("card", email_data.get("card_text"))],
                         portal="idealista",
                     )
 

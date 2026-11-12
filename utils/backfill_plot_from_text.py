@@ -78,7 +78,9 @@ def _sources(prop: Any) -> Tuple[List[Tuple[str, Optional[str]]], bool]:
         skipped = True
         description = None
     sources.append(("description", description))
-    sources.append(("title", prop.title))
+    if source_of(prop) != IDEALISTA:
+        # An idealista title may be the saved-search subject (#645): not evidence.
+        sources.append(("title", prop.title))
     return sources, skipped
 
 
@@ -91,24 +93,26 @@ def _in_scope(prop: Any) -> bool:
 def plan_row(prop: Any) -> Dict[str, Any]:
     """What the text says about one row (no write)."""
     sources, skipped = _sources(prop)
-    mentions = False
-    for field, text in sources:
-        reading = plot_text.extract_plot_m2(text)
-        if reading is not None:
-            return {
-                "id": prop.id,
-                "portal": source_of(prop),
-                "outcome": "gain",
-                "value": reading.value,
-                "field": field,
-                "snippet": reading.snippet,
-            }
-        mentions = mentions or bool(text)
+    decided = plot_text.read_sources(sources)
+    if decided is not None:
+        field, reading = decided
+        return {
+            "id": prop.id,
+            "portal": source_of(prop),
+            "outcome": "gain",
+            "value": reading.value,
+            "field": field,
+            "snippet": reading.snippet,
+        }
+    if any(plot_text.mentions_plot(text) for _, text in sources):
+        outcome = "ambiguous"
+    else:
+        outcome = "multi_listing_skipped" if skipped else "no_reading"
     return {
         "id": prop.id,
         "portal": source_of(prop),
-        "outcome": "multi_listing_skipped" if skipped else "no_reading",
-        "has_text": mentions,
+        "outcome": outcome,
+        "has_text": any(bool(text) for _, text in sources),
     }
 
 

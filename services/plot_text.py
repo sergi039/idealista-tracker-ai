@@ -129,22 +129,56 @@ def _readings(text: str) -> List[Tuple[float, str]]:
     return found
 
 
-def extract_plot_m2(text: Optional[str]) -> Optional[PlotReading]:
-    """The one plot figure `text` states, or None (absent, cut off, ambiguous)."""
+def _all_readings(text: Optional[str]) -> List[Tuple[float, str]]:
+    """Every credible plot figure `text` states (total: [] on any failure)."""
     if not text or not isinstance(text, str):
-        return None
+        return []
     try:
-        plain = _strip_html(text)
-        found = _readings(plain)
+        return _readings(_strip_html(text))
     except Exception:  # pure and total: ingestion must never lose an email to it
         logger.warning("plot text reading failed", exc_info=True)
-        return None
-    if not found:
-        return None
-    if len({value for value, _ in found}) > 1:
+        return []
+
+
+def mentions_plot(text: Optional[str]) -> bool:
+    """True when `text` states at least one credible plot figure."""
+    return bool(_all_readings(text))
+
+
+def extract_plot_m2(text: Optional[str]) -> Optional[PlotReading]:
+    """The one plot figure `text` states, or None (absent, cut off, ambiguous)."""
+    found = _all_readings(text)
+    if len({value for value, _ in found}) != 1:
         return None
     value, snippet = found[0]
     return PlotReading(value=value, snippet=snippet)
+
+
+def read_sources(
+    sources: Sequence[Tuple[str, Optional[str]]],
+) -> Optional[Tuple[str, PlotReading]]:
+    """The one decision: (field, reading) when every source that names a plot
+    names the same single value, else None. A source that contradicts itself,
+    or two sources that disagree, leave the row unknown. Total.
+    """
+    try:
+        values = set()
+        first: Optional[Tuple[str, PlotReading]] = None
+        for field, text in sources:
+            found = _all_readings(text)
+            distinct = {value for value, _ in found}
+            if len(distinct) > 1:
+                return None
+            if distinct:
+                values |= distinct
+                if first is None:
+                    first = (field, PlotReading(*found[0]))
+        if len(values) != 1:
+            return None
+        return first
+    except Exception:
+        logger.warning("plot sources could not be read", exc_info=True)
+        return None
 
 
 def apply_to_property(
@@ -153,7 +187,7 @@ def apply_to_property(
     *,
     portal: str,
 ) -> Optional[Dict[str, Any]]:
-    """Set `plot_area` from the first source that states exactly one plot.
+    """Set `plot_area` when every source naming a plot names the same one.
 
     Returns the provenance block written, or None when nothing was written.
     Never overwrites: a row whose plot is already credible (portal-stated,
@@ -166,10 +200,9 @@ def apply_to_property(
             return None
         if prop.plot_area is not None and not _blank(prop.plot_area):
             return None
-        for field, text in sources:
-            reading = extract_plot_m2(text)
-            if reading is None:
-                continue
+        decided = read_sources(sources)
+        if decided is not None:
+            field, reading = decided
             block = {
                 "value": reading.value,
                 "field": field,

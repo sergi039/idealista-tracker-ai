@@ -146,11 +146,13 @@ things about it are load bearing:
   version, portal and UTC time in the same transaction (no migration). It
   never overwrites a stated or hand-set plot, and refuses a house figure
   ("construidos", "útiles", "de vivienda"), a cut-off one ("parcela de 6...":
-  idealista's alert text is truncated), two different figures, and anything
+  idealista's alert text is truncated), two different figures (within a source or between sources: a plot is read
+  only when every source that names one names the same value), and anything
   `MAX_CREDIBLE_M2` (the one credibility rule) or the `NUMERIC(10,2)` column
   cannot hold; a refusal leaves `unknown`, never `fail`. `solar` counts only
   as the noun "solar de N m²". Ingestion calls it after `build_property`
-  (never inside it) and, for idealista, on the row's own card only;
+  (never inside it) and, for idealista, on the row's own card only (an
+  idealista title is never read, it may be the saved-search subject);
   `utils/backfill_plot_from_text.py` is the dry-run-first, snapshot-backed
   pass over stored rows and prints the before/after unknown share. Yaencontre
   cards carry no text and its pages may not be fetched, so those rows stay
