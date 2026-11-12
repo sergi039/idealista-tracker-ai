@@ -220,6 +220,7 @@ def test_adjacent_buildings_tiled_by_patches_stay_two_buildings():
         "<ExceptionReport/>",
         '<FeatureCollection xmlns="http://www.opengis.net/wfs/2.0" numberMatched="1" numberReturned="0"/>',
         '<FeatureCollection xmlns="http://www.opengis.net/wfs/2.0" numberMatched="unknown" numberReturned="0"/>',
+        '<FeatureCollection xmlns="http://www.opengis.net/wfs/2.0" numberMatched="²" numberReturned="0"/>',
         '<FeatureCollection xmlns="http://www.opengis.net/wfs/2.0"/>',
         '<FeatureCollection xmlns="http://www.opengis.net/gml/3.2" next="page2"/>',
     ],
@@ -263,6 +264,9 @@ def test_precise_requires_unique_zero_distance_parcel(monkeypatch):
         lambda *_: dict(status="ok", parcels=[dict(reference=REF, distance_m=2)]),
     )
     assert n._resolve_parcel(p)["status"] == "no_parcel"
+    for kept in (123, REF.lower()):  # unreadable or unnormalised: no conflict
+        p = prop(enrichment={"cadastre": {"reference": kept}})
+        assert n._resolve_parcel(p) == {"status": "ok", "reference": REF}
 
 
 def test_privacy_circle_never_reaches_coordinate_lookup(monkeypatch):
@@ -458,14 +462,17 @@ def test_address_naming_one_parcel_is_read(monkeypatch, result):
     assert (answer["status"], answer["reference"]) == (c.OK, REF)
 
 
-def test_measure_uses_shared_transport_full_buffer_and_single_attempt(monkeypatch):
+@pytest.mark.parametrize("cached", [None, "junk", {"status": "ok"}])
+def test_measure_uses_shared_transport_full_buffer_and_single_attempt(
+    monkeypatch, cached
+):
     p = prop()
     monkeypatch.setattr(
         n,
         "_metric_parcel",
         lambda _: (MultiPolygon([box(1000, 2000, 1010, 2020)]), 25829),
     )
-    monkeypatch.setattr(c, "_cache_get", lambda _: None)
+    monkeypatch.setattr(c, "_cache_get", lambda _: cached)
     monkeypatch.setattr(c, "_cache_set", lambda *_: None)
     calls = []
     monkeypatch.setattr(c.CATASTRO_GATE, "wait", lambda: 0)
@@ -519,6 +526,9 @@ def test_subject_stable_for_sql_numeric_roundtrip_and_stale_on_change():
         ("unknown_use_buildings_within_100m", 1),
         ("epsg", 4326),
         ("source", "photo"),
+        ("reference", 123),
+        ("epsg", 25829.0),
+        ("measured_at", 1),
     ],
 )
 def test_malformed_stored_measurement_never_supports_descriptor(field, value):
@@ -673,7 +683,14 @@ def test_metric_parcel_uses_own_reference_point_and_refuses_wrong_reference(
     monkeypatch.setattr(c, "_source", source)
     parcel, epsg = n._metric_parcel(REF)
     assert epsg == 25829 and parcel.area == pytest.approx(1616.24565)
-    measured["reference"] = "15044A01901483"
+    for key, bad in [("reference", "15044A01901483"), ("reference", 123)]:
+        measured[key] = bad
+        with pytest.raises(c.CadastreError):
+            n._metric_parcel(REF)
+    measured.update(reference=REF, declared_area_m2="x")
+    with pytest.raises(c.CadastreError, match="unreadable"):
+        n._metric_parcel(REF)
+    mapped["reference_point"] = "43,-8"
     with pytest.raises(c.CadastreError):
         n._metric_parcel(REF)
 

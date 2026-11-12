@@ -42,6 +42,16 @@ def _dict(value):
     return value if isinstance(value, dict) else {}
 
 
+def _text(value):
+    return value if isinstance(value, str) else None
+
+
+def _real(value):
+    """A finite number; a bool, a string or NaN is not one."""
+    ok = isinstance(value, (int, float)) and not isinstance(value, bool)
+    return value if ok and math.isfinite(value) else None
+
+
 def subject(prop: Any) -> str:
     """Invalidate when the parcel, origin, accuracy or asked address changes."""
     enrichment = _dict(getattr(prop, "enrichment", None))
@@ -161,7 +171,9 @@ def parse_buildings(text: str, epsg: int) -> list[dict]:
         raise cadastre.CadastreError(cadastre.MALFORMED, "building feature cap reached")
     for name in ("numberMatched", "numberReturned"):
         value = root.get(name)
-        if value is not None and (not value.isdigit() or int(value) != len(members)):
+        if value is not None and (
+            not re.fullmatch(r"[0-9]+", value) or int(value) != len(members)
+        ):
             raise cadastre.CadastreError(
                 cadastre.MALFORMED, "partial building collection"
             )
@@ -258,17 +270,18 @@ def measure_buildings(parcel, reference: str, buildings: list[dict]) -> dict:
 
 def _resolve_parcel(prop):
     stored = _dict(_dict(getattr(prop, "enrichment", None)).get("cadastre"))
-    column = cadastre.normalize_reference(getattr(prop, "cadastral_reference", None))
-    reference = column or cadastre.normalize_reference(stored.get("reference"))
-    if reference:
-        if (
-            column
-            and stored.get("reference")
-            and cadastre.parcel_reference(column)
-            != cadastre.parcel_reference(stored["reference"])
-        ):
-            return {"status": "unavailable", "reason": "conflicting_parcel_references"}
-        return {"status": "ok", "reference": cadastre.parcel_reference(reference)}
+    column = cadastre.normalize_reference(
+        _text(getattr(prop, "cadastral_reference", None))
+    )
+    kept = cadastre.normalize_reference(_text(stored.get("reference")))
+    if (
+        column
+        and kept
+        and (cadastre.parcel_reference(column) != cadastre.parcel_reference(kept))
+    ):
+        return {"status": "unavailable", "reason": "conflicting_parcel_references"}
+    if column or kept:
+        return {"status": "ok", "reference": cadastre.parcel_reference(column or kept)}
     # A portal's 500m privacy circle is NEVER a coordinate lookup origin.
     if not is_precise(getattr(prop, "location_accuracy", None)):
         return _resolve_address(prop)
@@ -293,8 +306,8 @@ def _resolve_parcel(prop):
 
 def _resolve_address(prop):
     """An exact Catastro street and number; never the privacy-circle centre."""
-    query = _dict(_dict(getattr(prop, "enrichment", None)).get("geocoding")).get(
-        "query"
+    query = _text(
+        _dict(_dict(getattr(prop, "enrichment", None)).get("geocoding")).get("query")
     )
     numbers = query_house_numbers(query)
     province_code = _row_province(prop)
@@ -340,10 +353,11 @@ def _metric_parcel(reference):
         lambda: cadastre._fetch_outline(reference, 4326),
         cache_key=cadastre._cache_key(reference, 4326, "outline"),
     )
-    point = mapped.get("reference_point")
+    point = mapped.get("reference_point") if mapped.get("status") == "ok" else None
+    point = [_real(n) for n in point] if isinstance(point, (list, tuple)) else []
     epsg = (
         cadastre.metric_epsg_for(*point)
-        if mapped.get("status") == "ok" and point
+        if len(point) == 2 and None not in point
         else None
     )
     if epsg is None:
@@ -356,10 +370,14 @@ def _metric_parcel(reference):
     )
     if measured.get("status") != "ok":
         raise cadastre.CadastreError(cadastre.UNAVAILABLE, "parcel outline unavailable")
-    if cadastre.parcel_reference(measured.get("reference") or "") != reference:
+    returned = cadastre.normalize_reference(_text(measured.get("reference")))
+    if not returned or cadastre.parcel_reference(returned) != reference:
         raise cadastre.CadastreError(cadastre.MALFORMED, "different parcel returned")
     parcel = _shape(measured.get("polygons", []))
-    if not cadastre.area_agrees(parcel.area, measured.get("declared_area_m2")):
+    declared = measured.get("declared_area_m2")
+    if declared is not None and _real(declared) is None:
+        raise cadastre.CadastreError(cadastre.MALFORMED, "unreadable parcel area")
+    if not cadastre.area_agrees(parcel.area, declared):
         raise cadastre.CadastreError(cadastre.MALFORMED, "parcel area mismatch")
     return parcel, epsg
 
@@ -387,9 +405,15 @@ class NeighboursService:
                         cadastre.UNAVAILABLE, "parcel exceeds bounded building query"
                     )
                 key = cadastre._cache_key(reference, epsg, "neighbours_buildings_v1")
+                # A cached entry is used only if it reads as this measurement.
                 cached = cadastre._cache_get(key)
-                if cached is not None:
-                    return {**result, **cached}
+                hit = {**result, **cached} if isinstance(cached, dict) else {}
+                if (
+                    _checked(hit, origin)
+                    and hit["reference"] == reference
+                    and hit["epsg"] == epsg
+                ):
+                    return hit
                 response = cadastre._get(
                     BUILDINGS_URL,
                     {
@@ -449,9 +473,13 @@ class NeighboursService:
 
 def read_verdict(prop):
     block = _dict(_dict(getattr(prop, "enrichment", None)).get("neighbours"))
+    return _checked(block, subject(prop))
+
+
+def _checked(block, origin):
     if (
         block.get("status") != "ok"
-        or block.get("subject") != subject(prop)
+        or block.get("subject") != origin
         or block.get("source") != "catastro_inspire_buildings"
         or block.get("searched_m") != 100
     ):
@@ -483,9 +511,10 @@ def read_verdict(prop):
     ):
         return {}
     if (
-        cadastre.normalize_reference(block.get("reference")) is None
+        cadastre.normalize_reference(_text(block.get("reference"))) is None
+        or type(block.get("epsg")) is not int
         or block.get("epsg") not in (25829, 25830, 25831)
-        or not block.get("measured_at")
+        or not _text(block.get("measured_at"))
     ):
         return {}
     return block
