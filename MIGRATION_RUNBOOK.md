@@ -1,5 +1,8 @@
 # Migration Runbook: Legacy → Universal
 
+> Moving the deployment's state directory (`data/`) out of the checkout is a
+> different procedure with its own runbook: `DATA_DIR_RUNBOOK.md` (#639).
+
 ## Overview
 Merge `feature/properties-universal` into `main` and promote Universal as the primary deployment.
 
