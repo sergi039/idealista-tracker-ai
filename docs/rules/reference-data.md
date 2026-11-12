@@ -37,3 +37,24 @@ month on sepe.es exists only as legacy OLE2 `.xls`, which openpyxl refuses and
 xlrd is not a dependency of this project — so the annual open-data CSV is the
 newest *machine-readable* month, and the period actually parsed is recorded in
 the output instead of being assumed by whatever renders it.
+
+**Where the container reads them from** (added with #639; not part of the text
+moved from `CLAUDE.md` above). The four files sit in `data/`, which is also the
+directory the deployment mounts its state at, and until #639 that coincidence
+was the only way they reached the container: `.dockerignore` excluded `data/`
+whole, so the app read them through the bind mount, out of the checkout. Once
+the state directory can live outside the checkout, `/app/data` is a directory
+with a mail cursor and no reference files. So the image carries its own copy:
+`.dockerignore` is `data/*` plus the same four `!data/<file>` lines, the
+Dockerfile copies them to `/opt/idealista/reference_data` and sets
+`REFERENCE_DATA_DIR`, and every reader asks `utils/reference_data.py`
+(`reference_path(name)`; a checkout, pytest and an importer get the
+repository's `data/`, as before). Four lists now name the same four files --
+`.gitignore`, `.dockerignore`, the Dockerfile and `REFERENCE_FILES` -- and
+`tests/test_reference_data_location.py` holds them together; a fifth file added
+to three of them would be committed, reviewed and silently absent in
+production. Consequences worth knowing: the container's reference data is what
+the image was built from, so a new edition reaches production with the deploy
+of the commit that carries it (not with a `git pull`); and an importer run
+through `docker exec ... --out data/x.json` writes into the state directory,
+where nothing reads it -- run importers in a checkout and commit the result.
