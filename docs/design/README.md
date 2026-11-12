@@ -191,7 +191,9 @@ first listing at 479px, down from 902px; rows 285-360px (average 314), down
 from 469-551px (average 514); 2.7 listings per 844px screen, up from 1.6.
 Acceptance for later changes: first listing by 480px and at least 2.5 rows per
 844px screen in that state; Spanish labels and a 320px screen may wrap to an
-extra line.
+extra line. `docs/screenshots/properties-phone-before.png` and
+`properties-phone-after.png` are the same fixture rows drawn by the template
+before and after the change (placeholder pictures, no owner data).
 
 ## Recommendation states
 

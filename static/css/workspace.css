@@ -236,8 +236,13 @@
     /* The phone's display disclosure is transparent here: its three controls
        are direct items of the tools row, as they were before it existed. */
     .app-workspace .workspace-result-tools .workspace-display-options { display: contents; }
-    /* So are the status items a phone discloses on demand: always drawn here. */
-    .app-workspace .workspace-result-status .workspace-status-more.collapse { display: block; }
+    /* So are the status items a phone discloses on demand: always drawn here,
+       whatever state a phone left them in. Bootstrap swaps `collapse` for
+       `collapsing` (zero height, clipped, an inline height) while it animates,
+       so a window that crosses 768px mid-animation must not keep that state:
+       the trigger that would finish it is no longer drawn. */
+    .app-workspace .workspace-result-status .workspace-status-more { display: block; }
+    .app-workspace .workspace-result-status .workspace-status-more.collapsing { height: auto !important; overflow: visible; transition: none; }
     /* A table row names its decision buttons to assistive technology only. */
     .owner-decision-text-compact { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
     .workspace-page-heading h1 { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--ui-space-3); }
@@ -346,6 +351,9 @@
     }
     .app-workspace .workspace-data-table > tbody > tr > td { width: auto; min-width: 0; padding: 0; padding-left: 0 !important; border: 0; text-align: left; }
     .app-workspace .workspace-data-table > tbody > tr > td::before { display: none; }
+    /* Two of the four cells have no box of their own here, so a hover tint
+       would paint half a row -- and on a touch screen it sticks after a tap. */
+    .app-workspace .workspace-data-table > tbody > tr:hover > * { --bs-table-bg-state: initial; --bs-table-color-state: initial; }
     .app-workspace .workspace-data-table > tbody > tr > td.col-title,
     .workspace-data-table .workspace-property-overview,
     .workspace-data-table .workspace-property-copy { display: contents; }

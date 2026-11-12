@@ -312,16 +312,44 @@ class TestTheStylesheetMeetsTheMarkup:
         its coverage line: both are `collapse`, and their triggers are `d-md-none`."""
         block = _media_block(WORKSPACE_CSS.read_text(encoding="utf-8"), TABLET_UP)
         assert "display: contents" in _rule(block, ".workspace-display-options")
-        assert "display: block" in _rule(block, ".workspace-status-more.collapse")
+        assert "display: block" in _rule(block, ".workspace-status-more")
         # The same block hides the decision words a phone draws.
         assert "clip: rect(0, 0, 0, 0)" in _rule(block, ".owner-decision-text-compact")
         # And wraps the tabs, now that the markup no longer forces it.
         assert "flex-wrap: wrap" in _rule(block, ".workspace-result-tabs")
 
+    def test_no_collapse_state_can_hide_them_from_the_tablet_width_up(self):
+        """The rules must not depend on which class Bootstrap has on the element.
+
+        While a collapse animates it carries `collapsing` instead of
+        `collapse`, with zero height, `overflow: hidden` and an inline height.
+        A phone rotated across 768px in that moment kept the coverage line
+        clipped with no trigger on screen (independent review, 2026-11-12), so
+        neither selector may name `.collapse` and the animating state has to
+        be undone -- with `!important`, because the height is an inline style.
+        """
+        block = _media_block(WORKSPACE_CSS.read_text(encoding="utf-8"), TABLET_UP)
+        selectors = [
+            selector.strip()
+            for selector, body in re.findall(r"([^{}]+)\{([^}]*)\}", block)
+            if re.search(r"display:\s*(contents|block)", body)
+            and (
+                "workspace-display-options" in selector
+                or "workspace-status-more" in selector
+            )
+        ]
+        assert len(selectors) == 2, selectors
+        for selector in selectors:
+            assert ".collapse" not in selector and ":not(" not in selector, selector
+        animating = _rule(block, ".workspace-status-more.collapsing")
+        assert "height: auto !important" in animating
+        assert "overflow: visible" in animating
+
     def test_the_phone_block_does_not_draw_the_wrappers_open(self):
         block = _media_block(WORKSPACE_CSS.read_text(encoding="utf-8"), PHONE)
         assert "display: contents" not in _rule(block, ".workspace-display-options")
-        assert ".workspace-status-more.collapse" not in block
+        # A phone leaves these to Bootstrap: closed until the trigger is pressed.
+        assert "workspace-status-more" not in block
 
     def test_the_tabs_scroll_on_one_line_on_a_phone(self):
         block = _media_block(WORKSPACE_CSS.read_text(encoding="utf-8"), PHONE)
