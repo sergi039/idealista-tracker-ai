@@ -27,6 +27,7 @@ from services import (
     yaencontre_source,
 )
 from services.settings_service import SettingsService
+from services import plot_text
 from services.search_profile_service import SearchProfileService
 from services.property_classification_service import PropertyClassificationService
 from utils.email_parser import EmailParser
@@ -38,6 +39,7 @@ from utils.uid_cursor import (
 )
 from utils.idealista_extractors import (
     extract_card_area_m2,
+    extract_card_text,
     extract_idealista_property_id,
     extract_listing_title,
     extract_municipality_from_title,
@@ -890,6 +892,11 @@ class PropertyIMAPService:
                                 "property_category": category,
                                 "property_subtype": subtype,
                                 "description": description,
+                                # The listing's own card, for the plot reader
+                                # (#634): never the whole multi-listing body.
+                                "card_text": extract_card_text(body, idealista_id)
+                                if body
+                                else "",
                                 "attributes": attrs,
                                 "photos": portal_photos.from_idealista_email(body).get(
                                     idealista_id
@@ -1288,6 +1295,13 @@ class PropertyIMAPService:
             email_sender=email_data.get("email_sender"),
             source=source,
             record_advertiser=record_advertiser,
+        )
+        # A plot stated in the description (#634); yaencontre cards carry
+        # none and stay unknown. After build_property, never inside it.
+        plot_text.apply_to_property(
+            prop,
+            [("description", prop.description), ("title", prop.title)],
+            portal=source,
         )
         try:
             db.session.add(prop)
@@ -1728,6 +1742,15 @@ class PropertyIMAPService:
                     prop.email_date = email_date
                     if email_data.get("photos"):
                         prop.enrichment = {"import": {"photos": email_data["photos"]}}
+                    # A plot the card states in words (#634); the alert text is
+                    # truncated and the reader refuses a cut-off figure. Never
+                    # the title: it may be the saved-search subject (#645),
+                    # and the card already holds the listing's own heading.
+                    plot_text.apply_to_property(
+                        prop,
+                        [("card", email_data.get("card_text"))],
+                        portal="idealista",
+                    )
 
                     db.session.add(prop)
                     db.session.commit()
