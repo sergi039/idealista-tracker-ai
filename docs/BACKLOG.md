@@ -86,6 +86,28 @@ must be an ancestor of `main`.
   takes the nearest declared dimension on the ring's ancestors and refuses
   anything but 2 as `MALFORMED`.
 
+### A WFS count longer than Python's integer limit raises instead of refusing
+
+- **Anchor:** `services/neighbours_service.py` `parse_buildings`
+  (`numberMatched` / `numberReturned`: `re.fullmatch(r"[0-9]+", value)` then `int(value)`).
+- **Found 2026-11-12** by merge_bot on PR #663
+  (https://github.com/sergi039/idealista-tracker-ai/pull/663#issuecomment-6834607473),
+  the third review round; merged as is on the owner's command 2026-11-12.
+  Input: an empty `wfs:FeatureCollection` with `numberMatched` of 4301 ASCII
+  nines and `numberReturned="0"` passes the pattern, and `int()` raises
+  `ValueError` (the 4300-digit limit of `sys.get_int_max_str_digits()`),
+  not `CadastreError(MALFORMED)`; at 4300 digits it is refused correctly.
+- **What breaks, for whom:** the Enrich press does not fail:
+  `PropertyEnrichmentService` catches it around the neighbour step, rolls
+  back and logs "Neighbour measurement failed", the previous measurement is
+  left untouched and nothing is cached. But the refusal is never recorded as
+  `unavailable` with a reason, and `utils/backfill_neighbours.py` stops on
+  that row. Needs a hostile or corrupt WFS answer. **Not reproduced on live
+  answers** (969, 1282).
+- **Check:** `rg -n 'int\(value\)' services/neighbours_service.py` — a fix
+  bounds the length before `int()` (e.g. `[0-9]{1,6}`, `MAX_FEATURES` is far
+  below) or catches `ValueError` beside `CadastreError` in `measure()`.
+
 ### Four input shapes take the Jev route out instead of to the bridge
 
 - **Anchor:** `services/typesafe_transport.py` (`_KEY_SHAPE`, `_origin`,
