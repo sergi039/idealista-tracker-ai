@@ -65,6 +65,7 @@ from services.cadastre_service import (
     REQUEST_TIMEOUT_S,
     UNAVAILABLE,
     CadastreError,
+    normalize_reference,
 )
 from utils.http import HTTP_USER_AGENT, request_with_retries
 
@@ -743,26 +744,18 @@ def parcel_for_address(
     if error:
         return error
 
+    if require_unique_parcel:
+        refusal = _not_one_parcel(result)
+        if refusal:
+            return refusal
+
     holder = result.get("bico") if isinstance(result.get("bico"), dict) else result
     item = holder.get("bi") if isinstance(holder, dict) else None
     if isinstance(item, list):
-        if require_unique_parcel:
-            references = {_reference_from_rc(e) for e in item if isinstance(e, dict)}
-            if None in references or len({r[:14] for r in references if r}) != 1:
-                return {"status": MALFORMED, "detail": "address has no unique parcel"}
         item = item[0] if item else None
     if not isinstance(item, dict):
         # `lrcdnp` is the shape a street number with several parcels answers in.
         listed = result.get("lrcdnp")
-        if require_unique_parcel:
-            entries = listed.get("rcdnp") if isinstance(listed, dict) else listed
-            entries = entries if isinstance(entries, list) else [entries]
-            references = {_reference_from_rc(e) for e in entries if isinstance(e, dict)}
-            if None in references:
-                return {"status": MALFORMED, "detail": "unreadable address parcel"}
-            references = {r[:14] for r in references if r}
-            if len(references) != 1:
-                return {"status": MALFORMED, "detail": "address has no unique parcel"}
         item = _first_listed(listed)
     if not isinstance(item, dict):
         return {"status": NOT_FOUND, "detail": "no bien inmueble at that number"}
@@ -782,6 +775,31 @@ def parcel_for_address(
             else None
         ),
     }
+
+
+def _not_one_parcel(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A refusal unless every entry is a readable reference to ONE parcel.
+
+    Exactly one of `bico` / `lrcdnp` must be present; any entry that is not an
+    object with a full reference (null, string, number, half an `rc`) refuses
+    the answer before uniqueness is asked, so an unreadable alternative is
+    never read as no alternative.
+    """
+    bico, listed = result.get("bico"), result.get("lrcdnp")
+    if (bico is None) == (listed is None):
+        return {"status": MALFORMED, "detail": "address answer of unknown shape"}
+    container, key = (bico, "bi") if bico is not None else (listed, "rcdnp")
+    entries = container.get(key) if isinstance(container, dict) else None
+    entries = entries if isinstance(entries, list) else [entries]
+    references = [
+        normalize_reference(_reference_from_rc(e)) if isinstance(e, dict) else None
+        for e in entries
+    ]
+    if None in references:
+        return {"status": MALFORMED, "detail": "unreadable address parcel"}
+    if len({r[:14] for r in references}) != 1:
+        return {"status": MALFORMED, "detail": "address has no unique parcel"}
+    return None
 
 
 def _first_listed(listed: Any) -> Optional[Dict[str, Any]]:

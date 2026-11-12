@@ -21,7 +21,28 @@ from services import cadastre_service as cadastre
 GML = "{http://www.opengis.net/gml/3.2}"
 WFS = "{http://www.opengis.net/wfs/2.0}"
 XLINK = "{http://www.w3.org/1999/xlink}"
+XSI_NIL = "{http://www.w3.org/2001/XMLSchema-instance}nil"
 MAX_FEATURES = 5000
+
+
+def _parcel_key(raw):
+    reference = cadastre.normalize_reference(raw)
+    if not reference:
+        raise cadastre.CadastreError(cadastre.MALFORMED, "unreadable parcel reference")
+    return cadastre.parcel_reference(reference)
+
+
+def _linked_parcels(element):
+    """Every parcel a link names. A nil link is an omitted one; a link that
+    names no readable parcel is unreadable, never "no parcel"."""
+    href = element.get(XLINK + "href")
+    if href is None and element.get(XSI_NIL) == "true" and not len(element):
+        return set()
+    query = parse_qs(urlsplit(href or "").query)
+    values = [v for k, vs in query.items() if k.lower() == "refcat" for v in vs]
+    if not values:
+        raise cadastre.CadastreError(cadastre.MALFORMED, "parcel link names no parcel")
+    return {_parcel_key(value) for value in values}
 
 
 def _patch(rings):
@@ -127,20 +148,9 @@ def parse_buildings(text: str, epsg: int) -> list[dict]:
         for element in building.iter():
             local = element.tag.rsplit("}", 1)[-1]
             if local == "cadastralParcels":
-                href = element.get(XLINK + "href", "")
-                for key, values in parse_qs(urlsplit(href).query).items():
-                    if key.lower() == "refcat":
-                        refs.update(
-                            cadastre.parcel_reference(cadastre.normalize_reference(r))
-                            for r in values
-                            if cadastre.normalize_reference(r)
-                        )
-            if local == "reference" and cadastre.normalize_reference(element.text):
-                refs.add(
-                    cadastre.parcel_reference(
-                        cadastre.normalize_reference(element.text)
-                    )
-                )
+                refs.update(_linked_parcels(element))
+            if local == "reference":
+                refs.add(_parcel_key(element.text))
             if local == "currentUse":
                 raw = (element.text or element.get(XLINK + "href") or "").rsplit(
                     "/", 1

@@ -110,6 +110,7 @@ def test_adjacent_buildings_tiled_by_patches_stay_two_buildings():
             pos = patch.find(f".//{n.GML}posList")
             assert pos is not None
             pos.text = " ".join(f"{v:g}" for xy in _square(left, 0) for v in xy)
+            pos.set("count", "5")
             patches.append(patch)
     buildings = n.parse_buildings(ET.tostring(root, encoding="unicode"), 25829)
     assert [b["id"] for b in buildings] == ["ES.TEST.0", "ES.TEST.1"]
@@ -172,6 +173,143 @@ def test_address_multiple_parcels_never_selects_first(monkeypatch):
         )["status"]
         == c.MALFORMED
     )
+
+
+G = 'xmlns:g="http://www.opengis.net/gml/3.2"'
+SQUARE = "0 0 10 0 10 10 0 10 0 0"
+HOLE = "2 2 8 2 8 8 2 8 2 2"
+
+
+def _ring(pos=SQUARE, attrs=""):
+    return f"<g:LinearRing><g:posList{attrs}>{pos}</g:posList></g:LinearRing>"
+
+
+def _polygon(*boundaries):
+    return f"<root {G}><g:Polygon>{''.join(boundaries)}</g:Polygon></root>"
+
+
+@pytest.mark.parametrize(
+    "gml",
+    [
+        # Two exteriors: the second must never be read as a hole (area 64).
+        _polygon(
+            f"<g:exterior>{_ring()}</g:exterior>",
+            f"<g:exterior>{_ring(HOLE)}</g:exterior>",
+        ),
+        _polygon(f"<g:interior>{_ring(HOLE)}</g:interior>"),
+        _polygon(f"<g:exterior>{_ring()}{_ring(HOLE)}</g:exterior>"),
+        _polygon(
+            f"<g:exterior><g:LinearRing><g:posList>{SQUARE}</g:posList>"
+            f"<g:posList>{HOLE}</g:posList></g:LinearRing></g:exterior>"
+        ),
+        _polygon("<g:exterior><g:LinearRing/></g:exterior>"),
+        _polygon("<g:exterior/>"),
+        _polygon(f"<g:exterior>{_ring('')}</g:exterior>"),
+        _polygon(f"<g:exterior>{_ring(SQUARE + ' 7')}</g:exterior>"),
+        _polygon(
+            f"<g:exterior>{_ring(SQUARE.replace('10 0', '1_0 0', 1))}</g:exterior>"
+        ),
+        _polygon(
+            f"<g:exterior>{_ring(SQUARE.replace('10 0', '١٠ 0', 1))}</g:exterior>"
+        ),
+        _polygon("<g:exterior>" + _ring(attrs=" count='4'") + "</g:exterior>"),
+        _polygon("<g:exterior>" + _ring(attrs=" count='²'") + "</g:exterior>"),
+        _polygon("<g:exterior>" + _ring(attrs=" srsDimension='3'") + "</g:exterior>"),
+        f"<root {G}><g:MultiSurface><g:surfaceMember><g:Polygon><g:exterior>{_ring()}"
+        f"</g:exterior></g:Polygon><g:Polygon><g:exterior>{_ring(HOLE)}</g:exterior>"
+        "</g:Polygon></g:surfaceMember></g:MultiSurface></root>",
+    ],
+)
+def test_surface_of_unexpected_cardinality_or_form_is_refused(gml):
+    with pytest.raises(c.CadastreError) as refused:
+        c.surface_polygons(ET.fromstring(gml))
+    assert refused.value.state == c.MALFORMED
+
+
+def test_declared_point_count_that_agrees_is_read():
+    gml = _polygon("<g:exterior>" + _ring(attrs=" count='5'") + "</g:exterior>")
+    assert n._shape(c.surface_polygons(ET.fromstring(gml))).area == 100
+
+
+def _first_building_with(edit):
+    root = ET.fromstring((DATA / "969_buildings.gml").read_text())
+    building = root[0][0]
+    link = next(e for e in building.iter() if e.tag.endswith("}cadastralParcels"))
+    edit(building, link)
+    return ET.tostring(root, encoding="unicode")
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        lambda b, link: link.set(f"{n.XLINK}href", "https://x/?refcat="),
+        lambda b, link: link.set(f"{n.XLINK}href", "https://x/?refcat=not-a-parcel"),
+        lambda b, link: link.set(f"{n.XLINK}href", "https://x/?QUERIE_ID=GetParcel"),
+        lambda b, link: link.attrib.pop(f"{n.XLINK}href"),
+        lambda b, link: ET.SubElement(b, "reference").__setattr__("text", "n/a"),
+    ],
+)
+def test_unreadable_parcel_link_refuses_rather_than_drops(edit):
+    with pytest.raises(c.CadastreError) as refused:
+        n.parse_buildings(_first_building_with(edit), 25829)
+    assert refused.value.state == c.MALFORMED
+
+
+def test_nil_parcel_link_is_an_omitted_link():
+    def nil(_building, link):
+        link.attrib.pop(f"{n.XLINK}href")
+        link.set(n.XSI_NIL, "true")
+
+    parsed = n.parse_buildings(_first_building_with(nil), 25829)
+    assert parsed[0]["parcels"] == set()
+    assert all(b["parcels"] for b in parsed[1:])
+
+
+def _rc(reference):
+    return {"rc": {"pc1": reference[:7], "pc2": reference[7:]}}
+
+
+def _address_answer(monkeypatch, result):
+    monkeypatch.setattr(
+        locate, "_fetch_json", lambda *_: {"consulta_dnplocResult": result}
+    )
+    return locate.parcel_for_address(
+        "P", "M", "CL", "REAL", 8, require_unique_parcel=True
+    )
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"bico": {"bi": [_rc("4463719NH1946S"), None]}},
+        {"bico": {"bi": [_rc(REF), "4463719NH1946S"]}},
+        {"bico": {"bi": [_rc(REF), 7]}},
+        {"bico": {"bi": [_rc(REF), {"rc": {"pc1": "4463719"}}]}},
+        {"bico": {"bi": []}},
+        {"bico": {}},
+        {"bico": [_rc(REF)]},
+        {"lrcdnp": {"rcdnp": [_rc(REF), None]}},
+        {"lrcdnp": {"rcdnp": None}},
+        {"lrcdnp": [_rc(REF)]},
+        {"bico": {"bi": _rc(REF)}, "lrcdnp": {"rcdnp": _rc(REF)}},
+        {"bi": _rc(REF)},
+    ],
+)
+def test_address_answer_of_unexpected_form_is_refused(monkeypatch, result):
+    assert _address_answer(monkeypatch, result)["status"] == c.MALFORMED
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"bico": {"bi": _rc(REF)}},
+        {"lrcdnp": {"rcdnp": [_rc(REF), _rc(REF)]}},
+        {"lrcdnp": {"rcdnp": _rc(REF)}},
+    ],
+)
+def test_address_naming_one_parcel_is_read(monkeypatch, result):
+    answer = _address_answer(monkeypatch, result)
+    assert (answer["status"], answer["reference"]) == (c.OK, REF)
 
 
 def test_gate_policy_is_context_local():

@@ -305,6 +305,9 @@ def surface_polygons(element: ET.Element) -> list:
         "posList",
         "upperCorner",
     }
+    # GML property elements hold exactly one object: a second exterior read as
+    # a hole, or a second posList ignored, would measure a shape nobody sent.
+    single_child = {"surfaceMember", "Surface", "exterior", "interior", "LinearRing"}
     polygons = []
     for patch in element.iter():
         if patch.tag.startswith(_GML_NS):
@@ -313,37 +316,59 @@ def surface_polygons(element: ET.Element) -> list:
                 raise CadastreError(MALFORMED, "unsupported or empty surface part")
             allowed = allowed_parts.get(part)
             if allowed is not None:
-                children = {child.tag for child in patch}
-                if not children or children - {f"{_GML_NS}{tag}" for tag in allowed}:
+                children = [child.tag for child in patch]
+                if (
+                    not children
+                    or set(children) - {f"{_GML_NS}{tag}" for tag in allowed}
+                    or (part in single_child and len(children) != 1)
+                ):
                     raise CadastreError(MALFORMED, "unsupported or empty surface part")
         if patch.tag not in {f"{_GML_NS}Polygon", f"{_GML_NS}PolygonPatch"}:
             continue
+        if [child.tag for child in patch].count(f"{_GML_NS}exterior") != 1:
+            raise CadastreError(MALFORMED, "polygon needs exactly one exterior")
         rings = []
         for boundary in ["exterior", "interior"]:
             for ring in patch.findall(f"{_GML_NS}{boundary}"):
-                pos = ring.find(f".//{_GML_NS}posList")
-                if pos is None or pos.get("srsDimension", "2") != "2":
-                    raise CadastreError(MALFORMED, "missing or non-2D polygon ring")
-                try:
-                    values = [float(n) for n in (pos.text or "").split()]
-                except ValueError as exc:
-                    raise CadastreError(
-                        MALFORMED, "invalid polygon coordinate"
-                    ) from exc
-                if (
-                    len(values) < 8
-                    or len(values) % 2
-                    or not all(math.isfinite(n) for n in values)
-                    or values[:2] != values[-2:]
-                ):
-                    raise CadastreError(MALFORMED, "invalid or open polygon ring")
-                rings.append(list(zip(values[::2], values[1::2])))
-        if not rings or patch.find(f"{_GML_NS}exterior") is None:
-            raise CadastreError(MALFORMED, "polygon has no exterior")
+                rings.append(_ring_points(ring))
         polygons.append(rings)
     if not polygons:
         raise CadastreError(MALFORMED, "no polygon surface")
     return polygons
+
+
+_GML_NUMBER = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+
+
+def _ring_points(boundary: ET.Element) -> List[Tuple[float, float]]:
+    """One closed 2D ring from exactly one LinearRing holding one posList."""
+    linear = list(boundary)
+    pos = list(linear[0]) if len(linear) == 1 else []
+    if (
+        len(linear) != 1
+        or linear[0].tag != f"{_GML_NS}LinearRing"
+        or len(pos) != 1
+        or pos[0].tag != f"{_GML_NS}posList"
+        or pos[0].get("srsDimension", "2") != "2"
+    ):
+        raise CadastreError(MALFORMED, "missing or non-2D polygon ring")
+    tokens = (pos[0].text or "").split()
+    if not all(_GML_NUMBER.fullmatch(token) for token in tokens):
+        raise CadastreError(MALFORMED, "invalid polygon coordinate")
+    values = [float(token) for token in tokens]
+    count = pos[0].get("count")
+    if (
+        len(values) < 8
+        or len(values) % 2
+        or not all(math.isfinite(n) for n in values)
+        or values[:2] != values[-2:]
+        or (
+            count is not None
+            and (not re.fullmatch(r"[0-9]+", count) or int(count) * 2 != len(values))
+        )
+    ):
+        raise CadastreError(MALFORMED, "invalid or open polygon ring")
+    return list(zip(values[::2], values[1::2]))
 
 
 def _ring_area(ring: List[Tuple[float, float]]) -> float:
