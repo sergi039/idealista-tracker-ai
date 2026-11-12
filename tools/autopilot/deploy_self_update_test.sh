@@ -22,6 +22,9 @@ LOCK_SOURCE="${SCRIPT_DIR}/lib/lock.sh"
 # handover vets and carries `lib/` as its own source, so the throwaway repo has
 # to hold the real file rather than a stand-in.
 RENDER_SOURCE="${SCRIPT_DIR}/lib/render_check.sh"
+# Likewise the one reader of where the state directory is (#639): the watcher
+# runs its own repository's copy before it can so much as open its log.
+DATA_DIR_SOURCE="${SCRIPT_DIR}/lib/data_dir.sh"
 
 # The interpreter that runs the watcher under test. The LaunchAgent execs
 # /bin/bash, so that is the default and the case that matters in production;
@@ -209,6 +212,7 @@ fresh_repo() {
     cp "$WATCHER_SOURCE" "${REPO}/tools/autopilot/deploy_watcher.sh"
     cp "$LOCK_SOURCE" "${REPO}/tools/autopilot/lib/lock.sh"
     cp "$RENDER_SOURCE" "${REPO}/tools/autopilot/lib/render_check.sh"
+    cp "$DATA_DIR_SOURCE" "${REPO}/tools/autopilot/lib/data_dir.sh"
     chmod +x "${REPO}/tools/autopilot/deploy_watcher.sh"
     printf 'first\n' >"${REPO}/file.txt"
     git -C "$REPO" add -A
