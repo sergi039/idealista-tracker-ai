@@ -5,6 +5,7 @@ shapes the issue measured; the idealista e-mails are reconstructed cards, not
 captured mail. Nothing here touches the network.
 """
 
+import json
 from email.message import EmailMessage
 
 import pytest
@@ -16,6 +17,7 @@ from services.plot_text import EXTRACTOR_VERSION, apply_to_property, extract_plo
 from services.property_imap_service import PropertyIMAPService
 from tests import setup_test_environment
 from tests.test_last_seen_uid_cursor import _FakeIMAPClient, _make_service
+from utils import backfill_plot_from_text as tool
 
 CRITERIA = {"min_house_m2": 150, "min_plot_m2": 700, "max_price_eur": 300000}
 
@@ -535,3 +537,310 @@ class TestApplyToProperty:
 
         assert block["field"] == "description"
         assert float(prop.plot_area) == 745
+
+
+def _stored(n, *, description, plot_area=None, url=None, title="Casa", enrichment=None):
+    prop = Property(
+        source_email_id=f"s{n}",
+        url=url or f"https://www.fotocasa.es/es/comprar/vivienda/x/{n}/d",
+        title=title,
+        description=description,
+        price=250000,
+        currency="EUR",
+        area=200,
+        area_type="built",
+        plot_area=plot_area,
+        search_profile_id=db.session.query(SearchProfile).one().id,
+        enrichment=enrichment,
+    )
+    db.session.add(prop)
+    db.session.commit()
+    return prop.id
+
+
+class TestTheBackfill:
+    @pytest.fixture
+    def rows(self, app):
+        return {
+            "gain": _stored(1, description="Casa en parcela de 745 m²"),
+            "mention_only": _stored(2, description="casa con terreno"),
+            "stated": _stored(3, description="parcela de 745 m²", plot_area=1000),
+            "multi": _stored(
+                4,
+                description="Hola, 2 anuncios nuevos. Casa A 99.000 € parcela de 745 m²",
+                url="https://www.idealista.com/inmueble/4/",
+            ),
+            "single": _stored(
+                5,
+                description="Hola, X, 1 anuncio recién publicado. 99.000 € finca de 2 ha",
+                url="https://www.idealista.com/inmueble/5/",
+            ),
+            "yaencontre": _stored(
+                6,
+                description=None,
+                url="https://www.yaencontre.com/venta/casa/inmueble-6",
+            ),
+        }
+
+    def test_the_report_writes_nothing_and_measures_before_after(self, app, rows):
+        out = tool.report()
+
+        assert {p["id"] for p in out["plans"]} == {rows["gain"], rows["single"]}
+        assert out["per_portal"]["idealista"]["multi_listing_skipped"] == 1
+        (m,) = out["measure"]
+        assert m["promising"] == 6
+        assert (m["plot_unknown_before"], m["plot_unknown_after"]) == (5, 3)
+        db.session.expire_all()
+        assert Property.query.filter(Property.plot_area.isnot(None)).count() == 1
+        assert not any(
+            "plot_from_text" in (p.enrichment or {}) for p in Property.query.all()
+        )
+
+    def test_an_idealista_title_is_never_read(self, app):
+        pid = _stored(
+            11,
+            description=None,
+            title="Galicia - parcela de 1.000 m²",
+            url="https://www.idealista.com/inmueble/11/",
+        )
+        prop = db.session.get(Property, pid)
+
+        assert tool.plan_row(prop)["outcome"] != "gain"
+        out = tool.report()
+        assert pid not in {p["id"] for p in out["plans"]}
+
+    def test_disagreeing_sources_are_ambiguous_and_counted(self, app):
+        pid = _stored(
+            12,
+            description="parcela de 700 m² y finca de 900 m²",
+            title="Casa en parcela de 700 m²",
+        )
+        prop = db.session.get(Property, pid)
+
+        assert tool.plan_row(prop)["outcome"] == "ambiguous"
+        out = tool.report()
+        assert out["per_portal"]["fotocasa"]["ambiguous"] == 1
+        assert pid not in {p["id"] for p in out["plans"]}
+
+    def test_apply_needs_a_new_snapshot_path(self, app, rows, tmp_path):
+        with pytest.raises(ValueError):
+            tool.apply("")
+        path = tmp_path / "snap.json"
+        path.write_text("{}")
+        with pytest.raises(FileExistsError):
+            tool.apply(str(path))
+
+    def test_apply_writes_with_source_then_restore_is_compare_and_swap(
+        self, app, rows, tmp_path
+    ):
+        path = str(tmp_path / "snap.json")
+
+        out = tool.apply(path)
+
+        assert sorted(out["written"]) == sorted([rows["gain"], rows["single"]])
+        db.session.expire_all()
+        gained = db.session.get(Property, rows["gain"])
+        assert float(gained.plot_area) == 745
+        assert (
+            gained.enrichment["plot_from_text"]["extractor_version"]
+            == EXTRACTOR_VERSION
+        )
+        assert db.session.get(Property, rows["multi"]).plot_area is None
+        assert json.load(open(path))["phase"] == "final"
+
+        # A person corrects one row afterwards: restore leaves it alone.
+        edited = db.session.get(Property, rows["single"])
+        edited.plot_area = 3000
+        db.session.commit()
+        back = tool.restore(path, apply_it=True)
+
+        assert back["restored"] == [rows["gain"]]
+        assert back["changed_since_apply"] == [rows["single"]]
+        db.session.expire_all()
+        assert db.session.get(Property, rows["gain"]).plot_area is None
+        assert "plot_from_text" not in (
+            db.session.get(Property, rows["gain"]).enrichment or {}
+        )
+        assert float(db.session.get(Property, rows["single"]).plot_area) == 3000
+
+    def test_a_commit_whose_journal_line_failed_is_still_restored(
+        self, app, tmp_path, monkeypatch
+    ):
+        """Review of #661, P1: commit, then the journal write fails."""
+        pid = _stored(21, description="Casa en parcela de 745 m²")
+        path = str(tmp_path / "snap.json")
+
+        def _disk_full(handle, record):
+            raise OSError("No space left on device")
+
+        monkeypatch.setattr(tool, "_journal_append", _disk_full)
+        with pytest.raises(OSError):
+            tool.apply(path)
+        db.session.expire_all()
+        assert float(db.session.get(Property, pid).plot_area) == 745
+        assert json.load(open(path))["phase"] == "planned"
+
+        back = tool.restore(path, apply_it=True)
+
+        assert back["restored"] == [pid]
+        db.session.expire_all()
+        row = db.session.get(Property, pid)
+        assert row.plot_area is None
+        assert "plot_from_text" not in (row.enrichment or {})
+
+    def test_restore_puts_back_what_was_there_not_a_blank(self, app, tmp_path):
+        """Review of #661, P2: a stored 0 and an earlier block come back as they were."""
+        earlier = {"value": 500.0, "extractor_version": "old", "field": "title"}
+        pid = _stored(
+            22,
+            description="parcela de 745 m²",
+            plot_area=0,
+            enrichment={"plot_from_text": earlier, "other": 1},
+        )
+        path = str(tmp_path / "snap.json")
+
+        assert tool.apply(path)["written"] == [pid]
+        db.session.expire_all()
+        assert float(db.session.get(Property, pid).plot_area) == 745
+
+        back = tool.restore(path, apply_it=True)
+
+        assert back["restored"] == [pid]
+        db.session.expire_all()
+        row = db.session.get(Property, pid)
+        assert row.plot_area is not None and float(row.plot_area) == 0
+        assert row.enrichment == {"plot_from_text": earlier, "other": 1}
+
+    def test_a_row_changed_between_the_plan_and_the_lock_is_skipped(
+        self, app, tmp_path, monkeypatch
+    ):
+        """The snapshot's "before" is only true if the locked row still matches it."""
+        pid = _stored(23, description="parcela de 745 m²")
+        real_locked = tool._locked
+
+        def _edited_meanwhile(prop_id):
+            row = real_locked(prop_id)
+            row.plot_area = 0  # still blank, so still in scope, but not "before"
+            return row
+
+        monkeypatch.setattr(tool, "_locked", _edited_meanwhile)
+        out = tool.apply(str(tmp_path / "snap.json"))
+
+        assert out["written"] == [] and out["skipped_changed"] == [pid]
+
+    def test_a_correction_committed_elsewhere_is_seen_under_the_lock(
+        self, app, tmp_path
+    ):
+        """Review of #675, P1: the session already holds the row as written;
+        another session corrects it; restore must compare the fresh value."""
+        from sqlalchemy import update
+        from sqlalchemy.orm import Session
+
+        pid = _stored(24, description="Casa en parcela de 745 m²")
+        path = str(tmp_path / "snap.json")
+        assert tool.apply(path)["written"] == [pid]
+        cached = db.session.get(Property, pid)
+        assert float(cached.plot_area) == 745  # loaded into this identity map
+
+        with Session(db.engine) as other:
+            other.execute(
+                update(Property).where(Property.id == pid).values(plot_area=1000)
+            )
+            other.commit()
+
+        back = tool.restore(path, apply_it=True)
+
+        assert back["restored"] == [] and back["changed_since_apply"] == [pid]
+        db.session.expire_all()
+        assert float(db.session.get(Property, pid).plot_area) == 1000
+
+    def test_apply_compares_the_before_image_read_fresh(
+        self, app, tmp_path, monkeypatch
+    ):
+        """Same class in apply: a row another session changed after the plan is
+        skipped, not written over a before-image the session cached."""
+        from sqlalchemy import update
+        from sqlalchemy.orm import Session
+
+        pid = _stored(25, description="Casa en parcela de 745 m²")
+        real_report = tool.report
+        held = []  # the session keeps the row, as a long-lived caller would
+
+        def _then_edited_elsewhere(profile_id=None):
+            out = real_report(profile_id)
+            held.append(db.session.get(Property, pid))
+            assert held[0].plot_area is None  # cached before the other commit
+            with Session(db.engine) as other:
+                other.execute(
+                    update(Property).where(Property.id == pid).values(plot_area=0)
+                )
+                other.commit()
+            return out
+
+        monkeypatch.setattr(tool, "report", _then_edited_elsewhere)
+        out = tool.apply(str(tmp_path / "snap.json"))
+
+        assert out["written"] == [] and out["skipped_changed"] == [pid]
+        db.session.expire_all()
+        assert float(db.session.get(Property, pid).plot_area) == 0
+
+    def test_it_makes_no_network_call(self):
+        assert "requests" not in open(tool.__file__).read()
+        assert "urllib" not in open(plot_text.__file__).read()
+
+
+def _documented_invocations():
+    """Every `python -m utils.backfill_plot_from_text ...` line of the docstring,
+    once with each optional part given and once with all of them left out."""
+    import re
+
+    prefix = "python -m utils.backfill_plot_from_text"
+    lines = [
+        line.split("#")[0].strip()[len(prefix) :]
+        for line in tool.__doc__.splitlines()
+        if line.strip().startswith(prefix)
+    ]
+    out = []
+    for line in lines:
+        with_all = re.sub(r"\[([^\]]*)\]", r"\1", line).replace(" N", " 24")
+        without = re.sub(r"\[[^\]]*\]", "", line)
+        out += [with_all.split(), without.split()]
+    return out
+
+
+class TestTheDocumentedCommandsParse:
+    def test_the_docstring_lists_every_command(self):
+        commands = {
+            argv[0] if argv and not argv[0].startswith("-") else "report"
+            for argv in _documented_invocations()
+        }
+        assert commands == {"report", "apply", "restore"}
+
+    @pytest.mark.parametrize("argv", _documented_invocations(), ids=" ".join)
+    def test_each_documented_invocation_parses(self, argv):
+        tool.build_parser().parse_args(argv)
+
+    @pytest.mark.parametrize(
+        "argv, command, profile_id",
+        [
+            (["--profile-id", "24"], None, 24),
+            ([], None, None),
+            (["report", "--profile-id", "3"], "report", 3),
+            (["--profile-id", "5", "report"], "report", 5),
+            (["apply", "--snapshot", "s.json", "--profile-id", "7"], "apply", 7),
+            (["apply", "--snapshot", "s.json"], "apply", None),
+        ],
+    )
+    def test_the_report_filter_reaches_the_command(self, argv, command, profile_id):
+        args = tool.build_parser().parse_args(argv)
+        assert args.command == command and args.profile_id == profile_id
+
+    def test_the_owner_restore_command_parses(self):
+        args = tool.build_parser().parse_args(
+            ["restore", "data/plot_634.json", "--apply"]
+        )
+        assert (args.command, args.path, args.restore_apply) == (
+            "restore",
+            "data/plot_634.json",
+            True,
+        )
