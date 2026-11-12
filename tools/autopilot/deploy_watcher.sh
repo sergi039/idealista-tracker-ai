@@ -24,19 +24,54 @@ SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 SCRIPT_ARGS=("$@")
 
 REPO_DIR="${AUTOPILOT_REPO_DIR:-/Users/ss/IdealistaRank}"
+# Where the deployment keeps its state, on the host (#639): the directory
+# docker-compose.yml binds at /app/data, so the markers a job writes inside the
+# container are the files read here. It has one home - IDEALISTA_DATA_DIR in
+# ${REPO_DIR}/.env, which Compose interpolates the mount from - and
+# lib/data_dir.sh is the one reader of it; unset, the answer is
+# ${REPO_DIR}/data, as it was when this was spelled out on every line below.
+#
+# Run, not sourced: a subprocess reads one complete version of the file even
+# while a fast-forward replaces it, and Apple's Bash 3.2 would take this shell
+# down with a sourced syntax error. It runs before the log exists because the
+# log lives in that directory, so a refusal can only go to stderr - launchd's
+# own file. There is deliberately no fallback to ${REPO_DIR}/data: a watcher
+# keeping its markers in one directory while the container writes another is
+# the split this variable exists to prevent.
+#
+# What that costs, said plainly: a tick refused here deploys nothing and is
+# not counted by the stall alarm (#532) - the counter is a file in the
+# directory nobody could name. Production stays on the image it is serving.
+# The refusal is in launchd's file every five minutes, and
+# tools/backfill_status.sh asks the same reader, so it answers `unknown` with
+# the same reason for as long as this lasts.
+STATE_DIR="$("${BASH:-/bin/bash}" "${SCRIPT_DIR}/lib/data_dir.sh" "$REPO_DIR")" || {
+    echo "$(date '+%Y-%m-%d %H:%M:%S')  FATAL: cannot tell where the deployment's state lives (see the line above) - refusing to run" >&2
+    exit 1
+}
+# Exit 0 without an absolute path is not an answer: taken as one, the
+# deployment marker would be looked for under `/`, never found, and every tick
+# would rebuild.
+case "$STATE_DIR" in
+    /*) ;;
+    *)
+        echo "$(date '+%Y-%m-%d %H:%M:%S')  FATAL: the reader of the state directory answered '${STATE_DIR}', which is not an absolute path - refusing to run" >&2
+        exit 1
+        ;;
+esac
 BRANCH="${AUTOPILOT_BRANCH:-main}"
 COMPOSE_FILE="${AUTOPILOT_COMPOSE_FILE:-docker-compose.yml}"
 IMAGE="${AUTOPILOT_IMAGE:-idealistarank-app}"
 ROLLBACK_TAG="${IMAGE}:autopilot-rollback"
 HEALTH_URL="${AUTOPILOT_HEALTH_URL:-http://127.0.0.1:5001/api/healthz}"
 LOCK_DIR="${AUTOPILOT_LOCK_DIR:-/tmp/idealista-autopilot-deploy.lock.d}"
-LOG_FILE="${AUTOPILOT_LOG_FILE:-${REPO_DIR}/data/autopilot-deploy.log}"
+LOG_FILE="${AUTOPILOT_LOG_FILE:-${STATE_DIR}/autopilot-deploy.log}"
 # What is actually running, as opposed to what is checked out. Comparing
 # local git against remote git only answers "is the checkout current", and the
 # container can be older than the checkout - a `git pull` by hand is enough to
 # make the watcher believe there is nothing to do while the app still serves
 # the previous build. Observed on the very first run.
-DEPLOYED_MARKER="${AUTOPILOT_DEPLOYED_MARKER:-${REPO_DIR}/data/.deployed_sha}"
+DEPLOYED_MARKER="${AUTOPILOT_DEPLOYED_MARKER:-${STATE_DIR}/.deployed_sha}"
 
 # The app has to answer healthz within this window after a rebuild.
 HEALTH_TIMEOUT_SECONDS="${AUTOPILOT_HEALTH_TIMEOUT:-180}"
@@ -74,7 +109,7 @@ LOCK_LIB="${AUTOPILOT_LIB_DIR}/lock.sh"
 # instead, and the bound is the point: a deploy that never lands is also a
 # failure, just a quieter one.
 APP_CONTAINER="${AUTOPILOT_APP_CONTAINER:-${COMPOSE_CONTAINER_PREFIX:-idealista}-app}"
-INFLIGHT_DIR="${AUTOPILOT_INFLIGHT_DIR:-${REPO_DIR}/data/.inflight}"
+INFLIGHT_DIR="${AUTOPILOT_INFLIGHT_DIR:-${STATE_DIR}/.inflight}"
 # Which container processes count as a job. Both spellings the repo uses.
 # This pattern is a deliberately generous PRE-FILTER, and it must stay one.
 # Three spellings of the same command defeated three successive attempts to be
@@ -89,7 +124,7 @@ INFLIGHT_DIR="${AUTOPILOT_INFLIGHT_DIR:-${REPO_DIR}/data/.inflight}"
 INFLIGHT_PATTERN="${AUTOPILOT_INFLIGHT_PATTERN:-python.*utils[./]}"
 DEFER_ON_INFLIGHT="${AUTOPILOT_DEFER_ON_INFLIGHT:-0}"
 DEFER_BUDGET="${AUTOPILOT_DEFER_BUDGET:-6}"
-DEFER_STATE="${AUTOPILOT_DEFER_STATE:-${REPO_DIR}/data/.deploy_deferrals}"
+DEFER_STATE="${AUTOPILOT_DEFER_STATE:-${STATE_DIR}/.deploy_deferrals}"
 # What a truthful process list for THIS container must contain. The Dockerfile
 # CMD runs gunicorn, so a table without it is not an idle container - it is a
 # probe that answered without looking. Shape alone is too weak: eight columns
@@ -118,8 +153,8 @@ CONTAINER_SENTINEL="${AUTOPILOT_CONTAINER_SENTINEL-gunicorn}"
 # The counter is on disk because each tick is a fresh process, and it is NOT
 # keyed on the target commit the way the deferral budget is: main moving
 # further during a stall is more reason to shout, not a reason to start over.
-STALL_STATE="${AUTOPILOT_STALL_STATE:-${REPO_DIR}/data/.deploy_stall_ticks}"
-STALLED_MARKER="${AUTOPILOT_STALLED_MARKER:-${REPO_DIR}/data/.deploy_stalled}"
+STALL_STATE="${AUTOPILOT_STALL_STATE:-${STATE_DIR}/.deploy_stall_ticks}"
+STALLED_MARKER="${AUTOPILOT_STALLED_MARKER:-${STATE_DIR}/.deploy_stalled}"
 # Refused ticks in a row before the alarm; 3 is fifteen minutes. Validated
 # once the log exists, further down, so garbage stops the tick loudly.
 STALL_THRESHOLD="${AUTOPILOT_STALL_THRESHOLD:-3}"
