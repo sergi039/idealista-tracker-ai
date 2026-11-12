@@ -43,6 +43,80 @@ def test_multipart_and_holes_are_preserved():
     assert shape.distance(box(31, 1, 32, 2)) == 1
 
 
+def _square(x, y, size=1):
+    return [(x, y), (x + size, y), (x + size, y + size), (x, y + size), (x, y)]
+
+
+@pytest.mark.parametrize(
+    "patches,area,parts",
+    [
+        # Patches tiling one footprint share an edge: one rectangle, area 2.
+        (
+            [
+                [[(0, 0), (1, 0), (1, 1), (0, 1), (0, 0)]],
+                [[(1, 0), (2, 0), (2, 1), (1, 1), (1, 0)]],
+            ],
+            2,
+            1,
+        ),
+        # Touching in one point stays two parts of one footprint.
+        ([[_square(0, 0)], [_square(1, 1)]], 2, 2),
+        # Overlapping patches cover their union, never the sum of areas.
+        ([[_square(0, 0, 2)], [_square(1, 0, 2)]], 6, 1),
+        # A holed patch beside an adjacent one keeps its hole.
+        ([[_square(0, 0, 10), _square(2, 2, 6)], [_square(10, 0, 10)]], 164, 1),
+    ],
+)
+def test_patches_of_one_footprint_are_one_valid_shape(patches, area, parts):
+    shape = n._shape(patches)
+    assert shape.is_valid
+    assert shape.area == area
+    assert len(shape.geoms) == parts
+
+
+@pytest.mark.parametrize(
+    "patches",
+    [
+        [],
+        # A self-crossing patch is refused, even beside a sound adjacent one.
+        [[[(0, 0), (1, 1), (1, 0), (0, 1), (0, 0)]], [_square(1, 0)]],
+        # An open ring is refused here too: stored polygons reach this check.
+        [[[(0, 0), (1, 0), (1, 1), (0, 1)]], [_square(1, 0)]],
+        [[[[0, 0], [1, 0], [1, 1], [0, 1]]]],
+        # A patch with no area.
+        [[[(0, 0), (1, 0), (2, 0), (0, 0)]], [_square(1, 0)]],
+        [[[(0, 0), (1, 0), (1, float("nan")), (0, 1), (0, 0)]]],
+    ],
+)
+def test_broken_patch_still_refuses_the_feature(patches):
+    with pytest.raises(c.CadastreError, match="invalid polygon surface"):
+        n._shape(patches)
+
+
+def test_adjacent_buildings_tiled_by_patches_stay_two_buildings():
+    root = ET.fromstring((DATA / "969_buildings.gml").read_text())
+    for extra in list(root)[2:]:
+        root.remove(extra)
+    for index, member in enumerate(root):
+        building = member[0]
+        building.set(f"{n.GML}id", f"ES.TEST.{index}")
+        patches = building.find(f".//{n.GML}patches")
+        assert patches is not None
+        template = patches[0]
+        for patch in list(patches):
+            patches.remove(patch)
+        for left in (2 * index, 2 * index + 1):
+            patch = deepcopy(template)
+            pos = patch.find(f".//{n.GML}posList")
+            assert pos is not None
+            pos.text = " ".join(f"{v:g}" for xy in _square(left, 0) for v in xy)
+            patches.append(patch)
+    buildings = n.parse_buildings(ET.tostring(root, encoding="unicode"), 25829)
+    assert [b["id"] for b in buildings] == ["ES.TEST.0", "ES.TEST.1"]
+    assert buildings[0]["shape"].equals(box(0, 0, 2, 1))
+    assert buildings[1]["shape"].equals(box(2, 0, 4, 1))
+
+
 @pytest.mark.parametrize(
     "body",
     [

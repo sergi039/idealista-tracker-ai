@@ -12,7 +12,9 @@ import re
 import xml.etree.ElementTree as ET
 from urllib.parse import parse_qs, urlsplit
 
+from shapely.errors import ShapelyError
 from shapely.geometry import MultiPolygon, Polygon
+from shapely.ops import unary_union
 
 from services import cadastre_service as cadastre
 
@@ -22,14 +24,38 @@ XLINK = "{http://www.w3.org/1999/xlink}"
 MAX_FEATURES = 5000
 
 
+def _patch(rings):
+    if any(len(ring) < 4 or tuple(ring[0]) != tuple(ring[-1]) for ring in rings):
+        raise ValueError("open polygon ring")
+    patch = Polygon(rings[0], rings[1:])
+    if patch.is_empty or not patch.is_valid or not patch.area > 0:
+        raise ValueError("invalid polygon patch")
+    return patch
+
+
 def _shape(polygons):
+    """One footprint from one feature's patches, every patch checked alone.
+
+    GML tiles a footprint with patches that share edges; as a MultiPolygon
+    they are invalid although each is sound, so the footprint is their union.
+    Called once per feature, so neighbouring buildings never merge.
+    """
     try:
-        shapes = [Polygon(rings[0], rings[1:]) for rings in polygons]
-        result = MultiPolygon(shapes)
-        if result.is_empty or not result.is_valid or not math.isfinite(result.area):
+        patches = [_patch(rings) for rings in polygons]
+        if not patches:
+            raise ValueError("no polygon patch")
+        result = unary_union(patches)
+        if isinstance(result, Polygon):
+            result = MultiPolygon([result])
+        if (
+            not isinstance(result, MultiPolygon)
+            or result.is_empty
+            or not result.is_valid
+            or not math.isfinite(result.area)
+        ):
             raise ValueError("invalid surface")
         return result
-    except (ValueError, TypeError, IndexError) as exc:
+    except (ValueError, TypeError, IndexError, ShapelyError) as exc:
         raise cadastre.CadastreError(
             cadastre.MALFORMED, "invalid polygon surface"
         ) from exc
