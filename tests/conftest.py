@@ -49,7 +49,7 @@ import pytest
 from flask import globals as flask_globals
 
 from config import Config
-from tests import network_guard, skip_guard
+from tests import data_dir_guard, network_guard, skip_guard
 from utils.cache import cache as flask_cache
 
 
@@ -327,6 +327,7 @@ _problems: list[str] = []
 _reported = False
 _network_reported = False
 _skip_reported = False
+_data_dir_reported = False
 
 
 def _mutable_config_attributes() -> dict[str, Any]:
@@ -470,6 +471,46 @@ def pytest_configure(config: pytest.Config) -> None:
     network_guard.install()
     skip_guard.reset()
 
+    # The state directory leaves the checkout for the whole session (#639).
+    #
+    # `Config.DATA_DIR` defaults to the working tree's `data/`, and in the
+    # main checkout that is the directory the deployment mounts at /app/data.
+    # #627 moved the two paths that had already done damage (the cursor and
+    # the ledger, below); everything else that hangs off `DATA_DIR` -- the
+    # attachments root is computed from it at import -- still pointed there.
+    # Moving the attribute is the half that makes well-behaved code write
+    # somewhere harmless; `data_dir_guard` is the half that refuses, and
+    # reports, the code that does not go through the attribute at all (a
+    # cwd-relative `data/...` literal). The guard is told what the attribute
+    # was, so a `DATA_DIR` from the environment is protected as well.
+    #
+    # The committed reference files are not affected: their readers build
+    # their paths from the code's own location, not from `DATA_DIR`
+    # (services/quality_of_life_service.py, services/agency_directory.py,
+    # utils/municipality_codes.py).
+    import os
+    import tempfile
+
+    _checkout_state = Config.DATA_DIR
+    _state_dir = tempfile.mkdtemp(prefix="idealista-state-")
+    Config.DATA_DIR = _state_dir
+    Config.ATTACHMENTS_DIR = os.path.join(_state_dir, "attachments")
+    data_dir_guard.install(extra=(_checkout_state,))
+
+    # The in-flight markers go with it. `utils.inflight` names its directory
+    # relative to the working directory (`data/.inflight`: /app in the
+    # container, the repository root under pytest), not through `DATA_DIR`,
+    # so moving the attribute above does not move it. Thirteen tests in five
+    # modules run a backfill's `run()` and with it `inflight(...)`; the guard
+    # found every one of them on its first full run, each creating
+    # `data/.inflight/` in the checkout -- on the mini the directory the
+    # deploy watcher reads to decide what a deploy would kill. Redirected
+    # once, like the ledger below, so a fourteenth cannot forget; a test that
+    # passes `directory=` or sets the name itself still wins.
+    import utils.inflight as inflight_module
+
+    inflight_module.INFLIGHT_DIRNAME = os.path.join(_state_dir, ".inflight")
+
     # The spend ledger goes to a throwaway file for the whole session.
     #
     # `utils.google_spend.record_spend` appends to `DATA_DIR/
@@ -480,14 +521,10 @@ def pytest_configure(config: pytest.Config) -> None:
     # that file answers is "what did this machine pay Google for", and test
     # traffic is a wrong answer to it.
     #
-    # Redirected here rather than by moving `Config.DATA_DIR`, which would
-    # also move the committed reference files `services/reference_places.py`
-    # and `/municipalities` read (`data/hospitals_cnh.json`,
-    # `data/ine_municipal.json`) and break suites that have nothing to do with
-    # spending. One function, one file.
-    import os
-    import tempfile
-
+    # Redirected by name (#627) before `Config.DATA_DIR` itself was moved
+    # above (#639), and kept: the tests of the ledger replace this function to
+    # read their own file, and one function with one file is what they expect
+    # to find.
     import utils.google_spend as google_spend
 
     _ledger = os.path.join(
@@ -551,16 +588,23 @@ def pytest_collectreport(report: Any) -> None:
 
 
 def pytest_runtest_logstart(nodeid: str, location: Any) -> None:
-    """Attribute the connects made from here on to this test."""
+    """Attribute the connects and the state-directory writes made from here
+    on to this test."""
     network_guard.note_test(nodeid)
+    data_dir_guard.note_test(nodeid)
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    """Fail the run when a mutation, a live network call, or an unapproved
-    skip escaped a test."""
+    """Fail the run when a mutation, a live network call, a write into the
+    deployment's state directory, or an unapproved skip escaped a test."""
     global _problems
     _problems = _detect_mutations()
-    if not _problems and not network_guard.attempts() and not skip_guard.offenses():
+    if (
+        not _problems
+        and not network_guard.attempts()
+        and not data_dir_guard.attempts()
+        and not skip_guard.offenses()
+    ):
         return
 
     # Raising here does not fail the run: wrap_session() has already computed
@@ -582,7 +626,15 @@ def pytest_terminal_summary(terminalreporter: Any) -> None:
     callers catch `Exception` and degrade, so a refused call can leave a green
     test and no trace anywhere else in the output.
     """
-    global _reported, _network_reported, _skip_reported
+    global _reported, _network_reported, _skip_reported, _data_dir_reported
+    data_dir_lines = data_dir_guard.summary_lines()
+    if data_dir_lines:
+        terminalreporter.write_sep(
+            "=", "state directory guard: FAILED", red=True, bold=True
+        )
+        for line in data_dir_lines:
+            terminalreporter.write_line(line, red=True)
+        _data_dir_reported = True
     skip_lines = skip_guard.summary_lines()
     if skip_lines:
         terminalreporter.write_sep("=", "skip guard: FAILED", red=True, bold=True)
@@ -620,4 +672,8 @@ def pytest_unconfigure(config: pytest.Config) -> None:
     skip_lines = skip_guard.summary_lines()
     if skip_lines and not _skip_reported:  # pragma: no cover - as above
         print("\n".join(["skip guard: FAILED", *skip_lines]))
+    data_dir_lines = data_dir_guard.summary_lines()
+    if data_dir_lines and not _data_dir_reported:  # pragma: no cover - as above
+        print("\n".join(["state directory guard: FAILED", *data_dir_lines]))
     network_guard.uninstall()
+    data_dir_guard.uninstall()
