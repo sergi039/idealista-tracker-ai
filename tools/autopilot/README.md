@@ -53,6 +53,12 @@ call costs a reviewer attempt. `--pr N` has the same cost unless combined with
 `--dry-run`. Dry runs never call `rx`: they read CI and the review journal,
 then report the cached decision or the review they would request.
 
+Every `data/...` path in this file is the deployment's state directory as the
+host sees it: `<repo>/data` unless the checkout's `.env` sets
+`IDEALISTA_DATA_DIR` (#639). The scripts here ask `lib/data_dir.sh` for it, the
+same variable `docker-compose.yml` mounts `/app/data` from; see
+`docs/rules/run-and-deploy.md`.
+
 Logs live in `data/autopilot*.log`. Review verdicts are journalled in
 `data/autopilot-reviews.tsv`, keyed by `base..head` — a re-push or a moved base
 gets a fresh review, a re-run does not burn another reviewer attempt on an

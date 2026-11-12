@@ -1,24 +1,23 @@
-"""The host path of the deployment's state has one home (issue #639).
+"""The host path of the deployment's state has exactly one home (issue #639).
 
 The app container persists one directory, mounted at `/app/data`. On the host
-it is spelled `./data` in docker-compose.yml and `${REPO_DIR}/data` in seven
-scripts - eight copies of "inside the git working copy", which is the fact
-that let a `pytest` run in the checkout overwrite the production mail cursor.
+it was spelled `./data` in docker-compose.yml and `${REPO_DIR}/data` in seven
+scripts - the deploy watcher, the merge bot, the issue runner, the backfill
+status and supervisor tools, the attachment backup. Eight copies of "inside
+the git working copy", which is the fact that let a `pytest` run in the
+checkout overwrite the production mail cursor.
 
-This is the first step out of that: one variable, `IDEALISTA_DATA_DIR` in the
-checkout's `.env`. Compose interpolates the bind mount from it, and
-`tools/autopilot/lib/data_dir.sh` is the one reader of it for everything else
-on the host. Unset, both say `<repo>/data`, so nothing moves until a
-machine's `.env` says so. The backfill and backup tools ask the reader now;
-the autopilot scripts follow in the next change.
+It is one variable now, `IDEALISTA_DATA_DIR` in the checkout's `.env`:
+Compose interpolates the bind mount from it and every host tool asks
+`tools/autopilot/lib/data_dir.sh`. Unset, both say `<repo>/data`, so nothing
+moves until a machine's `.env` says so.
 
-Pinned here:
+Three things are pinned here:
 
-* the reader's contract, by running its shell harness (pytest is what CI
-  runs; a harness nobody runs proves nothing);
+* the reader's contract and the watcher's use of it, by running the two shell
+  harnesses (pytest is what CI runs; a harness nobody runs proves nothing);
 * that Compose's default still renders the directory it always did;
-* that the host variable can never be mistaken for the container's;
-* that each script already moved over asks the reader.
+* that no script has grown a ninth copy of the path.
 """
 
 from __future__ import annotations
@@ -34,6 +33,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LIB = REPO_ROOT / "tools" / "autopilot" / "lib" / "data_dir.sh"
 LIB_TEST = REPO_ROOT / "tools" / "autopilot" / "lib" / "data_dir_test.sh"
+WATCHER_TEST = REPO_ROOT / "tools" / "autopilot" / "deploy_data_dir_test.sh"
 
 # Four watcher runs against stubs, three of which build and poll a loopback
 # health stub that answers at once. The bound is there to fail a hang.
@@ -41,11 +41,21 @@ TIMEOUT_SECONDS = 300
 
 VARIABLE = "IDEALISTA_DATA_DIR"
 
-# The host scripts moved over to the reader so far.
+# Every host script that used to spell the directory itself.
 CALLERS = (
+    "tools/autopilot/deploy_watcher.sh",
+    "tools/autopilot/merge_bot.sh",
+    "tools/autopilot/autopilot.sh",
+    "tools/autopilot/run_issue.sh",
     "tools/backfill_status.sh",
     "tools/backfill_supervisor.sh",
     "tools/backup_attachments.sh",
+)
+
+# `${REPO_DIR}/data`, `"$REPO_ROOT"/data`, `$project_dir/data` and friends:
+# a repository-root variable followed by the directory's old name.
+HAND_BUILT_PATH = re.compile(
+    r"\$\{?(?:REPO_DIR|REPO_ROOT|REPO|repo_root|repo_dir|project_dir)\}?\"?/data\b"
 )
 
 
@@ -88,6 +98,26 @@ def test_the_one_reader_of_the_state_directory(interpreter):
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
     assert "ALL " in result.stdout and " PASSED" in result.stdout
+
+
+def test_the_watcher_keeps_its_files_where_the_state_is():
+    for tool in ("git", "curl", "nc", "python3"):
+        assert shutil.which(tool), f"the harness needs {tool} on PATH"
+    result = subprocess.run(
+        ["/bin/bash", str(WATCHER_TEST)],
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT_SECONDS,
+        cwd=REPO_ROOT,
+        env=_environment(),
+    )
+    assert result.returncode == 0, (
+        "deploy_watcher.sh and the state directory came apart: either the "
+        "default is no longer <repo>/data, or a configured directory did not "
+        "take every one of the watcher's files with it\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert result.stdout.count("OK: ") == 4, result.stdout
 
 
 def _resolve(repo: Path, **extra: str) -> subprocess.CompletedProcess:
@@ -160,3 +190,57 @@ def test_every_host_tool_asks_the_one_reader(script):
         f"{script} no longer asks tools/autopilot/lib/data_dir.sh where the "
         "state directory is"
     )
+
+
+def test_no_script_builds_the_path_by_hand():
+    """A ninth copy would be a tool that keeps looking in `<repo>/data` after
+    the mount has moved: a backup of an empty directory, a watcher that reads
+    no in-flight markers."""
+    offenders: list[str] = []
+    roots = [REPO_ROOT / "tools", REPO_ROOT / ".githooks"]
+    for root in roots:
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or path.name.endswith("_test.sh"):
+                continue
+            if path.suffix not in {".sh", ""}:
+                continue
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except UnicodeDecodeError:
+                continue
+            for number, line in enumerate(lines, start=1):
+                if line.lstrip().startswith("#"):
+                    continue
+                if HAND_BUILT_PATH.search(line):
+                    offenders.append(
+                        f"{path.relative_to(REPO_ROOT)}:{number}: {line.strip()}"
+                    )
+    assert offenders == [], "\n".join(offenders)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'LOG_FILE="${AUTOPILOT_LOG:-${REPO_DIR}/data/autopilot.log}"',
+        'for marker in "${REPO_ROOT}"/data/.inflight/*.json; do',
+        'attachments_dir="${ATTACHMENTS_DIR:-$project_dir/data/attachments}"',
+        'LOCK_ROOT="$REPO_ROOT/data"',
+    ],
+)
+def test_the_pattern_recognises_the_spellings_that_were_removed(line):
+    """The scan above is only as good as its pattern; these are the lines it
+    exists to keep out, verbatim from before the change."""
+    assert HAND_BUILT_PATH.search(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'LOG_FILE="${AUTOPILOT_LOG:-${STATE_DIR}/autopilot.log}"',
+        'RUN_LOG="${RUN_LOG:-data/${MODULE_TAIL}_supervised.log}"',
+        'WORKTREE_ROOT="${AUTOPILOT_WORKTREE_ROOT:-${REPO_DIR}/.claude/worktrees}"',
+        'cp "$REPO_ROOT/database.yml" .',
+    ],
+)
+def test_the_pattern_leaves_other_paths_alone(line):
+    assert not HAND_BUILT_PATH.search(line)
