@@ -25,6 +25,10 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUPERVISOR="${SCRIPT_DIR}/backfill_supervisor.sh"
+# The directory under test is each scenario's own; an export inherited from
+# whoever runs this must not decide where the supervisor looks (#639).
+unset IDEALISTA_DATA_DIR
+
 failures=0
 
 pass() { printf '  ok   %s\n' "$1"; }
@@ -483,6 +487,85 @@ if [ "$rc" -eq 2 ] && [ ! -f "$dir/docker-calls.log" ]; then
     pass "a run log escaping data/ through a symlink is refused"
 else
     fail "a run log escaping data/ through a symlink is refused" "rc=$rc"
+fi
+rm -rf "$dir"
+
+# 19. `data/` is the container's name for the directory; on the host it is
+# wherever docker-compose.yml binds /app/data from (#639). With the checkout's
+# .env naming another directory, the run log the container writes as
+# /app/data/run.log is <that directory>/run.log here. A supervisor still
+# reading <repo>/data/run.log would never see the job finish, and would restart
+# a completed paid run the moment its process exited.
+dir="$(mktemp -d)"
+mkdir -p "$dir/state" "$dir/data" "$dir/bin"
+printf 'IDEALISTA_DATA_DIR=%s\n' "$dir/state" > "$dir/.env"
+# Scenario 5's stub, except that the job finishes in the configured directory.
+cat >"$dir/bin/docker" <<STUB
+#!/bin/bash
+echo "\$@" >> "$dir/docker-calls.log"
+case "\$1" in
+  ps) printf '%s\n' 'idealista-app' ;;
+  exec)
+    if [ "\$2" = "-d" ]; then exit 0; fi
+    if [ ! -f "$dir/.done-written" ]; then
+      : > "$dir/.done-written"
+      printf '%s\n' 'INFO:__main__:Done: 10 processed' >> "$dir/state/run.log"
+    fi
+    printf '%s\n' 'python -m utils.backfill_pool --snapshot data/x.json'
+    exit 0
+    ;;
+esac
+exit 0
+STUB
+chmod +x "$dir/bin/docker"
+( unset IDEALISTA_DATA_DIR; run_supervisor "$dir" ) >/dev/null 2>&1
+rc=$?
+if [ "$rc" -eq 0 ] && grep -q "reported done" "$dir/supervisor.log" 2>/dev/null &&
+   [ "$(starts_in "$dir")" -eq 0 ] && [ ! -e "$dir/data/run.log" ]; then
+    pass "the run log is read from the configured state directory"
+else
+    fail "the run log is read from the configured state directory" \
+        "rc=$rc starts=$(starts_in "$dir") $(cat "$dir/supervisor.log" 2>/dev/null)"
+fi
+rm -rf "$dir"
+
+# 19b. The lock lives there too: a live supervisor's lock in the configured
+# directory refuses a second one, and a lock left in <repo>/data - where it
+# used to be - is not the one consulted.
+dir="$(mktemp -d)"
+mkdir -p "$dir/state" "$dir/data"
+printf 'IDEALISTA_DATA_DIR=%s\n' "$dir/state" > "$dir/.env"
+make_stub "$dir" "python -m utils.backfill_pool --snapshot data/x.json" "idealista-app"
+printf '%s\n' "$$" > "$dir/state/.supervisor.idealista-app.utils.backfill_pool.lock"
+( unset IDEALISTA_DATA_DIR; run_supervisor "$dir" ) >/dev/null 2>&1
+refused_locked="$(grep -c "refusing to start" "$dir/supervisor.log" 2>/dev/null || true)"
+rm -f "$dir/state/.supervisor.idealista-app.utils.backfill_pool.lock"
+printf '%s\n' "$$" > "$dir/data/.supervisor.idealista-app.utils.backfill_pool.lock"
+( unset IDEALISTA_DATA_DIR; run_supervisor "$dir" ) >/dev/null 2>&1
+refused_after_decoy="$(grep -c "refusing to start" "$dir/supervisor.log" 2>/dev/null || true)"
+# One refusal in all: the first run met the live lock, the second did not
+# mistake the decoy for one and went on to watch the job.
+if [ "$refused_locked" = "1" ] && [ "$refused_after_decoy" = "1" ] \
+    && grep -q "supervisor: watching" "$dir/supervisor.log" 2>/dev/null; then
+    pass "the supervisor lock is taken in the configured state directory"
+else
+    fail "the supervisor lock is taken in the configured state directory" \
+        "refusals after the live lock=$refused_locked, after the decoy=$refused_after_decoy; $(cat "$dir/supervisor.log" 2>/dev/null)"
+fi
+rm -rf "$dir"
+
+# 20. A state directory that cannot be resolved stops the supervisor before
+# it inspects or restarts anything.
+dir="$(mktemp -d)"
+mkdir -p "$dir/data"
+printf 'IDEALISTA_DATA_DIR=%s\n' "$dir/no-such-directory" > "$dir/.env"
+make_stub "$dir" "sh -c sleep 1" "idealista-app"
+( unset IDEALISTA_DATA_DIR; run_supervisor "$dir" ) >/dev/null 2>&1
+rc=$?
+if [ "$rc" -eq 2 ] && [ ! -f "$dir/docker-calls.log" ] && [ ! -e "$dir/no-such-directory" ]; then
+    pass "an unresolvable state directory stops the supervisor before docker"
+else
+    fail "an unresolvable state directory stops the supervisor before docker" "rc=$rc"
 fi
 rm -rf "$dir"
 

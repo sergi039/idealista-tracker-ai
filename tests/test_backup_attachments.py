@@ -125,3 +125,80 @@ def test_a_missing_attachment_directory_is_said_out_loud(harness, tmp_path):
 def test_it_deletes_nothing(harness):
     _run(harness, str(harness["destination"]))
     assert (harness["attachments"] / "ab" / "file.pdf").exists()
+
+
+class TestWhereTheBytesAre:
+    """The bytes live in the directory docker-compose.yml binds at /app/data,
+    and on the host that has one home (#639). A backup that keeps archiving
+    `<repo>/data/attachments` after the mount has moved reports success over
+    an archive that holds none of the files the dump's rows point at."""
+
+    def _project(self, tmp_path, env_line=None):
+        """A stand-in checkout holding the script and the one reader."""
+        project = tmp_path / "checkout"
+        lib = project / "tools" / "autopilot" / "lib"
+        lib.mkdir(parents=True)
+        script = project / "tools" / "backup_attachments.sh"
+        script.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+        (lib / "data_dir.sh").write_text(
+            (SCRIPT.parent / "autopilot" / "lib" / "data_dir.sh").read_text(
+                encoding="utf-8"
+            ),
+            encoding="utf-8",
+        )
+        if env_line is not None:
+            (project / ".env").write_text(f"DB_PASSWORD=x\n{env_line}\n")
+        return project, script
+
+    def _run(self, harness, script, *args):
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in {"ATTACHMENTS_DIR", "IDEALISTA_DATA_DIR"}
+        }
+        env["PATH"] = f"{harness['bin']}:{env['PATH']}"
+        env["DOCKER_BIN"] = "docker"
+        return subprocess.run(
+            ["bash", str(script), *args], capture_output=True, text=True, env=env
+        )
+
+    def test_nothing_configured_archives_the_checkout_directory(
+        self, harness, tmp_path
+    ):
+        project, script = self._project(tmp_path)
+        (project / "data" / "attachments").mkdir(parents=True)
+        result = self._run(harness, script, str(harness["destination"]))
+        assert result.returncode == 0, result.stderr
+        assert f"archiving {project}/data/attachments" in result.stdout
+
+    def test_the_configured_state_directory_is_the_one_archived(
+        self, harness, tmp_path
+    ):
+        state = tmp_path / "state"
+        (state / "attachments").mkdir(parents=True)
+        project, script = self._project(tmp_path, f"IDEALISTA_DATA_DIR={state}")
+        # A decoy where the bytes used to be: archiving it would "succeed".
+        (project / "data" / "attachments").mkdir(parents=True)
+        result = self._run(harness, script, str(harness["destination"]))
+        assert result.returncode == 0, result.stderr
+        assert f"archiving {state}/attachments" in result.stdout
+        tar_calls = [
+            line
+            for line in harness["log"].read_text().splitlines()
+            if line.startswith("tar")
+        ]
+        assert len(tar_calls) == 1 and f"-C {state} attachments" in tar_calls[0]
+
+    def test_an_unresolvable_state_directory_stops_the_backup(self, harness, tmp_path):
+        project, script = self._project(
+            tmp_path, f"IDEALISTA_DATA_DIR={tmp_path / 'no-such-directory'}"
+        )
+        (project / "data" / "attachments").mkdir(parents=True)
+        result = self._run(harness, script, str(harness["destination"]))
+        assert result.returncode != 0
+        assert "not an existing directory" in result.stderr
+        # Before the dump: a dump without its bytes is not half a backup.
+        assert (
+            not harness["log"].exists() or "pg_dump" not in harness["log"].read_text()
+        )
+        assert not list(harness["destination"].iterdir())

@@ -9,15 +9,16 @@ This is the first step out of that: one variable, `IDEALISTA_DATA_DIR` in the
 checkout's `.env`. Compose interpolates the bind mount from it, and
 `tools/autopilot/lib/data_dir.sh` is the one reader of it for everything else
 on the host. Unset, both say `<repo>/data`, so nothing moves until a
-machine's `.env` says so. The scripts are moved over to the reader in the
-changes that follow this one.
+machine's `.env` says so. The backfill and backup tools ask the reader now;
+the autopilot scripts follow in the next change.
 
 Pinned here:
 
 * the reader's contract, by running its shell harness (pytest is what CI
   runs; a harness nobody runs proves nothing);
 * that Compose's default still renders the directory it always did;
-* that the host variable can never be mistaken for the container's.
+* that the host variable can never be mistaken for the container's;
+* that each script already moved over asks the reader.
 """
 
 from __future__ import annotations
@@ -39,6 +40,13 @@ LIB_TEST = REPO_ROOT / "tools" / "autopilot" / "lib" / "data_dir_test.sh"
 TIMEOUT_SECONDS = 300
 
 VARIABLE = "IDEALISTA_DATA_DIR"
+
+# The host scripts moved over to the reader so far.
+CALLERS = (
+    "tools/backfill_status.sh",
+    "tools/backfill_supervisor.sh",
+    "tools/backup_attachments.sh",
+)
 
 
 def _interpreters() -> list[str]:
@@ -140,3 +148,15 @@ def test_the_container_side_is_not_fed_the_host_path():
         if line.strip().startswith("- ") and "=" in line and "DATA_DIR" in line
     ]
     assert environment_lines == [], environment_lines
+
+
+@pytest.mark.parametrize("script", CALLERS)
+def test_every_host_tool_asks_the_one_reader(script):
+    text = (REPO_ROOT / script).read_text(encoding="utf-8")
+    code = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert "lib/data_dir.sh" in code, (
+        f"{script} no longer asks tools/autopilot/lib/data_dir.sh where the "
+        "state directory is"
+    )
