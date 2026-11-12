@@ -41,6 +41,21 @@ COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
 # Copy application code
 COPY --chown=appuser:appuser . .
 
+# The committed reference files, where the state mount cannot hide them (#639).
+# `COPY . .` above puts them in /app/data too, and at run time that path is the
+# bind mount of the deployment's state directory - which holds a mail cursor
+# and, once it lives outside the checkout, no reference files at all. So the
+# image keeps a second copy outside /app and says where; the readers ask
+# utils/reference_data.py, which reads this variable. The same four names as
+# .dockerignore, .gitignore and utils/reference_data.py.
+COPY --chown=appuser:appuser \
+    data/ine_municipal.json \
+    data/hospitals_cnh.json \
+    data/sepe_unemployment.json \
+    data/top_agencies.json \
+    /opt/idealista/reference_data/
+ENV REFERENCE_DATA_DIR=/opt/idealista/reference_data
+
 # Switch to non-root user
 USER appuser
 

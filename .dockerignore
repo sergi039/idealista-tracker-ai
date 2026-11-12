@@ -37,8 +37,18 @@ test_*.py
 attached_assets/
 LICENSE
 
-# Data (will be mounted as volume)
-data/
+# Data: the deployment's state is mounted at /app/data and never built in.
+# The four committed reference files are the exception (#639): the image
+# carries its own copy of them (see the Dockerfile), because /app/data stops
+# being the checkout's directory once the state lives elsewhere. `data/*`
+# rather than `data/`, and the same four names `.gitignore` re-includes and
+# utils/reference_data.py lists - tests/test_reference_data_location.py holds
+# the four lists together.
+data/*
+!data/ine_municipal.json
+!data/hospitals_cnh.json
+!data/sepe_unemployment.json
+!data/top_agencies.json
 instance/
 .last_seen_uid
 
