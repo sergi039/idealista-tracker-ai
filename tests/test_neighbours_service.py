@@ -668,3 +668,24 @@ def test_empty_use_does_not_disappear_beside_a_known_use():
     )
     parsed = n.parse_buildings(ET.tostring(root, encoding="unicode"), 25829)
     assert parsed[0]["uses"] == {"1_residential", ""}
+
+
+def test_sixth_enrich_press_in_a_minute_is_refused(app, monkeypatch):
+    """One press can now spend up to six Catastro requests on the neighbour walk.
+
+    Behavioural, like the cadastre route's own test: a sixth press must not
+    reach the handler at all. A missing row keeps the handler off the network.
+    """
+    from app import limiter
+
+    monkeypatch.setattr(limiter, "enabled", True)
+    monkeypatch.setitem(app.config, "WTF_CSRF_ENABLED", False)
+    limiter.reset()
+    client = app.test_client()
+    statuses = [
+        client.post("/api/property/999999/enrich", json={}).status_code
+        for _ in range(6)
+    ]
+    limiter.reset()
+    assert statuses[:5] == [404] * 5, statuses
+    assert statuses[5] == 429, statuses
