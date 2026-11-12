@@ -46,6 +46,27 @@ def _inside(path: str | os.PathLike, directory: str | os.PathLike) -> bool:
     return os.path.commonpath([path, directory]) == directory
 
 
+def _remove_leftover(path: Path) -> None:
+    """Remove a probe that a broken guard let through.
+
+    The guard is switched off for the length of the cleanup, so a half-working
+    one cannot refuse it, and then put back exactly as it was -- NOT installed
+    afresh: a cleanup that installed the guard would repair the very defect
+    `test_the_guard_is_installed` exists to report, and every test after the
+    first would pass against a conftest that never installed it (measured:
+    with the `install()` call removed, 38 of 41 tests here still passed).
+    """
+    was_active = data_dir_guard._active
+    data_dir_guard._active = False
+    try:
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path, ignore_errors=True)
+        elif path.exists() or path.is_symlink():
+            path.unlink()
+    finally:
+        data_dir_guard._active = was_active
+
+
 @pytest.fixture
 def probe():
     """A path inside the checkout's state directory that does not exist, and
@@ -53,16 +74,7 @@ def probe():
     path = CHECKOUT_DATA / PROBE_NAME
     assert not path.exists() and not path.is_symlink()
     yield path
-    # Only reached with something to remove when the guard failed. The guard
-    # is switched off for the cleanup so a half-working one cannot refuse it.
-    data_dir_guard.uninstall()
-    try:
-        if path.is_dir() and not path.is_symlink():
-            shutil.rmtree(path, ignore_errors=True)
-        elif path.exists() or path.is_symlink():
-            path.unlink()
-    finally:
-        data_dir_guard.install(extra=tuple(data_dir_guard._protected))
+    _remove_leftover(path)
 
 
 @pytest.fixture
@@ -406,7 +418,9 @@ def test_a_swallowed_write_fails_the_session_and_is_named(tmp_path):
         timeout=INNER_PYTEST_TIMEOUT_S,
     )
     output = result.stdout + result.stderr
-    assert not (CHECKOUT_DATA / probe).exists(), "the write went through"
+    went_through = (CHECKOUT_DATA / probe).exists()
+    _remove_leftover(CHECKOUT_DATA / probe)
+    assert not went_through, "the write went through"
     assert "1 passed" in output, output
     assert result.returncode != 0, output
     assert "state directory guard: FAILED" in output, output
