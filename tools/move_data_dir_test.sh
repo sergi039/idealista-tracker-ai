@@ -11,8 +11,10 @@
 # What is pinned, in the order the review of the plan asked for it:
 #   * the happy path, and that --check touches nothing;
 #   * every preflight refusal leaves everything exactly as it was;
-#   * (in the change that follows this one) a failure at EACH step after the
-#     app is stopped ends with the app running on the original directory;
+#   * a failure at EACH step after the app is stopped ends with the app
+#     running on the original directory - including a stop that succeeded
+#     while its confirmation failed, a failure after the rename, a page that
+#     redirects after the switch, and a signal;
 #   * an exported IDEALISTA_DATA_DIR can neither start the move nor steer it;
 #   * --rollback returns everything, including what was written after the move.
 
@@ -378,8 +380,161 @@ rm -f "${W}/held"; wait "$holder" 2>/dev/null || true
 expect_untouched "scenario 5"
 pass "a deploy in progress stops the move before it starts"
 
-# --- 6, 7. failures after the app is stopped, and a recovery that cannot ---
-# --- finish: the next change adds them; this file then counts 8 groups. ------
+# --- 6. failures after the app is stopped: each ends on the original -------
+recovered() {
+    local label="$1"
+    [ "$RC" = "1" ] || fail "${label}: exit ${RC}, expected 1 (recovered)"
+    grep -q "^RECOVERED:" "${W}/out" || fail "${label}: no RECOVERED line"
+    expect_original "$label"
+    no_leak "$label"
+}
+
+# 6a. The stop succeeds and its confirmation fails (plan review, F4).
+new_world; : >"$STUB/fail.inspect-running"
+# Preflight asks once before the stop; only the probe AFTER the stop fails.
+python3 - "${W}/bin/docker" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+old = "                hook inspect-running && exit 1\n"
+new = ('                if [ "$(cat "$STUB/running")" = "false" ]; then hook inspect-running && exit 1; fi\n')
+assert text.count(old) == 1
+open(path, "w").write(text.replace(old, new))
+PY
+run_move -- --apply "$DEST"
+recovered "scenario 6a (stop confirmed by a failing probe)"
+grep -q "FAILED in phase 'stopping'" "${W}/out" || fail "scenario 6a: the failure was not attributed to the stopping phase"
+
+# 6b. `compose stop` fails, and keeps failing: the app never stopped. There
+# is nothing to undo, so recovery must not need a working `stop` to say so -
+# and must not stop the app itself to "recover" it.
+new_world; : >"$STUB/fail.stop"; : >"$STUB/keep.stop"
+run_move -- --apply "$DEST"
+recovered "scenario 6b (compose stop keeps failing)"
+grep -q "nothing was moved" "${W}/out" || fail "scenario 6b: recovery did not recognise that nothing was moved"
+[ "$(grep -c ' stop app' "${W}/docker.log")" = "1" ] \
+    || fail "scenario 6b: recovery tried to stop an app that was never taken down"
+
+# 6c. The safety copy does not match (a state file changed under the copy).
+new_world
+cat >"${W}/bin/cp" <<'STUB'
+#!/bin/bash
+/bin/cp "$@" || exit $?
+for last in "$@"; do :; done
+[ -f "$last/google_spend.jsonl" ] && printf 'corrupted\n' >>"$last/google_spend.jsonl"
+exit 0
+STUB
+chmod +x "${W}/bin/cp"
+run_move -- --apply "$DEST"
+recovered "scenario 6c (safety copy differs)"
+grep -q "google_spend.jsonl" "${W}/out" || fail "scenario 6c: the differing file was not named"
+
+# 6d. A log that grew during the copy is NOT a failed copy.
+new_world
+cat >"${W}/bin/cp" <<'STUB'
+#!/bin/bash
+/bin/cp "$@" || exit $?
+for last in "$@"; do :; done
+[ -f "$last/autopilot-deploy.log" ] && printf 'another tick\n' >>"$last/autopilot-deploy.log"
+exit 0
+STUB
+chmod +x "${W}/bin/cp"
+run_move -- --apply "$DEST"
+[ "$RC" = "0" ] || fail "scenario 6d: a log appended during the copy failed the move (rc=${RC})"
+grep -q "only logs differ" "${W}/out" || fail "scenario 6d: the tolerated difference was not reported"
+
+# 6e. The rename fails.
+new_world
+printf '#!/bin/bash\nexit 1\n' >"${W}/bin/mv"; chmod +x "${W}/bin/mv"
+run_move -- --apply "$DEST"
+rm -f "${W}/bin/mv"
+recovered "scenario 6e (rename fails)"
+
+# 6f. The rename succeeds and the directory is then found changed (F1).
+new_world
+cat >"${W}/bin/mv" <<'STUB'
+#!/bin/bash
+/bin/mv "$@" || exit $?
+for last in "$@"; do :; done
+# Once: the directory that arrives is not the directory that left.
+if [ -f "$last/google_spend.jsonl" ] && [ ! -e "$STUB/tampered-once" ]; then
+    : >"$STUB/tampered-once"
+    : >"$last/.extra-after-rename"
+fi
+exit 0
+STUB
+chmod +x "${W}/bin/mv"
+run_move -- --apply "$DEST"
+[ "$RC" = "1" ] || fail "scenario 6f: exit ${RC}"
+grep -q "^RECOVERED:" "${W}/out" || fail "scenario 6f: no RECOVERED line after a post-rename verification failure"
+[ -d "$REPO/data" ] && [ ! -e "$DEST" ] || fail "scenario 6f: the directory was not renamed back"
+[ "$(cat "$STUB/running")" = "true" ] && [ "$(cat "$STUB/mount")" = "$REPO/data" ] \
+    || fail "scenario 6f: the app is not running on <repo>/data"
+[ "$(cat "$REPO/data/.last_seen_uid_properties")" = "4711" ] || fail "scenario 6f: the cursor was lost"
+[ ! -e "$REPO/data/.moved-to" ] || fail "scenario 6f: a tombstone was left"
+grep -q '^IDEALISTA_DATA_DIR=' "$REPO/.env" && fail "scenario 6f: .env names the variable after recovery"
+
+# 6g. `compose up` fails after the switch.
+new_world; : >"$STUB/fail.up"
+run_move -- --apply "$DEST"
+recovered "scenario 6g (compose up fails after the switch)"
+aside="$(find "$BACKUPS" -maxdepth 1 -name 'checkout-data-at-rollback-*' -type d | head -n 1)"
+[ -n "$aside" ] && [ -f "$aside/.moved-to" ] || fail "scenario 6g: the rebuilt directory was not kept aside"
+
+# 6h. The app comes up healthy and the page redirects: not accepted. The page
+# keeps redirecting after the directory is back, which is not something a
+# rename can cure - so the data is returned, the app is started on the
+# original directory, and the verdict is "incomplete", not "recovered".
+new_world; printf '302' >"$STUB/page"
+run_move -- --apply "$DEST"
+grep -q "answered 302" "${W}/out" || fail "scenario 6h: a redirecting page was accepted as a working deployment (rc=${RC})"
+[ "$RC" = "3" ] || fail "scenario 6h: exit ${RC}, expected 3 (the page still does not render)"
+grep -q "^RECOVERY INCOMPLETE" "${W}/out" || fail "scenario 6h: a deployment whose page redirects was called recovered"
+printf '200' >"$STUB/page"
+expect_original "scenario 6h (page redirects after the switch)"
+no_leak "scenario 6h"
+
+# 6i. The container does not read the directory that was mounted.
+new_world
+python3 - "${W}/bin/docker" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+old = '            cat) cat "$(cat "$STUB/mount")/${2#/app/data/}" ;;\n'
+new = '            cat) if [ -e "$STUB_REPO/data/.moved-to" ]; then echo stale; else cat "$(cat "$STUB/mount")/${2#/app/data/}"; fi ;;\n'
+assert text.count(old) == 1
+open(path, "w").write(text.replace(old, new))
+PY
+run_move -- --apply "$DEST"
+recovered "scenario 6i (the container reads another directory)"
+
+# 6j. SIGTERM while the app is being started (F5).
+new_world; : >"$STUB/hang.up"
+env -u IDEALISTA_DATA_DIR PATH="${W}/bin:${PATH}" STUB="$STUB" STUB_REPO="$REPO" STUB_APP="idealista-app" \
+    MOVE_BACKUP_ROOT="$BACKUPS" MOVE_DEPLOY_LOCK="${W}/deploy.lock" MOVE_MERGE_LOCK="${W}/merge.lock" \
+    MOVE_HEALTH_URL="http://127.0.0.1:1/api/healthz" MOVE_HEALTH_TIMEOUT=2 MOVE_HEALTH_POLL=1 \
+    /bin/bash "$REPO/tools/move_data_dir.sh" --apply "$DEST" >"${W}/out" 2>&1 &
+mover=$!
+for _ in $(seq 1 200); do grep -q ' up -d --no-build app' "${W}/docker.log" 2>/dev/null && break; sleep 0.05; done
+grep -q ' up -d --no-build app' "${W}/docker.log" || fail "scenario 6j: the move never reached the start"
+kill -TERM "$mover"
+rm -f "$STUB/hang.up"
+RC=0; wait "$mover" || RC=$?
+recovered "scenario 6j (SIGTERM during the start)"
+grep -q "FAILED in phase 'starting' (exit 143)" "${W}/out" || fail "scenario 6j: the signal was not what ended the move"
+pass "a failure at every step after the stop ends with the app running on the original directory"
+
+# --- 7. recovery that cannot finish says so, with the commands -------------
+new_world; : >"$STUB/fail.up"; : >"$STUB/keep.up"
+run_move -- --apply "$DEST"
+[ "$RC" = "3" ] || fail "scenario 7: exit ${RC}, expected 3 (recovery incomplete)"
+grep -q "^RECOVERY INCOMPLETE" "${W}/out" || fail "scenario 7: no RECOVERY INCOMPLETE line"
+grep -q "docker compose -f docker-compose.yml up -d --no-build app" "${W}/out" || fail "scenario 7: the manual commands were not printed"
+# The data is back where it was even though the app could not be started.
+[ "$(cat "$REPO/data/.last_seen_uid_properties")" = "4711" ] && [ ! -e "$DEST" ] \
+    || fail "scenario 7: the state was not returned before the start failed"
+grep -q '^IDEALISTA_DATA_DIR=' "$REPO/.env" && fail "scenario 7: .env still names the variable"
+pass "a recovery that cannot start the app returns the data, exits 3 and prints the manual commands"
 
 # --- 8. the locks do not outlive the script --------------------------------
 new_world

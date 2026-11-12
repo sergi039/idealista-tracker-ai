@@ -140,7 +140,7 @@ def test_moving_the_state_directory_never_leaves_the_app_down():
         "changed after a failed move\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
-    assert "ALL 6 GROUPS PASSED" in result.stdout, result.stdout
+    assert "ALL 8 GROUPS PASSED" in result.stdout, result.stdout
 
 
 def _resolve(repo: Path, **extra: str) -> subprocess.CompletedProcess:
