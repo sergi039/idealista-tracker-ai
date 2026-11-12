@@ -139,6 +139,80 @@ def _create(app, row, source="fotocasa"):
     return Property.query.one()
 
 
+class TestTheHouseLabelWhateverTheSeparator:
+    """Review of #661: a house label after the figure refused it only when
+    whitespace stood between them; "(superficie construida)" read as a plot."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Finca: 1.362 m² (superficie construida), sin terreno",
+            "Finca: 1.362 m² (superficie construida)",
+            "Finca: 1.362 m² (construidos)",
+            "Finca de 1.362 m² - construidos",
+            "Finca de 1.362 m² – edificados",
+            "Finca: 1.362 m²: útiles",
+            "Finca 1.362 m², edificados",
+            "Finca 1.362 m², construcción",
+            "Finca de 1.362 m² (vivienda)",
+            "Finca de 1.362 m² [casa]",
+            "Finca de 300 m² / construidos",
+            "Parcela de 1.362 m² (de vivienda)",
+            "Terreno: 900 m² — habitables",
+        ],
+    )
+    def test_a_house_label_after_any_separator_refuses(self, text):
+        assert _value(text) is None
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Vivienda: 300 m²",
+            "Casa - 300 m²",
+            "Finca construida: 300 m²",
+            "Finca (construidos): 300 m²",
+            "Superficie construida: 1.362 m²",
+        ],
+    )
+    def test_a_house_label_before_the_figure_is_not_a_plot(self, text):
+        assert _value(text) is None
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Parcela de 1.362 m², sin parcela",
+            "Casa sin terreno. Finca de 300 m²",
+            "Finca de 2.000 m2. Sin ningún terreno anexo",
+            "Piso sin parcela; terreno comunitario de 500 m²",
+        ],
+    )
+    def test_a_text_that_denies_a_plot_states_none(self, text):
+        assert _value(text) is None
+
+    @pytest.mark.parametrize(
+        "text, expected",
+        [
+            ("parcela de 1.362 m²", 1362),
+            ("finca de 2.000 m2", 2000),
+            ("finca de 2.000 m2, casa de 150 m2", 2000),
+            ("parcela de 2.000 m², vivienda de 150 m²", 2000),
+            ("parcela de 2.000 m² (aprox.)", 2000),
+            ("2.000 m² de terreno (urbanizable)", 2000),
+            ("Finca: 1.362 m². Superficie construida: 266 m²", 1362),
+        ],
+    )
+    def test_a_real_plot_still_reads(self, text, expected):
+        assert _value(text) == expected
+
+    def test_a_denying_source_vetoes_one_that_states_a_plot(self):
+        assert (
+            plot_text.read_sources(
+                [("title", "Parcela de 1.362 m²"), ("description", "sin terreno")]
+            )
+            is None
+        )
+
+
 def _sql_ids(expression):
     return {p.id for p in Property.query.filter(expression(Property, CRITERIA)).all()}
 
@@ -160,6 +234,19 @@ class TestPortalIngestion:
         # Python and SQL read the same figure: pass in both.
         assert sc.read_verdict(prop, CRITERIA)["state"] == "pass"
         assert _sql_ids(sc.passing_expression) == {prop.id}
+        assert _sql_ids(sc.failing_expression) == set()
+
+    def test_a_house_figure_in_brackets_is_not_the_plot(self, app):
+        # Review of #661: this exact description was stored as plot_area=1362.
+        prop = _create(
+            app,
+            _row(description="Finca: 1.362 m² (superficie construida), sin terreno"),
+        )
+
+        assert prop.plot_area is None
+        assert "plot_from_text" not in (prop.enrichment or {})
+        assert sc.read_verdict(prop, CRITERIA)["state"] == "unknown"
+        assert _sql_ids(sc.passing_expression) == set()
         assert _sql_ids(sc.failing_expression) == set()
 
     def test_no_text_figure_stays_unknown_in_both(self, app):

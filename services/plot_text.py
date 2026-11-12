@@ -10,7 +10,16 @@ What it refuses (a refusal is `None`, which the criteria read as `unknown`,
 never as `fail`):
 
 * a figure that belongs to the house ("745 m² construidos", "útiles",
-  "de vivienda"): the plot keyword has to introduce the number;
+  "de vivienda"): the plot keyword has to introduce the number, and a house
+  label after it refuses the figure whatever punctuation stands between
+  (review of #661: "Finca: 1.362 m² (superficie construida)"). A qualifier
+  (construido, edificado, útil, habitable, construcción) refuses across
+  brackets, dashes, colons, slashes and commas; a noun (vivienda, casa)
+  across everything but a comma, because after a comma it starts the next
+  item ("finca de 2.000 m², casa de 150 m²");
+* a text that says there is no plot ("sin terreno", "sin parcela"): whatever
+  figure it also gives, the plot is not established, and as a source it
+  vetoes the others;
 * a figure cut off by an excerpt ("parcela de 6..." -- idealista's alert text
   is truncated): the unit has to follow the number inside the text;
 * a text that gives two different plot figures: which one is the plot is not
@@ -51,7 +60,7 @@ logger = logging.getLogger(__name__)
 
 # Bump when the reading rules change: a stored provenance names the rules that
 # produced it, and the backfill's restore compares it.
-EXTRACTOR_VERSION = "plot_text/1"
+EXTRACTOR_VERSION = "plot_text/2"
 ENRICHMENT_KEY = "plot_from_text"
 
 # NUMERIC(10, 2) overflows at 1e8; this is the column, not a plausibility rule.
@@ -72,10 +81,20 @@ _UNIT = (
     r"(?P<unit>m\s?[²2]|mts\s?[²2]|metros\s+cuadrados|m\^2|hect[áa]reas?|ha)"
     r"(?![\w²])"
 )
-# What directly follows a figure that is the HOUSE, not the plot.
+# What follows a figure that is the HOUSE, not the plot. The separator is
+# any run of these characters, never one kind (review of #661); a full stop
+# or semicolon ends the clause, so it is not one.
+_HOUSE_SEPARATOR = r"[\s()\[\]{}\-–—:,/]*"
+_HOUSE_NOUN_SEPARATOR = r"[\s()\[\]{}\-–—:/]*"
+_HOUSE_QUALIFIER = r"(?:de\s+)?(?:superficie\s+)?(?:constru|edificad|[úu]til|habitable)"
+_HOUSE_NOUN = r"(?:de\s+)?(?:superficie\s+)?(?:vivienda|casa)\b"
 _HOUSE_AFTER = re.compile(
-    r"\s*(?:de\s+)?(?:superficie\s+)?"
-    r"(?:construid|edificad|[úu]til|habitable|vivienda|de\s+vivienda)",
+    rf"{_HOUSE_SEPARATOR}{_HOUSE_QUALIFIER}|{_HOUSE_NOUN_SEPARATOR}{_HOUSE_NOUN}",
+    re.IGNORECASE,
+)
+# A text that says the home has no plot establishes none, whatever it adds.
+_NO_PLOT = re.compile(
+    r"\bsin\s+(?:ning[úu]n\s+)?(?:terreno|parcela|finca|solar)\b",
     re.IGNORECASE,
 )
 
@@ -115,8 +134,21 @@ def _square_metres(match: "re.Match[str]") -> Optional[float]:
     return round(number * factor, 2)
 
 
+def denies_plot(text: Optional[str]) -> bool:
+    """True when `text` says there is no plot ("sin terreno")."""
+    if not text or not isinstance(text, str):
+        return False
+    try:
+        return bool(_NO_PLOT.search(_strip_html(text)))
+    except Exception:
+        logger.warning("plot denial could not be read", exc_info=True)
+        return True  # cannot tell: doubt writes nothing
+
+
 def _readings(text: str) -> List[Tuple[float, str]]:
     found: List[Tuple[float, str]] = []
+    if _NO_PLOT.search(text):
+        return found
     for pattern in (_FORWARD, _BACKWARD):
         for match in pattern.finditer(text):
             if _HOUSE_AFTER.match(text, match.end()):
@@ -164,6 +196,8 @@ def read_sources(
     try:
         values = set()
         first: Optional[Tuple[str, PlotReading]] = None
+        if any(denies_plot(text) for _, text in sources):
+            return None
         for field, text in sources:
             found = _all_readings(text)
             distinct = {value for value, _ in found}
