@@ -22,7 +22,7 @@
 # the app is not using.
 #
 #   * The variable is named nowhere -> `<repo>/data`, without asking anybody.
-#   * Its name occurs anywhere in `<repo>/.env`, comments included -> the
+#   * Its name occurs anywhere in `<repo>/.env` outside a comment line -> the
 #     answer is whatever `docker compose config` binds at /app/data for the
 #     `app` service, asked the way the deploy watcher runs Compose: from the
 #     checkout, with `-f docker-compose.yml`. No Docker, no python3 to read
@@ -105,8 +105,8 @@ _data_dir_trim() {
 # and cannot be read: then it cannot be ruled out.
 #
 # Nothing is parsed, and the question is deliberately coarse: it only decides
-# whether Compose has to be asked. `.env` counts when the name occurs anywhere
-# in it. The file is never sourced and no line of it is printed.
+# whether Compose has to be asked. `.env` counts when the name occurs on any
+# line of it that is not a comment. The file is never sourced, no line printed.
 _data_dir_where_named() {
     local repo="$1" env_file="${1}/.env" hits
     DATA_DIR_NAMED_IN=""
@@ -120,7 +120,11 @@ _data_dir_where_named() {
     # Bytes, not text (`-a`, LC_ALL=C): a NUL or a byte that is not valid in
     # the locale would otherwise make grep call the file binary and report
     # nothing of what is in it.
-    hits="$(LC_ALL=C grep -a -c -F "$IDEALISTA_DATA_DIR_KEY" "$env_file")" || true
+    # A comment line cannot set anything, so it does not count:
+    # `cp .env.example .env` leaves one. Counted, not `grep -q`: both greps
+    # read their whole input.
+    hits="$(LC_ALL=C grep -a -v '^[[:space:]]*#' "$env_file" \
+        | LC_ALL=C grep -a -c -F "$IDEALISTA_DATA_DIR_KEY")" || true
     # `grep -c` always prints a count. Anything else is a search that did not
     # run - no grep on a stripped PATH - and "could not look" is not "not
     # there": read as zero, it would answer for a file nobody searched.

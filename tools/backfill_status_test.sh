@@ -73,6 +73,11 @@ exit 0
 STUB
 chmod +x "${WORK}/bin/docker"
 
+# compose_mounts <dir>: what the stub's Compose would bind at /app/data.
+compose_mounts() {
+    printf '{"services":{"app":{"volumes":[{"type":"bind","source":"%s","target":"/app/data"}]}}}\n' "$1" >"${WORK}/compose.json"
+}
+
 TOP="${WORK}/top.txt"
 HEADER='UID PID PPID C STIME TTY TIME CMD'
 GUNICORN='appuser 7 1 0 12:00 ? 00:00:03 /app/.venv/bin/python /app/.venv/bin/gunicorn --bind 0.0.0.0:5001 main:app'
@@ -312,26 +317,60 @@ run_status
 grep -q "deploy chain:" "${WORK}/out" && fail "scenario 14 reported a stall after the marker was gone"
 printf 'OK: a stalled deploy chain is surfaced, and the backfill verdict is not its business\n'
 
-# --- scenario 15: the state directory comes from the one reader (#639) -------
-# .env names IDEALISTA_DATA_DIR, so the reader asks Compose - and here Compose
-# gives no answer. That is "unknown" (exit 2): neither the directory .env
-# names nor <repo>/data is taken on a guess. The live lock there is the decoy.
+# --- scenario 15: the state directory is wherever .env says it is (#639) ----
+# A status tool still looking in <repo>/data after the mount moved would
+# answer "idle" over a live supervisor - the duplicate paid run this script
+# exists to stop. The decoy in <repo>/data is a stale lock for ANOTHER module.
 set_top; clear_locks; clear_markers
 STATE="${WORK}/state"
 mkdir -p "${STATE}/.inflight"
 printf 'DB_PASSWORD=x\nIDEALISTA_DATA_DIR=%s\n' "$STATE" >"${WORK}/repo/.env"
+# The reader asks Compose what it binds at /app/data; here Compose says STATE.
+compose_mounts "$STATE"
 printf '%s\n' "$$" >"${STATE}/.supervisor.idealista-app.utils.backfill_pool.lock"
+printf '{"module":"backfill_pool"}\n' >"${STATE}/.inflight/backfill_pool.41.json"
+printf 'STALLED: production is 1 commit(s) behind main\n' >"${STATE}/.deploy_stalled"
+printf '%s\n' "$DEAD_PID" >"${WORK}/repo/data/.supervisor.idealista-app.utils.recalc_sea_distance.lock"
+run_status
+[ "$RC" = "1" ] || fail "scenario 15: a supervisor lock in the configured state directory was not seen (rc=$RC)"
+grep -q "supervised: utils.backfill_pool is watched by pid $$" "${WORK}/out" \
+    || fail "scenario 15 did not read the supervisor lock from the configured directory"
+grep -q "marker: backfill_pool.41.json" "${WORK}/out" \
+    || fail "scenario 15 did not read the in-flight markers from the configured directory"
+grep -q "deploy chain: STALLED: production is 1 commit(s) behind main" "${WORK}/out" \
+    || fail "scenario 15 did not read the stall alarm from the configured directory"
+grep -q "recalc_sea_distance" "${WORK}/out" \
+    && fail "scenario 15 still read <repo>/data although .env names another directory"
+printf 'OK: the status tool reads the locks, the markers and the alarm from the configured state directory\n'
+
+# --- scenario 16: a state directory that cannot be resolved is not "idle" ---
+# Exit 2, the code for "a source could not be read", which blocks like busy.
+printf 'IDEALISTA_DATA_DIR=%s\n' "${WORK}/no-such-directory" >"${WORK}/repo/.env"
+compose_mounts "${WORK}/no-such-directory"
+run_status
+[ "$RC" = "2" ] || fail "scenario 16: an unresolvable state directory did not answer unknown (rc=$RC)"
+grep -q "VERDICT: unknown" "${WORK}/out" || fail "scenario 16 gave no verdict line"
+grep -q "not an existing directory" "${WORK}/out" || fail "scenario 16 did not say what is wrong with the directory"
+grep -q "VERDICT: idle" "${WORK}/out" && fail "scenario 16 called an unreadable state directory idle"
+[ ! -e "${WORK}/no-such-directory" ] || fail "scenario 16 created the missing directory"
+printf 'OK: an unresolvable state directory is unknown, never idle\n'
+
+# --- scenario 17: a Compose that cannot be asked is not "idle" either --------
+# The variable is named and Compose gives no answer: the directory is unknown,
+# and neither the one .env names nor <repo>/data is taken on a guess.
+printf 'IDEALISTA_DATA_DIR=%s\n' "$STATE" >"${WORK}/repo/.env"
 rm -f "${WORK}/compose.json"
 run_status
-[ "$RC" = "2" ] || fail "scenario 15: an unanswered question to Compose did not answer unknown (rc=$RC)"
-grep -q "VERDICT: unknown" "${WORK}/out" || fail "scenario 15 gave no verdict line"
-grep -q "VERDICT: idle" "${WORK}/out" && fail "scenario 15 called an unresolvable state directory idle"
+[ "$RC" = "2" ] || fail "scenario 17: an unanswered question to Compose did not answer unknown (rc=$RC)"
+grep -q "VERDICT: unknown" "${WORK}/out" || fail "scenario 17 gave no verdict line"
+grep -q "what Compose would mount at /app/data is unknown" "${WORK}/out" || fail "scenario 17 did not say Compose gave no answer"
+grep -q "VERDICT: idle" "${WORK}/out" && fail "scenario 17 called an unresolvable state directory idle"
 grep -q "backfill_pool is watched" "${WORK}/out" \
-    && fail "scenario 15 read the directory .env names although Compose did not confirm it"
-rm -f "${WORK}/repo/.env"
-printf 'OK: a state directory the reader refuses is unknown, never idle and never guessed\n'
+    && fail "scenario 17 read the directory .env names although Compose did not confirm it"
+rm -f "${WORK}/repo/.env" "${WORK}/repo/data/.supervisor.idealista-app.utils.recalc_sea_distance.lock"
+printf 'OK: when Compose cannot be asked the state directory is unknown, never guessed\n'
 
-# --- scenario 15b: no answer from the reader is unknown too (#639) ------------
+# --- scenario 18: no answer from the reader is unknown too (#639) ------------
 # The reader is a file in the same checkout. Missing, emptied, or answering
 # something that is not an absolute path, it has said nothing about where the
 # state is - and an empty answer would turn every path this tool reads into a
@@ -342,38 +381,38 @@ READER="${WORK}/repo/tools/autopilot/lib/data_dir.sh"
 set_top; clear_locks; clear_markers
 printf '%s\n' "$$" >"${WORK}/repo/data/.supervisor.idealista-app.utils.backfill_pool.lock"
 run_status
-[ "$RC" = "1" ] || fail "scenario 15b: the control run did not see the live supervisor lock (rc=$RC)"
+[ "$RC" = "1" ] || fail "scenario 18: the control run did not see the live supervisor lock (rc=$RC)"
 mv "$READER" "${READER}.real"
 run_status
-[ "$RC" = "2" ] || fail "scenario 15b: a missing reader did not answer unknown (rc=$RC)"
-grep -q "VERDICT: unknown" "${WORK}/out" || fail "scenario 15b: a missing reader gave no verdict line"
+[ "$RC" = "2" ] || fail "scenario 18: a missing reader did not answer unknown (rc=$RC)"
+grep -q "VERDICT: unknown" "${WORK}/out" || fail "scenario 18: a missing reader gave no verdict line"
 : >"$READER"
 run_status
-[ "$RC" = "2" ] || fail "scenario 15b: a reader that answers nothing did not answer unknown (rc=$RC)"
-grep -q "not an absolute path" "${WORK}/out" || fail "scenario 15b did not say the answer was no path"
-grep -q "VERDICT: idle" "${WORK}/out" && fail "scenario 15b called an empty answer idle"
+[ "$RC" = "2" ] || fail "scenario 18: a reader that answers nothing did not answer unknown (rc=$RC)"
+grep -q "not an absolute path" "${WORK}/out" || fail "scenario 18 did not say the answer was no path"
+grep -q "VERDICT: idle" "${WORK}/out" && fail "scenario 18 called an empty answer idle"
 printf '#!/bin/bash\necho data\n' >"$READER"
 run_status
-[ "$RC" = "2" ] || fail "scenario 15b: a relative answer did not answer unknown (rc=$RC)"
-grep -q "VERDICT: idle" "${WORK}/out" && fail "scenario 15b called a relative answer idle"
+[ "$RC" = "2" ] || fail "scenario 18: a relative answer did not answer unknown (rc=$RC)"
+grep -q "VERDICT: idle" "${WORK}/out" && fail "scenario 18 called a relative answer idle"
 mv "${READER}.real" "$READER"
 printf 'OK: a reader that is missing or answers no absolute path is unknown, never idle\n'
 
-# --- scenario 15c: a linked git worktree is not where the state is (#639) ----
+# --- scenario 19: a linked git worktree is not where the state is (#639) ----
 # The stack is started from one checkout. A linked worktree of the same
 # repository has a data/ of its own that no container mounts, so this tool run
 # from one would look for the supervisor lock where no supervisor writes it.
 # Git marks a linked worktree with a `.git` FILE; the checkout's is a directory.
 printf 'gitdir: /somewhere/.git/worktrees/issue-1\n' >"${WORK}/repo/.git"
 run_status
-[ "$RC" = "2" ] || fail "scenario 15c: a linked worktree did not answer unknown (rc=$RC)"
-grep -q "VERDICT: unknown" "${WORK}/out" || fail "scenario 15c gave no verdict line"
-grep -q "linked git worktree" "${WORK}/out" || fail "scenario 15c did not say why"
+[ "$RC" = "2" ] || fail "scenario 19: a linked worktree did not answer unknown (rc=$RC)"
+grep -q "VERDICT: unknown" "${WORK}/out" || fail "scenario 19 gave no verdict line"
+grep -q "linked git worktree" "${WORK}/out" || fail "scenario 19 did not say why"
 rm -f "${WORK}/repo/.git"
 mkdir "${WORK}/repo/.git"
 run_status
-[ "$RC" = "1" ] || fail "scenario 15c: the checkout itself (a .git directory) was refused (rc=$RC)"
-grep -q "backfill_pool is watched" "${WORK}/out" || fail "scenario 15c: the checkout's own lock was not read"
+[ "$RC" = "1" ] || fail "scenario 19: the checkout itself (a .git directory) was refused (rc=$RC)"
+grep -q "backfill_pool is watched" "${WORK}/out" || fail "scenario 19: the checkout's own lock was not read"
 rmdir "${WORK}/repo/.git"
 clear_locks
 printf 'OK: a linked git worktree is unknown, and the checkout itself is still read\n'

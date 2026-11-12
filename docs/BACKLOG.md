@@ -204,3 +204,17 @@ must be an ancestor of `main`.
   `find "$(tools/autopilot/lib/data_dir.sh "$PWD")" -type f -exec sh -c 'head -c 15 "$1" | grep -q "^SQLite format 3" && echo "$1"' _ {} \;`
   prints nothing in the main checkout on the mini. A fix treats every `file:`
   URI naming a path inside a protected directory as a write, `mode=ro` included.
+
+### A commit made on a branch while its `pre-push` gate runs is pushed unvalidated
+
+- **Anchor:** `.githooks/pre-push` (`validating pushed commit`).
+- **Measured 2026-11-13** on PR #678: the hook validated `b124c07` for ten
+  minutes; `384e4de` was committed on the branch meanwhile; git printed
+  `f280ed2..b124c07` and GitHub's activity log shows one push,
+  `f280ed2 -> 384e4de`. That the https transport re-resolves the ref after the
+  hook is the reading of those facts, not a separate experiment.
+- **What breaks, for whom:** the local gate's verdict is about a commit other
+  than the one published; GitHub's required checks still run on that one.
+- **Check:** the push log's `validating pushed commit <sha>` and
+  `git ls-remote origin <branch>` differ. A fix compares the branch tip after
+  the gate with the commit it validated.

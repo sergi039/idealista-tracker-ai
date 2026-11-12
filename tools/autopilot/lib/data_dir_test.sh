@@ -168,6 +168,32 @@ rm -f "${REPO}/.env"
 resolve "$REPO" "IDEALISTA_DATA_DIR="
 expect_refusal "an empty exported variable is refused" "IDEALISTA_DATA_DIR is set in this process"
 
+# 8. Every way .env can carry the name sends the question to Compose - a
+#    comment counts too: asking once too often costs a moment, not asking once
+#    too rarely costs the state. None of these is the plain line that says
+#    what Compose answers (STATE here), so none is interpreted: all refused.
+BOM="$(printf '\357\273\277')"
+MULTILINE="$(printf 'OTHER="first line\nIDEALISTA_DATA_DIR=%s\n"' "$OTHER")"
+BINARY="$(printf 'SECRET=a\377c\nIDEALISTA_DATA_DIR=%s' "$OTHER")"
+for content in \
+    "IDEALISTA_DATA_DIR=" \
+    "export IDEALISTA_DATA_DIR=${OTHER}" \
+    "IDEALISTA_DATA_DIR = ${OTHER}" \
+    "IDEALISTA_DATA_DIR: ${OTHER}" \
+    "IDEALISTA_DATA_DIR=\"${OTHER}\"" \
+    "${BOM}IDEALISTA_DATA_DIR=${OTHER}" \
+    "IDEALISTA_DATA_DIR_OLD=${OTHER}" \
+    "DB_PASSWORD=x # IDEALISTA_DATA_DIR=${OTHER}" \
+    "$MULTILINE" \
+    "$BINARY"; do
+    new_repo
+    printf 'DB_PASSWORD=x\n%s\n' "$content" >"${REPO}/.env"
+    label="$(printf '%s' "$content" | LC_ALL=C tr -c '[:print:]' ' ')"
+    resolve "$REPO"
+    expect_refusal "not the plain line: ${label%%"${OTHER}"*}" "does not say exactly that"
+    asked || fail "Compose was not asked for: ${label}"
+done
+
 # 9. COMPOSE_ENV_FILES points Compose at other env files, for this process.
 new_repo
 resolve "$REPO" "COMPOSE_ENV_FILES=${WORK}/elsewhere.env"
@@ -187,9 +213,17 @@ for line in '~/state' '${STATE_ROOT}/state' './state' "$OTHER" "\"${STATE}\"" "$
     resolve "$REPO"
     expect_refusal "Compose's answer is refused when .env says '${line%%"${WORK}"*}'" "does not say exactly that"
 done
-printf 'IDEALISTA_DATA_DIR=%s\n# IDEALISTA_DATA_DIR=%s\n' "$STATE" "$OTHER" >"${REPO}/.env"
+printf 'IDEALISTA_DATA_DIR=%s\nIDEALISTA_DATA_DIR_OLD=%s\n' "$STATE" "$OTHER" >"${REPO}/.env"
 resolve "$REPO"
 expect_refusal "the name on two lines is refused" "names it on 2"
+#     A comment line is not one of them: it cannot set anything.
+printf 'IDEALISTA_DATA_DIR=%s\n  # IDEALISTA_DATA_DIR=%s\n' "$STATE" "$OTHER" >"${REPO}/.env"
+resolve "$REPO"
+expect_dir "a comment line beside the plain line does not count" "$STATE"
+printf '# IDEALISTA_DATA_DIR=%s\n' "$OTHER" >"${REPO}/.env"
+resolve "$REPO"
+expect_dir "a .env that names the variable only in a comment is <repo>/data" "${REPO}/data"
+asked && fail "Compose was asked about a comment"
 mkdir -p "${WORK}/a\$b"
 printf 'IDEALISTA_DATA_DIR=%s\n' "${WORK}/a\$b" >"${REPO}/.env"
 compose_says "[$(bind "${WORK}/a\$b")]"
@@ -221,11 +255,45 @@ named_repo() {
     printf 'IDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
 }
 MISSING="${WORK}/missing"
+: >"${WORK}/a-file"
 
 named_repo; compose_says "[$(bind "$MISSING")]"; resolve "$REPO"
 expect_refusal "a directory that does not exist is refused" "not an existing directory"
 [ ! -e "$MISSING" ] || fail "the missing directory was created"
 pass "a missing directory is not created"
+
+named_repo; compose_says "[$(bind "${WORK}/a-file")]"; resolve "$REPO"
+expect_refusal "a regular file is refused" "not an existing directory"
+
+named_repo; compose_says "[$(bind "/")]"; resolve "$REPO"
+expect_refusal "the filesystem root is refused" "would mount /"
+
+named_repo; compose_says "[$(bind "state")]"; resolve "$REPO"
+expect_refusal "a relative source is refused" "not an absolute path"
+
+named_repo; compose_says "[$(bind "${STATE}/")]"; resolve "$REPO"
+expect_dir "a trailing slash on the source is trimmed" "$STATE"
+
+named_repo; compose_says "[$(bind "$STATE"),$(bind "$OTHER")]"; resolve "$REPO"
+expect_refusal "two mounts at /app/data are refused" "exactly one host directory"
+
+named_repo; compose_says "[$(bind "$STATE"),$(bind "$OTHER" /app/data/attachments)]"; resolve "$REPO"
+expect_refusal "a second mount under /app/data is refused" "exactly one host directory"
+
+named_repo; compose_says "[$(bind "$STATE" /app/data/)]"; resolve "$REPO"
+expect_refusal "a target that is not literally /app/data is refused" "exactly one host directory"
+
+named_repo; compose_says "[$(bind "$OTHER" /app/logs)]"; resolve "$REPO"
+expect_refusal "no mount at /app/data is refused" "exactly one host directory"
+
+named_repo; compose_says '[{"type":"volume","source":"state","target":"/app/data"}]'; resolve "$REPO"
+expect_refusal "a named volume at /app/data is refused" "exactly one host directory"
+
+named_repo; printf '{"services":{"worker":{"volumes":[%s]}}}\n' "$(bind "$STATE")" >"${WORK}/compose.json"; resolve "$REPO"
+expect_refusal "a mount that belongs to another service is refused" "exactly one host directory"
+
+named_repo; printf 'this is not json\n' >"${WORK}/compose.json"; resolve "$REPO"
+expect_refusal "an answer that is not a configuration is refused" "exactly one host directory"
 
 named_repo; compose_says "[$(bind "$STATE")]"; printf '1\n' >"${WORK}/compose.rc"; resolve "$REPO"
 expect_refusal "a Compose that fails is refused, whatever it printed" "config' failed"

@@ -126,7 +126,7 @@ def test_the_watcher_keeps_its_files_where_the_state_is():
         "take every one of the watcher's files with it\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
-    assert result.stdout.count("OK: ") == 2, result.stdout
+    assert result.stdout.count("OK: ") == 5, result.stdout
 
 
 def _resolve(repo: Path, **extra: str) -> subprocess.CompletedProcess:
@@ -340,6 +340,21 @@ def test_compose_and_the_reader_name_the_same_directory(tmp_path, how):
     )
 
 
+def test_a_directory_that_does_not_exist_is_refused_and_not_created(tmp_path):
+    """Compose would mount it (and, with `create_host_path: false`, fail to
+    start). The reader gives no directory, and creates none."""
+    _docker_compose_or_skip()
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    missing = tmp_path / "typo"
+    checkout = _stand_in_checkout(tmp_path, compose, f"{VARIABLE}={missing}")
+
+    assert _what_compose_mounts(checkout) == str(missing)
+    refused = _resolve(checkout)
+    assert refused.returncode == 1 and refused.stdout == "", refused.stdout
+    assert "not an existing directory" in refused.stderr
+    assert not missing.exists()
+
+
 # Compose files that say different things about the variable. The first is the
 # reviewer's input from #665: the real bind is the literal, the variable is
 # only in a comment after it. A reader that looked for the variable's name in
@@ -413,6 +428,23 @@ services:
         source: ${IDEALISTA_DATA_DIR:-./data}
         target: /app/data
 """,
+}
+
+
+# Lines of `.env` that a reader of text and Compose can take differently.
+_ENV_SPELLINGS = {
+    "plain": "IDEALISTA_DATA_DIR={state}",
+    "export": "export IDEALISTA_DATA_DIR={state}",
+    "spaces around =": "IDEALISTA_DATA_DIR = {state}",
+    "colon": "IDEALISTA_DATA_DIR: {state}",
+    "double quotes": 'IDEALISTA_DATA_DIR="{state}"',
+    "single quotes": "IDEALISTA_DATA_DIR='{state}'",
+    "inline comment": "IDEALISTA_DATA_DIR={state} # the state",
+    "commented out": "# IDEALISTA_DATA_DIR={state}",
+    "longer name": "IDEALISTA_DATA_DIR_OLD={state}",
+    "twice": "IDEALISTA_DATA_DIR={other}\nIDEALISTA_DATA_DIR={state}",
+    "inside another value": 'NOTE="first line\nIDEALISTA_DATA_DIR={state}\n"',
+    "empty": "IDEALISTA_DATA_DIR=",
 }
 
 
@@ -534,6 +566,36 @@ def test_what_compose_derives_from_the_asking_process_is_not_an_answer(tmp_path,
         assert answer.returncode == 1 and answer.stdout == "", answer.stdout
         assert "does not say exactly that" in answer.stderr, answer.stderr
     assert bool(_DERIVED[value]) != _same_directory(*mounted), mounted
+
+
+@pytest.mark.parametrize("spelling", sorted(_ENV_SPELLINGS))
+def test_only_the_plain_line_is_an_answer(tmp_path, spelling):
+    """Compose reads several of these as the variable. The reader takes
+    Compose's answer for one: the line that says it in so many characters.
+    Every other spelling is refused - never read a second way, and never
+    answered with the checkout's own `data`."""
+    _docker_compose_or_skip()
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    state = tmp_path / "state"
+    other = tmp_path / "other"
+    state.mkdir()
+    other.mkdir()
+    line = _ENV_SPELLINGS[spelling].format(state=state, other=other)
+    checkout = _stand_in_checkout(tmp_path, compose, line)
+
+    answer = _resolve(checkout)
+    if spelling == "plain":
+        assert answer.returncode == 0, answer.stderr
+        assert _same_directory(_what_compose_mounts(checkout), state)
+        assert _same_directory(answer.stdout.strip(), state), answer.stdout
+        return
+    if spelling == "commented out":
+        # A comment sets nothing, for Compose and for the reader alike.
+        assert answer.returncode == 0, answer.stderr
+        assert _same_directory(_what_compose_mounts(checkout), checkout / "data")
+        assert _same_directory(answer.stdout.strip(), checkout / "data")
+        return
+    assert answer.returncode == 1 and answer.stdout == "", (spelling, answer.stdout)
 
 
 def test_the_container_side_is_not_fed_the_host_path():

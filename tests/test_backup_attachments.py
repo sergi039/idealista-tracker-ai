@@ -13,6 +13,7 @@ greps the source for two strings passes over a script that calls them in either
 sequence.
 """
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -158,6 +159,34 @@ class TestWhereTheBytesAre:
     moved reports success over an archive that holds none of the files the
     dump's rows point at."""
 
+    def _compose_mounts(self, harness, tmp_path, source):
+        """Teach the docker stub the one answer the reader asks Compose for:
+        `docker compose -f docker-compose.yml config --format json`."""
+        rendered = tmp_path / "compose.json"
+        rendered.write_text(
+            json.dumps(
+                {
+                    "services": {
+                        "app": {
+                            "volumes": [
+                                {
+                                    "type": "bind",
+                                    "source": str(source),
+                                    "target": "/app/data",
+                                }
+                            ]
+                        }
+                    }
+                }
+            )
+        )
+        _write_stub(
+            harness["bin"] / "docker",
+            f'if [ "$1" = compose ]; then cat {rendered}; exit 0; fi\n'
+            f'echo "docker $*" >> {harness["log"]}\n'
+            'if [[ "$*" == *pg_dump* ]]; then echo "PGDUMP-BYTES"; fi\n',
+        )
+
     def _run(self, harness, *args):
         env = {
             key: value
@@ -187,6 +216,35 @@ class TestWhereTheBytesAre:
         result = self._run(harness, str(harness["destination"]))
         assert result.returncode == 0, result.stderr
         assert f"archiving {project}/data/attachments" in result.stdout
+
+    def test_the_directory_compose_mounts_is_the_one_archived(self, harness, tmp_path):
+        state = tmp_path / "state"
+        (state / "attachments").mkdir(parents=True)
+        project = harness["project"]
+        (project / ".env").write_text(f"DB_PASSWORD=x\nIDEALISTA_DATA_DIR={state}\n")
+        self._compose_mounts(harness, tmp_path, state)
+        # A decoy where the bytes used to be: archiving it would "succeed".
+        (project / "data" / "attachments").mkdir(parents=True)
+        result = self._run(harness, str(harness["destination"]))
+        assert result.returncode == 0, result.stderr
+        assert f"archiving {state}/attachments" in result.stdout
+        tar_calls = [
+            line
+            for line in harness["log"].read_text().splitlines()
+            if line.startswith("tar")
+        ]
+        assert len(tar_calls) == 1 and f"-C {state} attachments" in tar_calls[0]
+
+    def test_an_unresolvable_state_directory_stops_the_backup(self, harness, tmp_path):
+        missing = tmp_path / "no-such-directory"
+        project = harness["project"]
+        (project / ".env").write_text(f"DB_PASSWORD=x\nIDEALISTA_DATA_DIR={missing}\n")
+        self._compose_mounts(harness, tmp_path, missing)
+        (project / "data" / "attachments").mkdir(parents=True)
+        result = self._run(harness, str(harness["destination"]))
+        assert "not an existing directory" in result.stderr
+        assert not missing.exists()
+        self._nothing_was_backed_up(harness, result)
 
     def test_a_compose_that_cannot_be_asked_stops_the_backup(self, harness, tmp_path):
         """The variable is named and the stub's Compose answers nothing. The
