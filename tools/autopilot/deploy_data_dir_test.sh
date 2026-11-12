@@ -66,7 +66,8 @@ cat >"${STUB_BIN}/docker" <<'STUB'
 #!/bin/bash
 # `compose ... config` is the reader's question, not a deploy call: kept out
 # of the log the scenarios read as "what was done".
-if [ "$1" = "compose" ] && [ "${4:-}" = "config" ]; then
+case " $* " in " compose "*" config "*) is_config=1 ;; *) is_config=0 ;; esac
+if [ "$is_config" = "1" ]; then
     [ -f "${DOCKER_COMPOSE_JSON:-/nonexistent}" ] || exit 1
     cat "$DOCKER_COMPOSE_JSON"
     exit 0

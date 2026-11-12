@@ -635,6 +635,36 @@ def test_a_copy_of_the_example_env_file_is_answered(tmp_path):
     assert answer.stdout == f"{tmp_path}/data\n"
 
 
+def test_another_compose_file_is_read_against_the_checkout(tmp_path):
+    """`data_dir.sh --compose-source <repo> <file>` is how the deploy gate asks
+    what a commit that is not checked out would mount. The file is a copy that
+    lies outside the checkout; `.env` and `./data` must still be the
+    checkout's, or the answer is about some other deployment."""
+    _docker_compose_or_skip()
+    state = tmp_path / "state"
+    state.mkdir()
+    checkout = _stand_in_checkout(
+        tmp_path, _SHAPES["variable mounted, long form"], f"{VARIABLE}={state}"
+    )
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    for shape, expected in (
+        ("variable mounted, long form", state),
+        ("literal bind, variable in an inline comment", checkout / "data"),
+    ):
+        copy = elsewhere / "target.yml"
+        copy.write_text(_SHAPES[shape], encoding="utf-8")
+        asked = subprocess.run(
+            ["/bin/bash", str(LIB), "--compose-source", str(checkout), str(copy)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=_environment(),
+        )
+        assert asked.returncode == 0, asked.stderr
+        assert _same_directory(asked.stdout.strip(), expected), (shape, asked.stdout)
+
+
 def test_the_container_side_is_not_fed_the_host_path():
     """`.env` is the app service's env_file, and config.py reads `DATA_DIR`.
     The host variable must stay a different name, or a host path becomes the

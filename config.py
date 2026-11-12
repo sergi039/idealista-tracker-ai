@@ -502,6 +502,10 @@ class Config:
     # Paths
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     DATA_DIR = os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data"))
+    # Left in the checkout's `data/` by tools/move_data_dir.sh once the state
+    # has been moved out of it (#639). A DATA_DIR that carries this file is the
+    # directory the state USED to be in; app.py refuses to start on it.
+    STATE_TOMBSTONE_NAME = ".moved-to"
     # Attached documents and photos (#430). Under DATA_DIR because that is the
     # one directory docker-compose bind-mounts, so a file written here survives
     # the `COPY . .` rebuild that takes the image -- and it is already covered

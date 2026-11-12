@@ -139,7 +139,7 @@ new_repo
 printf 'DB_PASSWORD=hunter2\nIDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
 resolve "$REPO"
 expect_dir "the variable in .env -> what Compose binds" "$STATE"
-grep -q "^compose -f docker-compose.yml config --format json | cwd=${REPO} | IDEALISTA_DATA_DIR=<unset>$" "${WORK}/docker.log" \
+grep -q "^compose --project-directory ${REPO} -f docker-compose.yml config --format json | cwd=${REPO} | IDEALISTA_DATA_DIR=<unset>$" "${WORK}/docker.log" \
     || fail "Compose was not asked from the checkout with the one compose file: $(cat "${WORK}/docker.log")"
 [ "$(wc -l <"${WORK}/docker.log" | tr -d ' ')" = "1" ] || fail "Compose was asked more than once"
 pass "Compose is asked once, from the checkout, with -f docker-compose.yml"
@@ -311,6 +311,83 @@ resolve "$REPO" "DOCKER_BIN=${WORK}/no-such-docker"
 expect_refusal "no Docker to ask is refused" "is not on PATH"
 [ -z "$(ls -A "${REPO}/data")" ] || fail "something was written into <repo>/data after a refusal"
 pass "a refusal leaves <repo>/data alone"
+
+# 12. --compose-source prints what Compose would bind, unchecked, for the
+#     compose file it is given.
+compose_says "[$(bind "$MISSING")]"
+new_repo
+: >"${WORK}/docker.log"
+RC=0
+OUT="$(env -u IDEALISTA_DATA_DIR DOCKER_BIN="$STUB" "$SHELL_UNDER_TEST" "$LIB" --compose-source "$REPO" other.yml 2>"${WORK}/err")" || RC=$?
+ERR="$(cat "${WORK}/err")"
+expect_dir "--compose-source prints the bind although the directory does not exist" "$MISSING"
+grep -q "^compose --project-directory ${REPO} -f other.yml config --format json | cwd=${REPO} " "${WORK}/docker.log" \
+    || fail "--compose-source did not ask about the compose file it was given"
+pass "--compose-source asks about the compose file it is given"
+RC=0
+OUT="$(DOCKER_BIN="$STUB" "$SHELL_UNDER_TEST" "$LIB" --compose-source 2>"${WORK}/err")" || RC=$?
+ERR="$(cat "${WORK}/err")"
+expect_refusal "--compose-source without a repository root is refused" "usage"
+compose_says "[$(bind "$STATE")]"
+
+# 12b. The tombstone. tools/move_data_dir.sh leaves `.moved-to` in <repo>/data
+#      once the state lives elsewhere. Resolving to that directory means the
+#      .env line was lost, and the directory holds no mail cursor: refused,
+#      with the place the state went and both ways out.
+new_repo
+printf 'moved_to=%s\nmoved_at=20261112T000000Z\n' "$STATE" >"${REPO}/data/.moved-to"
+resolve "$REPO"
+expect_refusal "the default directory is refused once it carries the tombstone" "carries .moved-to"
+case "$ERR" in
+    *"${STATE}"*"--rollback"*) pass "the refusal names where the state went and how to undo it" ;;
+    *) fail "the tombstone refusal does not name the moved directory and --rollback" ;;
+esac
+
+# 12c. With the line in place Compose mounts the moved directory, and the
+#      tombstone is exactly what is expected in <repo>/data.
+printf 'IDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
+resolve "$REPO"
+expect_dir "the moved directory resolves while <repo>/data carries the tombstone" "$STATE"
+
+# 12d. A .env line that points back at the directory the state left is the
+#      same mistake arrived at through Compose. (A compose file that binds
+#      ./data again while .env names the moved directory is refused earlier:
+#      Compose's answer is then not the text of .env.)
+printf 'IDEALISTA_DATA_DIR=%s\n' "${REPO}/data" >"${REPO}/.env"
+compose_says "[$(bind "${REPO}/data")]"
+resolve "$REPO"
+expect_refusal "Compose mounting the tombstoned directory is refused" "carries .moved-to"
+printf 'IDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
+resolve "$REPO"
+expect_refusal "a compose file that binds the directory the state left is refused" "does not say exactly that"
+compose_says "[$(bind "$STATE")]"
+
+# 12e. A tombstone that records nothing is still a tombstone.
+new_repo
+: >"${REPO}/data/.moved-to"
+resolve "$REPO"
+expect_refusal "an empty tombstone still refuses" "an unrecorded directory"
+# A symbolic link whose target is gone: -e says there is nothing there.
+rm -f "${REPO}/data/.moved-to"
+ln -s "${WORK}/gone" "${REPO}/data/.moved-to"
+resolve "$REPO"
+expect_refusal "a dangling symbolic link named as the tombstone still refuses" "carries .moved-to"
+
+# 12f. `--default` names the directory inside the checkout and reads nothing:
+#      not .env, not the environment, not the tombstone, and not Compose.
+new_repo
+printf 'IDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
+: >"${REPO}/data/.moved-to"
+: >"${WORK}/docker.log"
+RC=0
+OUT="$(IDEALISTA_DATA_DIR="$OTHER" DOCKER_BIN="$STUB" "$SHELL_UNDER_TEST" "$LIB" --default "${REPO}/" 2>"${WORK}/err")" || RC=$?
+ERR="$(cat "${WORK}/err")"
+expect_dir "--default is <repo>/data whatever is configured" "${REPO}/data"
+asked && fail "--default asked Compose"
+RC=0
+OUT="$("$SHELL_UNDER_TEST" "$LIB" --default 2>"${WORK}/err")" || RC=$?
+ERR="$(cat "${WORK}/err")"
+expect_refusal "--default without a repository root is refused" "usage"
 
 # 13. The root has to be the checkout Compose runs from: absolute, existing.
 new_repo
