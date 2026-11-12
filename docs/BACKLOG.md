@@ -86,26 +86,27 @@ must be an ancestor of `main`.
   takes the nearest declared dimension on the ring's ancestors and refuses
   anything but 2 as `MALFORMED`.
 
-### A non-ASCII digit in the WFS counts raises instead of refusing
+### A WFS count longer than Python's integer limit raises instead of refusing
 
 - **Anchor:** `services/neighbours_service.py` `parse_buildings`
-  (`numberMatched` / `numberReturned` checked with `isdigit()` then `int()`).
-- **Found 2026-11-12** by merge_bot on PR #662
-  (https://github.com/sergi039/idealista-tracker-ai/pull/662#issuecomment-6829017199),
-  the third review round; merged as is at the owner's command the same day.
-  Input: `<FeatureCollection xmlns="http://www.opengis.net/wfs/2.0"
-  numberMatched="²" numberReturned="0"/>` — `"²".isdigit()` is true and
-  `int("²")` raises `ValueError`, not `CadastreError(MALFORMED)`.
+  (`numberMatched` / `numberReturned`: `re.fullmatch(r"[0-9]+", value)` then `int(value)`).
+- **Found 2026-11-12** by merge_bot on PR #663
+  (https://github.com/sergi039/idealista-tracker-ai/pull/663#issuecomment-6834607473),
+  the third review round; merged as is on the owner's command 2026-11-12.
+  Input: an empty `wfs:FeatureCollection` with `numberMatched` of 4301 ASCII
+  nines and `numberReturned="0"` passes the pattern, and `int()` raises
+  `ValueError` (the 4300-digit limit of `sys.get_int_max_str_digits()`),
+  not `CadastreError(MALFORMED)`; at 4300 digits it is refused correctly.
 - **What breaks, for whom:** the Enrich press does not fail:
-  `PropertyEnrichmentService._advisory_pass` catches it, rolls back and logs
-  "Neighbour measurement failed", the previous measurement is left untouched
-  and nothing is cached. But the refusal is never recorded as `unavailable`
-  with a reason, and `utils/backfill_neighbours.py` stops on that row. Needs a
-  hostile or corrupt WFS answer. **Not reproduced on live answers** (969,
-  1282: plain ASCII counts).
-- **Check:** `rg -n 'isdigit' services/neighbours_service.py` — a fix uses
-  the same `re.fullmatch(r"[0-9]+", ...)` that `_ring_points` already applies
-  to `count`.
+  `PropertyEnrichmentService` catches it around the neighbour step, rolls
+  back and logs "Neighbour measurement failed", the previous measurement is
+  left untouched and nothing is cached. But the refusal is never recorded as
+  `unavailable` with a reason, and `utils/backfill_neighbours.py` stops on
+  that row. Needs a hostile or corrupt WFS answer. **Not reproduced on live
+  answers** (969, 1282).
+- **Check:** `rg -n 'int\(value\)' services/neighbours_service.py` — a fix
+  bounds the length before `int()` (e.g. `[0-9]{1,6}`, `MAX_FEATURES` is far
+  below) or catches `ValueError` beside `CadastreError` in `measure()`.
 
 ### Four input shapes take the Jev route out instead of to the bridge
 
