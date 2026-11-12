@@ -36,6 +36,16 @@ every media query, which is what made the table 1344px wide at any viewport.
 `tests/test_tablet_list_layout.py` fails if those widths move back into the
 markup or if the cap comes back.
 
+**On a phone the same page is a resource index** (owner report, 2026-11-12:
+a screen of controls before the first listing, one listing per screen). Below
+768px the secondary display controls and the secondary status items sit behind
+one trigger each, search opens with the Filters, and a table row is one
+stacked summary; the order, the reference it was taken from and the rules that
+keep it are in `docs/design/README.md`, "Phone layout". The folding re-places
+the elements that exist -- the rule below holds at every width -- and a hide is
+never folded. `tests/test_phone_resource_index.py` pins the markup those rules
+need; the positions are a browser measurement.
+
 **Every one of those controls exists exactly once** (owner decision,
 2026-08-09, superseding "the page is a copy of the /lands layout"). The page
 had grown a duplicate of nearly everything: a subscription dropdown in the

@@ -122,6 +122,17 @@ def test_explicit_form_and_external_sort_keep_one_owner(client):
     )
 
 
+def test_phone_status_trigger_is_rendered_once_beside_a_profile(client):
+    """The trigger is drawn from either branch of the profile block; with a
+    profile on the page it must still be one element with one id."""
+    tags = Tags(client.get("/properties?mode=combined&view_type=list").text).tags
+    toggles = [a for _, a in tags if a.get("id") == "result-details-toggle"]
+    assert len(toggles) == 1
+    assert toggles[0]["data-bs-target"] == ".workspace-status-more"
+    status = [a for _, a in tags if a.get("id") == "recommendation-profile-status"]
+    assert len(status) == 1 and "workspace-status-more" not in status[0]["class"]
+
+
 @pytest.mark.parametrize("sort", ["score_total", "score_investment"])
 def test_score_sort_keeps_recommendation_tab_and_explanations(client, sort):
     response = client.get(
