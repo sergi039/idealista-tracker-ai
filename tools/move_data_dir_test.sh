@@ -155,6 +155,12 @@ new_world() {
     snapshot_original
 }
 
+# The permission bits of a file, in octal. Asked of python and not of stat(1):
+# `stat -f` is the format flag on macOS and "describe the filesystem" under GNU
+# coreutils, where it succeeds and prints something else - so a BSD-first
+# fallback chain never falls through on Linux, which is where CI runs this.
+mode_of() { python3 -c 'import os, stat, sys; print("%o" % stat.S_IMODE(os.stat(sys.argv[1]).st_mode))' "$1"; }
+
 # What "exactly as it was" means: the state directory's content and .env.
 tree_of() { ( cd "$1" && find . -type f ! -name '*.log' -exec shasum -a 256 {} + | LC_ALL=C sort ); }
 snapshot_original() {
@@ -214,7 +220,7 @@ expect_moved() {
     tree_of "$DEST" | cmp -s - "${W}/original.tree" || fail "${label}: the moved directory is not what was there before"
     [ "$(sed -n 's/^IDEALISTA_DATA_DIR=//p' "$REPO/.env")" = "$DEST" ] || fail "${label}: .env does not name the destination"
     grep -q '^DB_PASSWORD=hunter2$' "$REPO/.env" || fail "${label}: another line of .env was lost"
-    [ "$(stat -f '%Lp' "$REPO/.env" 2>/dev/null || stat -c '%a' "$REPO/.env")" = "600" ] || fail "${label}: .env lost its mode"
+    [ "$(mode_of "$REPO/.env")" = "600" ] || fail "${label}: .env lost its mode"
     grep -q hunter2 "${W}/out" && fail "${label}: a line of .env was printed"
     [ "$(cat "$STUB/running")" = "true" ] || fail "${label}: the app is not running"
     [ "$(cat "$STUB/mount")" = "$DEST" ] || fail "${label}: the app is not mounted on the destination"
