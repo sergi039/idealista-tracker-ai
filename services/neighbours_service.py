@@ -18,7 +18,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import requests
 from shapely.errors import ShapelyError
-from shapely.geometry import MultiPolygon, Polygon
+from shapely.geometry import MultiPolygon, Polygon, box
 from shapely.ops import unary_union
 
 from services import cadastre_locate as locate, cadastre_service as cadastre
@@ -151,6 +151,8 @@ def parse_buildings(text: str, epsg: int) -> list[dict]:
     Catastro's native gml:FeatureCollection omits WFS counts. Its documented
     limit is 5000; reaching that cap is incomplete. Where WFS counts are
     provided they must both be exact and agree with the parsed collection.
+    An empty native collection states no coverage: it cannot be told from a
+    query the service read in another CRS, so it is not an absence.
     """
     root = _xml(text)
     if root.tag not in {GML + "FeatureCollection", WFS + "FeatureCollection"}:
@@ -167,6 +169,8 @@ def parse_buildings(text: str, epsg: int) -> list[dict]:
         raise cadastre.CadastreError(
             cadastre.MALFORMED, "unsupported collection content"
         )
+    if not members and root.tag == GML + "FeatureCollection":
+        raise cadastre.CadastreError(cadastre.UNAVAILABLE, "empty native collection")
     if len(members) >= MAX_FEATURES:
         raise cadastre.CadastreError(cadastre.MALFORMED, "building feature cap reached")
     for name in ("numberMatched", "numberReturned"):
@@ -422,7 +426,10 @@ class NeighboursService:
                         "request": "GetFeature",
                         "typenames": "BU.BUILDING",
                         "srsname": f"EPSG::{epsg}",
-                        "bbox": ",".join(str(n) for n in bbox),
+                        # The fifth component pins the box's CRS; without
+                        # it the box is read in the service's default.
+                        "bbox": ",".join(str(n) for n in bbox)
+                        + f",urn:ogc:def:crs:EPSG::{epsg}",
                     },
                 )
                 if response.status_code != 200:
@@ -430,6 +437,14 @@ class NeighboursService:
                         cadastre.REFUSED, f"HTTP {response.status_code}"
                     )
                 buildings = parse_buildings(response.text, epsg)
+                # Catastro returns buildings up to ~50 m past the box (969),
+                # so only an answer touching it nowhere is about another place.
+                if buildings and not any(
+                    b["shape"].intersects(box(*bbox)) for b in buildings
+                ):
+                    raise cadastre.CadastreError(
+                        cadastre.MALFORMED, "answer lies outside the requested box"
+                    )
                 payload = {
                     "status": "ok",
                     "reference": reference,

@@ -24,7 +24,7 @@ from services import (  # noqa: E402
 )
 from services.enrichment_write import EnrichmentWriteContractError  # noqa: E402
 
-# Catastro's live answers for the owner's two references (rows 969 and 1282),
+# Catastro's live answer for the owner's reference row 969 (1282: PR #664),
 # trimmed to the buildings within 100 m, the parcel's own building and two or
 # three beyond the radius. Trimming removes only features farther than the
 # kept ones, so every measured count and distance is the live answer's.
@@ -84,7 +84,7 @@ def _measure_reference(row, reference):
 
 @pytest.mark.parametrize(
     "row,reference,within100,nearest",
-    [(969, REF, 7, 17.8646942317), (1282, "15044A01901483", 11, 3.7759133525)],
+    [(969, REF, 7, 17.8646942317)],
 )
 def test_owner_reference_calibration_counts(row, reference, within100, nearest):
     measured = _measure_reference(row, reference)
@@ -117,9 +117,7 @@ def test_distance_is_from_entire_parcel_excluding_own_not_just_centroid():
     )
 
 
-@pytest.mark.parametrize(
-    "row,reference,features", [(969, REF, 10), (1282, "15044A01901483", 14)]
-)
+@pytest.mark.parametrize("row,reference,features", [(969, REF, 10)])
 def test_owner_fixture_parses_every_building(row, reference, features):
     buildings = n.parse_buildings((DATA / f"{row}_buildings.gml").read_text(), 25829)
     assert len(buildings) == features
@@ -223,6 +221,7 @@ def test_adjacent_buildings_tiled_by_patches_stay_two_buildings():
         '<FeatureCollection xmlns="http://www.opengis.net/wfs/2.0" numberMatched="²" numberReturned="0"/>',
         '<FeatureCollection xmlns="http://www.opengis.net/wfs/2.0"/>',
         '<FeatureCollection xmlns="http://www.opengis.net/gml/3.2" next="page2"/>',
+        '<FeatureCollection xmlns="http://www.opengis.net/gml/3.2"/>',
     ],
 )
 def test_incomplete_or_refused_collection_is_not_absence(body):
@@ -479,6 +478,8 @@ def test_measure_uses_shared_transport_full_buffer_and_single_attempt(
     monkeypatch.setattr(c.CATASTRO_GATE, "mark", lambda: None)
 
     def transport(url, **kwargs):
+        # A box without its CRS is read in the service's default CRS.
+        assert kwargs["params"]["bbox"].endswith(",urn:ogc:def:crs:EPSG::25829")
         calls.append((url, kwargs, c.CATASTRO_GATE._interval()))
         return SimpleNamespace(
             status_code=200,
@@ -489,21 +490,49 @@ def test_measure_uses_shared_transport_full_buffer_and_single_attempt(
     result = n.NeighboursService().measure(p)
     assert result["status"] == "ok" and result["buildings_within_100m"] == 0
     assert len(calls) == 1
-    assert calls[0][1]["params"]["bbox"] == "900.0,1900.0,1110.0,2120.0"
+    assert (
+        calls[0][1]["params"]["bbox"]
+        == "900.0,1900.0,1110.0,2120.0,urn:ogc:def:crs:EPSG::25829"
+    )
     assert calls[0][2] == 12
     assert c.CATASTRO_GATE._interval() == 1
 
 
-def test_refusal_never_retries_or_becomes_zero(monkeypatch):
+@pytest.mark.parametrize(
+    "status, body",
+    [
+        (500, ""),
+        (200, '<FeatureCollection xmlns="http://www.opengis.net/gml/3.2"/>'),
+        (200, (DATA / "969_buildings.gml").read_text()),  # far from box(0..10)
+    ],
+)
+def test_refusal_never_retries_or_becomes_zero(monkeypatch, status, body):
     monkeypatch.setattr(n, "_metric_parcel", lambda _: (box(0, 0, 10, 10), 25829))
     monkeypatch.setattr(c, "_cache_get", lambda _: None)
     monkeypatch.setattr(c.CATASTRO_GATE, "wait", lambda: 0)
     monkeypatch.setattr(c.CATASTRO_GATE, "mark", lambda: None)
-    transport = Mock(return_value=SimpleNamespace(status_code=500, text=""))
+    monkeypatch.setattr(c, "_cache_set", Mock(side_effect=AssertionError))
+    transport = Mock(return_value=SimpleNamespace(status_code=status, text=body))
     monkeypatch.setattr(c.requests, "get", transport)
     result = n.NeighboursService().measure(prop())
     assert result["status"] == "unavailable" and "buildings_within_100m" not in result
     assert transport.call_count == 1
+
+
+def test_answer_reaching_past_the_box_is_measured(monkeypatch):
+    # One fixture building lies wholly outside the box, as Catastro returns.
+    gml = c._parse_gml((DATA / "969_parcel.gml").read_text(), 25829)
+    parcel = n._shape(gml["polygons"])
+    monkeypatch.setattr(n, "_metric_parcel", lambda _: (parcel, 25829))
+    monkeypatch.setattr(c, "_cache_get", lambda _: None)
+    monkeypatch.setattr(c, "_cache_set", lambda *_: None)
+    monkeypatch.setattr(c.CATASTRO_GATE, "wait", lambda: 0)
+    monkeypatch.setattr(c.CATASTRO_GATE, "mark", lambda: None)
+    text = (DATA / "969_buildings.gml").read_text()
+    answer = SimpleNamespace(status_code=200, text=text)
+    monkeypatch.setattr(c.requests, "get", Mock(return_value=answer))
+    result = n.NeighboursService().measure(prop())
+    assert (result["status"], result["buildings_within_100m"]) == ("ok", 7)
 
 
 def test_subject_stable_for_sql_numeric_roundtrip_and_stale_on_change():
