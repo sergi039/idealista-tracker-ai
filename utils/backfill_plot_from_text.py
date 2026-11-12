@@ -211,6 +211,8 @@ def report(profile_id: Optional[int] = None) -> Dict[str, Any]:
 
 
 def _locked(prop_id: int):
+    """The row under `FOR UPDATE`, read fresh: a compare-and-swap must not
+    compare against what the session cached before the lock (review of #675)."""
     from app import db
     from models import Property
 
@@ -218,6 +220,7 @@ def _locked(prop_id: int):
         db.session.query(Property)
         .filter(Property.id == prop_id)
         .with_for_update()
+        .populate_existing()
         .one_or_none()
     )
 
@@ -396,19 +399,28 @@ def _print_report(out: Dict[str, Any]) -> None:
         print(f"Report only; {len(out['plans'])} row(s) would gain a plot.")
 
 
-def main(argv=None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    # The bare command is the report, so it takes the report's filter too.
+    parser.add_argument("--profile-id", type=int, default=None)
     sub = parser.add_subparsers(dest="command")
     for name in ("report", "apply"):
         p = sub.add_parser(name)
-        p.add_argument("--profile-id", type=int, default=None)
+        # SUPPRESS: a subcommand without the flag keeps the one given before it.
+        p.add_argument("--profile-id", type=int, default=argparse.SUPPRESS)
         if name == "apply":
             p.add_argument("--snapshot", required=True)
     back = sub.add_parser("restore")
     back.add_argument("path")
     back.add_argument("--apply", action="store_true", dest="restore_apply")
-    args = parser.parse_args(argv)
+    return parser
 
+
+def main(argv=None) -> int:
+    return _run(build_parser().parse_args(argv))
+
+
+def _run(args: argparse.Namespace) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     from app import create_app
 
@@ -419,7 +431,7 @@ def main(argv=None) -> int:
         elif args.command == "apply":
             _print_report(apply(args.snapshot, args.profile_id))
         else:
-            _print_report(report(getattr(args, "profile_id", None)))
+            _print_report(report(args.profile_id))
     return 0
 
 

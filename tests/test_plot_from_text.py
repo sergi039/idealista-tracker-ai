@@ -728,6 +728,119 @@ class TestTheBackfill:
 
         assert out["written"] == [] and out["skipped_changed"] == [pid]
 
+    def test_a_correction_committed_elsewhere_is_seen_under_the_lock(
+        self, app, tmp_path
+    ):
+        """Review of #675, P1: the session already holds the row as written;
+        another session corrects it; restore must compare the fresh value."""
+        from sqlalchemy import update
+        from sqlalchemy.orm import Session
+
+        pid = _stored(24, description="Casa en parcela de 745 m²")
+        path = str(tmp_path / "snap.json")
+        assert tool.apply(path)["written"] == [pid]
+        cached = db.session.get(Property, pid)
+        assert float(cached.plot_area) == 745  # loaded into this identity map
+
+        with Session(db.engine) as other:
+            other.execute(
+                update(Property).where(Property.id == pid).values(plot_area=1000)
+            )
+            other.commit()
+
+        back = tool.restore(path, apply_it=True)
+
+        assert back["restored"] == [] and back["changed_since_apply"] == [pid]
+        db.session.expire_all()
+        assert float(db.session.get(Property, pid).plot_area) == 1000
+
+    def test_apply_compares_the_before_image_read_fresh(
+        self, app, tmp_path, monkeypatch
+    ):
+        """Same class in apply: a row another session changed after the plan is
+        skipped, not written over a before-image the session cached."""
+        from sqlalchemy import update
+        from sqlalchemy.orm import Session
+
+        pid = _stored(25, description="Casa en parcela de 745 m²")
+        real_report = tool.report
+        held = []  # the session keeps the row, as a long-lived caller would
+
+        def _then_edited_elsewhere(profile_id=None):
+            out = real_report(profile_id)
+            held.append(db.session.get(Property, pid))
+            assert held[0].plot_area is None  # cached before the other commit
+            with Session(db.engine) as other:
+                other.execute(
+                    update(Property).where(Property.id == pid).values(plot_area=0)
+                )
+                other.commit()
+            return out
+
+        monkeypatch.setattr(tool, "report", _then_edited_elsewhere)
+        out = tool.apply(str(tmp_path / "snap.json"))
+
+        assert out["written"] == [] and out["skipped_changed"] == [pid]
+        db.session.expire_all()
+        assert float(db.session.get(Property, pid).plot_area) == 0
+
     def test_it_makes_no_network_call(self):
         assert "requests" not in open(tool.__file__).read()
         assert "urllib" not in open(plot_text.__file__).read()
+
+
+def _documented_invocations():
+    """Every `python -m utils.backfill_plot_from_text ...` line of the docstring,
+    once with each optional part given and once with all of them left out."""
+    import re
+
+    prefix = "python -m utils.backfill_plot_from_text"
+    lines = [
+        line.split("#")[0].strip()[len(prefix) :]
+        for line in tool.__doc__.splitlines()
+        if line.strip().startswith(prefix)
+    ]
+    out = []
+    for line in lines:
+        with_all = re.sub(r"\[([^\]]*)\]", r"\1", line).replace(" N", " 24")
+        without = re.sub(r"\[[^\]]*\]", "", line)
+        out += [with_all.split(), without.split()]
+    return out
+
+
+class TestTheDocumentedCommandsParse:
+    def test_the_docstring_lists_every_command(self):
+        commands = {
+            argv[0] if argv and not argv[0].startswith("-") else "report"
+            for argv in _documented_invocations()
+        }
+        assert commands == {"report", "apply", "restore"}
+
+    @pytest.mark.parametrize("argv", _documented_invocations(), ids=" ".join)
+    def test_each_documented_invocation_parses(self, argv):
+        tool.build_parser().parse_args(argv)
+
+    @pytest.mark.parametrize(
+        "argv, command, profile_id",
+        [
+            (["--profile-id", "24"], None, 24),
+            ([], None, None),
+            (["report", "--profile-id", "3"], "report", 3),
+            (["--profile-id", "5", "report"], "report", 5),
+            (["apply", "--snapshot", "s.json", "--profile-id", "7"], "apply", 7),
+            (["apply", "--snapshot", "s.json"], "apply", None),
+        ],
+    )
+    def test_the_report_filter_reaches_the_command(self, argv, command, profile_id):
+        args = tool.build_parser().parse_args(argv)
+        assert args.command == command and args.profile_id == profile_id
+
+    def test_the_owner_restore_command_parses(self):
+        args = tool.build_parser().parse_args(
+            ["restore", "data/plot_634.json", "--apply"]
+        )
+        assert (args.command, args.path, args.restore_apply) == (
+            "restore",
+            "data/plot_634.json",
+            True,
+        )
