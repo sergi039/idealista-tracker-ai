@@ -13,6 +13,51 @@ must be an ancestor of `main`.
 
 ## Open
 
+### A dimension declared above the `posList` is not read
+
+- **Anchor:** `services/cadastre_service.py` `_ring_points` (reads
+  `srsDimension` from the `posList` alone, never from an enclosing
+  `LinearRing` / `Polygon` / `Surface` / `MultiSurface`).
+- **Found 2026-11-12** by merge_bot on PR #662
+  (https://github.com/sergi039/idealista-tracker-ai/pull/662#issuecomment-6829017199),
+  the third review round; merged as is at the owner's command the same day.
+  Input: `<LinearRing srsDimension="3"><posList>0 0 0 2 2 2 2 0 2 0 0 0</posList>`
+  — the triples are read as 2D pairs and close into a valid ring of area 4.
+- **What breaks, for whom:** a Catastro answer that declares three
+  dimensions above the `posList` is measured as a shape nobody sent. A parcel
+  outline is almost always caught by `area_agrees` against `areaValue` (no
+  guarantee: only a coincidental area passes); a neighbouring building's
+  outline has no such check, so the owner would get an `ok` measurement in
+  `enrichment["neighbours"]`, cached 30 days (`neighbours_buildings_v1`) and
+  fed to the taste prompt through `taste_descriptors`. It never reaches
+  `score_total`. **Not reproduced on live answers:** in all four fixtures
+  (`tests/data/neighbours/969_*`, `1282_*`) `srsDimension="2"` sits only on
+  `posList`. Before #662 the card did not read `srsDimension` at all.
+- **Check:** `rg -n 'srsDimension' services/cadastre_service.py` — a fix
+  takes the nearest declared dimension on the ring's ancestors and refuses
+  anything but 2 as `MALFORMED`.
+
+### A non-ASCII digit in the WFS counts raises instead of refusing
+
+- **Anchor:** `services/neighbours_service.py` `parse_buildings`
+  (`numberMatched` / `numberReturned` checked with `isdigit()` then `int()`).
+- **Found 2026-11-12** by merge_bot on PR #662
+  (https://github.com/sergi039/idealista-tracker-ai/pull/662#issuecomment-6829017199),
+  the third review round; merged as is at the owner's command the same day.
+  Input: `<FeatureCollection xmlns="http://www.opengis.net/wfs/2.0"
+  numberMatched="²" numberReturned="0"/>` — `"²".isdigit()` is true and
+  `int("²")` raises `ValueError`, not `CadastreError(MALFORMED)`.
+- **What breaks, for whom:** the Enrich press does not fail:
+  `PropertyEnrichmentService._advisory_pass` catches it, rolls back and logs
+  "Neighbour measurement failed", the previous measurement is left untouched
+  and nothing is cached. But the refusal is never recorded as `unavailable`
+  with a reason, and `utils/backfill_neighbours.py` stops on that row. Needs a
+  hostile or corrupt WFS answer. **Not reproduced on live answers** (969,
+  1282: plain ASCII counts).
+- **Check:** `rg -n 'isdigit' services/neighbours_service.py` — a fix uses
+  the same `re.fullmatch(r"[0-9]+", ...)` that `_ring_points` already applies
+  to `count`.
+
 ### Four input shapes take the Jev route out instead of to the bridge
 
 - **Anchor:** `services/typesafe_transport.py` (`_KEY_SHAPE`, `_origin`,
