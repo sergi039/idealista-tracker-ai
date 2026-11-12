@@ -57,8 +57,20 @@ services:
       # Linux hosts need this mapping; Docker Desktop provides it natively.
       - "host.docker.internal:host-gateway"
     volumes:
-      # Persist last seen UID
-      - ./data:/app/data
+      # The deployment's state: the mail cursor and its retry list, the Google
+      # spend ledger, attachments, score snapshots, in-flight markers.
+      #
+      # The host side has one home (#639): IDEALISTA_DATA_DIR in this
+      # checkout's .env, which is where Compose reads it from here and where
+      # tools/autopilot/lib/data_dir.sh reads it for the deploy watcher, the
+      # backup and the backfill tools - so the directory mounted and the
+      # directory those tools look in cannot be two different ones. Unset, as
+      # it is today, this renders ./data exactly as the literal did.
+      #
+      # It is not called DATA_DIR on purpose: .env is also this service's
+      # env_file, config.py reads DATA_DIR, and a host path must never become
+      # the path the app uses inside the container. That side stays /app/data.
+      - ${IDEALISTA_DATA_DIR:-./data}:/app/data
     restart: unless-stopped
     networks:
       - idealista-network

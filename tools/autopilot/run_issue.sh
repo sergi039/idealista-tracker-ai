@@ -18,7 +18,11 @@ set -euo pipefail
 REPO_DIR="${AUTOPILOT_REPO_DIR:-/Users/ss/IdealistaRank}"
 REPO_SLUG="${AUTOPILOT_REPO_SLUG:-sergi039/idealista-tracker-ai}"
 BASE_BRANCH="${AUTOPILOT_BRANCH:-main}"
-LOG_FILE="${AUTOPILOT_ISSUE_LOG:-${REPO_DIR}/data/autopilot-issues.log}"
+# Where the deployment keeps its state on the host (#639): one answer, from
+# lib/data_dir.sh, which reads the same IDEALISTA_DATA_DIR that
+# docker-compose.yml takes its bind mount from. Unset, it is ${REPO_DIR}/data.
+STATE_DIR="$(/bin/bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/data_dir.sh" "$REPO_DIR")" || exit 1
+LOG_FILE="${AUTOPILOT_ISSUE_LOG:-${STATE_DIR}/autopilot-issues.log}"
 WORKTREE_ROOT="${AUTOPILOT_WORKTREE_ROOT:-${REPO_DIR}/.claude/worktrees}"
 # An agent that has not produced a commit by now is stuck, not thinking.
 AGENT_TIMEOUT_SECONDS="${AUTOPILOT_AGENT_TIMEOUT:-3600}"

@@ -44,7 +44,13 @@ if [[ ! -d "$destination" ]]; then
 fi
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-attachments_dir="${ATTACHMENTS_DIR:-$project_dir/data/attachments}"
+# The bytes live in the directory docker-compose.yml binds at /app/data, and
+# on the host that has one home (#639): the same IDEALISTA_DATA_DIR Compose
+# mounts from, read by the one reader of it. Unset, it is $project_dir/data. A
+# refusal stops the backup: archiving the wrong directory would report success
+# over a backup that holds none of the files the dump's rows point at.
+data_dir="$(/bin/bash "$project_dir/tools/autopilot/lib/data_dir.sh" "$project_dir")"
+attachments_dir="${ATTACHMENTS_DIR:-$data_dir/attachments}"
 stamp="$(date -u +%Y%m%d-%H%M%S)"
 
 db_container="${DB_CONTAINER:-${COMPOSE_CONTAINER_PREFIX:-idealista}-db}"

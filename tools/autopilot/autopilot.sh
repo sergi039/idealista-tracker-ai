@@ -24,7 +24,11 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${AUTOPILOT_REPO_DIR:-/Users/ss/IdealistaRank}"
 REPO_SLUG="${AUTOPILOT_REPO_SLUG:-sergi039/idealista-tracker-ai}"
-LOG_FILE="${AUTOPILOT_LOG:-${REPO_DIR}/data/autopilot.log}"
+# Where the deployment keeps its state on the host (#639): one answer, from
+# lib/data_dir.sh, which reads the same IDEALISTA_DATA_DIR that
+# docker-compose.yml takes its bind mount from. Unset, it is ${REPO_DIR}/data.
+STATE_DIR="$(/bin/bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/data_dir.sh" "$REPO_DIR")" || exit 1
+LOG_FILE="${AUTOPILOT_LOG:-${STATE_DIR}/autopilot.log}"
 LOCK_DIR="${AUTOPILOT_LOCK_DIR_MAIN:-/tmp/idealista-autopilot.lock.d}"
 
 # Highest-severity work first; an issue with none of these labels is left alone

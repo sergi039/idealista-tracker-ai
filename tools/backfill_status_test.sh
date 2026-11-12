@@ -12,6 +12,10 @@
 
 set -euo pipefail
 
+# The directory under test is the stub repository's own; an export inherited
+# from whoever runs this must not decide where the script looks (#639).
+unset IDEALISTA_DATA_DIR
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REAL_SCRIPT="${SCRIPT_DIR}/backfill_status.sh"
 
@@ -30,6 +34,10 @@ fail() {
 # REPO_ROOT resolution (dirname/..) lands here rather than in the real repo.
 mkdir -p "${WORK}/repo/tools" "${WORK}/repo/data/.inflight" "${WORK}/bin"
 cp "$REAL_SCRIPT" "${WORK}/repo/tools/backfill_status.sh"
+# The one reader of where the state directory is (#639). The script asks its
+# own repository's copy, so the stub root carries the real one.
+mkdir -p "${WORK}/repo/tools/autopilot/lib"
+cp "${SCRIPT_DIR}/autopilot/lib/data_dir.sh" "${WORK}/repo/tools/autopilot/lib/data_dir.sh"
 chmod +x "${WORK}/repo/tools/backfill_status.sh"
 
 cat >"${WORK}/bin/docker" <<'STUB'
@@ -297,3 +305,41 @@ rm -f "${WORK}/repo/data/.deploy_stalled"
 run_status
 grep -q "deploy chain:" "${WORK}/out" && fail "scenario 14 reported a stall after the marker was gone"
 printf 'OK: a stalled deploy chain is surfaced, and the backfill verdict is not its business\n'
+
+# --- scenario 15: the state directory is wherever .env says it is (#639) ----
+# The supervisor lock, the markers and the stall alarm live in the directory
+# docker-compose.yml binds at /app/data, and that has one home:
+# IDEALISTA_DATA_DIR in the checkout's .env. A status tool still looking in
+# <repo>/data after the mount moved would answer "idle" over a live supervisor
+# - the duplicate paid run this script exists to stop. The decoy in <repo>/data
+# is a stale lock for ANOTHER module: reading the old directory is visible too.
+set_top; clear_locks; clear_markers
+STATE="${WORK}/state"
+mkdir -p "${STATE}/.inflight"
+printf 'DB_PASSWORD=x\nIDEALISTA_DATA_DIR=%s\n' "$STATE" >"${WORK}/repo/.env"
+printf '%s\n' "$$" >"${STATE}/.supervisor.idealista-app.utils.backfill_pool.lock"
+printf '{"module":"backfill_pool"}\n' >"${STATE}/.inflight/backfill_pool.41.json"
+printf 'STALLED: production is 1 commit(s) behind main\n' >"${STATE}/.deploy_stalled"
+printf '%s\n' "$DEAD_PID" >"${WORK}/repo/data/.supervisor.idealista-app.utils.recalc_sea_distance.lock"
+run_status
+[ "$RC" = "1" ] || fail "scenario 15: a supervisor lock in the configured state directory was not seen (rc=$RC)"
+grep -q "supervised: utils.backfill_pool is watched by pid $$" "${WORK}/out" \
+    || fail "scenario 15 did not read the supervisor lock from the configured directory"
+grep -q "marker: backfill_pool.41.json" "${WORK}/out" \
+    || fail "scenario 15 did not read the in-flight markers from the configured directory"
+grep -q "deploy chain: STALLED: production is 1 commit(s) behind main" "${WORK}/out" \
+    || fail "scenario 15 did not read the stall alarm from the configured directory"
+grep -q "recalc_sea_distance" "${WORK}/out" \
+    && fail "scenario 15 still read <repo>/data although .env names another directory"
+printf 'OK: the status tool reads the locks, the markers and the alarm from the configured state directory\n'
+
+# --- scenario 16: a state directory that cannot be resolved is not "idle" ---
+# Exit 2, the code for "a source could not be read", which blocks like busy.
+printf 'IDEALISTA_DATA_DIR=%s\n' "${WORK}/no-such-directory" >"${WORK}/repo/.env"
+run_status
+[ "$RC" = "2" ] || fail "scenario 16: an unresolvable state directory did not answer unknown (rc=$RC)"
+grep -q "VERDICT: unknown" "${WORK}/out" || fail "scenario 16 gave no verdict line"
+grep -q "VERDICT: idle" "${WORK}/out" && fail "scenario 16 called an unreadable state directory idle"
+[ ! -e "${WORK}/no-such-directory" ] || fail "scenario 16 created the missing directory"
+rm -f "${WORK}/repo/.env" "${WORK}/repo/data/.supervisor.idealista-app.utils.recalc_sea_distance.lock"
+printf 'OK: an unresolvable state directory is unknown, never idle\n'

@@ -325,6 +325,7 @@ fresh_watcher_contract_copy() {
     cp "${SCRIPT_DIR}/lib/lock.sh" "${where}/lib/lock.sh"
     cp "${SCRIPT_DIR}/lib/render_check.sh" "${where}/lib/render_check.sh"
     cp "${SCRIPT_DIR}/lib/docker_cleanup.sh" "${where}/lib/docker_cleanup.sh"
+    cp "${SCRIPT_DIR}/lib/data_dir.sh" "${where}/lib/data_dir.sh"
 }
 
 watcher_with_contract() {

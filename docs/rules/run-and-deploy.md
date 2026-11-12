@@ -281,3 +281,56 @@ launchctl bootout gui/$UID/com.idealista.db-backup     # to remove
 Verify a dump (lists it, never restores): `bash tools/backup_db.sh --verify FILE`.
 Restore is the manual command in `MIGRATION_RUNBOOK.md` /
 `tools/backup_attachments.sh`: `docker exec -i idealista-db pg_restore -U idealista -d idealista_universal --clean < FILE`.
+
+## Where the deployment's state lives (#639)
+
+The app container persists one directory, mounted at `/app/data`: the mail
+cursor and its retry list, the Google spend ledger, attachments, score
+snapshots, the in-flight markers. The deploy watcher keeps its own files next
+to them (`.deployed_sha`, the deferral count, the stall alarm, its logs, the
+review journal), because it has to read what a job writes inside the container.
+
+On the host that directory has **one home: `IDEALISTA_DATA_DIR` in the
+checkout's `.env`**. `docker-compose.yml` mounts `${IDEALISTA_DATA_DIR:-./data}`
+and every host tool asks `tools/autopilot/lib/data_dir.sh <repo>` -- the deploy
+watcher, `merge_bot.sh`, `autopilot.sh`, `run_issue.sh`,
+`tools/backfill_status.sh`, `tools/backfill_supervisor.sh` and
+`tools/backup_attachments.sh`. Unset, both answer `<repo>/data`, which is what
+all eight spelled out by hand before; so the variable existing changes nothing
+until a machine's `.env` sets it. **On the mini it is not set yet: the state is
+still inside the checkout, and moving it is a separate, owner-commanded step.**
+
+- The name is not `DATA_DIR` on purpose. `.env` is also the app service's
+  `env_file` and `config.py` reads `DATA_DIR`; a host path under that name
+  would become the directory the app writes *inside* the container. That side
+  stays `/app/data`, and every documented `--snapshot data/x.json` stays true.
+- The reader follows Compose's precedence (process environment, then `.env`)
+  and refuses what Compose would resolve silently: the variable set in both
+  places to different values (an empty export counts), the key twice, or any
+  spelling other than `IDEALISTA_DATA_DIR=/absolute/path`. An explicit value
+  must be an existing directory; nothing creates it and nothing falls back to
+  `<repo>/data`. A watcher tick that cannot resolve it dies on stderr
+  (`data/autopilot-deploy.launchd.log`) before touching docker.
+- Run it, do not source it: `"$(/bin/bash tools/autopilot/lib/data_dir.sh "$repo")"`.
+  It lives in `tools/autopilot/lib/`, so the watcher's handover parse gate
+  (#293) vets it before a fast-forward like the other contracts there.
+- A new host script that needs the directory asks the reader;
+  `tests/test_data_dir_single_home.py` fails on a ninth `${REPO_DIR}/data`.
+- What stays in the checkout's `data/` whatever the variable says: the four
+  committed reference files (`docs/rules/reference-data.md`),
+  `data/.orchestrator` (an agreement between sessions, not state) and the
+  launchd stdout logs, whose paths are fixed in the installed plists.
+
+**A test run cannot write that directory** (`tests/data_dir_guard.py`). #627
+moved the two paths that had already done damage -- the cursor, after a test
+wrote UID 99 into the production one on 2026-11-09, and the ledger. A list is
+as long as its incidents: on 2026-11-12 a full run still left `data/.inflight/`
+behind, the directory the watcher reads to decide what a deploy would kill. So
+the session now moves `Config.DATA_DIR` and `ATTACHMENTS_DIR` to a temporary
+directory, and an audit hook refuses any open-for-writing, create, rename,
+delete, truncate, chmod or utime whose real path is inside `<checkout>/data`
+(or inside `IDEALISTA_DATA_DIR` / the original `DATA_DIR` when the environment
+names one). A refusal is recorded as well as raised, so a caller that swallows
+it still fails the session by name. Reads are allowed -- the reference files
+live there. Not covered, and said in the module: a subprocess, and a relative
+name given with a `dir_fd`.
