@@ -3,6 +3,7 @@
 from email.message import EmailMessage
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 from unittest.mock import Mock
@@ -372,6 +373,19 @@ def test_browser_shell_sends_validated_source_over_stdin_with_constant_ssh_argv(
         timeout=10,
     )
     assert result.returncode != 0 and json.loads(output.read_text())["stdin"] == ""
+
+
+def test_browser_shell_runs_the_pinned_playwright_cli_from_the_cache():
+    # An unpinned package made npx ask the registry for the newest release,
+    # and --no-install then refused every command once that release was newer
+    # than the MacBook's cache (0.1.24 against an installed 0.1.23).
+    text = (Path(__file__).resolve().parents[1] / "tools/browser.sh").read_text()
+    pins = re.findall(r"^PLAYWRIGHT_CLI_VERSION=(\S+)$", text, re.MULTILINE)
+    assert len(pins) == 1 and re.fullmatch(r"\d+\.\d+\.\d+", pins[0]), pins
+    npx = re.findall(r"/opt/homebrew/bin/npx[^)]*\)", text)
+    assert len(npx) == 1, npx
+    assert "--offline" in npx[0] and "--no-install" in npx[0]
+    assert '--package "@playwright/cli@$PLAYWRIGHT_CLI_VERSION"' in npx[0]
 
 
 @pytest.mark.parametrize(
