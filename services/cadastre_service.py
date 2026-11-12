@@ -59,6 +59,8 @@ import logging
 import math
 import re
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -78,7 +80,31 @@ DNPRC_URL = (
 # calls is conservative against an undocumented limit, and an interactive press
 # never waits at all because the gate is idle between them.
 CATASTRO_MIN_INTERVAL_S = 1.0
-CATASTRO_GATE = RateGate(CATASTRO_MIN_INTERVAL_S, name="catastro")
+_catastro_interval = ContextVar("catastro_interval", default=CATASTRO_MIN_INTERVAL_S)
+
+
+class _CatastroGate(RateGate):
+    def _interval(self) -> float:
+        return max(super()._interval(), _catastro_interval.get())
+
+
+CATASTRO_GATE = _CatastroGate(CATASTRO_MIN_INTERVAL_S, name="catastro")
+
+
+@contextmanager
+def shortlist_requests():
+    """At most five starts/minute for this shortlist walk, on the SAME gate.
+
+    Context-local policy avoids changing other threads' request settings. The
+    gate's reservations remain shared with the parcel and address clients.
+    Like RateGate itself this is process-local, not an IP-wide quota service.
+    """
+    token = _catastro_interval.set(12.0)
+    try:
+        yield
+    finally:
+        _catastro_interval.reset(token)
+
 
 REQUEST_TIMEOUT_S = 20
 
@@ -205,7 +231,9 @@ def _parse_gml(text: str, expected_epsg: int) -> Dict[str, Any]:
     srs_names = {
         element.get("srsName") for element in parcel.iter() if element.get("srsName")
     }
-    if not any(str(expected_epsg) in (name or "") for name in srs_names):
+    if not srs_names or any(
+        not re.search(rf"(?:/|:){expected_epsg}$", name) for name in srs_names
+    ):
         # The service reprojects into whatever it is asked for and says so in
         # the response; a mismatch means the numbers are not in the CRS the
         # metrics would be computed against.
@@ -233,12 +261,114 @@ def _parse_gml(text: str, expected_epsg: int) -> Dict[str, Any]:
 
     return {
         "rings": rings,
+        "polygons": surface_polygons(parcel),
         "declared_area_m2": float(declared.text)
         if declared is not None and declared.text
         else None,
         "reference": (reference.text or "").strip() if reference is not None else None,
         "reference_point": reference_point,
     }
+
+
+def surface_polygons(element: ET.Element) -> list:
+    """Preserve each GML exterior and its holes, including multipart surfaces.
+
+    Coordinates stay in the source CRS. The consumer must check that CRS and
+    validate the resulting polygons before measuring anything.
+    """
+    surface_types = {"Polygon", "Surface"}
+    allowed_parts = {
+        "MultiSurface": {"surfaceMember", "surfaceMembers"},
+        "surfaceMember": surface_types,
+        "surfaceMembers": surface_types,
+        "Surface": {"patches"},
+        "patches": {"PolygonPatch"},
+        "Polygon": {"exterior", "interior"},
+        "PolygonPatch": {"exterior", "interior"},
+        "exterior": {"LinearRing"},
+        "interior": {"LinearRing"},
+        "LinearRing": {"posList"},
+    }
+    # The feature can also contain a cadastral reference point, an envelope,
+    # and GML metadata. Any other GML element could be an unparsed footprint.
+    ancillary_parts = {
+        "boundedBy",
+        "description",
+        "descriptionReference",
+        "Envelope",
+        "identifier",
+        "lowerCorner",
+        "metaDataProperty",
+        "name",
+        "Point",
+        "pos",
+        "posList",
+        "upperCorner",
+    }
+    # GML property elements hold exactly one object: a second exterior read as
+    # a hole, or a second posList ignored, would measure a shape nobody sent.
+    single_child = {"surfaceMember", "Surface", "exterior", "interior", "LinearRing"}
+    polygons = []
+    for patch in element.iter():
+        if patch.tag.startswith(_GML_NS):
+            part = patch.tag.removeprefix(_GML_NS)
+            if part not in allowed_parts and part not in ancillary_parts:
+                raise CadastreError(MALFORMED, "unsupported or empty surface part")
+            allowed = allowed_parts.get(part)
+            if allowed is not None:
+                children = [child.tag for child in patch]
+                if (
+                    not children
+                    or set(children) - {f"{_GML_NS}{tag}" for tag in allowed}
+                    or (part in single_child and len(children) != 1)
+                ):
+                    raise CadastreError(MALFORMED, "unsupported or empty surface part")
+        if patch.tag not in {f"{_GML_NS}Polygon", f"{_GML_NS}PolygonPatch"}:
+            continue
+        if [child.tag for child in patch].count(f"{_GML_NS}exterior") != 1:
+            raise CadastreError(MALFORMED, "polygon needs exactly one exterior")
+        rings = []
+        for boundary in ["exterior", "interior"]:
+            for ring in patch.findall(f"{_GML_NS}{boundary}"):
+                rings.append(_ring_points(ring))
+        polygons.append(rings)
+    if not polygons:
+        raise CadastreError(MALFORMED, "no polygon surface")
+    return polygons
+
+
+_GML_NUMBER = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+
+
+def _ring_points(boundary: ET.Element) -> List[Tuple[float, float]]:
+    """One closed 2D ring from exactly one LinearRing holding one posList."""
+    linear = list(boundary)
+    pos = list(linear[0]) if len(linear) == 1 else []
+    if (
+        len(linear) != 1
+        or linear[0].tag != f"{_GML_NS}LinearRing"
+        or len(pos) != 1
+        or pos[0].tag != f"{_GML_NS}posList"
+        or pos[0].get("srsDimension", "2") != "2"
+    ):
+        raise CadastreError(MALFORMED, "missing or non-2D polygon ring")
+    tokens = (pos[0].text or "").split()
+    if not all(_GML_NUMBER.fullmatch(token) for token in tokens):
+        raise CadastreError(MALFORMED, "invalid polygon coordinate")
+    values = [float(token) for token in tokens]
+    count = pos[0].get("count")
+    if (
+        len(values) < 8
+        or len(values) % 2
+        or not all(math.isfinite(n) for n in values)
+        or values[:2] != values[-2:]
+        or (
+            count is not None
+            and (not re.fullmatch(r"[0-9]+", count) or int(count) * 2 != len(values))
+        )
+    ):
+        raise CadastreError(MALFORMED, "invalid or open polygon ring")
+    return list(zip(values[::2], values[1::2]))
 
 
 def _ring_area(ring: List[Tuple[float, float]]) -> float:
