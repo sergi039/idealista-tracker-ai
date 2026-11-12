@@ -194,33 +194,6 @@
     .app-workspace .workspace-data-table > tbody > tr > td { padding: var(--ui-space-4) var(--ui-space-2); }
     .workspace-owner-actions { flex-wrap: wrap; }
 }
-@media (max-width: 767.98px) {
-    .app-workspace { --ui-control-height: 2.75rem; }
-    .app-workspace main.container { padding: var(--ui-space-4); }
-    .workspace-topbar { padding-inline: var(--ui-space-4); }
-    .workspace-utilities { gap: var(--ui-space-1); }
-    .workspace-utilities .utility-label { display: none; }
-    .scope-utilities { margin-left: 0; }
-    .app-workspace #profile-select-dropdown { max-width: 100%; }
-    .workspace-filter-primary .properties-filter-search { flex-basis: 100%; }
-    .workspace-result-controls { align-items: flex-start; }
-    .workspace-result-tools { width: 100%; }
-    .workspace-result-tabs { gap: var(--ui-space-4); }
-    .workspace-result-tools .properties-filter-sort { flex: 1 1 12rem; }
-    .workspace-mode-options { flex-wrap: wrap; }
-    .workspace-data-table thead { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); }
-    .workspace-data-table tbody { display: block; }
-    .workspace-data-table tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding: var(--ui-space-4); border-bottom: 1px solid var(--ui-border); }
-    .app-workspace .workspace-data-table > tbody > tr > td { width: auto; min-width: 0; padding: var(--ui-space-2) 0; padding-left: 0 !important; border: 0; text-align: left; }
-    .app-workspace .workspace-data-table > tbody > tr > td::before { display: none; }
-    .workspace-data-table .col-title { grid-column: 1 / -1; }
-    .workspace-data-table .col-price { grid-column: 1; }
-    .workspace-data-table .col-actions { grid-column: 2; grid-row: 2; }
-    .workspace-data-table .col-score { grid-column: 1 / -1; }
-    .workspace-photo { flex-basis: 6rem; width: 6rem; }
-    .workspace-photo .listing-thumb { width: 6rem; height: 5rem; }
-    .workspace-owner-actions { flex-wrap: nowrap; }
-}
 @media (prefers-reduced-motion: reduce) {
     .app-workspace *, .app-workspace *::before, .app-workspace *::after { scroll-behavior: auto !important; transition-duration: 0s !important; }
 }
@@ -241,11 +214,6 @@
 .app-workspace .workspace-data-table > tbody > tr > td { padding-block: var(--ui-space-3); }
 .workspace-data-table .col-type .badge { background: var(--ui-canvas) !important; color: var(--ui-muted) !important; font-weight: 400; }
 .workspace-location-warning { color: var(--ui-warning); font-size: 0.75rem; margin-top: var(--ui-space-1); }
-@media (max-width: 767.98px) {
-    .workspace-filter-primary { padding-right: 0; }
-    .workspace-advanced-filters > summary { position: static; margin-top: var(--ui-space-2); }
-    .workspace-result-status .properties-coverage { width: 100%; }
-}
 
 /* Disclosures and dropdown labels share the same usable target as buttons. */
 .app-workspace .dropdown-item { min-height: var(--ui-control-height); display: flex; align-items: center; }
@@ -263,7 +231,20 @@
 /* Keep the closed disclosure beside the copy, rather than below the whole row.
    Opening it restores the full object column for unabridged evidence. */
 @media (min-width: 768px) {
+    .workspace-result-tabs { flex-wrap: wrap; }
     .workspace-result-tools { flex: 1 1 auto; min-width: 0; justify-content: flex-end; }
+    /* The phone's display disclosure is transparent here: its three controls
+       are direct items of the tools row, as they were before it existed. */
+    .app-workspace .workspace-result-tools .workspace-display-options { display: contents; }
+    /* So are the status items a phone discloses on demand: always drawn here,
+       whatever state a phone left them in. Bootstrap swaps `collapse` for
+       `collapsing` (zero height, clipped, an inline height) while it animates,
+       so a window that crosses 768px mid-animation must not keep that state:
+       the trigger that would finish it is no longer drawn. */
+    .app-workspace .workspace-result-status .workspace-status-more { display: block; }
+    .app-workspace .workspace-result-status .workspace-status-more.collapsing { height: auto !important; overflow: visible; transition: none; }
+    /* A table row names its decision buttons to assistive technology only. */
+    .owner-decision-text-compact { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
     .workspace-page-heading h1 { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--ui-space-3); }
     .workspace-page-heading .properties-last-sync { margin: 0 !important; }
     .workspace-location-line { display: flex; flex-wrap: wrap; column-gap: var(--ui-space-2); }
@@ -279,6 +260,130 @@
 }
 @media (min-width: 768px) and (max-width: 1199.98px) {
     .workspace-with-photo { grid-template-columns: 4.5rem minmax(0, 1fr); column-gap: var(--ui-space-2); }
+}
+
+/* ---- Phone (below 768px): a resource index, not a shrunken desktop ----
+   The order and the weight of the regions follow an established index layout
+   (docs/design/README.md, "Phone layout"): title; scope; the promoted filter
+   with Apply and ONE Filters trigger; view tabs on one scrolling line; sort
+   and ONE display trigger; one status paragraph; then the list, each object a
+   compact stacked summary. Nothing is duplicated for the phone: every rule
+   below re-places a control that exists once in the markup. */
+@media (max-width: 767.98px) {
+    .app-workspace { --ui-control-height: 2.75rem; --ui-filter-trigger: 6.75rem; }
+    .app-workspace main.container { padding: var(--ui-space-3) var(--ui-space-4) var(--ui-space-4); }
+    .workspace-topbar { padding-inline: var(--ui-space-4); }
+    .workspace-utilities { gap: var(--ui-space-1); }
+    .workspace-utilities .utility-label { display: none; }
+
+    /* Title and the whole-index status share a line. */
+    .workspace-page-heading h1 { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: var(--ui-space-3); font-size: 1.25rem; }
+    .workspace-page-heading .properties-last-sync { margin: 0 !important; }
+
+    /* Scope: the applied subscription and its rare tools, then the switches. */
+    .app-workspace #subscription-switcher { gap: var(--ui-space-2) !important; }
+    #subscription-switcher > .dropdown { flex: 1 1 11rem; min-width: 0; }
+    .app-workspace #profile-select-dropdown { width: 100%; max-width: 100%; justify-content: flex-start; text-align: left; }
+    .app-workspace #profile-select-label { flex: 1 1 auto; min-width: 0; }
+    #subscription-switcher > #subscription-draft-note,
+    #subscription-switcher > #profile-selection-truncated { flex-basis: 100%; }
+    .scope-utilities { margin-left: 0; flex: 1 1 100%; flex-wrap: nowrap; }
+    .scope-utilities .scope-switch { flex: 1 1 0; min-width: 0; }
+
+    /* The promoted filter stays visible with the one Apply; the Filters
+       trigger shares their row. Search and the other fields open in place. */
+    .workspace-filter-primary { padding-right: 0; }
+    .properties-queue-switch { flex: 1 1 0; min-width: 0; margin: 0; font-size: 0; }
+    .app-workspace .properties-queue-switch > .form-select { width: 100%; min-width: 0; padding-left: var(--ui-space-2); padding-right: 1.75rem; background-position: right var(--ui-space-2) center; font-size: 0.8125rem; text-overflow: ellipsis; }
+    .workspace-filter-primary > .btn[type="submit"] { margin-right: calc(var(--ui-filter-trigger) + var(--ui-space-2)); }
+    .workspace-advanced-filters > summary { width: var(--ui-filter-trigger); max-width: none; justify-content: center; }
+    .workspace-advanced-filters > summary > .ui-icon:first-child { display: none; }
+    .workspace-filter-primary .properties-filter-search { order: 3; flex: 1 1 100%; min-width: 0; max-width: none; }
+    .workspace-filter-form:not(:has(.workspace-advanced-filters[open])) .properties-filter-search { display: none; }
+    .workspace-advanced-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--ui-space-2); padding: var(--ui-space-3); }
+
+    /* View tabs: one line that scrolls sideways instead of wrapping. */
+    .workspace-result-controls { flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: var(--ui-space-2); padding-bottom: var(--ui-space-2); }
+    .workspace-result-tabs { flex-wrap: nowrap; gap: var(--ui-space-4); overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; margin-inline: calc(-1 * var(--ui-space-4)); padding-inline: var(--ui-space-4); border-bottom: 1px solid var(--ui-border); }
+    .workspace-result-tabs::-webkit-scrollbar { display: none; }
+    .workspace-result-tab { flex: 0 0 auto; white-space: nowrap; }
+    .workspace-result-tab[aria-current="true"]::after { bottom: 0; }
+
+    /* Sort, and one trigger for how the same rows are drawn. */
+    .workspace-result-tools { width: 100%; flex-wrap: wrap; }
+    .workspace-result-tools .properties-filter-sort { flex: 1 1 13rem; min-width: 0; width: auto; }
+    .workspace-result-tools .properties-filter-sort > .input-group-text { padding-inline: var(--ui-space-2); }
+    .workspace-result-tools .properties-filter-sort > .form-select { min-width: 0; padding-left: var(--ui-space-2); padding-right: 1.75rem; background-position: right var(--ui-space-2) center; text-overflow: ellipsis; }
+    .workspace-display-toggle { flex: 0 1 auto; min-width: 0; max-width: 100%; padding-inline: var(--ui-space-2); }
+    .workspace-display-toggle > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .workspace-display-options { flex: 1 1 100%; }
+    .workspace-display-options.show,
+    .workspace-display-options.collapsing { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-space-2); }
+    .workspace-display-options > .btn-group { width: auto; flex: 1 1 auto; }
+
+    /* Count, what is hidden and why, and the profile state: one paragraph. */
+    .workspace-result-status { display: block; min-height: 0; padding-top: var(--ui-space-2); line-height: 1.6; }
+    .workspace-result-status > * { margin-right: var(--ui-space-3); }
+    .workspace-result-status > #criteria-hidden-coverage,
+    .workspace-result-status > #rejected-hidden-coverage { white-space: nowrap; }
+    .workspace-status-toggle { padding-inline: 0; vertical-align: baseline; }
+    .workspace-result-status > details.show { display: block; margin-right: 0; }
+    .workspace-result-status > details > summary { min-height: var(--ui-control-height); padding-block: var(--ui-space-2); cursor: pointer; }
+    /* The refresh form is `d-inline` (an !important utility), so its closed
+       and open states have to be stated with the same weight. */
+    .workspace-result-status > form.collapse:not(.show) { display: none !important; }
+    .workspace-result-status > form.show { display: block !important; margin-block: var(--ui-space-2); }
+    .app-workspace .workspace-result-status .properties-coverage { width: auto; margin: 0 !important; }
+
+    /* The list: each object one stacked summary under a single rule. */
+    .workspace-data-table thead { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); }
+    .workspace-data-table tbody { display: block; }
+    .workspace-data-table tr {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas: "summary summary" "price price" "owner owner" "score facts" "scorex scorex" "factsx factsx";
+        column-gap: var(--ui-space-2);
+        margin: 0;
+        padding: var(--ui-space-3) var(--ui-space-4);
+        border: 0;
+        border-bottom: 1px solid var(--ui-border);
+        border-radius: 0;
+    }
+    .app-workspace .workspace-data-table > tbody > tr > td { width: auto; min-width: 0; padding: 0; padding-left: 0 !important; border: 0; text-align: left; }
+    .app-workspace .workspace-data-table > tbody > tr > td::before { display: none; }
+    /* Two of the four cells have no box of their own here, so a hover tint
+       would paint half a row -- and on a touch screen it sticks after a tap. */
+    .app-workspace .workspace-data-table > tbody > tr:hover > * { --bs-table-bg-state: initial; --bs-table-color-state: initial; }
+    .app-workspace .workspace-data-table > tbody > tr > td.col-title,
+    .workspace-data-table .workspace-property-overview,
+    .workspace-data-table .workspace-property-copy { display: contents; }
+    .workspace-property-summary { grid-area: summary; display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto 1fr; gap: 0; align-items: start; }
+    .workspace-photo { grid-column: 1; grid-row: 1 / span 2; width: 4.5rem; margin-right: var(--ui-space-3); }
+    .workspace-photo .listing-thumb { width: 4.5rem; height: 4.5rem; }
+    .workspace-property-summary > .workspace-property-copy > * { grid-column: 2; }
+    .workspace-location-line { display: flex; flex-wrap: wrap; column-gap: var(--ui-space-2); }
+    .workspace-property-summary > .workspace-property-copy > .workspace-property-facts { grid-column: 1 / -1; }
+    .app-workspace .workspace-data-table > tbody > tr > td.col-price { grid-area: price; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: var(--ui-space-2); margin-top: var(--ui-space-2); }
+    .workspace-data-table .col-price .workspace-price-facts { margin-top: 0; }
+    .app-workspace .workspace-data-table > tbody > tr > td.col-actions { grid-area: owner; margin-top: var(--ui-space-2); }
+    .workspace-owner-decision { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-space-1) var(--ui-space-2); text-align: left; }
+    .workspace-owner-decision > .owner-decision-buttons { order: 1; flex: 1 1 auto; justify-content: flex-start; margin-bottom: 0; }
+    .workspace-owner-decision > .owner-decision-buttons > .btn-group { flex: 1 1 auto; width: auto; }
+    .workspace-owner-decision > .owner-decision-buttons .btn { flex: 1 1 auto; gap: var(--ui-space-1); padding-inline: var(--ui-space-1); }
+    .workspace-owner-decision > .workspace-owner-actions { order: 2; flex: 0 0 auto; flex-wrap: nowrap; margin-bottom: 0; }
+    .workspace-owner-decision > :not(.owner-decision-buttons):not(.workspace-owner-actions) { order: 3; }
+    .workspace-owner-decision > div.mt-2 { flex-basis: 100%; margin-top: 0 !important; }
+    .app-workspace .workspace-data-table > tbody > tr > td.col-score { grid-area: score; display: flex; flex-wrap: wrap; align-items: center; column-gap: var(--ui-space-2); }
+    .workspace-data-table .workspace-secondary-scores[open] { flex-basis: 100%; }
+    .app-workspace .workspace-data-table > tbody > tr > td.col-score:has(.workspace-secondary-scores[open]) { grid-area: scorex; }
+    .workspace-data-table .workspace-row-details { grid-area: facts; justify-self: end; margin-top: 0; }
+    .workspace-data-table .workspace-row-details[open] { grid-area: factsx; justify-self: stretch; }
+    /* Page links are controls too: the same target as every other one. */
+    .app-workspace .pagination { flex-wrap: wrap; row-gap: var(--ui-space-1); }
+    .app-workspace .pagination .page-link { min-width: var(--ui-control-height); min-height: var(--ui-control-height); display: flex; align-items: center; justify-content: center; }
+    /* A recommendation's reason is prose: it takes the row's full width. */
+    .app-workspace .recommendation-table > tbody > tr > td.col-score { grid-area: scorex; margin-top: var(--ui-space-2); }
+    .recommendation-table .workspace-row-details { justify-self: start; }
 }
 
 /* Subscription management keeps the same rows and controls at narrow widths. */

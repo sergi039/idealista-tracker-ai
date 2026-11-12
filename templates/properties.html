@@ -335,13 +335,15 @@
    static/js/owner-decision.js handles the presses by delegation. The pressed
    button is the stored decision (`owner_decision_for`, the one reading), so a
    reload and a press agree. Labels are icon plus text; `show_text` makes the
-   text visible where there is room (the card), otherwise it is read by
-   assistive technology only. #}
+   text visible where there is room (the card). In a table row the text is
+   `owner-decision-text-compact`: read by assistive technology only from the
+   tablet width up, and drawn on a phone, where the stacked row has the room
+   and no tooltip exists to name an icon (static/css/workspace.css). #}
 {% macro owner_decision_buttons(p, show_text=False) -%}
 {%- set _d = owner_decision_for(p) -%}
 <div class="owner-decision-buttons" data-owner-decision data-owner-decision-id="{{ p.id }}"><div class="btn-group btn-group-sm" role="group" aria-label="{{ t('owner_decision_group') }} · {{ p.title or p.id }}">
 {%- for _state, _symbol in [('interested', 'thumbs-up'), ('waiting', 'clock'), ('rejected', 'thumbs-down')] -%}
-<button type="button" class="btn btn-outline-secondary{{ ' active' if _d.state == _state }}" data-decision="{{ _state }}" aria-pressed="{{ 'true' if _d.state == _state else 'false' }}">{{ icon(_symbol) }}<span{% if not show_text %} class="visually-hidden"{% endif %}>{{ ' ' if show_text }}{{ t('owner_decision_' ~ _state) }}</span></button>
+<button type="button" class="btn btn-outline-secondary{{ ' active' if _d.state == _state }}" data-decision="{{ _state }}" aria-pressed="{{ 'true' if _d.state == _state else 'false' }}">{{ icon(_symbol) }}<span class="owner-decision-text{{ '' if show_text else ' owner-decision-text-compact' }}">{{ ' ' if show_text }}{{ t('owner_decision_' ~ _state) }}</span></button>
 {%- endfor -%}
 </div><span class="visually-hidden" role="status" data-owner-decision-status></span></div>
 {%- endmacro %}
@@ -689,6 +691,20 @@
 {%- endmacro %}
 
 {% set similarity_notice = current_filters.similar or similar_set_aside or similar_hidden_by_favorites %}
+{# A phone keeps the count, every hide and the profile state in view and puts
+   the rest of the status row -- the refresh, the unused preferences, the
+   previous-evidence note and the coverage -- behind this one trigger. Those
+   elements are the same elements (`workspace-status-more`): `collapse` is
+   neutralised from the tablet width up (static/css/workspace.css), where the
+   trigger is not drawn. Rendered exactly once per page, before the first thing
+   it discloses, whichever branch reaches it. #}
+{% macro result_details_toggle() -%}
+                    <button class="btn btn-link btn-sm workspace-status-toggle d-md-none" type="button" id="result-details-toggle"
+                            data-bs-toggle="collapse" data-bs-target=".workspace-status-more" aria-expanded="false">
+                        {{ t('workspace_result_details') }}{{ icon('chevron-down') }}
+                    </button>
+{%- endmacro %}
+
 {% macro similarity_coverage() -%}
                     {# The likeness to the favorites, said beside the count
                        whenever the control is on screen (the taste line's
@@ -1246,7 +1262,7 @@
            change which rows they are. #}
         <section id="properties-results" aria-label="{{ t('properties') }}">
             <div class="workspace-result-controls">
-                <div class="workspace-result-tabs flex-wrap" role="group" aria-label="{{ t('workspace_collection') }}">
+                <div class="workspace-result-tabs" role="group" aria-label="{{ t('workspace_collection') }}">
                     <a id="mode-all-btn" class="workspace-result-tab" aria-current="{{ 'true' if active_mode != 'recommendation' else 'false' }}"
                        href="{{ url_for('main.properties', **dict(base_args, mode='combined', recommendation_scope=None, sort='created_at', order='desc')) }}">{{ t('workspace_all') }}</a>
                     <a id="mode-recommendation-btn" class="workspace-result-tab" aria-describedby="recommendation-entry-help" aria-current="{{ 'true' if active_mode == 'recommendation' and not current_filters.recommendation_scope else 'false' }}"
@@ -1312,8 +1328,22 @@
                         </a>
                     </div>
 
+                    {# On a phone the three display controls -- assessment mode,
+                       representation and the collection actions -- sit behind
+                       this one trigger, which names what is selected; from the
+                       tablet width up the trigger is not drawn and the wrapper
+                       is transparent (`display: contents`), so the row is the
+                       same row it was. The controls themselves exist once. #}
+                    {% set _assessment_label = t({'combined': 'workspace_rating_general', 'investment': 'workspace_rating_investment', 'lifestyle': 'workspace_rating_lifestyle', 'taste': 'workspace_rating_taste'}.get(active_mode, 'workspace_assessment')) %}
+                    <button class="btn btn-outline-secondary workspace-display-toggle d-md-none" type="button" id="display-options-toggle"
+                            data-bs-toggle="collapse" data-bs-target="#display-options"
+                            aria-expanded="false" aria-controls="display-options"
+                            aria-label="{{ t('workspace_display') }}: {{ t('workspace_table' if view_type == 'list' else 'workspace_cards') }} · {{ _assessment_label }}">
+                        <span>{{ t('workspace_table' if view_type == 'list' else 'workspace_cards') }} · {{ _assessment_label }}</span>{{ icon('chevron-down') }}
+                    </button>
+                    <div class="collapse workspace-display-options" id="display-options">
 <div class="dropdown">
-                    <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">{{ t({'combined': 'workspace_rating_general', 'investment': 'workspace_rating_investment', 'lifestyle': 'workspace_rating_lifestyle', 'taste': 'workspace_rating_taste'}.get(active_mode, 'workspace_assessment')) }}</button>
+                    <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">{{ _assessment_label }}</button>
                     <!-- Compact Mode Toggle Buttons -->
                     <div class="dropdown-menu dropdown-menu-end" role="group" aria-label="{{ t('workspace_assessment') }}">
                         <a id="mode-combined-btn"
@@ -1372,7 +1402,7 @@
                         <i class="fas fa-plus me-1"></i>{{ t('import_listings') }}
                     </a>
 </div>
-                </div></div>
+                </div></div></div>
             </div>
             <div class="workspace-result-status">
                     <strong>{{ pagination.total if pagination else properties|length }} {{ t('properties_found') }}</strong>
@@ -1558,8 +1588,9 @@
                                 <i class="fas fa-compass me-1"></i>{{ t('recommendation_profile_none') }}
                             {% endif %}
                         </span>
+                        {{ result_details_toggle() }}
                         {% if _rp.get('unapplied_clauses') %}
-                            <details id="recommendation-unapplied-preferences" class="small">
+                            <details id="recommendation-unapplied-preferences" class="small collapse workspace-status-more">
                                 <summary>{{ t('recommendation_profile_unapplied')|format(_rp.unapplied_clauses|length) }}</summary>
                                 <ol class="mt-2 mb-0 text-break">
                                     {% for clause in _rp.unapplied_clauses %}
@@ -1575,9 +1606,9 @@
                             </details>
                         {% endif %}
                         {% if _rp.get('model_profile_dirty') %}<span id="model-profile-dirty" class="small text-warning-emphasis">{{ t('recommendation_model_dirty') }}</span>{% endif %}
-                        {% if _rp.get('version') and _rp.get('state') in ('dirty', 'pending', 'failed') %}<span class="small">{{ t('workspace_previous') }}</span>{% endif %}
+                        {% if _rp.get('version') and _rp.get('state') in ('dirty', 'pending', 'failed') %}<span class="small collapse workspace-status-more">{{ t('workspace_previous') }}</span>{% endif %}
                         {% if _rp.get('usable_signal_count', 0) and (_rp.get('state') in ('none', 'dirty', 'failed') or _rp.get('model_profile_dirty')) %}
-                            <form method="POST" action="{{ url_for('main.refresh_taste_recommendations') }}" class="d-inline"
+                            <form method="POST" action="{{ url_for('main.refresh_taste_recommendations') }}" class="d-inline collapse workspace-status-more"
                                   onsubmit='return confirm({{ t("recommendation_refresh_confirm")|tojson }});'>
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                                 <button id="recommendation-refresh-button" class="btn btn-outline-primary btn-sm" type="submit"
@@ -1586,13 +1617,15 @@
                                 </button>
                             </form>
                         {% endif %}
+                    {% else %}
+                        {{ result_details_toggle() }}
                     {% endif %}
                     {% if recommendation_excluded_count %}
                         <span id="recommendation-hard-exclusions" class="text-body-secondary small">
                             {{ t('recommendation_hard_exclusions')|format(recommendation_excluded_count) }}
                         </span>
                     {% endif %}
-            <details class="properties-coverage" id="properties-coverage">
+            <details class="properties-coverage collapse workspace-status-more" id="properties-coverage">
                 <summary>{{ t('properties_coverage_details') }}</summary>
                 <div class="d-flex flex-column align-items-start gap-2 mt-2">
                     {# How many of those rows carry a status anybody established.
