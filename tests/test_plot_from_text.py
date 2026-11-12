@@ -489,6 +489,71 @@ class TestTheBackfill:
         )
         assert float(db.session.get(Property, rows["single"]).plot_area) == 3000
 
+    def test_a_commit_whose_journal_line_failed_is_still_restored(
+        self, app, tmp_path, monkeypatch
+    ):
+        """Review of #661, P1: commit, then the journal write fails."""
+        pid = _stored(21, description="Casa en parcela de 745 m²")
+        path = str(tmp_path / "snap.json")
+
+        def _disk_full(handle, record):
+            raise OSError("No space left on device")
+
+        monkeypatch.setattr(tool, "_journal_append", _disk_full)
+        with pytest.raises(OSError):
+            tool.apply(path)
+        db.session.expire_all()
+        assert float(db.session.get(Property, pid).plot_area) == 745
+        assert json.load(open(path))["phase"] == "planned"
+
+        back = tool.restore(path, apply_it=True)
+
+        assert back["restored"] == [pid]
+        db.session.expire_all()
+        row = db.session.get(Property, pid)
+        assert row.plot_area is None
+        assert "plot_from_text" not in (row.enrichment or {})
+
+    def test_restore_puts_back_what_was_there_not_a_blank(self, app, tmp_path):
+        """Review of #661, P2: a stored 0 and an earlier block come back as they were."""
+        earlier = {"value": 500.0, "extractor_version": "old", "field": "title"}
+        pid = _stored(
+            22,
+            description="parcela de 745 m²",
+            plot_area=0,
+            enrichment={"plot_from_text": earlier, "other": 1},
+        )
+        path = str(tmp_path / "snap.json")
+
+        assert tool.apply(path)["written"] == [pid]
+        db.session.expire_all()
+        assert float(db.session.get(Property, pid).plot_area) == 745
+
+        back = tool.restore(path, apply_it=True)
+
+        assert back["restored"] == [pid]
+        db.session.expire_all()
+        row = db.session.get(Property, pid)
+        assert row.plot_area is not None and float(row.plot_area) == 0
+        assert row.enrichment == {"plot_from_text": earlier, "other": 1}
+
+    def test_a_row_changed_between_the_plan_and_the_lock_is_skipped(
+        self, app, tmp_path, monkeypatch
+    ):
+        """The snapshot's "before" is only true if the locked row still matches it."""
+        pid = _stored(23, description="parcela de 745 m²")
+        real_locked = tool._locked
+
+        def _edited_meanwhile(prop_id):
+            row = real_locked(prop_id)
+            row.plot_area = 0  # still blank, so still in scope, but not "before"
+            return row
+
+        monkeypatch.setattr(tool, "_locked", _edited_meanwhile)
+        out = tool.apply(str(tmp_path / "snap.json"))
+
+        assert out["written"] == [] and out["skipped_changed"] == [pid]
+
     def test_it_makes_no_network_call(self):
         assert "requests" not in open(tool.__file__).read()
         assert "urllib" not in open(plot_text.__file__).read()

@@ -20,13 +20,18 @@ pages is forbidden (docs/rules/portal-network-safety.md), so they stay
 unknown and the report says how many.
 
 It writes `plot_area` and `enrichment["plot_from_text"]` (value, field,
-snippet, extractor version, portal, UTC time) and nothing else, under
-`FOR UPDATE`, one commit per row. `apply` needs `--snapshot` with a path that
-does not exist; phase 1 (atomic, fsynced) lists every planned row before the
-first write, each commit is journaled, phase 2 replaces the file with what was
-written. `restore` is compare-and-swap: a row is put back only when it still
-holds exactly the written value AND the same extractor version; a changed row
-is reported and left alone.
+snippet, extractor version, portal, UTC time, and the run's id) and nothing
+else, under `FOR UPDATE`, one commit per row. `apply` needs `--snapshot` with
+a path that does not exist; phase 1 (atomic, fsynced) lists every planned row
+with what it held BEFORE (`plot_area` as text, the earlier `plot_from_text`
+block) before the first write; a locked row that no longer holds that is
+skipped, so the snapshot's "before" is true of every row written. Each commit
+is journaled, phase 2 replaces the file with what was written. `restore` is
+compare-and-swap and puts back the "before": a row is undone only when it
+still carries this run's id, the written value and the extractor version; a
+changed row is reported and left alone. From a phase-1 file it walks every
+planned row, not only the journal, so a commit whose journal line never
+reached the disk is undone too (review of #661).
 
 No network, no Catastro. Free. Run it on the mini, after
 `tools/backfill_status.sh` says idle, and announce it (module, rows, cost 0).
@@ -39,8 +44,10 @@ import json
 import logging
 import os
 import sys
+import uuid
 from collections import Counter
 from datetime import datetime, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -84,6 +91,15 @@ def _sources(prop: Any) -> Tuple[List[Tuple[str, Optional[str]]], bool]:
     return sources, skipped
 
 
+def _before(prop: Any) -> Dict[str, Any]:
+    """What `apply` may change, exactly enough to put it back (0 stays 0)."""
+    block = (prop.enrichment or {}).get(plot_text.ENRICHMENT_KEY)
+    return {
+        "plot_area": None if prop.plot_area is None else str(prop.plot_area),
+        "plot_from_text": block,
+    }
+
+
 def _in_scope(prop: Any) -> bool:
     if effective_figures(prop)["plot_m2"] is not None:
         return False
@@ -103,6 +119,7 @@ def plan_row(prop: Any) -> Dict[str, Any]:
             "value": reading.value,
             "field": field,
             "snippet": reading.snippet,
+            "before": _before(prop),
         }
     if any(plot_text.mentions_plot(text) for _, text in sources):
         outcome = "ambiguous"
@@ -220,9 +237,12 @@ def apply(snapshot_path: str, profile_id: Optional[int] = None) -> Dict[str, Any
     if not todo:
         return summary
 
+    run_id = uuid.uuid4().hex
+
     def _snap(phase: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         return {
             "taken_at": datetime.now(timezone.utc).isoformat(),
+            "run_id": run_id,
             "reason": "#634: plot read from listing text",
             "columns": SNAPSHOT_COLUMNS,
             "extractor_version": plot_text.EXTRACTOR_VERSION,
@@ -242,7 +262,7 @@ def apply(snapshot_path: str, profile_id: Optional[int] = None) -> Dict[str, Any
         for entry in todo:
             prop = _locked(entry["id"])
             # The scope and the reading are re-decided on the locked row.
-            if prop is None or not _in_scope(prop):
+            if prop is None or not _in_scope(prop) or _before(prop) != entry["before"]:
                 db.session.rollback()
                 summary["skipped_changed"].append(entry["id"])
                 final.append({**entry, "status": "skipped", "reason": "changed"})
@@ -254,6 +274,8 @@ def apply(snapshot_path: str, profile_id: Optional[int] = None) -> Dict[str, Any
                 summary["skipped_changed"].append(entry["id"])
                 final.append({**entry, "status": "skipped", "reason": "changed"})
                 continue
+            block = {**block, "run": run_id}
+            prop.enrichment = {**prop.enrichment, plot_text.ENRICHMENT_KEY: block}
             db.session.commit()
             _journal_append(
                 journal,
@@ -273,23 +295,33 @@ def apply(snapshot_path: str, profile_id: Optional[int] = None) -> Dict[str, Any
 
 
 def restore(path: str, apply_it: bool = False) -> Dict[str, Any]:
-    """Compare-and-swap: only a row still holding what was written is undone."""
+    """Compare-and-swap back to the snapshot's "before"; a changed row is left alone.
+
+    A phase-1 file walks every planned row: a row is this run's only if it
+    carries the run id, so a commit whose journal line was lost is still found,
+    and a planned row that was never written simply does not match.
+    """
     from app import db
     from sqlalchemy.orm.attributes import flag_modified
 
     with open(path, encoding="utf-8") as handle:
         payload = json.load(handle)
+    run_id = payload.get("run_id")
+    if not run_id:
+        raise ValueError(f"{path} carries no run_id; it is not an apply snapshot.")
+    rows = payload.get("rows", [])
+    journal: Dict[int, Dict[str, Any]] = {}
+    unreadable = 0
     if payload.get("phase") == "planned":
         journal, unreadable = _read_journal(_journal_path(path))
-        targets = [
-            {"id": i, "written_value": r["written_value"]} for i, r in journal.items()
-        ]
+        targets = rows
     else:
-        unreadable = 0
-        targets = [e for e in payload.get("rows", []) if e.get("status") == "written"]
+        targets = [e for e in rows if e.get("status") == "written"]
     restored: List[int] = []
     changed_since: List[int] = []
+    not_written: List[int] = []
     for entry in targets:
+        written = float(entry["value"])
         prop = _locked(entry["id"])
         block = (
             ((prop.enrichment or {}).get(plot_text.ENRICHMENT_KEY)) if prop else None
@@ -297,22 +329,31 @@ def restore(path: str, apply_it: bool = False) -> Dict[str, Any]:
         holds = (
             prop is not None
             and isinstance(block, dict)
-            and block.get("extractor_version")
-            == payload.get("extractor_version", plot_text.EXTRACTOR_VERSION)
+            and block.get("run") == run_id
+            and block.get("extractor_version") == payload.get("extractor_version")
             and prop.plot_area is not None
-            and float(prop.plot_area) == float(entry["written_value"])
-            and float(block.get("value", -1)) == float(entry["written_value"])
+            and float(prop.plot_area) == written
+            and float(block.get("value", -1)) == written
         )
         if not holds:
             db.session.rollback()
-            changed_since.append(entry["id"])
+            planned_only = (
+                payload.get("phase") == "planned" and entry["id"] not in journal
+            )
+            (not_written if planned_only else changed_since).append(entry["id"])
             continue
         if apply_it:
+            before = entry["before"]
             enrichment = dict(prop.enrichment)
-            enrichment.pop(plot_text.ENRICHMENT_KEY, None)
+            if before["plot_from_text"] is None:
+                enrichment.pop(plot_text.ENRICHMENT_KEY, None)
+            else:
+                enrichment[plot_text.ENRICHMENT_KEY] = before["plot_from_text"]
             prop.enrichment = enrichment
             flag_modified(prop, "enrichment")
-            prop.plot_area = None
+            prop.plot_area = (
+                None if before["plot_area"] is None else Decimal(before["plot_area"])
+            )
             db.session.commit()
         else:
             db.session.rollback()
@@ -321,6 +362,7 @@ def restore(path: str, apply_it: bool = False) -> Dict[str, Any]:
         "applied": bool(apply_it),
         "restored": restored,
         "changed_since_apply": changed_since,
+        "planned_not_written_or_changed": not_written,
         "unreadable_journal_lines": unreadable,
     }
 

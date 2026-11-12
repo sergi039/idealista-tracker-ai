@@ -154,7 +154,11 @@ things about it are load bearing:
   (never inside it) and, for idealista, on the row's own card only (an
   idealista title is never read, it may be the saved-search subject);
   `utils/backfill_plot_from_text.py` is the dry-run-first, snapshot-backed
-  pass over stored rows and prints the before/after unknown share. Yaencontre
+  pass over stored rows and prints the before/after unknown share; its
+  snapshot holds each row's "before" (a stored `0` and an earlier block come
+  back as they were) and every write carries the run's id, so `restore` is
+  compare-and-swap and also finds a commit whose journal line was lost
+  (review of #661). Yaencontre
   cards carry no text and its pages may not be fetched, so those rows stay
   unknown; only the per-press cadastre can state their plot.
 * **A row the owner has judged is never hidden.** Favorited or reviewed
