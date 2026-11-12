@@ -13,32 +13,42 @@
 # This file is the one place the host side of that fact is written down, so the
 # seven scripts can ask instead of spelling it.
 #
-# What it answers in this commit: `<repo>/data`. docker-compose.yml binds the
-# literal `./data`, so that is where the app's state is, and nothing on this
-# machine can make Compose mount another directory. The answer is therefore not
-# computed from any configuration - there is none to read, and a reader that
-# parsed docker-compose.yml or `.env` on its own could disagree with Compose
-# about what they say.
+# The directory is configured in one place: IDEALISTA_DATA_DIR in the
+# checkout's `.env`, which docker-compose.yml mounts as
+# `${IDEALISTA_DATA_DIR:-./data}`. Compose is the reader that decides where the
+# app's state really is, so this file does not keep a second opinion: it parses
+# neither docker-compose.yml nor `.env`. A second parser of either can disagree
+# with Compose about what they say - a variable mentioned in a comment after
+# the real bind, `KEY: value`, a byte-order mark, a value inside another key's
+# quotes - and every such disagreement is a host tool looking at a directory
+# the app is not using.
 #
-# IDEALISTA_DATA_DIR is the name the directory will be configured under, in the
-# commit that makes docker-compose.yml mount it; from then on this file asks
-# Compose itself what it mounts. Until then a machine that already sets the
-# variable expects something no part of the deployment does. Following it here
-# would send the host tools to a directory the app is not using; ignoring it
-# silently would let the mount switch to it unannounced on the deploy that
-# brings that commit. So it is refused, wherever it is named: non-empty in the
-# environment, or anywhere in `<repo>/.env` outside a comment line - any
-# spelling at all, because recognising "the" spelling is the parsing this file
-# does not do.
+#   * The variable is named nowhere -> `<repo>/data`, without asking anybody.
+#     That is what `${IDEALISTA_DATA_DIR:-./data}` renders, and it keeps the
+#     common path free of Docker.
+#   * Its name occurs anywhere in `<repo>/.env`, comments included -> the
+#     answer is whatever `docker compose config` binds at /app/data for the
+#     `app` service, asked the way the deploy watcher runs Compose: from the
+#     checkout, with `-f docker-compose.yml`. No Docker, no python3 to read
+#     its answer, or an answer that is not exactly one existing host
+#     directory: refused.
+#   * It is exported in this process's environment (or COMPOSE_ENV_FILES
+#     points Compose at other env files) -> refused. Compose would follow the
+#     export, but only when run from this very process: the watcher under
+#     launchd and a tool in somebody's shell would then name two directories.
+#     One home means `<repo>/.env`, which every process reads alike.
+#
+# Nothing here creates the directory and nothing falls back to `<repo>/data`
+# when Compose's answer cannot be used: a typo that silently became an empty
+# directory would be a second, empty copy of the deployment's state.
 #
 # A linked git worktree is refused as a root: the stack is not started from
 # one, so its `data/` is nobody's state.
 #
 # What this does not see: a second clone or a plain copy of the checkout (it
-# looks exactly like the first), a docker-compose.yml edited by hand to bind
-# another directory at /app/data, or an override file that does. The seven scripts
-# make the same assumption today; tests/test_data_dir_single_home.py holds the
-# committed file to it by asking `docker compose config`.
+# looks exactly like the first), and an override file or another compose file
+# that a person passes to Compose by hand. The watcher passes exactly the one
+# file.
 #
 # The name is deliberately not DATA_DIR. `.env` is also the container's
 # `env_file`, config.py reads DATA_DIR, and a host path must never become the
@@ -75,19 +85,12 @@ _data_dir_trim() {
 # place or to the empty string. Returns 1, having said why, when `.env` exists
 # and cannot be read: then it cannot be ruled out.
 #
-# Nothing is parsed. The environment counts when the variable is non-empty.
-# `.env` counts when the name occurs on any line that is not a comment line,
-# whatever surrounds it - `export`, `KEY: value`, quotes, a longer name that
-# contains it, another key's value. Each of those is refused rather than
-# understood. The file is never sourced and no line of it is printed.
+# Nothing is parsed, and the question is deliberately coarse: it only decides
+# whether Compose has to be asked. `.env` counts when the name occurs anywhere
+# in it. The file is never sourced and no line of it is printed.
 _data_dir_where_named() {
     local repo="$1" env_file="${1}/.env" hits
     DATA_DIR_NAMED_IN=""
-
-    if [ -n "${IDEALISTA_DATA_DIR:-}" ]; then
-        DATA_DIR_NAMED_IN="the environment"
-        return 0
-    fi
 
     [ -e "$env_file" ] || [ -L "$env_file" ] || return 0
     if [ ! -f "$env_file" ] || [ ! -r "$env_file" ]; then
@@ -95,11 +98,9 @@ _data_dir_where_named() {
         return 1
     fi
     # Bytes, not text (`-a`, LC_ALL=C): a NUL or a byte that is not valid in
-    # the locale would otherwise make grep call the file binary and stop
-    # printing its lines, and the name would go unseen. Counted, not `grep -q`:
-    # both greps read their whole input, so neither is cut short by the other.
-    hits="$(LC_ALL=C grep -a -v '^[[:space:]]*#' "$env_file" \
-        | LC_ALL=C grep -a -c -F "$IDEALISTA_DATA_DIR_KEY")" || true
+    # the locale would otherwise make grep call the file binary and report
+    # nothing of what is in it.
+    hits="$(LC_ALL=C grep -a -c -F "$IDEALISTA_DATA_DIR_KEY" "$env_file")" || true
     # `grep -c` always prints a count. Anything else is a search that did not
     # run - no grep on a stripped PATH - and "could not look" is not "not
     # there": read as zero, it would answer for a file nobody searched.
@@ -115,8 +116,63 @@ _data_dir_where_named() {
     return 0
 }
 
+# Reads `docker compose config --format json` on stdin and prints the host
+# directory bound at /app/data for the `app` service. Exits 1 unless that is
+# exactly one bind with a source, and nothing else is mounted on or under
+# /app/data - a second mount there would be a second place the state lives.
+_data_dir_bind_from_config() {
+    python3 -c '
+import json
+import sys
+
+try:
+    config = json.load(sys.stdin)
+    volumes = config["services"]["app"].get("volumes") or []
+except Exception:
+    sys.exit(1)
+state = [
+    v for v in volumes
+    if isinstance(v, dict)
+    and isinstance(v.get("target"), str)
+    and (v["target"].rstrip("/") == "/app/data" or v["target"].startswith("/app/data/"))
+]
+if len(state) != 1:
+    sys.exit(1)
+mount = state[0]
+source = mount.get("source")
+if mount.get("type") != "bind" or mount["target"] != "/app/data":
+    sys.exit(1)
+if not isinstance(source, str) or not source or "\n" in source:
+    sys.exit(1)
+print(source)
+'
+}
+
+# Asks Compose. Prints the host directory it would bind at /app/data for the
+# `app` service, from the checkout `repo` and the compose file given (the one
+# the watcher deploys by default). The rendered configuration carries every
+# value of `.env`; it stays in a variable and a pipe and none of it is printed.
+idealista_compose_source() {
+    local repo="${1:-}" compose_file="${2:-docker-compose.yml}"
+    local docker="${DOCKER_BIN:-docker}" rendered source
+
+    if ! command -v "$docker" >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+        _data_dir_refuse "cannot ask Compose what it mounts at /app/data: '${docker}' or python3 is not on PATH"
+        return 1
+    fi
+    if ! rendered="$(cd "$repo" && "$docker" compose -f "$compose_file" config --format json 2>/dev/null)"; then
+        _data_dir_refuse "'${docker} compose -f ${compose_file} config' failed in ${repo}, so what Compose would mount at /app/data is unknown; run it there to see why"
+        return 1
+    fi
+    if ! source="$(printf '%s' "$rendered" | _data_dir_bind_from_config)"; then
+        _data_dir_refuse "${compose_file} in ${repo} does not bind exactly one host directory at /app/data for the app service"
+        return 1
+    fi
+    printf '%s\n' "$(_data_dir_trim "$source")"
+}
+
 idealista_data_dir() {
-    local repo="${1:-}"
+    local repo="${1:-}" value
 
     if [ -z "$repo" ]; then
         _data_dir_refuse "usage: data_dir.sh <repository root>"
@@ -148,15 +204,33 @@ idealista_data_dir() {
         return 1
     fi
 
-    _data_dir_where_named "$repo" || return 1
-    if [ -n "$DATA_DIR_NAMED_IN" ]; then
-        _data_dir_refuse "${IDEALISTA_DATA_DIR_KEY} is named in ${DATA_DIR_NAMED_IN}, but docker-compose.yml in this commit binds ./data and does not read the variable: the app's state is ${repo}/data whatever it says. Remove ${IDEALISTA_DATA_DIR_KEY} from ${DATA_DIR_NAMED_IN}; it takes effect from the commit that makes docker-compose.yml mount it"
+    if [ -n "${IDEALISTA_DATA_DIR:-}" ] || [ -n "${COMPOSE_ENV_FILES:-}" ]; then
+        _data_dir_refuse "${IDEALISTA_DATA_DIR_KEY} or COMPOSE_ENV_FILES is exported in this process's environment. Compose would follow it only when run from here, and no other tool would see it: set ${IDEALISTA_DATA_DIR_KEY} in ${repo}/.env, its one home, and unset the export"
         return 1
     fi
+    _data_dir_where_named "$repo" || return 1
+    if [ -z "$DATA_DIR_NAMED_IN" ]; then
+        # What `${IDEALISTA_DATA_DIR:-./data}` renders with nothing set. Not
+        # checked for existence: callers created `<repo>/data` on demand
+        # before this file existed and still do.
+        printf '%s/data\n' "$repo"
+        return 0
+    fi
 
-    # Not checked for existence: callers created `<repo>/data` on demand
-    # before this file existed and still do.
-    printf '%s/data\n' "$repo"
+    value="$(idealista_compose_source "$repo")" || return 1
+    case "$value" in
+        /) _data_dir_refuse "Compose would mount / at /app/data; refusing"; return 1 ;;
+        /*) ;;
+        *)
+            _data_dir_refuse "Compose reports a state directory that is not an absolute path ('${value}')"
+            return 1
+            ;;
+    esac
+    if [ ! -d "$value" ]; then
+        _data_dir_refuse "Compose would mount '${value}' at /app/data (${IDEALISTA_DATA_DIR_KEY} is named in ${DATA_DIR_NAMED_IN}), and that is not an existing directory; refusing to guess or to create it"
+        return 1
+    fi
+    printf '%s\n' "$value"
     return 0
 }
 

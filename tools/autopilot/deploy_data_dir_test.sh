@@ -9,10 +9,9 @@
 #
 #   * every file is exactly where it was, in `<repo>/data` - that is what makes
 #     the change inert;
-#   * what the reader refuses stops the tick before docker is touched. The
-#     watcher does not fall back to `<repo>/data`, and it does not follow a
-#     variable docker-compose.yml does not read into a directory the container
-#     is not writing.
+#   * what the reader refuses - here a Compose that cannot say what it mounts -
+#     stops the tick before docker is touched. The watcher does not fall back
+#     to `<repo>/data` and does not take .env's word on its own.
 #
 # Drives the real deploy_watcher.sh with none of the AUTOPILOT_* path
 # overrides the other harnesses set - those bypass the very defaults under
@@ -60,6 +59,13 @@ mkdir -p "$STUB_BIN"
 TOP_FILE="${WORK}/docker-top.txt"
 cat >"${STUB_BIN}/docker" <<'STUB'
 #!/bin/bash
+# `compose ... config` is the reader's question, not a deploy call: kept out
+# of the log the scenarios read as "what was done".
+if [ "$1" = "compose" ] && [ "${4:-}" = "config" ]; then
+    [ -f "${DOCKER_COMPOSE_JSON:-/nonexistent}" ] || exit 1
+    cat "$DOCKER_COMPOSE_JSON"
+    exit 0
+fi
 printf '%s\n' "$*" >>"$DOCKER_LOG"
 case "$1" in
     ps) printf '%s\n' "idealista-app" ;;
@@ -141,6 +147,7 @@ new_repo() {
     HEAD_SHA="$(git -C "$REPO" rev-parse HEAD)"
     : >"${WORK}/docker.log"
     : >"${WORK}/stderr"
+    rm -f "${WORK}/compose.json"
 }
 
 run_watcher() {
@@ -150,6 +157,7 @@ run_watcher() {
     env -u IDEALISTA_DATA_DIR \
         PATH="${STUB_BIN}:${PATH}" \
         DOCKER_LOG="${WORK}/docker.log" \
+        DOCKER_COMPOSE_JSON="${WORK}/compose.json" \
         DOCKER_TOP_FILE="$TOP_FILE" \
         AUTOPILOT_REPO_DIR="$REPO" \
         AUTOPILOT_LOCK_DIR="${WORK}/lock.d" \
@@ -190,12 +198,10 @@ expect_all_in "scenario 1" "${REPO}/data"
 printf 'OK: with nothing configured the watcher keeps everything in <repo>/data\n'
 
 # --- scenario 2: what the reader refuses stops the tick ----------------------
-# docker-compose.yml does not read IDEALISTA_DATA_DIR yet, so the container
-# writes its markers in <repo>/data whatever .env says, and the reader refuses
-# a .env that names the variable. A watcher that followed it would look for
-# markers in STATE, find none, and deploy over the job the marker below stands
-# for; one that fell back to <repo>/data would be guessing. It does neither:
-# the tick ends before docker and before git, and nothing is written anywhere.
+# .env names the variable and nothing says what Compose would mount. A watcher
+# that took .env's word, or fell back to <repo>/data, would be guessing where
+# the container writes its markers - and the marker below, which says a job is
+# running, is in only one of the two. The tick ends before it deploys.
 new_repo repo2
 STATE="${WORK}/state2"
 mkdir -p "${STATE}" "${REPO}/data/.inflight"
@@ -204,11 +210,9 @@ printf 'DB_PASSWORD=x\nIDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
 before="$(ls -A "${REPO}/data")"
 set_top "$JOB"
 run_watcher AUTOPILOT_DEFER_ON_INFLIGHT=1
-[ "$WATCHER_RC" != "0" ] || fail "scenario 2: the watcher ran although the reader refused the state directory"
-grep -q "does not read the variable" "${WORK}/stderr" \
-    || fail "scenario 2: the refusal does not pass on why the reader refused"
+[ "$WATCHER_RC" != "0" ] || fail "scenario 2: the watcher ran although nothing says what Compose mounts"
 grep -q "FATAL" "${WORK}/stderr" || fail "scenario 2: the watcher did not say it is refusing to run"
 [ ! -s "${WORK}/docker.log" ] || fail "scenario 2: docker was called after the refusal"
-[ -z "$(ls -A "$STATE")" ] || fail "scenario 2: the watcher wrote into the directory the variable names"
+[ -z "$(ls -A "$STATE")" ] || fail "scenario 2: the watcher wrote into the directory .env names"
 [ "$(ls -A "${REPO}/data")" = "$before" ] || fail "scenario 2: the watcher wrote into <repo>/data after the refusal"
-printf 'OK: a state directory the reader refuses stops the tick before anything is touched\n'
+printf 'OK: a Compose that cannot be asked stops the tick before anything is touched\n'

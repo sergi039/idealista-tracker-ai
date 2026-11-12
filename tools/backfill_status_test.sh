@@ -63,6 +63,11 @@ case "$1" in
             *) cat "${DOCKER_TOP_FILE:-/dev/null}" 2>/dev/null || true ;;
         esac
         ;;
+    compose)
+        # The reader's question, `compose ... config`: what a scenario staged.
+        [ -f "${DOCKER_COMPOSE_JSON:-/nonexistent}" ] || exit 1
+        cat "$DOCKER_COMPOSE_JSON"
+        ;;
 esac
 exit 0
 STUB
@@ -100,6 +105,7 @@ run_status() {
     DOCKER_TOP_RC="${DOCKER_TOP_RC:-0}" \
     DOCKER_PS_RC="${DOCKER_PS_RC:-0}" \
     DOCKER_PS_OUTPUT="${DOCKER_PS_OUTPUT-idealista-app}" \
+    DOCKER_COMPOSE_JSON="${WORK}/compose.json" \
         bash "${WORK}/repo/tools/backfill_status.sh" --container idealista-app "$@" >"${WORK}/out" 2>&1
     RC=$?
     set -e
@@ -307,26 +313,22 @@ grep -q "deploy chain:" "${WORK}/out" && fail "scenario 14 reported a stall afte
 printf 'OK: a stalled deploy chain is surfaced, and the backfill verdict is not its business\n'
 
 # --- scenario 15: the state directory comes from the one reader (#639) -------
-# tools/autopilot/lib/data_dir.sh says where the directory bound at /app/data
-# is, and today that is <repo>/data: every scenario above ran through it. What
-# the reader refuses, this tool must not paper over. IDEALISTA_DATA_DIR is not
-# read by docker-compose.yml yet, so a .env that names it is refused there -
-# and here that is "unknown" (exit 2, which blocks like busy), not a fall back
-# to either directory. The live supervisor lock in the directory the variable
-# names is the decoy: following the variable would report it.
+# .env names IDEALISTA_DATA_DIR, so the reader asks Compose - and here Compose
+# gives no answer. That is "unknown" (exit 2, which blocks like busy): neither
+# the directory .env names nor <repo>/data is taken on a guess. The live
+# supervisor lock in the directory .env names is the decoy.
 set_top; clear_locks; clear_markers
 STATE="${WORK}/state"
 mkdir -p "${STATE}/.inflight"
 printf 'DB_PASSWORD=x\nIDEALISTA_DATA_DIR=%s\n' "$STATE" >"${WORK}/repo/.env"
 printf '%s\n' "$$" >"${STATE}/.supervisor.idealista-app.utils.backfill_pool.lock"
+rm -f "${WORK}/compose.json"
 run_status
-[ "$RC" = "2" ] || fail "scenario 15: a variable Compose does not read did not answer unknown (rc=$RC)"
+[ "$RC" = "2" ] || fail "scenario 15: an unanswered question to Compose did not answer unknown (rc=$RC)"
 grep -q "VERDICT: unknown" "${WORK}/out" || fail "scenario 15 gave no verdict line"
 grep -q "VERDICT: idle" "${WORK}/out" && fail "scenario 15 called an unresolvable state directory idle"
-grep -q "does not read the variable" "${WORK}/out" "${WORK}/err" 2>/dev/null \
-    || fail "scenario 15 did not pass on why the reader refused"
 grep -q "backfill_pool is watched" "${WORK}/out" \
-    && fail "scenario 15 followed the variable into a directory the app is not using"
+    && fail "scenario 15 read the directory .env names although Compose did not confirm it"
 rm -f "${WORK}/repo/.env"
 printf 'OK: a state directory the reader refuses is unknown, never idle and never guessed\n'
 
