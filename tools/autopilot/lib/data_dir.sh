@@ -36,10 +36,25 @@
 #
 # Prints the directory on stdout. On any refusal prints nothing there, says why
 # on stderr and exits 1.
+#
+#   data_dir.sh --default <repo>
+#
+# prints the directory inside the checkout - what the answer is when nothing
+# is configured - without reading .env or the environment. For the two callers
+# that have to tell "the state is still in the checkout" from "it was moved":
+# the watcher's deploy gate and tools/move_data_dir.sh. They ask here rather
+# than spell `<repo>/data` themselves, so that name stays in one file.
 
 set -u
 
 IDEALISTA_DATA_DIR_KEY="IDEALISTA_DATA_DIR"
+# Left in `<repo>/data` by tools/move_data_dir.sh once the state has been moved
+# out of the checkout. A directory that carries it is where the state USED to
+# be: four reference files and some logs, no mail cursor, no ledger. Resolving
+# to it means the `.env` line was lost, and the honest answer is a refusal - a
+# watcher that deployed against it would start an app with no cursor, which
+# re-reads the mailbox from the beginning (the incident of 2026-11-09).
+IDEALISTA_DATA_DIR_TOMBSTONE=".moved-to"
 
 _data_dir_refuse() {
     printf 'data_dir: %s\n' "$*" >&2
@@ -99,6 +114,16 @@ _data_dir_read_env_file() {
     return 0
 }
 
+# Refuses a directory that carries the tombstone, whichever way it was reached:
+# by default, or by a line that points back at the checkout.
+_data_dir_refuse_tombstone() {
+    local dir="$1" moved_to
+    [ -e "${dir}/${IDEALISTA_DATA_DIR_TOMBSTONE}" ] || return 0
+    moved_to="$(sed -n 's/^moved_to=//p' "${dir}/${IDEALISTA_DATA_DIR_TOMBSTONE}" 2>/dev/null | head -n 1)"
+    _data_dir_refuse "${dir} carries ${IDEALISTA_DATA_DIR_TOMBSTONE}: the deployment's state was moved to '${moved_to:-an unrecorded directory}' and ${IDEALISTA_DATA_DIR_KEY} no longer says so. Put ${IDEALISTA_DATA_DIR_KEY}=${moved_to:-/the/moved/directory} back in .env, or run tools/move_data_dir.sh --rollback"
+    return 1
+}
+
 # Trailing slashes are not a different directory.
 _data_dir_trim() {
     local path="$1"
@@ -106,6 +131,17 @@ _data_dir_trim() {
         path="${path%/}"
     done
     printf '%s' "$path"
+}
+
+# The directory inside the checkout: the default, and the place the state is
+# moved out of. No configuration is read.
+idealista_default_data_dir() {
+    local repo="${1:-}"
+    if [ -z "$repo" ]; then
+        _data_dir_refuse "usage: data_dir.sh --default <repository root>"
+        return 1
+    fi
+    printf '%s/data\n' "$(_data_dir_trim "$repo")"
 }
 
 idealista_data_dir() {
@@ -141,7 +177,9 @@ idealista_data_dir() {
     # docker-compose.yml. The default is not checked for existence: callers
     # created `<repo>/data` on demand before this file existed and still do.
     if [ -z "$value" ]; then
-        printf '%s\n' "${repo}/data"
+        value="$(idealista_default_data_dir "$repo")"
+        _data_dir_refuse_tombstone "$value" || return 1
+        printf '%s\n' "$value"
         return 0
     fi
 
@@ -158,11 +196,17 @@ idealista_data_dir() {
         return 1
     fi
 
+    _data_dir_refuse_tombstone "$value" || return 1
     printf '%s\n' "$value"
     return 0
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    if [ "${1:-}" = "--default" ]; then
+        shift
+        idealista_default_data_dir "$@"
+        exit $?
+    fi
     idealista_data_dir "$@"
     exit $?
 fi

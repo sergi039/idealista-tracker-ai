@@ -199,6 +199,51 @@ if [ "$(id -u)" != "0" ]; then
     expect_refusal "an unreadable .env is refused" "cannot be read"
 fi
 
+# 22. The tombstone. tools/move_data_dir.sh leaves `.moved-to` in <repo>/data
+#     once the state lives elsewhere. Resolving to that directory means the
+#     .env line was lost, and the directory holds no mail cursor: refused, with
+#     the place the state went and both ways out.
+new_repo
+printf 'moved_to=%s\nmoved_at=20261112T000000Z\n' "$STATE" >"${REPO}/data/.moved-to"
+resolve "$REPO"
+expect_refusal "the default directory is refused once it carries the tombstone" "carries .moved-to"
+case "$ERR" in
+    *"${STATE}"*"--rollback"*) pass "the refusal names where the state went and how to undo it" ;;
+    *) fail "the tombstone refusal does not name the moved directory and --rollback" ;;
+esac
+
+# 23. With the line in place the tombstone is exactly what is expected there.
+printf 'IDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
+resolve "$REPO"
+expect_dir "the moved directory resolves while <repo>/data carries the tombstone" "$STATE"
+
+# 24. A line that points back at the directory the state left is the same
+#     mistake spelled explicitly.
+printf 'IDEALISTA_DATA_DIR=%s\n' "${REPO}/data" >"${REPO}/.env"
+resolve "$REPO"
+expect_refusal "an explicit path to the tombstoned directory is refused" "carries .moved-to"
+
+# 25. A tombstone that records nothing is still a tombstone.
+new_repo
+: >"${REPO}/data/.moved-to"
+resolve "$REPO"
+expect_refusal "an empty tombstone still refuses" "an unrecorded directory"
+
+# 26. `--default` names the directory inside the checkout and reads nothing:
+#     not .env, not the environment, not the tombstone. It is how the watcher's
+#     deploy gate and the mover tell "still in the checkout" from "moved".
+new_repo
+printf 'IDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
+: >"${REPO}/data/.moved-to"
+RC=0
+OUT="$(IDEALISTA_DATA_DIR="$OTHER" "$SHELL_UNDER_TEST" "$LIB" --default "${REPO}/" 2>"${WORK}/err")" || RC=$?
+ERR="$(cat "${WORK}/err")"
+expect_dir "--default is <repo>/data whatever is configured" "${REPO}/data"
+RC=0
+OUT="$("$SHELL_UNDER_TEST" "$LIB" --default 2>"${WORK}/err")" || RC=$?
+ERR="$(cat "${WORK}/err")"
+expect_refusal "--default without a repository root is refused" "usage"
+
 # 21. No repository root is a usage error, not `/data`.
 RC=0
 OUT="$(env -u IDEALISTA_DATA_DIR "$SHELL_UNDER_TEST" "$LIB" 2>"${WORK}/err")" || RC=$?

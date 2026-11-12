@@ -64,6 +64,34 @@ limiter = Limiter(
 )
 
 
+def _state_directory_problem(data_dir):
+    """Why `data_dir` may not be used as the state directory, or None.
+
+    One reason today: it carries the tombstone tools/move_data_dir.sh leaves
+    behind, so it is where the state used to be rather than where it is.
+    """
+    tombstone = os.path.join(data_dir, Config.STATE_TOMBSTONE_NAME)
+    if not os.path.exists(tombstone):
+        return None
+    moved_to = ""
+    try:
+        with open(tombstone, encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("moved_to="):
+                    moved_to = line[len("moved_to=") :].strip()
+                    break
+    except OSError:
+        # Unreadable is still a tombstone: its presence is the fact.
+        moved_to = ""
+    return (
+        f"DATA_DIR {data_dir} carries {Config.STATE_TOMBSTONE_NAME}: the "
+        f"deployment's state was moved to "
+        f"{moved_to or 'another directory'} and this process was started on "
+        "the directory it left. On the host, IDEALISTA_DATA_DIR in .env must "
+        "name the moved directory (or run tools/move_data_dir.sh --rollback)"
+    )
+
+
 def _validate_config(app_config):
     """Fail-fast validation of critical configuration at startup.
 
@@ -74,6 +102,17 @@ def _validate_config(app_config):
         return
 
     errors = []
+
+    # The state directory must not be the one the state was moved out of
+    # (#639). tools/move_data_dir.sh leaves a tombstone in the checkout's
+    # `data/`; a container that mounts that directory again - a hand
+    # `docker compose up` after the IDEALISTA_DATA_DIR line was lost from .env -
+    # would start with no mail cursor and re-read the mailbox from the
+    # beginning, which is the incident of 2026-11-09. Refusing to start is the
+    # loud version of that mistake.
+    tombstone_problem = _state_directory_problem(Config.DATA_DIR)
+    if tombstone_problem:
+        errors.append(tombstone_problem)
 
     # DATABASE_URL must be set and look like a valid URI
     db_url = app_config.get("DATABASE_URL") or app_config.get("SQLALCHEMY_DATABASE_URI")

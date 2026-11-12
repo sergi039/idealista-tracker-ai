@@ -70,7 +70,16 @@ services:
       # It is not called DATA_DIR on purpose: .env is also this service's
       # env_file, config.py reads DATA_DIR, and a host path must never become
       # the path the app uses inside the container. That side stays /app/data.
-      - ${IDEALISTA_DATA_DIR:-./data}:/app/data
+      #
+      # Long form for one reason: `create_host_path: false`. The short form
+      # creates a missing source as an empty root-owned directory and starts
+      # the app on it - a typo in the variable would become a deployment with
+      # no mail cursor. This way a source that does not exist is an error.
+      - type: bind
+        source: ${IDEALISTA_DATA_DIR:-./data}
+        target: /app/data
+        bind:
+          create_host_path: false
     restart: unless-stopped
     networks:
       - idealista-network

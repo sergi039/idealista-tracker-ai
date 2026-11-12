@@ -140,14 +140,30 @@ def test_this_checkout_resolves_to_its_own_data_directory(tmp_path):
 
 def test_compose_mounts_the_variable_and_defaults_to_the_old_literal():
     """`${IDEALISTA_DATA_DIR:-./data}` renders `./data` when nothing is set,
-    which is the literal this line used to be - so a merge moves nothing."""
+    which is the literal this line used to be - so a merge moves nothing.
+
+    Long form, for `create_host_path: false`: the short form creates a missing
+    source as an empty directory and starts the app on it, so a typo in the
+    variable would be a deployment with no mail cursor. Measured on Compose
+    v5.7 against a throwaway project: with the flag, a missing source is
+    "bind source path does not exist" and nothing is created.
+    """
     compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    binds = [
-        line.strip().removeprefix("- ").strip()
+    code = [
+        line.strip()
         for line in compose.splitlines()
-        if line.strip().startswith("- ") and line.rstrip().endswith(":/app/data")
+        if line.strip() and not line.strip().startswith("#")
     ]
-    assert binds == ["${IDEALISTA_DATA_DIR:-./data}:/app/data"], binds
+    at = code.index("target: /app/data")
+    assert code[at - 2 : at + 3] == [
+        "- type: bind",
+        "source: ${IDEALISTA_DATA_DIR:-./data}",
+        "target: /app/data",
+        "bind:",
+        "create_host_path: false",
+    ], code[at - 2 : at + 3]
+    # The short form is gone: it is the one that creates a missing source.
+    assert not any(line.endswith(":/app/data") for line in code)
 
     # Nothing else in either Compose file mounts the state directory or names
     # the checkout's data/ by hand.
@@ -161,7 +177,13 @@ def test_compose_mounts_the_variable_and_defaults_to_the_old_literal():
         assert sum("/app/data" in line for line in code) == (
             1 if name == "docker-compose.yml" else 0
         ), name
-        assert not any(re.search(r"(^|[\s\"'])\./data\b", line) for line in code), name
+        hand_written = [
+            line
+            for line in code
+            if re.search(r"(^|[\s\"'])\./data\b", line)
+            and "${IDEALISTA_DATA_DIR:-./data}" not in line
+        ]
+        assert hand_written == [], name
 
 
 def test_the_container_side_is_not_fed_the_host_path():
