@@ -16,6 +16,14 @@ from utils.uid_cursor import read_uid_file
 
 CURSOR_ATTRIBUTES = ("LAST_SEEN_UID_PATH", "LAST_SEEN_UID_PROPERTIES_PATH")
 
+# The directory the deployment mounts when the suite runs in its checkout.
+# Named here rather than read from `Config.DATA_DIR`: since #639 the session
+# moves that attribute to a temporary directory too, so "outside
+# `Config.DATA_DIR`" alone would no longer say "outside the checkout".
+CHECKOUT_DATA = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data"
+)
+
 
 def _inside(path: str, directory: str) -> bool:
     path = os.path.realpath(path)
@@ -23,10 +31,14 @@ def _inside(path: str, directory: str) -> bool:
     return os.path.commonpath([path, directory]) == directory
 
 
+def _in_a_state_directory(path: str) -> bool:
+    return _inside(path, CHECKOUT_DATA) or _inside(path, Config.DATA_DIR)
+
+
 def test_cursor_paths_are_outside_the_data_directory():
     for name in CURSOR_ATTRIBUTES:
         path = getattr(Config, name)
-        assert not _inside(path, Config.DATA_DIR), (
+        assert not _in_a_state_directory(path), (
             f"Config.{name} = {path} is inside DATA_DIR; a test would write "
             "the deployment's cursor"
         )
@@ -39,7 +51,7 @@ def test_a_service_that_sets_no_path_saves_outside_the_data_directory():
 
     written = PropertyIMAPService._uid_file_path()
     assert read_uid_file(written) == 99
-    assert not _inside(written, Config.DATA_DIR)
+    assert not _in_a_state_directory(written)
 
 
 @pytest.fixture(scope="module")
@@ -53,7 +65,7 @@ def test_a_wider_scoped_fixture_is_outside_the_data_directory_too(
     paths_before_any_test,
 ):
     for name, path in paths_before_any_test.items():
-        assert not _inside(path, Config.DATA_DIR), (
+        assert not _in_a_state_directory(path), (
             f"Config.{name} = {path} before the first test is inside DATA_DIR"
         )
 
