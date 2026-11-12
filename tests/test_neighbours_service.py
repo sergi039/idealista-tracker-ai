@@ -21,8 +21,11 @@ from services import (  # noqa: E402
     cadastre_service as c,
     cadastre_locate as locate,
     neighbours_service as n,
+    taste_descriptors as d,
 )
 from services.enrichment_write import EnrichmentWriteContractError  # noqa: E402
+from services.property_enrichment_service import PropertyEnrichmentService  # noqa: E402
+from utils import backfill_neighbours as cli  # noqa: E402
 
 # Catastro's live answers for the owner's two references (rows 969 and 1282),
 # trimmed to the buildings within 100 m, the parcel's own building and two or
@@ -96,6 +99,19 @@ def test_owner_reference_calibration_counts(row, reference, within100, nearest):
         industrial_buildings_within_100m=0,
         unknown_use_buildings_within_100m=0,
     )
+
+
+@pytest.mark.parametrize(
+    "row,reference,within100",
+    [(969, REF, 7), (1282, "15044A01901483", 11)],
+)
+def test_owner_reference_calibration_keeps_privacy_unknown(row, reference, within100):
+    measured = _measure_reference(row, reference)
+    p = prop(cadastral_reference=reference)
+    p.enrichment["neighbours"] = payload(p, reference=reference, **measured)
+    descriptor = d.build_descriptor(p)
+    assert descriptor["aspects"]["neighbor_privacy"][0]["status"] == "unknown"
+    assert descriptor["aspects"]["nearby_buildings"][0]["value"] == within100
 
 
 def test_distance_is_from_entire_parcel_excluding_own_not_just_centroid():
@@ -568,6 +584,27 @@ def test_malformed_stored_measurement_never_supports_descriptor(field, value):
     assert n.read_verdict(p) == {}
 
 
+def test_unknown_use_is_not_agricultural_absence():
+    p = prop()
+    p.enrichment["neighbours"] = payload(
+        p,
+        buildings_within_100m=1,
+        nearest_building_m=80,
+        unknown_use_buildings_within_100m=1,
+    )
+    row = d.build_descriptor(p)["aspects"]["agricultural_context"][0]
+    assert row["status"] == "unknown"
+
+
+def test_only_measured_neighbours_change_descriptor_input():
+    p = prop()
+    before = d.input_fingerprint(p)
+    p.enrichment["neighbours"] = {"status": "unavailable"}
+    assert d.input_fingerprint(p) == before
+    p.enrichment["neighbours"] = payload(p)
+    assert d.input_fingerprint(p) != before
+
+
 # Stored JSON a reader must refuse, never raise on (#663: 10**400 overflowed).
 JUNK = {
     "10**400": 10**400,
@@ -696,6 +733,82 @@ def test_dirty_session_refuses_before_network(app, monkeypatch):
     db.session.rollback()
 
 
+def test_advisory_runs_neighbours_with_own_commit_and_free_ingestion_does_not(
+    monkeypatch,
+):
+    service = PropertyEnrichmentService(neighbours_service=Mock())
+    monkeypatch.setattr(
+        "services.property_enrichment_service.advertiser.enrich", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(service, "enrich_free_sources", lambda *_a, **_k: None)
+    service._advisory_pass(prop(), use_ai=False, with_pool=False)
+    service.neighbours_service.enrich.assert_called_once()
+    assert service.neighbours_service.enrich.call_args.kwargs == {"commit": True}
+
+
+@pytest.mark.parametrize(
+    "raw", ["", "0", "1,-2", ",".join(str(i) for i in range(1, 22))]
+)
+def test_cli_refuses_unscoped_or_bulk_ids(raw):
+    with pytest.raises(Exception):
+        cli.parse_ids(raw)
+
+
+def test_cli_dry_run_writes_plan_without_api_calls(app, monkeypatch, tmp_path):
+    p = Property(source_email_id="neighbours-cli", enrichment={})
+    db.session.add(p)
+    db.session.commit()
+    monkeypatch.setattr(cli, "create_app", lambda: app)
+    network = Mock(side_effect=AssertionError("dry run network"))
+    monkeypatch.setattr(n.NeighboursService, "enrich", network)
+    plan = tmp_path / "plan.json"
+    cli.main(["--ids", str(p.id), "--dry-run", "--plan", str(plan)])
+    assert json.loads(plan.read_text())["rows"][0]["id"] == p.id
+    assert p.enrichment == {}
+    network.assert_not_called()
+
+
+def test_photo_neighbours_remain_claims_with_incomparable_vocabulary():
+    from services.taste_recommendation import _value_relationship
+
+    p = prop()
+    visual = dict(
+        schema_version=1,
+        property_fingerprint=d.input_fingerprint(p),
+        input_fingerprint="a" * 64,
+        visual_observations=[
+            dict(
+                aspect_id=aspect,
+                value=value,
+                status="supported",
+                evidence=dict(
+                    source_kind="photo",
+                    source_id="photo:0",
+                    image_sha256="b" * 64,
+                    image_index=0,
+                ),
+                confidence=0.9,
+                limitation="Facade only; off-frame buildings are unknown.",
+            )
+            for aspect, value in [
+                ("neighbor_privacy", "neighbours_visible"),
+                ("nearby_buildings", "few_visible"),
+            ]
+        ],
+    )
+    descriptor = d.build_descriptor(p, visual_input=visual)
+    assert descriptor["aspects"]["neighbor_privacy"][0]["status"] == "claimed"
+    assert descriptor["aspects"]["nearby_buildings"][0]["status"] == "claimed"
+    assert (
+        _value_relationship("neighbours_visible", "low", "neighbor_privacy")
+        == "incomparable"
+    )
+    assert (
+        _value_relationship("7", "several_visible", "nearby_buildings")
+        == "incomparable"
+    )
+
+
 def test_refusal_preserves_only_same_subject_success(app, monkeypatch):
     p = Property(
         source_email_id="neighbours-refusal",
@@ -799,6 +912,26 @@ def test_building_cap_and_open_ring_are_refused(monkeypatch):
         c.surface_polygons(ring)
 
 
+def test_cli_apply_requires_plan_and_refuses_changed_baseline(
+    app, monkeypatch, tmp_path
+):
+    with pytest.raises(SystemExit):
+        cli.main(["--ids", "1", "--apply"])
+    p = Property(source_email_id="neighbours-plan", enrichment={})
+    db.session.add(p)
+    db.session.commit()
+    monkeypatch.setattr(cli, "create_app", lambda: app)
+    plan = tmp_path / "plan.json"
+    cli.main(["--ids", str(p.id), "--plan", str(plan)])
+    p.location_accuracy = "approximate"
+    db.session.commit()
+    network = Mock(side_effect=AssertionError("stale plan network"))
+    monkeypatch.setattr(n.NeighboursService, "enrich", network)
+    with pytest.raises(SystemExit):
+        cli.main(["--ids", str(p.id), "--apply", "--plan", str(plan)])
+    network.assert_not_called()
+
+
 def test_shortlist_plan_compare_is_under_lock_after_network(app, monkeypatch):
     p = Property(
         source_email_id="neighbours-plan-race",
@@ -887,3 +1020,24 @@ def test_empty_use_does_not_disappear_beside_a_known_use():
     )
     parsed = n.parse_buildings(ET.tostring(root, encoding="unicode"), 25829)
     assert parsed[0]["uses"] == {"1_residential", ""}
+
+
+def test_sixth_enrich_press_in_a_minute_is_refused(app, monkeypatch):
+    """One press can now spend up to six Catastro requests on the neighbour walk.
+
+    Behavioural, like the cadastre route's own test: a sixth press must not
+    reach the handler at all. A missing row keeps the handler off the network.
+    """
+    from app import limiter
+
+    monkeypatch.setattr(limiter, "enabled", True)
+    monkeypatch.setitem(app.config, "WTF_CSRF_ENABLED", False)
+    limiter.reset()
+    client = app.test_client()
+    statuses = [
+        client.post("/api/property/999999/enrich", json={}).status_code
+        for _ in range(6)
+    ]
+    limiter.reset()
+    assert statuses[:5] == [404] * 5, statuses
+    assert statuses[5] == 429, statuses
