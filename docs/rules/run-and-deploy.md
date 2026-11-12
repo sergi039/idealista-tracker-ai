@@ -297,8 +297,10 @@ watcher, `merge_bot.sh`, `autopilot.sh`, `run_issue.sh`,
 `tools/backfill_status.sh`, `tools/backfill_supervisor.sh` and
 `tools/backup_attachments.sh`. Unset, both answer `<repo>/data`, which is what
 all eight spelled out by hand before; so the variable existing changes nothing
-until a machine's `.env` sets it. **On the mini it is not set yet: the state is
-still inside the checkout, and moving it is a separate, owner-commanded step.**
+until a machine's `.env` sets it. **Setting it is the move, and the move is the
+owner's command**: `tools/move_data_dir.sh`, steps and rollback in
+`DATA_DIR_RUNBOOK.md`. Whether a machine has moved is what its `.env` says;
+`tools/move_data_dir.sh --check <dir>` reports it without touching anything.
 
 - The name is not `DATA_DIR` on purpose. `.env` is also the app service's
   `env_file` and `config.py` reads `DATA_DIR`; a host path under that name
@@ -320,6 +322,46 @@ still inside the checkout, and moving it is a separate, owner-commanded step.**
   committed reference files (`docs/rules/reference-data.md`),
   `data/.orchestrator` (an agreement between sessions, not state) and the
   launchd stdout logs, whose paths are fixed in the installed plists.
+
+**Moving it is one rename under a recovery trap**
+(`tools/move_data_dir.sh --check | --apply <dir> | --rollback`). `--apply`
+takes the deploy lock and the merge lock, stops the app, takes a checksummed
+safety copy to `~/IdealistaRank-backups/data-pre-move-<UTC>/`, renames
+`<repo>/data` to the destination on the same volume (so there is never a
+second authoritative copy), rebuilds a small `<repo>/data`, writes the `.env`
+line, starts the app with `--no-build` and verifies mount, healthz, the page
+(`lib/render_check.sh`, 200 or it failed) and a host-to-container probe. From
+the moment the app is stopped every non-success exit, signals included, runs
+the same idempotent `recover` that `--rollback` runs; phases are intents
+assigned before the command they cover, and recovery reads the disk, not the
+phase. Its own `docker compose` calls drop `IDEALISTA_DATA_DIR` from the
+environment so only `.env` decides the mount.
+
+- **The tombstone.** After the move `<repo>/data` holds the four reference
+  files, `.orchestrator`, launchd logs and `data/.moved-to`. A directory that
+  carries the tombstone is where the state *used* to be: `lib/data_dir.sh`
+  refuses to resolve to it and the app refuses to start on it
+  (`app._state_directory_problem`), so a lost `.env` line is a loud stop
+  rather than an app with no mail cursor.
+- **A build that does not know about the move is not deployed onto it.** The
+  tombstone readers are part of what a revert of #639 removes, so they cannot
+  be what stops that revert. The watcher that is *serving* can: while the
+  resolved directory is not the checkout's own, it refuses, before the
+  fast-forward, a target commit without `tools/autopilot/lib/data_dir.sh` or
+  whose `docker-compose.yml` does not mount `${IDEALISTA_DATA_DIR`; the refusal
+  counts toward the stall alarm (#532). `--rollback` first, then the revert
+  deploys normally. A hand `docker compose up --build` of such a tree is not
+  gated.
+- **`create_host_path: false`.** The mount is in long form for that flag: the
+  short form creates a missing source as an empty directory and starts the app
+  on it. Measured on Compose v5.7: with the flag, a missing source is "bind
+  source path does not exist" and nothing is created.
+- **The reference files ride in the image.** `.dockerignore` used to exclude
+  `data/` whole, so the four committed files reached the container only
+  through the bind mount; once `/app/data` is another directory they would be
+  gone. The Dockerfile copies them to `/opt/idealista/reference_data` and sets
+  `REFERENCE_DATA_DIR`; readers ask `utils/reference_data.py`
+  (`docs/rules/reference-data.md`).
 
 **A test run cannot write that directory** (`tests/data_dir_guard.py`). #627
 moved the two paths that had already done damage -- the cursor, after a test
