@@ -19,12 +19,14 @@ from __future__ import annotations
 
 import json
 import logging
-import os
+
+from utils.reference_data import reference_path
 
 logger = logging.getLogger(__name__)
 
-_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-TOP_AGENCIES_PATH = os.path.join(_DATA_DIR, "top_agencies.json")
+# The repository's `data/` in a checkout, the image's own copy inside the
+# container (#639): `utils/reference_data.py` is the one home of that.
+TOP_AGENCIES_PATH = reference_path("top_agencies.json")
 
 
 class AgencyDataUnavailable(Exception):
