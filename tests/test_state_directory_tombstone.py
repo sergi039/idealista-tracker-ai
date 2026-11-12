@@ -30,9 +30,11 @@ def test_the_tombstone_name_is_the_one_the_tools_write():
 
     root = Path(__file__).resolve().parent.parent
     assert Config.STATE_TOMBSTONE_NAME == ".moved-to"
+    mover = (root / "tools" / "move_data_dir.sh").read_text(encoding="utf-8")
     reader = (root / "tools" / "autopilot" / "lib" / "data_dir.sh").read_text(
         encoding="utf-8"
     )
+    assert 'TOMBSTONE=".moved-to"' in mover
     assert 'IDEALISTA_DATA_DIR_TOMBSTONE=".moved-to"' in reader
 
 
