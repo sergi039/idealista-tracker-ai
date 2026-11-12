@@ -137,6 +137,64 @@ remain in expandable details. On phones the same table rows stack into readable
 summaries. Do not silently change the query's representation preference or
 shrink text to fit all historical columns.
 
+## Phone layout
+
+Owner report, 2026-11-12, from a 390px phone: a full screen of controls came
+before the first listing (it began 902px down) and each listing took a screen
+(514px on average). His condition for the fix was that the layout be taken
+from an established interface, not designed here. The reference is the
+**resource index layout of Shopify Polaris** (title and whole-index actions,
+then view tabs with one filter trigger and one sort control, then a list of
+compact resource rows), chosen with an independent Codex review over two
+alternatives: the photo-first result cards of the property portals keep the
+density at about one listing per screen and have no place for evidence and the
+decision buttons, and Tabler/Bootstrap name components but no page order. Only
+the layout and interaction pattern is taken; components, colours, type and
+icons stay this project's. Three deliberate departures: the owner's Decision
+queue stays promoted beside Apply (#630) instead of joining the filters;
+Apply/Clear replace the reference's saved-view Save/Cancel; the three decision
+buttons stay on the row instead of rolling into an overflow menu.
+
+Below 768px the regions are, in order: title with last sync; applied
+subscription with its rare tools; Favorites and Hide removed; Decision, Apply
+and the **one Filters trigger** (search and the other fields open in place
+under it); view tabs on one line that scrolls sideways; sort with **one display
+trigger** naming the selected representation and assessment (assessment mode,
+Table/Cards/Map and Actions open under it); the count, every hide and the
+profile state as one paragraph with **one Result details trigger** (refresh,
+unused preferences, previous-evidence note and coverage open under it); the
+list. Nothing is sticky: `#listing-<id>` anchors keep their offset.
+
+Rules that keep it that way:
+
+- **One element per control at every width.** A phone folds a control away by
+  re-placing the element that exists (`collapse` wrappers that are
+  `display: contents` from 768px up, where their triggers are not drawn). Never
+  render a second copy for the narrow screen.
+- **A hide is never behind a phone disclosure.** Failing criteria, rejected
+  listings, folded publications, hard exclusions, a narrowing filter bar, the
+  overdue link and the profile state stay in the visible paragraph.
+- **The Decision select and Apply are never folded.** Search is; an applied
+  search is still a visible chip.
+- A row is one stacked summary: photo (72px) beside title, municipality and
+  the location warning; facts; price and area; the three decision buttons
+  **with their words** beside favourite and Open; the decision state; the
+  assessment beside the two row disclosures. Warnings wrap, they are not
+  clipped. Targets stay 44px.
+- New controls on this page are placed in the phone order above before they
+  ship; a control that only fits by adding a visible row on a phone belongs
+  behind one of the three triggers.
+
+Measured on production data on 2026-11-12 at a 390px layout width (table view,
+default filters, closed disclosures, three loads and a second sample each):
+first listing at 479px, down from 902px; rows 285-360px (average 314), down
+from 469-551px (average 514); 2.7 listings per 844px screen, up from 1.6.
+Acceptance for later changes: first listing by 480px and at least 2.5 rows per
+844px screen in that state; Spanish labels and a 320px screen may wrap to an
+extra line. `docs/screenshots/properties-phone-before.png` and
+`properties-phone-after.png` are the same fixture rows drawn by the template
+before and after the change (placeholder pictures, no owner data).
+
 ## Recommendation states
 
 Read the existing service's state and profile version. Operation state and
@@ -169,7 +227,7 @@ both themes, long titles/reasons, 200% zoom/reflow, keyboard focus, empty/error
 states and delayed samples. Use `elementFromPoint` for visible control centers;
 static markup assertions cannot prove layout. There must be no sideways page
 or tablet-table scrolling. Default closed panels target the first row by
-360px at1440 and520px at834; active conditions/errors/large text may expand it.
+360px at1440,520px at834 and 480px at 390; active conditions/errors/large text may expand it.
 Never remove evidence to satisfy the target.
 
 Retain project checks for filter memory, map/list/CSV parity and every relevant
