@@ -20,6 +20,20 @@ must be an ancestor of `main`.
   (#634) is out of that backfill's scope, so a later page-stated plot (stronger
   evidence) never replaces the text reading. Matters only if the two differ.
 
+### A plot figure introduced by a plot noun is trusted to be this home's
+
+- **Anchor:** `services/plot_text.py` (`_PLOT_MENTION`, `_scan`).
+- **What breaks, for whom:** the reading requires every plot noun to carry the
+  figure read, so negations and a second plot named without a figure refuse.
+  What it cannot see is a figure whose noun describes ANOTHER plot ("finca
+  colindante de 5.000 m² en venta" in an otherwise silent text): that figure
+  is written, and a row could move from `unknown` to `pass`/`fail` on it.
+  `jardín` / `huerta` are deliberately not plot nouns (part of a plot, not a
+  statement of one), and a plot equal to the house figure ("casa de 300 m² en
+  parcela de 300 m²") is written as stated. Every write carries its snippet in
+  `enrichment["plot_from_text"]`, so a wrong one is findable. Not measured on
+  production (third review of #661, 2026-11-12).
+
 ### Four input shapes take the Jev route out instead of to the bridge
 
 - **Anchor:** `services/typesafe_transport.py` (`_KEY_SHAPE`, `_origin`,

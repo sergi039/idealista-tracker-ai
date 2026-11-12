@@ -147,7 +147,11 @@ things about it are load bearing:
   never overwrites a stated or hand-set plot, and refuses a house figure
   ("construidos", "útiles", "de vivienda", whatever punctuation stands
   between: "1.362 m² (superficie construida)", review of #661), a text that
-  denies a plot ("sin terreno", "sin parcela" vetoes every source), a cut-off one ("parcela de 6...":
+  names a plot anywhere without the figure (every plot noun, plurals and
+  Galician/Catalan forms included, must be the one that introduced the figure:
+  "sin ninguna parcela. Finca de 300 m²" and "parcela llana. Finca de 900 m²"
+  both stay unknown and veto every source -- a structural rule, not a list of
+  negations, paid for in recall on purpose; third review of #661), a cut-off one ("parcela de 6...":
   idealista's alert text is truncated), two different figures (within a source or between sources: a plot is read
   only when every source that names one names the same value), and anything
   `MAX_CREDIBLE_M2` (the one credibility rule) or the `NUMERIC(10,2)` column

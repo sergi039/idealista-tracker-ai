@@ -211,6 +211,82 @@ class TestTheHouseLabelWhateverTheSeparator:
         )
 
 
+class TestEveryPlotMentionCarriesTheFigure:
+    """Third review of #661: a list of negations ("sin ningún") missed
+    "sin ninguna"; the rule is now structural -- every plot noun in the text
+    must be the one that introduced the figure, or nothing is read."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Casa sin ninguna parcela. Finca de 300 m²",
+            "No tiene parcela. Finca de 300 m²",
+            "Carece de terreno. Finca de 300 m²",
+            "Sin jardín ni parcela. Finca de 300 m²",
+            "sin ninguna clase de terreno. finca de 300 m2",
+            "Casa sin parcelas. Finca de 300 m²",
+        ],
+    )
+    def test_any_negation_reads_nothing(self, text):
+        assert _value(text) is None
+
+    def test_the_price_is_recall_a_plot_described_apart_is_unknown(self):
+        assert _value("parcela llana y vallada. Finca de 900 m²") is None
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Sin terrenito. Finca de 900 m²",
+            "Sin parcelita. Finca de 900 m²",
+            "Dos fincas. Finca de 900 m²",
+            "Sen leira. Finca de 900 m²",
+            "Con eido. Finca de 900 m²",
+            "Sen terreo. Finca de 900 m²",
+            "Sense terreny. Finca de 900 m²",
+            "Sense parcel·la. Finca de 900 m²",
+            "Urbanización La Finca, parcela de 900 m²",
+            "Solar urbano. Finca de 900 m²",
+            "Casa de 300 m² en parcela",
+            "parcela de 300 m² ... finca de 900 m²",
+        ],
+    )
+    def test_another_plot_word_or_figure_refuses(self, text):
+        assert _value(text) is None
+
+    @pytest.mark.parametrize(
+        "text, expected",
+        [
+            # A garden or an orchard is part of a plot, not a statement of one.
+            ("Casa con jardín. Finca de 900 m²", 900),
+            ("Casa con huerta. Finca de 900 m²", 900),
+            ("con placas solares. parcela de 900 m²", 900),
+            ("energía solar, parcela de 900 m²", 900),
+            ("PARCELA DE 900 M2", 900),
+            ("parcela\nde 900 m²", 900),
+            ("parcela de 900 metros cuadrados", 900),
+            ("sobre una parcela de 745 m² de terreno", 745),
+            ("Casa de 300 m² en parcela de 300 m²", 300),
+        ],
+    )
+    def test_a_plot_the_figure_belongs_to_still_reads(self, text, expected):
+        assert _value(text) == expected
+
+    def test_a_source_naming_a_plot_without_a_figure_vetoes_the_others(self):
+        assert (
+            plot_text.read_sources(
+                [
+                    ("title", "Finca de 900 m²"),
+                    ("description", "parcela llana y vallada"),
+                ]
+            )
+            is None
+        )
+
+    def test_a_refused_figure_still_counts_as_a_mention(self):
+        assert plot_text.mentions_plot("No tiene parcela. Finca de 300 m²")
+        assert not plot_text.mentions_plot("casa con terreno")
+
+
 def _sql_ids(expression):
     return {p.id for p in Property.query.filter(expression(Property, CRITERIA)).all()}
 
@@ -245,6 +321,17 @@ class TestPortalIngestion:
         assert "plot_from_text" not in (prop.enrichment or {})
         assert sc.read_verdict(prop, CRITERIA)["state"] == "unknown"
         assert _sql_ids(sc.passing_expression) == set()
+        assert _sql_ids(sc.failing_expression) == set()
+
+    def test_a_negated_plot_is_not_read_from_a_later_sentence(self, app):
+        # Third review of #661: "ninguna" was not in the negation list.
+        prop = _create(
+            app, _row(description="Casa sin ninguna parcela. Finca de 300 m²")
+        )
+
+        assert prop.plot_area is None
+        assert "plot_from_text" not in (prop.enrichment or {})
+        assert sc.read_verdict(prop, CRITERIA)["state"] == "unknown"
         assert _sql_ids(sc.failing_expression) == set()
 
     def test_no_text_figure_stays_unknown_in_both(self, app):

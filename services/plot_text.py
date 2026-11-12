@@ -17,9 +17,15 @@ never as `fail`):
   brackets, dashes, colons, slashes and commas; a noun (vivienda, casa)
   across everything but a comma, because after a comma it starts the next
   item ("finca de 2.000 m², casa de 150 m²");
-* a text that says there is no plot ("sin terreno", "sin parcela"): whatever
-  figure it also gives, the plot is not established, and as a source it
-  vetoes the others;
+* a text that names the plot anywhere WITHOUT the figure ("sin ninguna
+  parcela. Finca de 300 m²", "parcela llana y vallada. Finca de 900 m²"):
+  every mention of a plot noun has to be the one that introduced the figure
+  read, or nothing is written. This is a rule about structure, not a list of
+  negations (third review of #661): any negation, and any second plot the
+  text talks about, is closed by it. Its price is recall -- a plot described
+  in one sentence and measured in the next stays unknown -- and it is paid
+  on purpose: doubt writes nothing. As a source such a text vetoes the
+  others;
 * a figure cut off by an excerpt ("parcela de 6..." -- idealista's alert text
   is truncated): the unit has to follow the number inside the text;
 * a text that gives two different plot figures: which one is the plot is not
@@ -60,7 +66,7 @@ logger = logging.getLogger(__name__)
 
 # Bump when the reading rules change: a stored provenance names the rules that
 # produced it, and the backfill's restore compares it.
-EXTRACTOR_VERSION = "plot_text/2"
+EXTRACTOR_VERSION = "plot_text/3"
 ENRICHMENT_KEY = "plot_from_text"
 
 # NUMERIC(10, 2) overflows at 1e8; this is the column, not a plausibility rule.
@@ -92,9 +98,19 @@ _HOUSE_AFTER = re.compile(
     rf"{_HOUSE_SEPARATOR}{_HOUSE_QUALIFIER}|{_HOUSE_NOUN_SEPARATOR}{_HOUSE_NOUN}",
     re.IGNORECASE,
 )
-# A text that says the home has no plot establishes none, whatever it adds.
-_NO_PLOT = re.compile(
-    r"\bsin\s+(?:ning[úu]n\s+)?(?:terreno|parcela|finca|solar)\b",
+# Every word that names a plot, plurals and diminutives included (Spanish,
+# Galician "terreo"/"leira"/"eido", Catalan "terreny"/"parcel·la"). A mention
+# the reading did not consume refuses the text.
+_PLOT_MENTION = re.compile(
+    r"\b(?:parcel\w*|terren\w*|terreos?|finc\w*|solar(?:es)?|leiras?|eidos?)\b",
+    re.IGNORECASE,
+)
+# 'solar' is an adjective after these words ("placas solares", "energía
+# solar"); anywhere else it is read as the noun, so an unknown use refuses.
+_SOLAR_ADJECTIVE_AFTER = re.compile(
+    r"(?:placas?|panel(?:es)?|energ[íi]a|orientaci[óo]n|luz|instalaci[óo]n|"
+    r"captador(?:es)?|colector(?:es)?|protecci[óo]n|radiaci[óo]n|termo|caliente|"
+    r"t[ée]rmica|fotovoltaica|kit|sistema|bomba)\s+$",
     re.IGNORECASE,
 )
 
@@ -134,21 +150,18 @@ def _square_metres(match: "re.Match[str]") -> Optional[float]:
     return round(number * factor, 2)
 
 
-def denies_plot(text: Optional[str]) -> bool:
-    """True when `text` says there is no plot ("sin terreno")."""
-    if not text or not isinstance(text, str):
-        return False
-    try:
-        return bool(_NO_PLOT.search(_strip_html(text)))
-    except Exception:
-        logger.warning("plot denial could not be read", exc_info=True)
-        return True  # cannot tell: doubt writes nothing
+def _is_plot_mention(text: str, match: "re.Match[str]") -> bool:
+    if not match.group(0).lower().startswith("solar"):
+        return True
+    return not _SOLAR_ADJECTIVE_AFTER.search(
+        text[max(0, match.start() - 30) : match.start()]
+    )
 
 
-def _readings(text: str) -> List[Tuple[float, str]]:
+def _scan(text: str) -> Tuple[List[Tuple[float, str]], bool]:
+    """(credible readings, True when a plot mention introduced none of them)."""
     found: List[Tuple[float, str]] = []
-    if _NO_PLOT.search(text):
-        return found
+    claimed: List[Tuple[int, int]] = []
     for pattern in (_FORWARD, _BACKWARD):
         for match in pattern.finditer(text):
             if _HOUSE_AFTER.match(text, match.end()):
@@ -156,9 +169,22 @@ def _readings(text: str) -> List[Tuple[float, str]]:
             value = _square_metres(match)
             if not _credible(value):
                 continue
+            claimed.append(match.span())
             snippet = text[max(0, match.start() - 20) : match.end() + 20].strip()
             found.append((value, snippet[:SNIPPET_MAX_CHARS]))
-    return found
+    bare = any(
+        _is_plot_mention(text, mention)
+        and not any(
+            start <= mention.start() and mention.end() <= end for start, end in claimed
+        )
+        for mention in _PLOT_MENTION.finditer(text)
+    )
+    return found, bare
+
+
+def _readings(text: str) -> List[Tuple[float, str]]:
+    found, bare = _scan(text)
+    return [] if bare else found
 
 
 def _all_readings(text: Optional[str]) -> List[Tuple[float, str]]:
@@ -173,8 +199,15 @@ def _all_readings(text: Optional[str]) -> List[Tuple[float, str]]:
 
 
 def mentions_plot(text: Optional[str]) -> bool:
-    """True when `text` states at least one credible plot figure."""
-    return bool(_all_readings(text))
+    """True when `text` states at least one credible plot figure, read or
+    refused (a reader counting ambiguity asks this, not `extract_plot_m2`)."""
+    if not text or not isinstance(text, str):
+        return False
+    try:
+        return bool(_scan(_strip_html(text))[0])
+    except Exception:
+        logger.warning("plot text reading failed", exc_info=True)
+        return False
 
 
 def extract_plot_m2(text: Optional[str]) -> Optional[PlotReading]:
@@ -196,9 +229,9 @@ def read_sources(
     try:
         values = set()
         first: Optional[Tuple[str, PlotReading]] = None
-        if any(denies_plot(text) for _, text in sources):
-            return None
         for field, text in sources:
+            if _vetoes(text):
+                return None
             found = _all_readings(text)
             distinct = {value for value, _ in found}
             if len(distinct) > 1:
@@ -213,6 +246,13 @@ def read_sources(
     except Exception:
         logger.warning("plot sources could not be read", exc_info=True)
         return None
+
+
+def _vetoes(text: Optional[str]) -> bool:
+    """A source that names the plot without a figure the reading took."""
+    if not text or not isinstance(text, str):
+        return False
+    return _scan(_strip_html(text))[1]
 
 
 def apply_to_property(
