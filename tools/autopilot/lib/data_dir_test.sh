@@ -240,4 +240,35 @@ OUT="$(env -u IDEALISTA_DATA_DIR "$SHELL_UNDER_TEST" "$LIB" 2>"${WORK}/err")" ||
 ERR="$(cat "${WORK}/err")"
 expect_refusal "no repository root is refused" "usage"
 
+# 15. A linked git worktree is not the checkout the stack runs from. Git marks
+# one with a `.git` FILE; the checkout's own `.git` is a directory. The
+# worktree's data/ exists here, and holds a file, to show it is not followed.
+new_repo
+printf 'gitdir: /somewhere/.git/worktrees/issue-1\n' >"${REPO}/.git"
+: >"${REPO}/data/.supervisor.idealista-app.utils.backfill_pool.lock"
+resolve "$REPO"
+expect_refusal "a linked git worktree is refused" "linked git worktree"
+rm -f "${REPO}/.git"
+mkdir "${REPO}/.git"
+resolve "$REPO"
+expect_dir "a checkout with a .git directory is answered" "${REPO}/data"
+new_repo
+resolve "$REPO"
+expect_dir "a root that is no git checkout at all is answered" "${REPO}/data"
+
+# 16. "Could not look" is not "not there". With no grep to search `.env` -
+# a PATH stripped to nothing - the file has not been ruled out, so it is a
+# refusal; read as zero matches it would answer for a file nobody searched.
+# Without a `.env` there is nothing to search and no grep is needed.
+new_repo
+printf 'DB_PASSWORD=x\nIDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
+resolve "$REPO" "PATH=${WORK}/no-such-bin"
+expect_refusal "a .env that cannot be searched is refused (variable named)" "could not be searched"
+printf 'DB_PASSWORD=x\n' >"${REPO}/.env"
+resolve "$REPO" "PATH=${WORK}/no-such-bin"
+expect_refusal "a .env that cannot be searched is refused (variable not named)" "could not be searched"
+rm -f "${REPO}/.env"
+resolve "$REPO" "PATH=${WORK}/no-such-bin"
+expect_dir "no .env needs no grep" "${REPO}/data"
+
 printf '\nALL %d PASSED (%s %s)\n' "$passed" "$SHELL_UNDER_TEST" "$("$SHELL_UNDER_TEST" -c 'echo $BASH_VERSION')"

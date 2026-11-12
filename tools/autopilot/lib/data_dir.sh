@@ -31,8 +31,12 @@
 # spelling at all, because recognising "the" spelling is the parsing this file
 # does not do.
 #
-# What this does not see: a docker-compose.yml edited by hand to bind another
-# directory at /app/data, or an override file that does. The seven scripts
+# A linked git worktree is refused as a root: the stack is not started from
+# one, so its `data/` is nobody's state.
+#
+# What this does not see: a second clone or a plain copy of the checkout (it
+# looks exactly like the first), a docker-compose.yml edited by hand to bind
+# another directory at /app/data, or an override file that does. The seven scripts
 # make the same assumption today; tests/test_data_dir_single_home.py holds the
 # committed file to it by asking `docker compose config`.
 #
@@ -96,7 +100,16 @@ _data_dir_where_named() {
     # both greps read their whole input, so neither is cut short by the other.
     hits="$(LC_ALL=C grep -a -v '^[[:space:]]*#' "$env_file" \
         | LC_ALL=C grep -a -c -F "$IDEALISTA_DATA_DIR_KEY")" || true
-    if [ "${hits:-0}" != "0" ]; then
+    # `grep -c` always prints a count. Anything else is a search that did not
+    # run - no grep on a stripped PATH - and "could not look" is not "not
+    # there": read as zero, it would answer for a file nobody searched.
+    case "$hits" in
+        '' | *[!0-9]*)
+            _data_dir_refuse "${env_file} could not be searched for ${IDEALISTA_DATA_DIR_KEY} (grep gave no count), so it cannot be ruled out that it names it"
+            return 1
+            ;;
+    esac
+    if [ "$hits" != "0" ]; then
         DATA_DIR_NAMED_IN="$env_file"
     fi
     return 0
@@ -122,6 +135,16 @@ idealista_data_dir() {
     esac
     if [ ! -d "$repo" ]; then
         _data_dir_refuse "the repository root '${repo}' is not an existing directory"
+        return 1
+    fi
+    # The stack is started from one checkout, and that is where its state
+    # is. A linked git worktree is a second tree of the same repository with a
+    # `data/` of its own that no container mounts: a tool run from one would
+    # look for the supervisor lock, the markers and the attachments in a
+    # directory the deployment has never written. Git marks the difference: a
+    # linked worktree's `.git` is a file, the checkout's own is a directory.
+    if [ -f "${repo}/.git" ]; then
+        _data_dir_refuse "'${repo}' is a linked git worktree (its .git is a file), and the deployment does not run from one: its state is not in '${repo}/data'. Run this tool from the checkout the stack was started in - the first line of 'git worktree list'"
         return 1
     fi
 
