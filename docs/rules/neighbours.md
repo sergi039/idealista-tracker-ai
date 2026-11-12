@@ -74,8 +74,19 @@ across gunicorn workers or separate CLI processes**. The explicit Enrich route
 is capped at 5 presses/minute by the existing Flask limiter. An uncached walk
 needs 3 requests for an established reference, 4 via a precise coordinate, or up
 to 6 via an exact address. Existing parcel outline caches may reduce that total.
-A nested 90 s free-lookup budget can refuse a walk before completion and never
-extends the surrounding Enrich budget. There is no retry or scheduled sweep.
+A nested 90 s free-lookup budget (`WALK_BUDGET_S`) can refuse a walk before
+completion and never extends the surrounding Enrich budget. Both Catastro
+clients (`cadastre_service._get`, `cadastre_locate._get`) pass
+`deadline=lookup_deadline()` to `request_with_retries`, like the other free
+transports: a spent budget starts no request, and a request on the budget's
+last seconds gets only those as its timeout. Outside a budget (the cadastre
+card, the audit CLI) nothing changes. A walk the clock cut short is
+`unavailable` with `reason: lookup_budget_exhausted` and the step's own reason
+in `detail`; like every refusal it is not cached and never replaces a
+measurement of the same subject. The budget bounds when a request may start
+and how long it may wait for the server, not wall time: one gate wait (up to
+12 s) and a slow body after the headers can still run past it. There is no
+retry or scheduled sweep.
 
 The CLI requires 1–20 explicit positive IDs and has no `--all` or default cohort.
 It defaults to dry-run (no API calls or data writes):

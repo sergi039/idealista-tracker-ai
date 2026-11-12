@@ -67,7 +67,7 @@ from services.cadastre_service import (
     CadastreError,
     normalize_reference,
 )
-from utils.http import HTTP_USER_AGENT, request_with_retries
+from utils.http import HTTP_USER_AGENT, lookup_deadline, request_with_retries
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +120,12 @@ NO_PARCEL = "no_parcel"
 
 
 def _get(url: str, params: Dict[str, str]) -> requests.Response:
-    """One request. One attempt. The retry is a person asking again."""
+    """One request. One attempt. The retry is a person asking again.
+
+    Catastro is a free lookup, so it reads the ambient `lookup_budget` like
+    the others: a spent budget starts no request, and one on its last seconds
+    gets only those as its timeout. Outside a budget nothing changes.
+    """
     return request_with_retries(
         requests.get,
         url,
@@ -129,6 +134,7 @@ def _get(url: str, params: Dict[str, str]) -> requests.Response:
         timeout=REQUEST_TIMEOUT_S,
         max_attempts=1,
         gate=CATASTRO_GATE,
+        deadline=lookup_deadline(),
         logger=logger,
     )
 

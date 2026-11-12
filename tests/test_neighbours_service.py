@@ -26,6 +26,7 @@ from services import (  # noqa: E402
 from services.enrichment_write import EnrichmentWriteContractError  # noqa: E402
 from services.property_enrichment_service import PropertyEnrichmentService  # noqa: E402
 from utils import backfill_neighbours as cli  # noqa: E402
+from utils import http as h  # noqa: E402
 
 # Catastro's live answers for the owner's two references (rows 969 and 1282),
 # trimmed to the buildings within 100 m, the parcel's own building and two or
@@ -553,6 +554,78 @@ def test_answer_reaching_past_the_box_is_measured(monkeypatch):
     assert (result["status"], result["buildings_within_100m"]) == ("ok", 7)
 
 
+EMPTY_COLLECTION = (
+    '<FeatureCollection xmlns="http://www.opengis.net/wfs/2.0"'
+    ' numberMatched="0" numberReturned="0"/>'
+)
+
+
+def _no_cache_no_gate(monkeypatch):
+    monkeypatch.setattr(c, "_cache_get", lambda _: None)
+    monkeypatch.setattr(c, "_cache_set", Mock(side_effect=AssertionError))
+    monkeypatch.setattr(c.CATASTRO_GATE, "wait", lambda: 0)
+    monkeypatch.setattr(c.CATASTRO_GATE, "mark", lambda: None)
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        # Each path reaches Catastro through a different client: the parcel
+        # outline (cadastre_service), the coordinate lookup and the address
+        # indexes (cadastre_locate).
+        dict(),
+        dict(cadastral_reference=None),
+        dict(
+            cadastral_reference=None,
+            location_accuracy="approximate",
+            enrichment={"geocoding": {"query": "Rúa Maior 5, Miño"}},
+        ),
+    ],
+    ids=["parcel_outline", "coordinate_lookup", "address_index"],
+)
+def test_a_spent_budget_starts_no_catastro_request(monkeypatch, row):
+    _no_cache_no_gate(monkeypatch)
+    monkeypatch.setattr(n, "_row_province", lambda _: "15")
+    transport = Mock(side_effect=AssertionError("a request was started"))
+    monkeypatch.setattr(c.requests, "get", transport)
+    with h.lookup_budget(0):
+        result = n.NeighboursService().measure(prop(**row))
+    assert transport.call_count == 0
+    assert result["status"] == "unavailable"
+    assert result["reason"] == n.BUDGET_EXHAUSTED and result["detail"]
+    assert "buildings_within_100m" not in result
+
+
+def test_a_source_refusal_inside_the_budget_keeps_its_own_reason(monkeypatch):
+    _no_cache_no_gate(monkeypatch)
+    monkeypatch.setattr(n, "_metric_parcel", lambda _: (box(0, 0, 10, 10), 25829))
+    answer = SimpleNamespace(status_code=500, text="")
+    monkeypatch.setattr(c.requests, "get", Mock(return_value=answer))
+    with h.lookup_budget(300):
+        result = n.NeighboursService().measure(prop())
+    assert (result["status"], result["reason"]) == ("unavailable", "HTTP 500")
+
+
+@pytest.mark.parametrize("left, timeout", [(5.0, 5.0), (300.0, c.REQUEST_TIMEOUT_S)])
+def test_a_request_gets_no_more_than_the_budget_left(monkeypatch, left, timeout):
+    # A frozen clock: whatever the budget has left is exactly the timeout.
+    monkeypatch.setattr(
+        h, "time", SimpleNamespace(monotonic=lambda: 1000.0, sleep=lambda _: None)
+    )
+    _no_cache_no_gate(monkeypatch)
+    monkeypatch.setattr(c, "_cache_set", lambda *_: None)
+    monkeypatch.setattr(
+        n, "_metric_parcel", lambda _: (box(1000, 2000, 1010, 2020), 25829)
+    )
+    answer = SimpleNamespace(status_code=200, text=EMPTY_COLLECTION)
+    transport = Mock(return_value=answer)
+    monkeypatch.setattr(c.requests, "get", transport)
+    with h.lookup_budget(left):
+        result = n.NeighboursService().measure(prop())
+    assert result["status"] == "ok"
+    assert transport.call_args.kwargs["timeout"] == timeout
+
+
 def test_subject_stable_for_sql_numeric_roundtrip_and_stale_on_change():
     p = prop()
     old = n.subject(p)
@@ -1041,3 +1114,38 @@ def test_sixth_enrich_press_in_a_minute_is_refused(app, monkeypatch):
     limiter.reset()
     assert statuses[:5] == [404] * 5, statuses
     assert statuses[5] == 429, statuses
+
+
+@pytest.mark.parametrize("measured_before", [True, False])
+def test_a_clock_refusal_never_replaces_a_measurement(
+    app, monkeypatch, measured_before
+):
+    p = Property(
+        source_email_id="neighbours-clock",
+        cadastral_reference=REF,
+        location_lat=43.5,
+        location_lon=-8.5,
+        location_accuracy="precise",
+        enrichment={},
+    )
+    db.session.add(p)
+    db.session.commit()
+    previous = payload(p) if measured_before else None
+    if previous:
+        p.enrichment = {"neighbours": previous}
+        db.session.commit()
+    _no_cache_no_gate(monkeypatch)
+    transport = Mock(side_effect=AssertionError("a request was started"))
+    monkeypatch.setattr(c.requests, "get", transport)
+    with h.lookup_budget(0):
+        n.NeighboursService().enrich(p, commit=True)
+    db.session.expire_all()
+    stored = db.session.get(Property, p.id).enrichment["neighbours"]
+    if measured_before:
+        assert stored == previous
+    else:
+        assert (stored["status"], stored["reason"]) == (
+            "unavailable",
+            n.BUDGET_EXHAUSTED,
+        )
+    assert transport.call_count == 0

@@ -65,7 +65,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
-from utils.http import HTTP_USER_AGENT, RateGate, request_with_retries
+from utils.http import (
+    HTTP_USER_AGENT,
+    RateGate,
+    lookup_deadline,
+    request_with_retries,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -450,7 +455,12 @@ def area_agrees(computed: float, declared: Optional[float]) -> bool:
 
 
 def _get(url: str, params: Dict[str, str]) -> requests.Response:
-    """One request. One attempt. The retry is the owner pressing again."""
+    """One request. One attempt. The retry is the owner pressing again.
+
+    Catastro is a free lookup, so it reads the ambient `lookup_budget` like
+    the others: a spent budget starts no request, and one on its last seconds
+    gets only those as its timeout. Outside a budget nothing changes.
+    """
     return request_with_retries(
         requests.get,
         url,
@@ -459,6 +469,7 @@ def _get(url: str, params: Dict[str, str]) -> requests.Response:
         timeout=REQUEST_TIMEOUT_S,
         max_attempts=1,
         gate=CATASTRO_GATE,
+        deadline=lookup_deadline(),
         logger=logger,
     )
 
