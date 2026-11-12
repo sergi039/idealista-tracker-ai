@@ -13,16 +13,6 @@ must be an ancestor of `main`.
 
 ## Open
 
-### Yaencontre rows have no plot source except the per-press cadastre
-
-- **Anchor:** `services/plot_text.py` (`apply_to_property`); `docs/rules/portal-network-safety.md`.
-- **Measured 2026-11-12** on subscription 24: 1622 of the 1764 rows passing
-  price and house with an unknown plot are yaencontre, whose alert card has no
-  description and whose pages may not be fetched.
-- **What breaks, for whom:** the plot criterion stays `unknown` for them, so
-  #634's text reading cannot move most of the gap.
-- **Check:** `python -m utils.backfill_plot_from_text` prints the per-portal split.
-
 ### `utils/backfill_plot_area.py` skips rows filled from text
 
 - **Anchor:** `utils/backfill_plot_area.py` (`Property.plot_area.is_(None)`).

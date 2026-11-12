@@ -12,8 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the description or the idealista card at ingestion and stores it in
   `plot_area` with its source in `enrichment["plot_from_text"]`. It refuses
   house figures, truncated numbers and ambiguous texts; it never overwrites a
-  stated plot. `utils/backfill_plot_from_text.py` fills stored rows (dry run
-  first, snapshot, compare-and-swap restore) and reports the unknown share.
+  stated plot.
 
 ### Fixed: owner-fit ranking and research area provenance (#591)
 - Research CSV plot figures stay in `plot_area`, never the house area. The
