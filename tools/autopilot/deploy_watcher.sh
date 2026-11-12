@@ -55,7 +55,7 @@ STATE_DIR="$("${BASH:-/bin/bash}" "${SCRIPT_DIR}/lib/data_dir.sh" "$REPO_DIR")" 
 case "$STATE_DIR" in
     /*) ;;
     *)
-        echo "$(date '+%Y-%m-%d %H:%M:%S')  FATAL: the reader of the state directory answered '${STATE_DIR}', which is not an absolute path - refusing to run" >&2
+        echo "$(date '+%Y-%m-%d %H:%M:%S')  FATAL: the reader of the state directory answered something that is not an absolute path - refusing to run" >&2
         exit 1
         ;;
 esac
@@ -597,6 +597,70 @@ while read -r legacy_var; do
 done <<EOF
 $(deploy_render_legacy_vars)
 EOF
+
+# --- a moved state directory needs a build that knows where it is (#639) ----
+# Once the state lives outside the checkout (IDEALISTA_DATA_DIR in .env names
+# another directory), deploying a commit that does not carry the contract - a
+# revert of #639, a branch cut before it - would bring back a docker-compose.yml
+# that binds ./data: the checkout's directory, which by then holds four
+# reference files and no mail cursor. The app would start, healthz would be
+# green, the page would render, and ingestion would re-read the mailbox from
+# the beginning.
+#
+# The tombstone readers (lib/data_dir.sh, app.py) cannot stop that deploy: they
+# are part of what such a commit removes. This check can, because it runs in
+# the watcher that is serving NOW, before the fast-forward and before the
+# handover (#293) - checkout, container and marker are all untouched, and the
+# previous build keeps serving against the moved directory. It counts as a
+# refused tick, so the stall alarm (#532) carries it to a person.
+#
+# The way to deploy such a commit is to move the state back first:
+# tools/move_data_dir.sh --rollback. After that this condition is false.
+STATE_MOVED=0
+state_phys="$(cd "$STATE_DIR" 2>/dev/null && pwd -P)" || state_phys="$STATE_DIR"
+# The directory inside the checkout, from the one file that names it.
+CHECKOUT_STATE_DIR="$("${BASH:-/bin/bash}" "${SCRIPT_DIR}/lib/data_dir.sh" --default "$REPO_DIR")" \
+    || die "cannot tell which directory is the checkout's own state directory"
+default_phys="$(cd "$CHECKOUT_STATE_DIR" 2>/dev/null && pwd -P)" || default_phys="$CHECKOUT_STATE_DIR"
+if [ "$state_phys" != "$default_phys" ]; then
+    STATE_MOVED=1
+fi
+if [ "$STATE_MOVED" = "1" ]; then
+    contract_missing=""
+    if ! git cat-file -e "${remote_sha}:tools/autopilot/lib/data_dir.sh" 2>/dev/null; then
+        contract_missing="tools/autopilot/lib/data_dir.sh is not in it"
+    else
+        # Asked of Compose itself, about the target commit's file: what would
+        # it bind at /app/data, read against this checkout's .env? Anything but
+        # the directory the state is in - a literal ./data, a mount that moved,
+        # a file Compose cannot render - is a commit that must not be deployed
+        # onto it. The file is copied out of git to ask; nothing is checked out.
+        would_mount=""
+        target_compose="$(mktemp "${TMPDIR:-/tmp}/idealista-target-compose.XXXXXX")" \
+            || die "cannot create a temporary file to ask Compose about ${remote_sha:0:7}"
+        if git show "${remote_sha}:${COMPOSE_FILE}" >"$target_compose" 2>/dev/null; then
+            would_mount="$("${BASH:-/bin/bash}" "${SCRIPT_DIR}/lib/data_dir.sh" --compose-source "$REPO_DIR" "$target_compose" 2>/dev/null)" \
+                || would_mount=""
+        fi
+        rm -f "$target_compose"
+        if [ "$would_mount" != "$STATE_DIR" ]; then
+            # Not quoted: what Compose rendered can carry another variable's value.
+            contract_missing="${COMPOSE_FILE} there would mount another directory at /app/data, or Compose cannot say"
+        fi
+    fi
+    if [ -n "$contract_missing" ]; then
+        log "REFUSING to deploy ${remote_sha:0:7}: the deployment's state is in ${STATE_DIR}, and ${contract_missing}"
+        log "  that build would mount ${CHECKOUT_STATE_DIR} instead and start with no mail cursor"
+        log "  move the state back first: tools/move_data_dir.sh --rollback - then this commit deploys normally"
+        note_refused_tick "${remote_sha:0:7} does not carry the state-directory contract while the state is moved (#639)"
+        exit 0
+    fi
+    # Nothing is exported for the Compose calls below. They read the same .env
+    # from the same checkout the reader asked Compose about, and an export
+    # would outlive this block: it crosses the handover's exec (#293), where
+    # the watcher handed over to asks the reader first - and the reader
+    # refuses a process that has IDEALISTA_DATA_DIR exported.
+fi
 
 # --- checkpoint for rollback ----------------------------------------------
 if docker image inspect "$IMAGE" >/dev/null 2>&1; then

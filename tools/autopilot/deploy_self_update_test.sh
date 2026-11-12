@@ -79,6 +79,15 @@ STUB_BIN="${WORK}/bin"
 mkdir -p "$STUB_BIN"
 cat >"${STUB_BIN}/docker" <<'STUB'
 #!/bin/bash
+# `compose ... config` is the state-directory reader's question (#639), not a
+# deploy call: answered from what a scenario staged, and kept out of the log.
+case " $* " in
+    " compose "*" config "*)
+        [ -f "${DOCKER_COMPOSE_JSON:-/nonexistent}" ] || exit 1
+        cat "$DOCKER_COMPOSE_JSON"
+        exit 0
+        ;;
+esac
 printf '%s\n' "$*" >>"$DOCKER_LOG"
 # A parallel `git fetch` in the same clone, fired from inside the tick: the
 # rollback tag is taken after the watcher resolved origin/main and before it
@@ -245,6 +254,7 @@ run_watcher() {
     PATH="${STUB_BIN}:${PATH}" \
     DOCKER_LOG="${WORK}/docker.log" \
     DOCKER_TOP_FILE="$TOP_FILE" \
+    DOCKER_COMPOSE_JSON="${COMPOSE_JSON:-}" \
     DOCKER_PS_OUTPUT="${PS_OUTPUT:-}" \
     DOCKER_FAIL_BUILD="${FAIL_BUILD:-0}" \
     AUTOPILOT_DEFER_ON_INFLIGHT="${DEFER_ON_INFLIGHT:-0}" \
@@ -693,3 +703,32 @@ logged "building\.\.\. C-WATCHER-SPEAKING" \
 [ ! -e "$STALLED" ] || fail "scenario 14 left the stall marker after the deploy that followed"
 [ "$(cat "$MARKER")" = "$C_SHA" ] || fail "scenario 14 did not record the deploy"
 printf 'OK: a spent handover budget counts as a refused tick, and the next deploy clears it\n'
+
+# --- scenario 15: a handover while the state lives outside the checkout (#639)
+# .env names another directory, the commit carries the contract, and it also
+# changes the watcher. The watcher handed over to asks the reader first, like
+# any tick - and the reader refuses a process that has IDEALISTA_DATA_DIR
+# exported. So nothing the old watcher did before the exec may have exported
+# it: the handover would end in a watcher that refuses to run, with the
+# checkout already fast-forwarded and nothing deployed.
+fresh_repo
+STATE_15="${WORK}/state-15"
+mkdir -p "$STATE_15"
+mark_new_watcher
+# shellcheck disable=SC2016
+printf 'services:\n  app:\n    volumes:\n      - type: bind\n        source: ${IDEALISTA_DATA_DIR:-./data}\n        target: /app/data\n' \
+    >"${REPO}/docker-compose.yml"
+publish "watcher change while the state is moved"
+printf 'IDEALISTA_DATA_DIR=%s\n' "$STATE_15" >"${REPO}/.env"
+printf '{"services":{"app":{"volumes":[{"type":"bind","source":"%s","target":"/app/data"}]}}}\n' "$STATE_15" \
+    >"${WORK}/compose.json"
+COMPOSE_JSON="${WORK}/compose.json" run_watcher
+rm -f "${REPO}/.env" "${WORK}/compose.json"
+logged "handing this tick over" \
+    || fail "scenario 15 did not hand the tick over"
+logged "building\.\.\. NEW-WATCHER-SPEAKING" \
+    || fail "scenario 15: the watcher handed over to did not deploy while the state is moved"
+[ "$(builds)" = "1" ] || fail "scenario 15 ran $(builds) builds"
+[ "$(cat "$MARKER")" = "$NEW_SHA" ] || fail "scenario 15 recorded '$(cat "$MARKER")' instead of ${NEW_SHA}"
+[ "$WATCHER_RC" = "0" ] || fail "scenario 15 exited ${WATCHER_RC}"
+printf 'OK: a handover while the state is moved deploys under the new watcher\n'

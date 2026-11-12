@@ -68,11 +68,24 @@ cat >"${STUB_BIN}/docker" <<'STUB'
 # of the log the scenarios read as "what was done".
 case " $* " in " compose "*" config "*) is_config=1 ;; *) is_config=0 ;; esac
 if [ "$is_config" = "1" ]; then
-    [ -f "${DOCKER_COMPOSE_JSON:-/nonexistent}" ] || exit 1
-    cat "$DOCKER_COMPOSE_JSON"
+    # Two questions reach Compose: the reader's, about the checkout's own
+    # docker-compose.yml, and the deploy gate's, about a copy of another
+    # commit's file. Each gets what a scenario staged for it; nothing here
+    # works out what a compose file would mount - that would be this harness
+    # agreeing with itself. What the real Compose says about such a file is
+    # held by tests/test_data_dir_single_home.py.
+    file=""
+    while [ $# -gt 0 ]; do
+        if [ "$1" = "-f" ]; then file="$2"; break; fi
+        shift
+    done
+    answer="${DOCKER_COMPOSE_JSON:-}"
+    [ "$file" = "docker-compose.yml" ] || answer="${DOCKER_COMPOSE_TARGET_JSON:-}"
+    [ -f "${answer:-/nonexistent}" ] || exit 1
+    cat "$answer"
     exit 0
 fi
-printf '%s\n' "$*" >>"$DOCKER_LOG"
+printf '%s | IDEALISTA_DATA_DIR=%s\n' "$*" "${IDEALISTA_DATA_DIR-<unset>}" >>"$DOCKER_LOG"
 case "$1" in
     ps) printf '%s\n' "idealista-app" ;;
     top) cat "$DOCKER_TOP_FILE" 2>/dev/null || true ;;
@@ -82,9 +95,12 @@ exit 0
 STUB
 chmod +x "${STUB_BIN}/docker"
 
-# compose_mounts <dir>: what the stub's Compose would bind at /app/data.
+# compose_mounts <dir> [dir for the commit to deploy]: what the stub's Compose
+# would bind at /app/data for the checkout's file, and for the file of the
+# commit the gate asks about (the same, unless a scenario says otherwise).
 compose_mounts() {
     printf '{"services":{"app":{"volumes":[{"type":"bind","source":"%s","target":"/app/data"}]}}}\n' "$1" >"${WORK}/compose.json"
+    printf '{"services":{"app":{"volumes":[{"type":"bind","source":"%s","target":"/app/data"}]}}}\n' "${2:-$1}" >"${WORK}/compose.target.json"
 }
 
 JOB='python -m utils.backfill_pool --snapshot data/pool_backfill.json'
@@ -150,7 +166,14 @@ new_repo() {
     # What a real checkout has: `data/*` and `.env` are ignored, so neither
     # the state nor the variable's home makes the tree dirty.
     printf 'data/*\n.env\n' >"${REPO}/.gitignore"
-    git -C "$REPO" add file.txt .gitignore
+    # The state-directory contract, as a commit that may be deployed while the
+    # state is moved has to carry it (the gate of scenario 6 looks for both).
+    mkdir -p "${REPO}/tools/autopilot/lib"
+    cp "${SCRIPT_DIR}/lib/data_dir.sh" "${REPO}/tools/autopilot/lib/data_dir.sh"
+    # shellcheck disable=SC2016
+    printf 'services:\n  app:\n    volumes:\n      - type: bind\n        source: ${IDEALISTA_DATA_DIR:-./data}\n        target: /app/data\n' \
+        >"${REPO}/docker-compose.yml"
+    git -C "$REPO" add file.txt .gitignore tools docker-compose.yml
     git -C "$REPO" commit --quiet -m "first"
     git -C "$REPO" remote add origin "$remote"
     git -C "$REPO" push --quiet origin main
@@ -158,8 +181,10 @@ new_repo() {
     HEAD_SHA="$(git -C "$REPO" rev-parse HEAD)"
     : >"${WORK}/docker.log"
     : >"${WORK}/stderr"
-    rm -f "${WORK}/compose.json"
+    rm -f "${WORK}/compose.json" "${WORK}/compose.target.json"
 }
+
+publish_main() { git -C "$REPO" push --quiet origin main; }
 
 run_watcher() {
     # run_watcher [VAR=value ...]: no path overrides - the defaults are the
@@ -169,6 +194,7 @@ run_watcher() {
         PATH="${STUB_BIN}:${PATH}" \
         DOCKER_LOG="${WORK}/docker.log" \
         DOCKER_COMPOSE_JSON="${WORK}/compose.json" \
+        DOCKER_COMPOSE_TARGET_JSON="${WORK}/compose.target.json" \
         DOCKER_TOP_FILE="$TOP_FILE" \
         AUTOPILOT_REPO_DIR="$REPO" \
         AUTOPILOT_LOCK_DIR="${WORK}/lock.d" \
@@ -215,6 +241,9 @@ set_top "$JOB"
 run_watcher
 built || fail "scenario 1 did not deploy"
 expect_all_in "scenario 1" "${REPO}/data"
+# With nothing configured the Compose calls are what they always were.
+grep '^compose ' "${WORK}/docker.log" | grep -v 'IDEALISTA_DATA_DIR=<unset>' >/dev/null \
+    && fail "scenario 1: the watcher exported IDEALISTA_DATA_DIR with nothing configured"
 printf 'OK: with nothing configured the watcher keeps everything in <repo>/data\n'
 
 # --- scenario 2: .env names a directory outside the repository --------------
@@ -232,6 +261,12 @@ run_watcher
 built || fail "scenario 2 did not deploy"
 expect_all_in "scenario 2" "$STATE"
 expect_nothing_in "scenario 2" "${REPO}/data"
+# Compose reads .env itself, as it does for every other process: the watcher
+# exports nothing, here either. An export would cross the handover's exec and
+# the reader refuses a process that carries one (deploy_self_update_test.sh).
+grep -q '^compose ' "${WORK}/docker.log" || fail "scenario 2: Compose was never called"
+grep -v 'IDEALISTA_DATA_DIR=<unset>$' "${WORK}/docker.log" >/dev/null \
+    && fail "scenario 2: the watcher exported IDEALISTA_DATA_DIR to what it runs"
 printf 'OK: a configured state directory takes the log, the marker and the in-flight markers\n'
 
 # --- scenario 3: the deferral count and the stall alarm move with it --------
@@ -296,3 +331,82 @@ grep -q "FATAL" "${WORK}/stderr" || fail "scenario 5: the watcher did not say it
 [ -z "$(ls -A "$STATE")" ] || fail "scenario 5: the watcher wrote into the directory .env names"
 [ "$(ls -A "${REPO}/data")" = "$before" ] || fail "scenario 5: the watcher wrote into <repo>/data after the refusal"
 printf 'OK: a Compose that cannot be asked stops the tick before anything is touched\n'
+
+# --- scenario 6: a commit without the contract is not deployed while the ----
+# --- state is moved ----------------------------------------------------------
+# A revert of #639 reaches main while the state lives outside the checkout.
+# Its docker-compose.yml binds ./data again - the checkout's directory, which
+# by now has no mail cursor. Nothing in that commit can refuse itself, so the
+# watcher that is serving now does: before the fast-forward, with the checkout,
+# the container and the marker untouched. Three shapes of "no contract".
+for shape in compose-binds-data compose-unreadable reader-removed; do
+    new_repo "repo6-${shape}"
+    STATE="${WORK}/state6-${shape}"
+    mkdir -p "$STATE"
+    printf 'IDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
+    compose_mounts "$STATE"
+    printf '%s\n' "$HEAD_SHA" >"${STATE}/.deployed_sha"
+    serving_sha="$HEAD_SHA"
+    case "$shape" in
+        compose-binds-data)
+            # The variable survives only in a comment: not a mount.
+            # shellcheck disable=SC2016
+            printf '# was: ${IDEALISTA_DATA_DIR:-./data}\nservices:\n  app:\n    volumes:\n      - ./data:/app/data\n' \
+                >"${REPO}/docker-compose.yml"
+            # What Compose says of that file, staged: the checkout's ./data.
+            compose_mounts "$STATE" "${REPO}/data"
+            ;;
+        compose-unreadable)
+            # A file Compose cannot render: it has no answer about it, and no
+            # answer is not "the same directory". Fail-closed.
+            printf 'services: [this is not a compose file\n' >"${REPO}/docker-compose.yml"
+            rm -f "${WORK}/compose.target.json"
+            ;;
+        reader-removed)
+            git -C "$REPO" rm --quiet tools/autopilot/lib/data_dir.sh
+            ;;
+    esac
+    git -C "$REPO" commit --quiet -am "revert the state-directory contract (${shape})"
+    publish_main
+    git -C "$REPO" reset --quiet --hard "$serving_sha"
+    : >"${WORK}/docker.log"
+    set_top
+    run_watcher AUTOPILOT_STALL_THRESHOLD=1
+    built && fail "scenario 6 (${shape}): a commit without the contract was built while the state is moved"
+    [ ! -s "${WORK}/docker.log" ] || fail "scenario 6 (${shape}): docker was touched before the refusal"
+    [ "$(git -C "$REPO" rev-parse HEAD)" = "$serving_sha" ] \
+        || fail "scenario 6 (${shape}): the checkout was fast-forwarded to the refused commit"
+    [ "$(cat "${STATE}/.deployed_sha")" = "$serving_sha" ] \
+        || fail "scenario 6 (${shape}): the deployment marker moved"
+    grep -q "REFUSING to deploy" "${STATE}/autopilot-deploy.log" \
+        || fail "scenario 6 (${shape}): the refusal is not in the deploy log"
+    grep -q "move_data_dir.sh --rollback" "${STATE}/autopilot-deploy.log" \
+        || fail "scenario 6 (${shape}): the refusal does not say how to proceed"
+    [ -e "${STATE}/.deploy_stalled" ] \
+        || fail "scenario 6 (${shape}): the refusal did not reach the stall alarm"
+done
+printf 'OK: a commit without the state-directory contract is refused while the state is moved\n'
+
+# --- scenario 7: the same commit deploys once the state is back -------------
+# The gate is about a moved state directory, not about the commit: with
+# nothing configured the watcher has no opinion on what docker-compose.yml
+# mounts, exactly as before #639.
+new_repo repo7
+mkdir -p "${REPO}/data"
+printf '%s\n' "$HEAD_SHA" >"${REPO}/data/.deployed_sha"
+serving_sha="$HEAD_SHA"
+printf 'services:\n  app:\n    volumes:\n      - ./data:/app/data\n' >"${REPO}/docker-compose.yml"
+git -C "$REPO" rm --quiet tools/autopilot/lib/data_dir.sh
+git -C "$REPO" commit --quiet -am "revert the state-directory contract"
+publish_main
+target_sha="$(git -C "$REPO" rev-parse HEAD)"
+git -C "$REPO" reset --quiet --hard "$serving_sha"
+: >"${WORK}/docker.log"
+set_top
+run_watcher
+built || fail "scenario 7: with the state in <repo>/data the commit was not deployed"
+[ "$(cat "${REPO}/data/.deployed_sha")" = "$target_sha" ] \
+    || fail "scenario 7: the deployed marker does not name the new commit"
+grep -q "REFUSING to deploy" "${REPO}/data/autopilot-deploy.log" \
+    && fail "scenario 7: the gate fired although the state was never moved"
+printf 'OK: with the state in <repo>/data the gate has no opinion\n'
