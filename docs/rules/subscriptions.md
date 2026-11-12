@@ -145,7 +145,9 @@ things about it are load bearing:
   `enrichment["plot_from_text"]` records value, field, snippet, extractor
   version, portal and UTC time in the same transaction (no migration). It
   never overwrites a stated or hand-set plot, and refuses a house figure
-  ("construidos", "útiles", "de vivienda"), a cut-off one ("parcela de 6...":
+  ("construidos", "útiles", "de vivienda", whatever punctuation stands
+  between: "1.362 m² (superficie construida)", review of #661), a text that
+  denies a plot ("sin terreno", "sin parcela" vetoes every source), a cut-off one ("parcela de 6...":
   idealista's alert text is truncated), two different figures (within a source or between sources: a plot is read
   only when every source that names one names the same value), and anything
   `MAX_CREDIBLE_M2` (the one credibility rule) or the `NUMERIC(10,2)` column
