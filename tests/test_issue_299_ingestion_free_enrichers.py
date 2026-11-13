@@ -426,6 +426,11 @@ class TestTheAiBridgeIsNeverReachedUnattended:
         self, app, reference_files, monkeypatch
     ):
         """The other half of the contract: a press may spend a CLI run."""
+        monkeypatch.setattr(
+            "services.cadastre_locate.parcels_at",
+            lambda *_: {"status": "not_found"},
+        )
+
         with app.app_context():
             prop = Property(
                 source_email_id="enrich_button_ai",
@@ -1026,6 +1031,11 @@ class TestTheEnrichFlowComputesSeaView:
     def test_enrich_property_stores_a_sea_view_verdict(
         self, app, reference_files, monkeypatch
     ):
+        monkeypatch.setattr(
+            "services.cadastre_locate.parcels_at",
+            lambda *_: {"status": "not_found"},
+        )
+
         with app.app_context():
             prop = Property(
                 source_email_id="enrich_button_sea_view",

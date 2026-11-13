@@ -96,6 +96,13 @@
 
 ## 2026-11-04
 
+- Measure neighbouring Catastro building footprints from a known parcel's full
+  outline on an explicit Enrich press, with independent locked writes and a
+  dry-run-first, ID-scoped shortlist tool. Preserve raw counts and typed uses;
+  leave privacy categorical judgment unknown because both owner references
+  contradict the proposed 50/100 m thresholds. Keep facade-photo neighbour
+  evidence as claims so off-frame buildings cannot become supported facts.
+
 - Keep research-sheet parcel areas in `plot_area`, never in house area; add a
   dry-run repair with original-import identity checks, rollback snapshots and
   locked restore. Ambiguous house/outbuilding totals remain unmeasured.
