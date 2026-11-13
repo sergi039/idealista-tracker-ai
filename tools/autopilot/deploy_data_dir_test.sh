@@ -200,8 +200,7 @@ printf 'OK: with nothing configured the watcher keeps everything in <repo>/data\
 # --- scenario 2: what the reader refuses stops the tick ----------------------
 # .env names the variable and nothing says what Compose would mount. A watcher
 # that took .env's word, or fell back to <repo>/data, would be guessing where
-# the container writes its markers - and the marker below, which says a job is
-# running, is in only one of the two. The tick ends before it deploys.
+# the container writes its markers. The tick ends before it deploys.
 new_repo repo2
 STATE="${WORK}/state2"
 mkdir -p "${STATE}" "${REPO}/data/.inflight"

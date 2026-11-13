@@ -472,7 +472,7 @@ def test_the_reader_never_names_a_directory_compose_would_not_mount(
 
 
 # One more variable in the environment while `.env` names `state`. The first
-# is the reviewer's input to #678: exported EMPTY, Compose mounts `./data`.
+# is the review's input to #678.
 _ENVIRONMENTS = [
     f"{VARIABLE}=",
     f"{VARIABLE}={{other}}",

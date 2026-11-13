@@ -314,9 +314,8 @@ printf 'OK: a stalled deploy chain is surfaced, and the backfill verdict is not 
 
 # --- scenario 15: the state directory comes from the one reader (#639) -------
 # .env names IDEALISTA_DATA_DIR, so the reader asks Compose - and here Compose
-# gives no answer. That is "unknown" (exit 2, which blocks like busy): neither
-# the directory .env names nor <repo>/data is taken on a guess. The live
-# supervisor lock in the directory .env names is the decoy.
+# gives no answer. That is "unknown" (exit 2): neither the directory .env
+# names nor <repo>/data is taken on a guess. The live lock there is the decoy.
 set_top; clear_locks; clear_markers
 STATE="${WORK}/state"
 mkdir -p "${STATE}/.inflight"

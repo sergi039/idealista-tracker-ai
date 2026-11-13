@@ -101,7 +101,7 @@ _data_dir_trim() {
 # whether Compose has to be asked. `.env` counts when the name occurs anywhere
 # in it. The file is never sourced and no line of it is printed.
 _data_dir_where_named() {
-    local repo="$1" env_file="${1}/.env" hits
+    local repo="$1" env_file="${1}/.env" hits refs
     DATA_DIR_NAMED_IN=""
 
     [ -e "$env_file" ] || [ -L "$env_file" ] || return 0
@@ -123,6 +123,13 @@ _data_dir_where_named() {
             ;;
     esac
     if [ "$hits" != "0" ]; then
+        # `${X}/state` is resolved by Compose from each process's own
+        # environment: no one home. Refused.
+        refs="$(LC_ALL=C grep -a -F "$IDEALISTA_DATA_DIR_KEY" "$env_file" | LC_ALL=C grep -a -c -F '$')" || true
+        if [ "$refs" != "0" ]; then
+            _data_dir_refuse "${env_file} names ${IDEALISTA_DATA_DIR_KEY} on a line with a '\$': Compose would resolve it from each process's own environment. Write the path out"
+            return 1
+        fi
         DATA_DIR_NAMED_IN="$env_file"
     fi
     return 0
@@ -215,7 +222,7 @@ idealista_data_dir() {
     fi
 
     if exported="$(_data_dir_set_in_environment)"; then
-        _data_dir_refuse "${exported} is set in this process's environment (an empty value counts: Compose lets it outrank .env). Compose would follow it only when run from here, and no other tool would see it: set ${IDEALISTA_DATA_DIR_KEY} in ${repo}/.env, its one home, and unset ${exported}"
+        _data_dir_refuse "${exported} is set in this process's environment (an empty value counts: Compose lets it outrank .env). Compose would follow it only when run from here: set ${IDEALISTA_DATA_DIR_KEY} in ${repo}/.env, its one home, and unset ${exported}"
         return 1
     fi
     _data_dir_where_named "$repo" || return 1
