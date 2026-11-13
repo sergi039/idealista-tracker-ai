@@ -1037,6 +1037,85 @@ def test_shortlist_plan_compare_is_under_lock_after_network(app, monkeypatch):
     assert p.enrichment["neighbours"] == concurrent
 
 
+def test_planned_subject_is_compared_under_lock_after_network(app, monkeypatch):
+    """The subject moves after the pre-request check: the lookup measures the
+    moved row and agrees with it, and the previous block (None) still matches.
+    Only the planned subject, asked under the lock, refuses the write."""
+    p = Property(
+        source_email_id="neighbours-plan-subject-race",
+        cadastral_reference=REF,
+        location_lat=43.5,
+        location_lon=-8.5,
+        location_accuracy="precise",
+        enrichment={},
+    )
+    db.session.add(p)
+    db.session.commit()
+    planned = n.subject(p)
+    service = n.NeighboursService()
+
+    def measure(row):
+        db.session.execute(
+            text("UPDATE properties SET cadastral_reference=:r WHERE id=:i"),
+            {"r": "9999999NH9999S", "i": row.id},
+        )
+        db.session.commit()
+        return payload(row)  # measured on the moved row, as the real lookup would
+
+    monkeypatch.setattr(service, "measure", measure)
+    with pytest.raises(ValueError, match="plan changed during lookup"):
+        service.enrich(p, commit=True, expected_previous=None, expected_subject=planned)
+    db.session.expire_all()
+    assert "neighbours" not in (db.session.get(Property, p.id).enrichment or {})
+
+
+def test_cli_apply_refuses_a_subject_changed_between_plan_rows(
+    app, monkeypatch, tmp_path
+):
+    """The preflight compares the whole plan once; a later row can still move
+    while an earlier one is measured. Its subject must be asked again, before
+    any request and under the row lock, not merely its previous block (None
+    for a row never measured matches whatever was moved)."""
+    rows = [
+        Property(
+            source_email_id=f"neighbours-plan-rows-{i}",
+            cadastral_reference=REF,
+            location_lat=43.5,
+            location_lon=-8.5,
+            location_accuracy="precise",
+            enrichment={},
+        )
+        for i in range(2)
+    ]
+    db.session.add_all(rows)
+    db.session.commit()
+    first, second = (row.id for row in rows)
+    monkeypatch.setattr(cli, "create_app", lambda: app)
+    plan = tmp_path / "plan.json"
+    cli.main(["--ids", f"{first},{second}", "--plan", str(plan)])
+    measured = []
+
+    def measure(self, row):
+        measured.append(row.id)
+        if row.id == first:
+            # Another transaction moves the second row's parcel after the
+            # preflight passed and while the first row is being measured.
+            db.session.execute(
+                text("UPDATE properties SET cadastral_reference=:r WHERE id=:i"),
+                {"r": "9999999NH9999S", "i": second},
+            )
+            db.session.commit()
+        return payload(row)
+
+    monkeypatch.setattr(n.NeighboursService, "measure", measure)
+    with pytest.raises(ValueError, match="plan changed during lookup"):
+        cli.main(["--ids", f"{first},{second}", "--apply", "--plan", str(plan)])
+    assert measured == [first]
+    db.session.expire_all()
+    assert db.session.get(Property, first).enrichment["neighbours"]["status"] == "ok"
+    assert "neighbours" not in (db.session.get(Property, second).enrichment or {})
+
+
 def test_mixed_known_and_unknown_uses_cannot_support_agricultural_absence():
     result = n.measure_buildings(
         box(0, 0, 10, 10),

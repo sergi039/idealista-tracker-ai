@@ -97,7 +97,13 @@ python -m utils.backfill_neighbours --ids 969,1282 --dry-run --plan /private/pat
 
 The plan saves
 the exact IDs, subject hashes and previous blocks. `--apply --plan` requires
-that unchanged plan and refuses missing IDs or a changed baseline. It never
+that unchanged plan and refuses missing IDs or a changed baseline. That
+comparison runs once, before the loop, so each row's planned subject and
+previous block are also handed to `enrich(expected_subject=...,
+expected_previous=...)`: the subject is asked before any Catastro request and
+both again under the row lock, because a commit for an earlier row expires the
+later ones and a row moved meanwhile would otherwise be measured as moved and
+written over a matching `None`. It never
 overwrites an existing plan. After a partial run, generate a new dry-run plan;
 its in-flight marker therefore makes no resume claim. Before any real apply,
 follow `long-jobs-and-deploys.md`: announce module, rows and zero monetary cost,
