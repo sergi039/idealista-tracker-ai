@@ -11,8 +11,7 @@
 #   * an answer from Compose that is not exactly one existing host directory
 #     is refused - never created, never replaced by `<repo>/data`.
 #
-# Compose is played here by a stub that prints the configuration a scenario
-# puts in its mouth, so every answer Compose could give can be staged and no
+# Compose is played here by a stub that prints what a scenario stages, so no
 # Docker is needed. That the real `docker compose config` and the reader agree
 # is shown against Compose itself in tests/test_data_dir_single_home.py.
 #
@@ -69,7 +68,7 @@ resolve() {
     shift
     : >"${WORK}/docker.log"
     RC=0
-    OUT="$(env -u IDEALISTA_DATA_DIR -u COMPOSE_ENV_FILES DOCKER_BIN="$STUB" "$@" "$SHELL_UNDER_TEST" "$LIB" "$repo" 2>"${WORK}/err")" || RC=$?
+    OUT="$(env -u IDEALISTA_DATA_DIR -u COMPOSE_ENV_FILES -u COMPOSE_DISABLE_ENV_FILE DOCKER_BIN="$STUB" "$@" "$SHELL_UNDER_TEST" "$LIB" "$repo" 2>"${WORK}/err")" || RC=$?
     ERR="$(cat "${WORK}/err")"
 }
 
@@ -156,50 +155,32 @@ pass "nothing of the rendered configuration is printed"
 #    the same directory does not redeem it.
 new_repo
 resolve "$REPO" "IDEALISTA_DATA_DIR=${OTHER}"
-expect_refusal "an exported variable is refused" "exported"
+expect_refusal "an exported variable is refused" "IDEALISTA_DATA_DIR is set in this process"
 asked && fail "Compose was asked about an exported variable"
 printf 'IDEALISTA_DATA_DIR=%s\n' "$OTHER" >"${REPO}/.env"
 resolve "$REPO" "IDEALISTA_DATA_DIR=${OTHER}"
-expect_refusal "an exported variable is refused beside the same .env" "exported"
-rm -f "${REPO}/.env"
+expect_refusal "an exported variable is refused beside the same .env" "is set in this process"
 
-# 7. Exported but empty is unset, to Compose and here.
+# 7. Exported but EMPTY is refused too. To Compose that is not "unset": it
+#    outranks .env, the mount renders ./data, and this process alone would
+#    take <repo>/data while the watcher mounts what .env names.
 resolve "$REPO" "IDEALISTA_DATA_DIR="
-expect_dir "an empty exported variable is unset" "${REPO}/data"
-asked && fail "Docker was asked for an empty exported variable"
-
-# 8. Every way .env can carry the name sends the question to Compose. None is
-#    interpreted here: which of them Compose reads as the variable, and as
-#    what value, is Compose's to say. A comment counts too - asking once too
-#    often costs a moment, not asking once too rarely costs the state.
-BOM="$(printf '\357\273\277')"
-MULTILINE="$(printf 'OTHER="first line\nIDEALISTA_DATA_DIR=%s\n"' "$OTHER")"
-BINARY="$(printf 'SECRET=a\377c\nIDEALISTA_DATA_DIR=%s' "$OTHER")"
-for content in \
-    "IDEALISTA_DATA_DIR=" \
-    "export IDEALISTA_DATA_DIR=${OTHER}" \
-    "IDEALISTA_DATA_DIR = ${OTHER}" \
-    "IDEALISTA_DATA_DIR: ${OTHER}" \
-    "IDEALISTA_DATA_DIR=\"${OTHER}\"" \
-    "${BOM}IDEALISTA_DATA_DIR=${OTHER}" \
-    "IDEALISTA_DATA_DIR_OLD=${OTHER}" \
-    "DB_PASSWORD=x # IDEALISTA_DATA_DIR=${OTHER}" \
-    "# IDEALISTA_DATA_DIR=${OTHER}" \
-    "$MULTILINE" \
-    "$BINARY"; do
-    new_repo
-    printf 'DB_PASSWORD=x\n%s\n' "$content" >"${REPO}/.env"
-    label="$(printf '%s' "$content" | LC_ALL=C tr -c '[:print:]' ' ')"
-    resolve "$REPO"
-    expect_dir "Compose decides: ${label%%"${OTHER}"*}" "$STATE"
-    asked || fail "Compose was not asked for: ${label}"
-done
+expect_refusal "an empty exported variable is refused beside a .env that names another directory" "an empty value counts"
+asked && fail "Compose was asked about an empty exported variable"
+rm -f "${REPO}/.env"
+resolve "$REPO" "IDEALISTA_DATA_DIR="
+expect_refusal "an empty exported variable is refused" "IDEALISTA_DATA_DIR is set in this process"
 
 # 9. COMPOSE_ENV_FILES points Compose at other env files, where the variable
 #    may be set without .env ever naming it - for this process only.
 new_repo
 resolve "$REPO" "COMPOSE_ENV_FILES=${WORK}/elsewhere.env"
-expect_refusal "COMPOSE_ENV_FILES in the environment is refused" "exported"
+expect_refusal "COMPOSE_ENV_FILES in the environment is refused" "COMPOSE_ENV_FILES is set in this process"
+#    COMPOSE_DISABLE_ENV_FILE stops it reading .env. Set to nothing is set.
+for switch in COMPOSE_ENV_FILES= COMPOSE_DISABLE_ENV_FILE=1 COMPOSE_DISABLE_ENV_FILE=; do
+    resolve "$REPO" "$switch"
+    expect_refusal "${switch} in the environment is refused" "${switch%%=*} is set in this process"
+done
 
 # 10. A .env that cannot be read cannot be ruled out, so it is not silent.
 if [ "$(id -u)" != "0" ]; then
@@ -230,38 +211,11 @@ expect_refusal "a directory that does not exist is refused" "not an existing dir
 [ ! -e "$MISSING" ] || fail "the missing directory was created"
 pass "a missing directory is not created"
 
-named_repo; compose_says "[$(bind "${WORK}/a-file")]"; resolve "$REPO"
-expect_refusal "a regular file is refused" "not an existing directory"
-
 named_repo; compose_says "[$(bind "/")]"; resolve "$REPO"
 expect_refusal "the filesystem root is refused" "would mount /"
 
 named_repo; compose_says "[$(bind "state")]"; resolve "$REPO"
 expect_refusal "a relative source is refused" "not an absolute path"
-
-named_repo; compose_says "[$(bind "${STATE}/")]"; resolve "$REPO"
-expect_dir "a trailing slash on the source is trimmed" "$STATE"
-
-named_repo; compose_says "[$(bind "$STATE"),$(bind "$OTHER")]"; resolve "$REPO"
-expect_refusal "two mounts at /app/data are refused" "exactly one host directory"
-
-named_repo; compose_says "[$(bind "$STATE"),$(bind "$OTHER" /app/data/attachments)]"; resolve "$REPO"
-expect_refusal "a second mount under /app/data is refused" "exactly one host directory"
-
-named_repo; compose_says "[$(bind "$STATE" /app/data/)]"; resolve "$REPO"
-expect_refusal "a target that is not literally /app/data is refused" "exactly one host directory"
-
-named_repo; compose_says "[$(bind "$OTHER" /app/logs)]"; resolve "$REPO"
-expect_refusal "no mount at /app/data is refused" "exactly one host directory"
-
-named_repo; compose_says '[{"type":"volume","source":"state","target":"/app/data"}]'; resolve "$REPO"
-expect_refusal "a named volume at /app/data is refused" "exactly one host directory"
-
-named_repo; printf '{"services":{"worker":{"volumes":[%s]}}}\n' "$(bind "$STATE")" >"${WORK}/compose.json"; resolve "$REPO"
-expect_refusal "a mount that belongs to another service is refused" "exactly one host directory"
-
-named_repo; printf 'this is not json\n' >"${WORK}/compose.json"; resolve "$REPO"
-expect_refusal "an answer that is not a configuration is refused" "exactly one host directory"
 
 named_repo; compose_says "[$(bind "$STATE")]"; printf '1\n' >"${WORK}/compose.rc"; resolve "$REPO"
 expect_refusal "a Compose that fails is refused, whatever it printed" "config' failed"

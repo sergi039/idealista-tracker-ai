@@ -18,29 +18,24 @@
 # `${IDEALISTA_DATA_DIR:-./data}`. Compose is the reader that decides where the
 # app's state really is, so this file does not keep a second opinion: it parses
 # neither docker-compose.yml nor `.env`. A second parser of either can disagree
-# with Compose about what they say - a variable mentioned in a comment after
-# the real bind, `KEY: value`, a byte-order mark, a value inside another key's
-# quotes - and every such disagreement is a host tool looking at a directory
+# with Compose, and each disagreement is a host tool looking at a directory
 # the app is not using.
 #
 #   * The variable is named nowhere -> `<repo>/data`, without asking anybody.
-#     That is what `${IDEALISTA_DATA_DIR:-./data}` renders, and it keeps the
-#     common path free of Docker.
 #   * Its name occurs anywhere in `<repo>/.env`, comments included -> the
 #     answer is whatever `docker compose config` binds at /app/data for the
 #     `app` service, asked the way the deploy watcher runs Compose: from the
 #     checkout, with `-f docker-compose.yml`. No Docker, no python3 to read
 #     its answer, or an answer that is not exactly one existing host
 #     directory: refused.
-#   * It is exported in this process's environment (or COMPOSE_ENV_FILES
-#     points Compose at other env files) -> refused. Compose would follow the
-#     export, but only when run from this very process: the watcher under
-#     launchd and a tool in somebody's shell would then name two directories.
-#     One home means `<repo>/.env`, which every process reads alike.
+#   * It is SET in this process's environment, empty included (so is
+#     COMPOSE_ENV_FILES or COMPOSE_DISABLE_ENV_FILE, which decide whether .env
+#     is read) -> refused. Compose would follow the export only when run from
+#     this very process: the watcher under launchd would name another
+#     directory. One home means `<repo>/.env`, which every process reads alike.
 #
 # Nothing here creates the directory and nothing falls back to `<repo>/data`
-# when Compose's answer cannot be used: a typo that silently became an empty
-# directory would be a second, empty copy of the deployment's state.
+# when Compose's answer cannot be used.
 #
 # A linked git worktree is refused as a root: the stack is not started from
 # one, so its `data/` is nobody's state.
@@ -66,6 +61,23 @@
 set -u
 
 IDEALISTA_DATA_DIR_KEY="IDEALISTA_DATA_DIR"
+# What Compose takes from the environment that moves the mount (measured on
+# v5.7; tests/test_data_dir_single_home.py asks it about the other switches).
+IDEALISTA_DATA_DIR_ENVIRONMENT="IDEALISTA_DATA_DIR COMPOSE_ENV_FILES COMPOSE_DISABLE_ENV_FILE"
+
+# Prints the first that is SET here, empty included: an exported empty value
+# outranks .env in Compose, so `IDEALISTA_DATA_DIR=` renders ./data in this
+# process while every other one mounts what .env names.
+_data_dir_set_in_environment() {
+    local name
+    for name in $IDEALISTA_DATA_DIR_ENVIRONMENT; do
+        if [ -n "${!name+set}" ]; then
+            printf '%s\n' "$name"
+            return 0
+        fi
+    done
+    return 1
+}
 
 _data_dir_refuse() {
     printf 'data_dir: %s\n' "$*" >&2
@@ -118,8 +130,7 @@ _data_dir_where_named() {
 
 # Reads `docker compose config --format json` on stdin and prints the host
 # directory bound at /app/data for the `app` service. Exits 1 unless that is
-# exactly one bind with a source, and nothing else is mounted on or under
-# /app/data - a second mount there would be a second place the state lives.
+# exactly one bind with a source and nothing else is mounted on or under it.
 _data_dir_bind_from_config() {
     python3 -c '
 import json
@@ -149,9 +160,8 @@ print(source)
 }
 
 # Asks Compose. Prints the host directory it would bind at /app/data for the
-# `app` service, from the checkout `repo` and the compose file given (the one
-# the watcher deploys by default). The rendered configuration carries every
-# value of `.env`; it stays in a variable and a pipe and none of it is printed.
+# `app` service, from the checkout `repo`. The rendered configuration carries
+# every value of `.env`; it stays in a variable and a pipe, none of it printed.
 idealista_compose_source() {
     local repo="${1:-}" compose_file="${2:-docker-compose.yml}"
     local docker="${DOCKER_BIN:-docker}" rendered source
@@ -172,7 +182,7 @@ idealista_compose_source() {
 }
 
 idealista_data_dir() {
-    local repo="${1:-}" value
+    local repo="${1:-}" value exported
 
     if [ -z "$repo" ]; then
         _data_dir_refuse "usage: data_dir.sh <repository root>"
@@ -204,8 +214,8 @@ idealista_data_dir() {
         return 1
     fi
 
-    if [ -n "${IDEALISTA_DATA_DIR:-}" ] || [ -n "${COMPOSE_ENV_FILES:-}" ]; then
-        _data_dir_refuse "${IDEALISTA_DATA_DIR_KEY} or COMPOSE_ENV_FILES is exported in this process's environment. Compose would follow it only when run from here, and no other tool would see it: set ${IDEALISTA_DATA_DIR_KEY} in ${repo}/.env, its one home, and unset the export"
+    if exported="$(_data_dir_set_in_environment)"; then
+        _data_dir_refuse "${exported} is set in this process's environment (an empty value counts: Compose lets it outrank .env). Compose would follow it only when run from here, and no other tool would see it: set ${IDEALISTA_DATA_DIR_KEY} in ${repo}/.env, its one home, and unset ${exported}"
         return 1
     fi
     _data_dir_where_named "$repo" || return 1
