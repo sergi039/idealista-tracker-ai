@@ -38,6 +38,7 @@ XSI_NIL = "{http://www.w3.org/2001/XMLSchema-instance}nil"
 MAX_FEATURES = 5000
 MAX_BBOX_AREA_M2 = 4_000_000
 _UNSET = object()
+PLAN_CHANGED = "shortlist plan changed during lookup; dry-run again"
 
 
 def _dict(value):
@@ -492,16 +493,32 @@ class NeighboursService:
                     {**result, "status": "unavailable", "reason": str(exc)}
                 )
 
-    def enrich(self, prop, *, commit=True, expected_previous=_UNSET):
+    def enrich(
+        self, prop, *, commit=True, expected_previous=_UNSET, expected_subject=_UNSET
+    ):
+        """A shortlist plan passes both what it planned to measure and the block
+        it planned to replace; either one changing refuses the write. The
+        subject is asked before any request and again under the row lock: a
+        commit between plan rows expires the row, so it reloads, and measure()
+        would otherwise measure the changed subject and agree with itself."""
         locked = check_writable(prop, commit)
+        if expected_subject is not _UNSET and subject(prop) != expected_subject:
+            raise ValueError(PLAN_CHANGED)
         fetched = self.measure(prop)
         with locked_write(prop, locked=locked, commit=commit):
             enrichment = dict(prop.enrichment or {})
-            if expected_previous is not _UNSET and (
-                enrichment.get("neighbours") != expected_previous
+            planned = expected_previous is not _UNSET or expected_subject is not _UNSET
+            if planned and (
+                (
+                    expected_previous is not _UNSET
+                    and enrichment.get("neighbours") != expected_previous
+                )
+                or (
+                    expected_subject is not _UNSET and subject(prop) != expected_subject
+                )
                 or fetched.get("subject") != subject(prop)
             ):
-                raise ValueError("shortlist plan changed during lookup; dry-run again")
+                raise ValueError(PLAN_CHANGED)
             previous = _dict(enrichment.get("neighbours"))
             if fetched.get("subject") != subject(prop):
                 fetched = {
