@@ -24,7 +24,7 @@ from services import (  # noqa: E402
 )
 from services.enrichment_write import EnrichmentWriteContractError  # noqa: E402
 
-# Catastro's live answer for the owner's reference row 969 (1282: PR #664),
+# Catastro's live answers for the owner's two references (rows 969 and 1282),
 # trimmed to the buildings within 100 m, the parcel's own building and two or
 # three beyond the radius. Trimming removes only features farther than the
 # kept ones, so every measured count and distance is the live answer's.
@@ -84,7 +84,7 @@ def _measure_reference(row, reference):
 
 @pytest.mark.parametrize(
     "row,reference,within100,nearest",
-    [(969, REF, 7, 17.8646942317)],
+    [(969, REF, 7, 17.8646942317), (1282, "15044A01901483", 11, 3.7759133525)],
 )
 def test_owner_reference_calibration_counts(row, reference, within100, nearest):
     measured = _measure_reference(row, reference)
@@ -117,7 +117,9 @@ def test_distance_is_from_entire_parcel_excluding_own_not_just_centroid():
     )
 
 
-@pytest.mark.parametrize("row,reference,features", [(969, REF, 10)])
+@pytest.mark.parametrize(
+    "row,reference,features", [(969, REF, 10), (1282, "15044A01901483", 14)]
+)
 def test_owner_fixture_parses_every_building(row, reference, features):
     buildings = n.parse_buildings((DATA / f"{row}_buildings.gml").read_text(), 25829)
     assert len(buildings) == features
