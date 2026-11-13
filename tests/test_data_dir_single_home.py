@@ -416,34 +416,6 @@ services:
 }
 
 
-def _agrees_or_refuses(checkout: Path, label: str, **extra: str) -> None:
-    """The property: the reader names the directory Compose binds at
-    /app/data, or it names none. Compose may itself reject the input; then
-    the reader must not answer either."""
-    rendered = subprocess.run(
-        ["docker", "compose", "-f", "docker-compose.yml", "config", "--format", "json"],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        cwd=checkout,
-        env=_environment(**extra),
-    )
-    answer = _resolve(checkout, **extra)
-    if rendered.returncode != 0:
-        assert answer.returncode == 1 and answer.stdout == "", (label, answer.stdout)
-        return
-    mounted = _what_compose_mounts(checkout, **extra)
-    if answer.returncode != 0:
-        assert answer.stdout == "", label
-        # A refusal is only for a directory that cannot be used.
-        assert not os.path.isdir(mounted), (label, mounted, answer.stderr)
-        return
-    assert _same_directory(answer.stdout.strip(), mounted), (
-        f"{label}: Compose would mount {mounted}, the host tools would use "
-        f"{answer.stdout.strip()}"
-    )
-
-
 @pytest.mark.parametrize("shape", sorted(_SHAPES))
 @pytest.mark.parametrize("how", _WAYS)
 def test_the_reader_never_names_a_directory_compose_would_not_mount(
@@ -465,10 +437,15 @@ def test_the_reader_never_names_a_directory_compose_would_not_mount(
     if how in _EXPORTED:
         _refuses_the_export(answer)
         return
-    # Every source in play exists, so there is nothing to refuse: a reader
-    # that refused everything must not pass.
+    mounted = _what_compose_mounts(checkout, **extra)
+    if env_line and not _same_directory(mounted, state):
+        # `.env` names one directory and this file mounts another: Compose's
+        # answer is not the text of `.env`, so the reader gives none.
+        assert answer.returncode == 1 and answer.stdout == "", answer.stdout
+        return
+    # Otherwise there is nothing to refuse: refusing everything must not pass.
     assert answer.returncode == 0, answer.stderr
-    _agrees_or_refuses(checkout, f"{shape} / {how}", **extra)
+    assert _same_directory(answer.stdout.strip(), mounted), (shape, how, mounted)
 
 
 # One more variable in the environment while `.env` names `state`. The first
@@ -486,6 +463,11 @@ _ENVIRONMENTS = [
     "COMPOSE_PROJECT_NAME=another",
     "COMPOSE_PROFILES=",
     "COMPOSE_PROFILES=another",
+    "COMPOSE_PATH_SEPARATOR=;",
+    "COMPOSE_PROJECT_DIRECTORY={other}",
+    "DOCKER_CONTEXT=nope",
+    "DOCKER_HOST=tcp://127.0.0.1:1",
+    "PWD={other}",
 ]
 
 
@@ -507,6 +489,10 @@ def test_the_environment_never_moves_the_reader_off_what_the_watcher_mounts(
     (checkout / "literal.yml").write_text(
         compose.replace("${IDEALISTA_DATA_DIR:-./data}", "./data"), encoding="utf-8"
     )
+    # Beside the file the watcher passes with `-f`: Compose does not pick it up.
+    (checkout / "docker-compose.override.yml").write_text(
+        f"services:\n  app:\n    volumes:\n      - {other}:/app/data\n"
+    )
     name, _, value = setting.partition("=")
     extra = {name: value.format(other=other)}
 
@@ -518,6 +504,36 @@ def test_the_environment_never_moves_the_reader_off_what_the_watcher_mounts(
     assert _same_directory(_what_compose_mounts(checkout, **extra), state), setting
     assert answer.returncode == 0, answer.stderr
     assert _same_directory(answer.stdout.strip(), state), answer.stdout
+
+
+# Values Compose derives from the process that asks, and what that process
+# has to differ in. `~` is the second input of the review of #678.
+_DERIVED = {"~/state": "HOME", "${PROBE_639}/state": "PROBE_639", "./state": ""}
+
+
+@pytest.mark.parametrize("value", sorted(_DERIVED))
+def test_what_compose_derives_from_the_asking_process_is_not_an_answer(tmp_path, value):
+    """`.env` says `~/state`, two processes have two HOMEs, both directories
+    exist: Compose mounts one for each. The reader takes Compose's answer only
+    when it is the text of `.env`, so it gives neither."""
+    _docker_compose_or_skip()
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    checkout = _stand_in_checkout(tmp_path, compose, f"{VARIABLE}={value}")
+    # The compose plugin is looked up under HOME; keep it findable.
+    docker = os.environ.get("DOCKER_CONFIG") or os.path.expanduser("~/.docker")
+    mounted = []
+    for who in ("one", "two"):
+        root = tmp_path / who if _DERIVED[value] else checkout
+        (root / "state").mkdir(parents=True, exist_ok=True)
+        extra = {"DOCKER_CONFIG": docker}
+        if _DERIVED[value]:
+            extra[_DERIVED[value]] = str(root)
+        mounted.append(_what_compose_mounts(checkout, **extra))
+        assert _same_directory(mounted[-1], root / "state"), mounted
+        answer = _resolve(checkout, **extra)
+        assert answer.returncode == 1 and answer.stdout == "", answer.stdout
+        assert "does not say exactly that" in answer.stderr, answer.stderr
+    assert bool(_DERIVED[value]) != _same_directory(*mounted), mounted
 
 
 def test_the_container_side_is_not_fed_the_host_path():

@@ -136,9 +136,9 @@ expect_dir "a trailing slash on the root is trimmed" "${REPO}/data"
 # 5. The variable in .env: the answer is Compose's, asked the way the deploy
 #    watcher runs it - from the checkout, with the one file.
 new_repo
-printf 'DB_PASSWORD=hunter2\nIDEALISTA_DATA_DIR=%s\n' "$OTHER" >"${REPO}/.env"
+printf 'DB_PASSWORD=hunter2\nIDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
 resolve "$REPO"
-expect_dir "the variable in .env -> what Compose binds, not what .env seems to say" "$STATE"
+expect_dir "the variable in .env -> what Compose binds" "$STATE"
 grep -q "^compose -f docker-compose.yml config --format json | cwd=${REPO} | IDEALISTA_DATA_DIR=<unset>$" "${WORK}/docker.log" \
     || fail "Compose was not asked from the checkout with the one compose file: $(cat "${WORK}/docker.log")"
 [ "$(wc -l <"${WORK}/docker.log" | tr -d ' ')" = "1" ] || fail "Compose was asked more than once"
@@ -178,11 +178,27 @@ for switch in COMPOSE_ENV_FILES= COMPOSE_DISABLE_ENV_FILE=1 COMPOSE_DISABLE_ENV_
     expect_refusal "${switch} in the environment is refused" "${switch%%=*} is set in this process"
 done
 
-#    A value that refers to another variable: resolved per process. Refused.
-printf 'IDEALISTA_DATA_DIR=${STATE_ROOT}/state\n' >"${REPO}/.env"
+# 9b. Compose's answer counts only if it is the text of the one line naming
+#     the variable. Here Compose says STATE each time, as it would for a
+#     process whose HOME, environment or directory make it so - and .env does
+#     not say STATE, or says it twice, or not alone on its line.
+for line in '~/state' '${STATE_ROOT}/state' './state' "$OTHER" "\"${STATE}\"" "${STATE} # the state" "${STATE}/"; do
+    printf 'IDEALISTA_DATA_DIR=%s\n' "$line" >"${REPO}/.env"
+    resolve "$REPO"
+    expect_refusal "Compose's answer is refused when .env says '${line%%"${WORK}"*}'" "does not say exactly that"
+done
+printf 'IDEALISTA_DATA_DIR=%s\n# IDEALISTA_DATA_DIR=%s\n' "$STATE" "$OTHER" >"${REPO}/.env"
 resolve "$REPO"
-expect_refusal "a .env value that refers to another variable is refused" "on a line with a '\$'"
-asked && fail "Compose was asked about such a value"
+expect_refusal "the name on two lines is refused" "names it on 2"
+mkdir -p "${WORK}/a\$b"
+printf 'IDEALISTA_DATA_DIR=%s\n' "${WORK}/a\$b" >"${REPO}/.env"
+compose_says "[$(bind "${WORK}/a\$b")]"
+resolve "$REPO"
+expect_refusal "an answer with a \$ in it is refused even when .env says the same" "with a '\$' in it"
+compose_says "[$(bind "$STATE")]"
+printf 'export IDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
+resolve "$REPO"
+expect_refusal "a line that is not exactly NAME=path is refused" "does not say exactly that"
 
 # 10. A .env that cannot be read cannot be ruled out, so it is not silent.
 if [ "$(id -u)" != "0" ]; then

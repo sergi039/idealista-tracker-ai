@@ -28,6 +28,13 @@
 #     checkout, with `-f docker-compose.yml`. No Docker, no python3 to read
 #     its answer, or an answer that is not exactly one existing host
 #     directory: refused.
+#   * That answer is taken only if it is, character for character, what the
+#     ONE line of `.env` naming the variable says: `IDEALISTA_DATA_DIR=<it>`.
+#     Whatever Compose derives from the process that asks - `~` from its
+#     HOME, `${X}` from its environment, a relative path from where it runs,
+#     an export or a switch that changes which env file is read - renders
+#     something other than the text written. So every answer given is the
+#     text of `.env`, and no two processes are ever given two.
 #   * It is SET in this process's environment, empty included (so is
 #     COMPOSE_ENV_FILES or COMPOSE_DISABLE_ENV_FILE, which decide whether .env
 #     is read) -> refused. Compose would follow the export only when run from
@@ -101,8 +108,9 @@ _data_dir_trim() {
 # whether Compose has to be asked. `.env` counts when the name occurs anywhere
 # in it. The file is never sourced and no line of it is printed.
 _data_dir_where_named() {
-    local repo="$1" env_file="${1}/.env" hits refs
+    local repo="$1" env_file="${1}/.env" hits
     DATA_DIR_NAMED_IN=""
+    DATA_DIR_NAMED_TIMES=0
 
     [ -e "$env_file" ] || [ -L "$env_file" ] || return 0
     if [ ! -f "$env_file" ] || [ ! -r "$env_file" ]; then
@@ -123,14 +131,8 @@ _data_dir_where_named() {
             ;;
     esac
     if [ "$hits" != "0" ]; then
-        # `${X}/state` is resolved by Compose from each process's own
-        # environment: no one home. Refused.
-        refs="$(LC_ALL=C grep -a -F "$IDEALISTA_DATA_DIR_KEY" "$env_file" | LC_ALL=C grep -a -c -F '$')" || true
-        if [ "$refs" != "0" ]; then
-            _data_dir_refuse "${env_file} names ${IDEALISTA_DATA_DIR_KEY} on a line with a '\$': Compose would resolve it from each process's own environment. Write the path out"
-            return 1
-        fi
         DATA_DIR_NAMED_IN="$env_file"
+        DATA_DIR_NAMED_TIMES="$hits"
     fi
     return 0
 }
@@ -237,6 +239,7 @@ idealista_data_dir() {
     value="$(idealista_compose_source "$repo")" || return 1
     case "$value" in
         /) _data_dir_refuse "Compose would mount / at /app/data; refusing"; return 1 ;;
+        *'$'*) _data_dir_refuse "Compose reports a state directory with a '\$' in it ('${value}'); refusing"; return 1 ;;
         /*) ;;
         *)
             _data_dir_refuse "Compose reports a state directory that is not an absolute path ('${value}')"
@@ -245,6 +248,13 @@ idealista_data_dir() {
     esac
     if [ ! -d "$value" ]; then
         _data_dir_refuse "Compose would mount '${value}' at /app/data (${IDEALISTA_DATA_DIR_KEY} is named in ${DATA_DIR_NAMED_IN}), and that is not an existing directory; refusing to guess or to create it"
+        return 1
+    fi
+    # Verified, not parsed: Compose decided, and this only checks that what it
+    # decided is the text written - on the one line that names the variable.
+    if [ "$DATA_DIR_NAMED_TIMES" != "1" ] ||
+        ! LC_ALL=C grep -a -q -x -F -- "${IDEALISTA_DATA_DIR_KEY}=${value}" "$DATA_DIR_NAMED_IN"; then
+        _data_dir_refuse "Compose would mount '${value}' at /app/data from here, and ${DATA_DIR_NAMED_IN} does not say exactly that on one line naming ${IDEALISTA_DATA_DIR_KEY} (it names it on ${DATA_DIR_NAMED_TIMES}). Another process may be given another directory: write one line, ${IDEALISTA_DATA_DIR_KEY}=/absolute/path, nothing else on it"
         return 1
     fi
     printf '%s\n' "$value"
