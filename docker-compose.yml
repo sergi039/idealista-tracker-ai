@@ -57,8 +57,21 @@ services:
       # Linux hosts need this mapping; Docker Desktop provides it natively.
       - "host.docker.internal:host-gateway"
     volumes:
-      # Persist last seen UID
-      - ./data:/app/data
+      # The deployment's state: mail cursor and retry list, Google spend
+      # ledger, attachments, score snapshots, in-flight markers.
+      #
+      # The host side has one home (#639): IDEALISTA_DATA_DIR in this
+      # checkout's .env. Host tools ask tools/autopilot/lib/data_dir.sh, which
+      # asks `docker compose config`. Unset, as today, it renders ./data.
+      # Not DATA_DIR: that is the container's side, and stays /app/data.
+      #
+      # Long form for `create_host_path: false`: the short form creates a
+      # missing source as an empty directory and starts the app on it.
+      - type: bind
+        source: ${IDEALISTA_DATA_DIR:-./data}
+        target: /app/data
+        bind:
+          create_host_path: false
     restart: unless-stopped
     networks:
       - idealista-network

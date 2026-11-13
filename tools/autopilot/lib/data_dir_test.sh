@@ -2,17 +2,17 @@
 # One home for the host path of the deployment's state (#639).
 #
 # Drives the real lib/data_dir.sh against throwaway repository roots. What is
-# pinned here is what every host tool will rely on:
-#   * the answer is `<repo>/data`, the path every caller spells by hand today;
-#   * IDEALISTA_DATA_DIR is never followed in this commit, because
-#     docker-compose.yml does not read it - and it is never ignored silently
-#     either: named anywhere, in any spelling, it is a refusal;
-#   * the reader parses neither docker-compose.yml nor `.env`, so no content of
-#     either can talk it into another directory.
+# pinned here is what every host tool relies on:
+#   * with the variable named nowhere the answer is `<repo>/data`, and Docker
+#     is not asked;
+#   * with IDEALISTA_DATA_DIR named anywhere the answer is what Compose binds
+#     at /app/data, because this reader parses neither file;
+#   * an answer that is not exactly one existing host directory is refused -
+#     never created, never replaced by `<repo>/data`.
 #
-# No Docker is needed: nothing here asks Compose anything. That this commit's
-# docker-compose.yml really mounts `<repo>/data`, variable or no variable, is
-# shown against Compose itself in tests/test_data_dir_single_home.py.
+# Compose is played here by a stub that prints what a scenario stages, so no
+# Docker is needed. That the real `docker compose config` and the reader agree
+# is shown against Compose itself in tests/test_data_dir_single_home.py.
 #
 # Runs under the interpreter the LaunchAgent uses (/bin/bash, 3.2 on the mini)
 # unless DATA_DIR_TEST_BASH says otherwise.
@@ -40,13 +40,34 @@ fail() {
 }
 pass() { passed=$((passed + 1)); printf 'ok   %s\n' "$*"; }
 
+# The stand-in for `docker`: logs its arguments and working directory, prints
+# the staged configuration, exits with the staged status.
+STUB="${WORK}/docker"
+cat >"$STUB" <<EOF
+#!/bin/bash
+printf '%s | cwd=%s | %s=%s\\n' "\$*" "\$PWD" IDEALISTA_DATA_DIR "\${IDEALISTA_DATA_DIR-<unset>}" >>"${WORK}/docker.log"
+cat "${WORK}/compose.json"
+exit "\$(cat "${WORK}/compose.rc")"
+EOF
+chmod +x "$STUB"
+
+# compose_says <volumes as JSON>: what the stub will answer. The environment
+# block stands for the values of .env a real rendering carries.
+compose_says() {
+    printf '{"services":{"app":{"environment":{"DB_PASSWORD":"hunter2"},"volumes":%s}}}\n' "$1" >"${WORK}/compose.json"
+    printf '0\n' >"${WORK}/compose.rc"
+}
+bind() { printf '{"type":"bind","source":"%s","target":"%s"}' "$1" "${2:-/app/data}"; }
+asked() { [ -s "${WORK}/docker.log" ]; }
+
 # resolve <repo> [VAR=value ...]: runs the lib with a clean variable unless
 # the caller sets one. Leaves OUT, ERR and RC.
 resolve() {
     local repo="$1"
     shift
+    : >"${WORK}/docker.log"
     RC=0
-    OUT="$(env -u IDEALISTA_DATA_DIR "$@" "$SHELL_UNDER_TEST" "$LIB" "$repo" 2>"${WORK}/err")" || RC=$?
+    OUT="$(env -u IDEALISTA_DATA_DIR -u COMPOSE_ENV_FILES -u COMPOSE_DISABLE_ENV_FILE DOCKER_BIN="$STUB" "$@" "$SHELL_UNDER_TEST" "$LIB" "$repo" 2>"${WORK}/err")" || RC=$?
     ERR="$(cat "${WORK}/err")"
 }
 
@@ -56,11 +77,11 @@ write_compose() {
     printf 'services:\n  app:\n    image: busybox\n    volumes:\n%s\n' "$1" >"${REPO}/docker-compose.yml"
 }
 
-# A checkout as this commit ships it: the bind is the literal ./data.
+# A checkout as this commit ships it: the bind is the variable.
 new_repo() {
     REPO="$(mktemp -d "${WORK}/repo.XXXXXX")"
     mkdir -p "${REPO}/data"
-    write_compose '      - ./data:/app/data'
+    write_compose '      - ${IDEALISTA_DATA_DIR:-./data}:/app/data'
 }
 
 expect_dir() {
@@ -80,12 +101,17 @@ expect_refusal() {
 }
 
 STATE="${WORK}/state"
-mkdir -p "$STATE"
+OTHER="${WORK}/other"
+mkdir -p "$STATE" "$OTHER"
+# Unless a scenario says otherwise, Compose would mount STATE.
+compose_says "[$(bind "$STATE")]"
 
 # 1. Nothing configured: the path every caller computes by hand today.
 new_repo
 resolve "$REPO"
 expect_dir "no .env and no variable -> <repo>/data" "${REPO}/data"
+asked && fail "Docker was asked although the variable is named nowhere"
+pass "with the variable named nowhere Docker is not asked"
 
 # 2. A .env that does not name the variable changes nothing - and its lines,
 #    which are secrets on the real machine, never reach the output.
@@ -107,68 +133,72 @@ new_repo
 resolve "${REPO}/"
 expect_dir "a trailing slash on the root is trimmed" "${REPO}/data"
 
-# 5. The variable in .env, in the spelling it will one day be written in.
-#    docker-compose.yml here binds ./data, so the app is in <repo>/data
-#    whatever this line says: following it would be wrong, and so would
-#    pretending it is not there.
+# 5. The variable in .env: the answer is Compose's, asked the way the deploy
+#    watcher runs it - from the checkout, with the one file.
 new_repo
 printf 'DB_PASSWORD=hunter2\nIDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
 resolve "$REPO"
-expect_refusal "the variable in .env is refused, not followed" "does not read the variable"
-case "$ERR" in
-    *"${REPO}/data"*"${REPO}/.env"*) pass "the refusal says where the state is and where the variable is named" ;;
-    *) fail "the refusal does not name <repo>/data and the .env file" ;;
-esac
+expect_dir "the variable in .env -> what Compose binds" "$STATE"
+grep -q "^compose -f docker-compose.yml config --format json | cwd=${REPO} | IDEALISTA_DATA_DIR=<unset>$" "${WORK}/docker.log" \
+    || fail "Compose was not asked from the checkout with the one compose file: $(cat "${WORK}/docker.log")"
+[ "$(wc -l <"${WORK}/docker.log" | tr -d ' ')" = "1" ] || fail "Compose was asked more than once"
+pass "Compose is asked once, from the checkout, with -f docker-compose.yml"
 case "${OUT}${ERR}" in
-    *hunter2* | *"$STATE"*) fail "a line of .env, or the variable's value, was printed" ;;
+    *hunter2*) fail "a value of the rendered configuration was printed" ;;
 esac
-pass "neither another line of .env nor the variable's value is printed"
+pass "nothing of the rendered configuration is printed"
 
-# 6. The variable in the environment.
+# 6. The variable exported in this process's environment is refused: an
+#    export is seen by this process alone, and the watcher under launchd would
+#    name another directory. `.env` naming the same one does not redeem it.
 new_repo
-resolve "$REPO" "IDEALISTA_DATA_DIR=${STATE}"
-expect_refusal "the exported variable is refused, not followed" "named in the environment"
+resolve "$REPO" "IDEALISTA_DATA_DIR=${OTHER}"
+expect_refusal "an exported variable is refused" "IDEALISTA_DATA_DIR is set in this process"
+asked && fail "Compose was asked about an exported variable"
+printf 'IDEALISTA_DATA_DIR=%s\n' "$OTHER" >"${REPO}/.env"
+resolve "$REPO" "IDEALISTA_DATA_DIR=${OTHER}"
+expect_refusal "an exported variable is refused beside the same .env" "is set in this process"
 
-# 7. Exported but empty is unset, to Compose and here.
+# 7. Exported but EMPTY is refused too. To Compose that is not "unset": it
+#    outranks .env and the mount renders ./data, for this process alone.
 resolve "$REPO" "IDEALISTA_DATA_DIR="
-expect_dir "an empty exported variable is unset" "${REPO}/data"
+expect_refusal "an empty exported variable is refused beside a .env naming a directory" "an empty value counts"
+asked && fail "Compose was asked about an empty exported variable"
+rm -f "${REPO}/.env"
+resolve "$REPO" "IDEALISTA_DATA_DIR="
+expect_refusal "an empty exported variable is refused" "IDEALISTA_DATA_DIR is set in this process"
 
-# 8. Every other way .env can carry the name. None is interpreted: which of
-#    them Compose would read as the variable is exactly the question this file
-#    does not answer for itself.
-BOM="$(printf '\357\273\277')"
-MULTILINE="$(printf 'OTHER="first line\nIDEALISTA_DATA_DIR=%s\n"' "$STATE")"
-for content in \
-    "IDEALISTA_DATA_DIR=" \
-    "export IDEALISTA_DATA_DIR=${STATE}" \
-    "IDEALISTA_DATA_DIR = ${STATE}" \
-    "  IDEALISTA_DATA_DIR=${STATE}" \
-    "IDEALISTA_DATA_DIR: ${STATE}" \
-    "IDEALISTA_DATA_DIR=\"${STATE}\"" \
-    "${BOM}IDEALISTA_DATA_DIR=${STATE}" \
-    "IDEALISTA_DATA_DIR_OLD=${STATE}" \
-    "STATE_VARIABLE=IDEALISTA_DATA_DIR" \
-    "DB_PASSWORD=x # IDEALISTA_DATA_DIR=${STATE}" \
-    "$MULTILINE"; do
-    new_repo
-    printf 'DB_PASSWORD=x\n%s\n' "$content" >"${REPO}/.env"
-    label="$(printf '%s' "$content" | tr '\n' ' ')"
-    resolve "$REPO"
-    expect_refusal "refused, whatever the spelling: ${label%%"${STATE}"*}" "does not read the variable"
+# 9. COMPOSE_ENV_FILES points Compose at other env files, for this process.
+new_repo
+resolve "$REPO" "COMPOSE_ENV_FILES=${WORK}/elsewhere.env"
+expect_refusal "COMPOSE_ENV_FILES in the environment is refused" "COMPOSE_ENV_FILES is set in this process"
+#    COMPOSE_DISABLE_ENV_FILE stops it reading .env. Set to nothing is set.
+for switch in COMPOSE_ENV_FILES= COMPOSE_DISABLE_ENV_FILE=1 COMPOSE_DISABLE_ENV_FILE=; do
+    resolve "$REPO" "$switch"
+    expect_refusal "${switch} in the environment is refused" "${switch%%=*} is set in this process"
 done
 
-# 8b. Bytes that make grep call a file binary - a NUL, a byte that is not
-#     UTF-8 - in another line do not hide the name.
-new_repo
-printf 'SECRET=a\000b\377c\nIDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
+# 9b. Compose's answer counts only if it is the text of the one line naming
+#     the variable. Here Compose says STATE each time, as it would for a
+#     process whose HOME, environment or directory make it so - and .env does
+#     not say STATE, or says it twice, or not alone on its line.
+for line in '~/state' '${STATE_ROOT}/state' './state' "$OTHER" "\"${STATE}\"" "${STATE} # the state" "${STATE}/"; do
+    printf 'IDEALISTA_DATA_DIR=%s\n' "$line" >"${REPO}/.env"
+    resolve "$REPO"
+    expect_refusal "Compose's answer is refused when .env says '${line%%"${WORK}"*}'" "does not say exactly that"
+done
+printf 'IDEALISTA_DATA_DIR=%s\n# IDEALISTA_DATA_DIR=%s\n' "$STATE" "$OTHER" >"${REPO}/.env"
 resolve "$REPO"
-expect_refusal "the name is seen in a .env with binary bytes" "does not read the variable"
-
-# 9. A comment line is the one thing that does not name it.
-new_repo
-printf '# IDEALISTA_DATA_DIR=%s\n  # IDEALISTA_DATA_DIR=%s\nDB_PASSWORD=x\n' "$STATE" "$STATE" >"${REPO}/.env"
+expect_refusal "the name on two lines is refused" "names it on 2"
+mkdir -p "${WORK}/a\$b"
+printf 'IDEALISTA_DATA_DIR=%s\n' "${WORK}/a\$b" >"${REPO}/.env"
+compose_says "[$(bind "${WORK}/a\$b")]"
 resolve "$REPO"
-expect_dir "a commented-out line is not the variable" "${REPO}/data"
+expect_refusal "an answer with a \$ in it is refused even when .env says the same" "with a '\$' in it"
+compose_says "[$(bind "$STATE")]"
+printf 'export IDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
+resolve "$REPO"
+expect_refusal "a line that is not exactly NAME=path is refused" "does not say exactly that"
 
 # 10. A .env that cannot be read cannot be ruled out, so it is not silent.
 if [ "$(id -u)" != "0" ]; then
@@ -183,45 +213,28 @@ new_repo
 mkdir "${REPO}/.env"
 resolve "$REPO"
 expect_refusal "a .env that is a directory is refused" "cannot be read"
-new_repo
-ln -s "${WORK}/nowhere" "${REPO}/.env"
-resolve "$REPO"
-expect_refusal "a .env that is a dangling link is refused" "cannot be read"
 
-# 11. Nothing in docker-compose.yml is read. Whatever a compose file says
-#     about the variable - mounting it, mentioning it after the real bind on
-#     the same line, mounting it for another service or at another target - a
-#     variable that is set is refused and an unset one answers <repo>/data.
-#     There is no text in that file that turns the variable on.
-compose_shape() {
-    case "$1" in
-        mounted-short) printf '      - ${IDEALISTA_DATA_DIR:-./data}:/app/data' ;;
-        inline-comment) printf '      - ./data:/app/data # ${IDEALISTA_DATA_DIR:-./data}' ;;
-        quoted-then-comment) printf '      - "./data:/app/data"  # was ${IDEALISTA_DATA_DIR}' ;;
-        mounted-long) printf '      - type: bind\n        source: ${IDEALISTA_DATA_DIR:-./data}\n        target: /app/data' ;;
-        other-target) printf '      - ./data:/app/data\n      - ${IDEALISTA_DATA_DIR:-./data}/logs:/app/logs' ;;
-        other-service) printf '      - ./data:/app/data\n  worker:\n    image: busybox\n    volumes:\n      - ${IDEALISTA_DATA_DIR:-./data}:/app/data' ;;
-    esac
-}
-for shape in mounted-short inline-comment quoted-then-comment mounted-long other-target other-service; do
+# 11. What Compose answers is used only if it is exactly one existing host
+#     directory bound at /app/data. Nothing is created, nothing falls back.
+named_repo() {
     new_repo
-    write_compose "$(compose_shape "$shape")"
-    resolve "$REPO"
-    expect_dir "compose file not read (${shape}): nothing set -> <repo>/data" "${REPO}/data"
     printf 'IDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
-    resolve "$REPO"
-    expect_refusal "compose file not read (${shape}): the .env line is refused" "does not read the variable"
-    rm -f "${REPO}/.env"
-    resolve "$REPO" "IDEALISTA_DATA_DIR=${STATE}"
-    expect_refusal "compose file not read (${shape}): the exported variable is refused" "does not read the variable"
-done
+}
+MISSING="${WORK}/missing"
 
-# 12. No compose file at all changes nothing either.
-REPO="$(mktemp -d "${WORK}/repo.XXXXXX")"
-resolve "$REPO"
-expect_dir "no compose file, nothing set -> <repo>/data" "${REPO}/data"
-resolve "$REPO" "IDEALISTA_DATA_DIR=${STATE}"
-expect_refusal "no compose file, variable refused" "does not read the variable"
+named_repo; compose_says "[$(bind "$MISSING")]"; resolve "$REPO"
+expect_refusal "a directory that does not exist is refused" "not an existing directory"
+[ ! -e "$MISSING" ] || fail "the missing directory was created"
+pass "a missing directory is not created"
+
+named_repo; compose_says "[$(bind "$STATE")]"; printf '1\n' >"${WORK}/compose.rc"; resolve "$REPO"
+expect_refusal "a Compose that fails is refused, whatever it printed" "config' failed"
+
+named_repo; compose_says "[$(bind "$STATE")]"
+resolve "$REPO" "DOCKER_BIN=${WORK}/no-such-docker"
+expect_refusal "no Docker to ask is refused" "is not on PATH"
+[ -z "$(ls -A "${REPO}/data")" ] || fail "something was written into <repo>/data after a refusal"
+pass "a refusal leaves <repo>/data alone"
 
 # 13. The root has to be the checkout Compose runs from: absolute, existing.
 new_repo

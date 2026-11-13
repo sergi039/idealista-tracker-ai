@@ -5,22 +5,17 @@ it is spelled `./data` in docker-compose.yml and `${REPO_DIR}/data` in seven
 scripts - eight copies of "inside the git working copy", which is the fact
 that let a `pytest` run in the checkout overwrite the production mail cursor.
 
-The way out starts with one reader, `tools/autopilot/lib/data_dir.sh`, that the
-seven scripts ask instead of spelling the path. In this commit it answers
-`<repo>/data` and nothing else, because that is what docker-compose.yml binds;
-it parses neither that file nor `.env`. `IDEALISTA_DATA_DIR`, the name the
-directory will later be configured under, is refused wherever it is named:
-Compose does not read it yet, so following it would point the host tools at a
-directory the app is not using.
+It is one variable now, `IDEALISTA_DATA_DIR` in the checkout's `.env`.
+docker-compose.yml mounts `${IDEALISTA_DATA_DIR:-./data}`, and every host tool
+asks `tools/autopilot/lib/data_dir.sh`, which parses neither file: named
+nowhere it answers `<repo>/data`, named anywhere it asks `docker compose config`.
 
 Pinned here:
 
-* the reader's contract, by running its shell harness (pytest is what CI
-  runs; a harness nobody runs proves nothing);
-* against Compose itself (`docker compose config`): this commit's
-  docker-compose.yml mounts `<checkout>/data` whether or not the variable is
-  set, and over a range of compose files the reader never names a directory
-  other than the one Compose would mount;
+* the reader's contract and the watcher's use of it, by running the two shell
+  harnesses (pytest is what CI runs; a harness nobody runs proves nothing);
+* against Compose itself: the directory the reader names is the one
+  `docker compose config` binds at /app/data - or the reader names none;
 * that the host variable can never be mistaken for the container's;
 * that a linked git worktree is refused as a root, with real git;
 * that every host script asks the reader, and none has grown another copy of
@@ -81,10 +76,16 @@ def _interpreters() -> list[str]:
     return interpreters
 
 
+# What the reader refuses to find set in its environment (data_dir.sh).
+_READER_REFUSES = (VARIABLE, "COMPOSE_ENV_FILES", "COMPOSE_DISABLE_ENV_FILE")
+
+
 def _environment(**extra: str) -> dict[str, str]:
     """This process's environment without the variable under test: a shell
     that exported it would otherwise decide every scenario."""
-    env = {key: value for key, value in os.environ.items() if key != VARIABLE}
+    env = {
+        key: value for key, value in os.environ.items() if key not in _READER_REFUSES
+    }
     env.update(extra)
     return env
 
@@ -243,56 +244,106 @@ def _same_directory(left: str | Path, right: str | Path) -> bool:
     return os.path.realpath(left) == os.path.realpath(right)
 
 
-def _how(state: Path, how: str) -> tuple[str | None, dict[str, str]]:
-    """The `.env` line and the environment for one way of setting the variable."""
+def test_compose_mounts_the_variable_and_defaults_to_the_old_literal():
+    """`${IDEALISTA_DATA_DIR:-./data}` renders `./data` when nothing is set,
+    which is the literal this line used to be - so a merge moves nothing.
+
+    Long form, for `create_host_path: false`: the short form creates a missing
+    source as an empty directory and starts the app on it. Measured on Compose
+    v5.7: with the flag that is "bind source path does not exist".
+    """
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    code = [
+        line.strip()
+        for line in compose.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    at = code.index("target: /app/data")
+    assert code[at - 2 : at + 3] == [
+        "- type: bind",
+        "source: ${IDEALISTA_DATA_DIR:-./data}",
+        "target: /app/data",
+        "bind:",
+        "create_host_path: false",
+    ], code[at - 2 : at + 3]
+    # The short form is gone: it is the one that creates a missing source.
+    assert not any(line.endswith(":/app/data") for line in code)
+    # The dev overlay adds no mount of its own.
+    dev = (REPO_ROOT / "docker-compose.dev.yml").read_text(encoding="utf-8")
+    assert "/app/data" not in "\n".join(
+        line for line in dev.splitlines() if not line.strip().startswith("#")
+    )
+
+
+_WAYS = [
+    "nothing set",
+    "env file",
+    "environment",
+    "both",
+    "environment over env file",
+    "empty in environment",
+    "empty in environment over env file",
+]
+
+
+# An export is private to one process: Compose run from it would follow it,
+# the watcher under launchd would not. Refused - an EMPTY one included.
+_EXPORTED = set(_WAYS) - {"nothing set", "env file"}
+
+
+def _refuses_the_export(answer: subprocess.CompletedProcess) -> None:
+    assert answer.returncode == 1 and answer.stdout == "", answer.stdout
+    assert "is set in this process's environment" in answer.stderr, answer.stderr
+
+
+def _how(state: Path, other: Path, how: str) -> tuple[str | None, dict[str, str]]:
+    """The `.env` line and the environment for one way of setting the
+    variable. In the last one the two disagree, and Compose takes the
+    environment's."""
+    if how == "environment over env file":
+        return f"{VARIABLE}={other}", {VARIABLE: str(state)}
+    if how.startswith("empty in environment"):
+        return (f"{VARIABLE}={other}" if "over" in how else None), {VARIABLE: ""}
     env_line = f"{VARIABLE}={state}" if how in ("env file", "both") else None
     extra = {VARIABLE: str(state)} if how in ("environment", "both") else {}
     return env_line, extra
 
 
-def test_compose_mounts_the_checkouts_data_directory_and_the_reader_names_it(
-    tmp_path,
-):
-    """The real docker-compose.yml, nothing set: Compose and the reader name
-    the same directory, `<checkout>/data`."""
-    _docker_compose_or_skip()
-    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    checkout = _stand_in_checkout(tmp_path, compose)
-
-    mounted = _what_compose_mounts(checkout)
-    answer = _resolve(checkout)
-    assert answer.returncode == 0, answer.stderr
-    assert _same_directory(mounted, checkout / "data"), mounted
-    assert _same_directory(answer.stdout.strip(), mounted)
-
-
-@pytest.mark.parametrize("how", ["env file", "environment", "both"])
-def test_the_variable_moves_nothing_for_compose_and_the_reader_refuses_it(
-    tmp_path, how
-):
-    """The real docker-compose.yml with the variable set to a directory that
-    exists. Compose still mounts `<checkout>/data` - that is the proof that
-    the state is there whatever the variable says - and the reader gives no
-    directory at all rather than the variable's."""
+@pytest.mark.parametrize("how", _WAYS)
+def test_compose_and_the_reader_name_the_same_directory(tmp_path, how):
+    """The real docker-compose.yml: one input, Compose's answer, and the
+    reader's - asked the way every host tool asks it."""
     _docker_compose_or_skip()
     compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     state = tmp_path / "state"
+    other = tmp_path / "other"
     state.mkdir()
-    env_line, extra = _how(state, how)
+    other.mkdir()
+    env_line, extra = _how(state, other, how)
     checkout = _stand_in_checkout(tmp_path, compose, env_line)
 
-    assert _same_directory(_what_compose_mounts(checkout, **extra), checkout / "data")
-    refused = _resolve(checkout, **extra)
-    assert refused.returncode == 1, refused.stdout
-    assert refused.stdout == ""
-    assert "does not read the variable" in refused.stderr
-    assert str(state) not in refused.stderr
+    mounted = _what_compose_mounts(checkout, **extra)
+    answer = _resolve(checkout, **extra)
+    if how in _EXPORTED:
+        # Compose run from this process would mount `state` - or, for an
+        # empty export, the checkout's `data` whatever `.env` names.
+        here = checkout / "data" if how.startswith("empty") else state
+        assert _same_directory(mounted, here), mounted
+        _refuses_the_export(answer)
+        return
+    assert answer.returncode == 0, answer.stderr
+    expected = checkout / "data" if how == "nothing set" else state
+    assert _same_directory(mounted, expected), mounted
+    assert _same_directory(answer.stdout.strip(), mounted), (
+        f"{how}: Compose would mount {mounted}, the host tools would use "
+        f"{answer.stdout.strip()}"
+    )
 
 
 # Compose files that say different things about the variable. The first is the
 # reviewer's input from #665: the real bind is the literal, the variable is
 # only in a comment after it. A reader that looked for the variable's name in
-# the file took this for a mount.
+# the file took this for a mount; this one asks Compose, which does not.
 _SHAPES = {
     "literal bind, variable in an inline comment": """\
 services:
@@ -366,39 +417,123 @@ services:
 
 
 @pytest.mark.parametrize("shape", sorted(_SHAPES))
-@pytest.mark.parametrize("how", ["nothing set", "env file", "environment", "both"])
+@pytest.mark.parametrize("how", _WAYS)
 def test_the_reader_never_names_a_directory_compose_would_not_mount(
     tmp_path, shape, how
 ):
     """The question a reviewer put to this reader: on which input does it
     agree to a directory the app does not mount? For every compose file above
-    and every way of setting the variable, either the reader gives no
-    directory, or it gives the one `docker compose config` binds at /app/data.
-    """
+    and every way of setting the variable, the reader gives the directory
+    `docker compose config` binds at /app/data."""
     _docker_compose_or_skip()
     state = tmp_path / "state"
+    other = tmp_path / "other"
     state.mkdir()
-    env_line, extra = _how(state, how)
+    other.mkdir()
+    env_line, extra = _how(state, other, how)
     checkout = _stand_in_checkout(tmp_path, _SHAPES[shape], env_line)
 
-    mounted = _what_compose_mounts(checkout, **extra)
     answer = _resolve(checkout, **extra)
-    if how == "nothing set":
-        # Every shape defaults to ./data, and the reader has to say so: a
-        # reader that refused everything would pass the line below for free.
-        assert answer.returncode == 0, answer.stderr
-        assert _same_directory(mounted, checkout / "data"), mounted
-    else:
-        # In this commit a variable that is set is never followed, whatever
-        # the compose file would do with it.
-        assert answer.returncode == 1, answer.stdout
-    if answer.returncode == 0:
-        assert _same_directory(answer.stdout.strip(), mounted), (
-            f"{shape} / {how}: Compose would mount {mounted}, the host tools "
-            f"would use {answer.stdout.strip()}"
-        )
-    else:
-        assert answer.stdout == ""
+    if how in _EXPORTED:
+        _refuses_the_export(answer)
+        return
+    mounted = _what_compose_mounts(checkout, **extra)
+    if env_line and not _same_directory(mounted, state):
+        # `.env` names one directory and this file mounts another: Compose's
+        # answer is not the text of `.env`, so the reader gives none.
+        assert answer.returncode == 1 and answer.stdout == "", answer.stdout
+        return
+    # Otherwise there is nothing to refuse: refusing everything must not pass.
+    assert answer.returncode == 0, answer.stderr
+    assert _same_directory(answer.stdout.strip(), mounted), (shape, how, mounted)
+
+
+# One more variable in the environment while `.env` names `state`. The first
+# is the review's input to #678.
+_ENVIRONMENTS = [
+    f"{VARIABLE}=",
+    f"{VARIABLE}={{other}}",
+    "COMPOSE_ENV_FILES=",
+    "COMPOSE_ENV_FILES=other.env",
+    "COMPOSE_DISABLE_ENV_FILE=",
+    "COMPOSE_DISABLE_ENV_FILE=1",
+    "COMPOSE_FILE=",
+    "COMPOSE_FILE=literal.yml",
+    "COMPOSE_PROJECT_NAME=",
+    "COMPOSE_PROJECT_NAME=another",
+    "COMPOSE_PROFILES=",
+    "COMPOSE_PROFILES=another",
+    "COMPOSE_PATH_SEPARATOR=;",
+    "COMPOSE_PROJECT_DIRECTORY={other}",
+    "DOCKER_CONTEXT=nope",
+    "DOCKER_HOST=tcp://127.0.0.1:1",
+    "PWD={other}",
+]
+
+
+@pytest.mark.parametrize("setting", _ENVIRONMENTS)
+def test_the_environment_never_moves_the_reader_off_what_the_watcher_mounts(
+    tmp_path, setting
+):
+    """Whatever is set, the reader names what Compose mounts for a process
+    WITHOUT it (the watcher), or refuses - and what it does not refuse,
+    Compose itself must not care about."""
+    _docker_compose_or_skip()
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    state = tmp_path / "state"
+    other = tmp_path / "other"
+    state.mkdir()
+    other.mkdir()
+    checkout = _stand_in_checkout(tmp_path, compose, f"{VARIABLE}={state}")
+    (checkout / "other.env").write_text(f"{VARIABLE}={other}\n")
+    (checkout / "literal.yml").write_text(
+        compose.replace("${IDEALISTA_DATA_DIR:-./data}", "./data"), encoding="utf-8"
+    )
+    # Beside the file the watcher passes with `-f`: Compose does not pick it up.
+    (checkout / "docker-compose.override.yml").write_text(
+        f"services:\n  app:\n    volumes:\n      - {other}:/app/data\n"
+    )
+    name, _, value = setting.partition("=")
+    extra = {name: value.format(other=other)}
+
+    answer = _resolve(checkout, **extra)
+    if name in _READER_REFUSES:
+        _refuses_the_export(answer)
+        assert name in answer.stderr
+        return
+    assert _same_directory(_what_compose_mounts(checkout, **extra), state), setting
+    assert answer.returncode == 0, answer.stderr
+    assert _same_directory(answer.stdout.strip(), state), answer.stdout
+
+
+# Values Compose derives from the process that asks, and what that process
+# has to differ in. `~` is the second input of the review of #678.
+_DERIVED = {"~/state": "HOME", "${PROBE_639}/state": "PROBE_639", "./state": ""}
+
+
+@pytest.mark.parametrize("value", sorted(_DERIVED))
+def test_what_compose_derives_from_the_asking_process_is_not_an_answer(tmp_path, value):
+    """`.env` says `~/state`, two processes have two HOMEs, both directories
+    exist: Compose mounts one for each. The reader takes Compose's answer only
+    when it is the text of `.env`, so it gives neither."""
+    _docker_compose_or_skip()
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    checkout = _stand_in_checkout(tmp_path, compose, f"{VARIABLE}={value}")
+    # The compose plugin is looked up under HOME; keep it findable.
+    docker = os.environ.get("DOCKER_CONFIG") or os.path.expanduser("~/.docker")
+    mounted = []
+    for who in ("one", "two"):
+        root = tmp_path / who if _DERIVED[value] else checkout
+        (root / "state").mkdir(parents=True, exist_ok=True)
+        extra = {"DOCKER_CONFIG": docker}
+        if _DERIVED[value]:
+            extra[_DERIVED[value]] = str(root)
+        mounted.append(_what_compose_mounts(checkout, **extra))
+        assert _same_directory(mounted[-1], root / "state"), mounted
+        answer = _resolve(checkout, **extra)
+        assert answer.returncode == 1 and answer.stdout == "", answer.stdout
+        assert "does not say exactly that" in answer.stderr, answer.stderr
+    assert bool(_DERIVED[value]) != _same_directory(*mounted), mounted
 
 
 def test_the_container_side_is_not_fed_the_host_path():

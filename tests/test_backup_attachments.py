@@ -152,9 +152,11 @@ def test_it_deletes_nothing(harness):
 
 class TestWhereTheBytesAre:
     """The bytes live in the directory docker-compose.yml binds at /app/data,
-    and on the host one reader says where that is (#639). What the reader
-    refuses, the backup must not paper over: an archive of the wrong directory
-    reports success and holds none of the files the dump's rows point at."""
+    and on the host one reader says where that is (#639): `<repo>/data`, or -
+    once `.env` names IDEALISTA_DATA_DIR - whatever Compose would mount. A
+    backup that keeps archiving `<repo>/data/attachments` after the mount has
+    moved reports success over an archive that holds none of the files the
+    dump's rows point at."""
 
     def _run(self, harness, *args):
         env = {
@@ -186,20 +188,17 @@ class TestWhereTheBytesAre:
         assert result.returncode == 0, result.stderr
         assert f"archiving {project}/data/attachments" in result.stdout
 
-    def test_a_state_directory_the_reader_refuses_stops_the_backup(
-        self, harness, tmp_path
-    ):
-        """docker-compose.yml does not read IDEALISTA_DATA_DIR yet, so the
-        reader refuses a `.env` that names it. The backup stops there, before
-        the dump - it archives neither the directory the variable names nor,
-        on a guess, the checkout's."""
+    def test_a_compose_that_cannot_be_asked_stops_the_backup(self, harness, tmp_path):
+        """The variable is named and the stub's Compose answers nothing. The
+        backup archives neither the directory `.env` names nor, on a guess,
+        the checkout's."""
         state = tmp_path / "state"
         (state / "attachments").mkdir(parents=True)
         project = harness["project"]
         (project / ".env").write_text(f"DB_PASSWORD=x\nIDEALISTA_DATA_DIR={state}\n")
         (project / "data" / "attachments").mkdir(parents=True)
         result = self._run(harness, str(harness["destination"]))
-        assert "does not read the variable" in result.stderr
+        assert "exactly one host directory" in result.stderr
         self._nothing_was_backed_up(harness, result)
 
     def test_a_refusal_stops_the_backup_whatever_directory_was_named_by_hand(
