@@ -28,7 +28,7 @@ from services.address_agreement import query_house_numbers
 from services.coordinate_quality import is_precise
 from services.enrichment_write import check_writable, locked_write
 from services.property_location_service import _row_province
-from utils.http import lookup_budget
+from utils.http import lookup_budget, lookup_budget_spent
 
 BUILDINGS_URL = "https://ovc.catastro.meh.es/INSPIRE/wfsBU.aspx"
 GML = "{http://www.opengis.net/gml/3.2}"
@@ -401,6 +401,23 @@ def _metric_parcel(reference):
     return parcel, epsg
 
 
+# The walk's own ceiling inside the Enrich run's budget: nested, so it can
+# only shorten what the run has left, never extend it.
+WALK_BUDGET_S = 90
+BUDGET_EXHAUSTED = "lookup_budget_exhausted"
+
+
+def _clock_refusal(result):
+    """A walk the budget cut short is refused by the clock, not by Catastro.
+
+    The step's own reason is kept as `detail`; the status stays `unavailable`,
+    so nothing is cached and `enrich` keeps a measurement of the same subject.
+    """
+    if result.get("status") == "unavailable" and lookup_budget_spent():
+        return {**result, "reason": BUDGET_EXHAUSTED, "detail": result.get("reason")}
+    return result
+
+
 class NeighboursService:
     def measure(self, prop):
         origin = subject(prop)
@@ -409,12 +426,12 @@ class NeighboursService:
             "measured_at": datetime.now(timezone.utc).isoformat(),
             "source": "catastro_inspire_buildings",
         }
-        try:
-            with cadastre.shortlist_requests(), lookup_budget(90):
+        with cadastre.shortlist_requests(), lookup_budget(WALK_BUDGET_S):
+            try:
                 resolved = _resolve_parcel(prop)
                 result.update(resolved)
                 if resolved["status"] != "ok":
-                    return result
+                    return _clock_refusal(result)
                 reference = resolved["reference"]
                 parcel, epsg = _metric_parcel(reference)
                 left, bottom, right, top = parcel.bounds
@@ -470,8 +487,10 @@ class NeighboursService:
                 }
                 cadastre._cache_set(key, payload)
                 return {**result, **payload}
-        except (cadastre.CadastreError, requests.RequestException) as exc:
-            return {**result, "status": "unavailable", "reason": str(exc)}
+            except (cadastre.CadastreError, requests.RequestException) as exc:
+                return _clock_refusal(
+                    {**result, "status": "unavailable", "reason": str(exc)}
+                )
 
     def enrich(self, prop, *, commit=True, expected_previous=_UNSET):
         locked = check_writable(prop, commit)
