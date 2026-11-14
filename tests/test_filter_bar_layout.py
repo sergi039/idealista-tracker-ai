@@ -8,7 +8,9 @@ the markup the regrouping rests on. Positions and heights are a browser
 measurement on a built image (docs/design/README.md), not asserted here.
 """
 
+import html
 import re
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -86,15 +88,25 @@ def test_favorites_and_hide_removed_live_in_the_filter_form_once(client, profile
     assert body.count("scope-switch") == 2
     assert form.count("scope-switch") == 2
     assert "scope-switch" not in scope
-    # They stay one-click links that keep the applied view and reset the page.
-    for name in ("favorites=on", "hide_removed=on"):
-        link = re.search(
-            r'<a class="btn btn-sm scope-switch[^>]*href="([^"]*' + name + r'[^"]*)"',
-            form,
-        )
-        assert link, name
-        assert "view_type=" in link.group(1)
-        assert "page=1" in link.group(1)
+
+    links = {}
+    for tag in re.findall(r'<a class="btn btn-sm scope-switch[^>]*>', form, re.S):
+        title = re.search(r'title="([^"]*)"', tag).group(1)
+        href = html.unescape(re.search(r'href="([^"]*)"', tag).group(1))
+        links[title] = parse_qs(urlsplit(href).query)
+    favorites = links["Show only the listings you starred"]
+    hide_removed = links["Hide listings that were removed or sold"]
+
+    # Hide removed is on by default, so each link flips only its own switch.
+    assert favorites["favorites"] == ["on"]
+    assert favorites["hide_removed"] == ["on"]
+    assert "favorites" not in hide_removed
+    assert "hide_removed" not in hide_removed
+    # Both stay one-click links that keep the applied view and reset the page.
+    for query in (favorites, hide_removed):
+        assert query["page"] == ["1"]
+        assert "view_type" in query
+        assert "mode" in query
 
 
 def test_one_apply_closes_the_filter_group_after_the_filters_trigger(
