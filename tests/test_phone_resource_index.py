@@ -59,6 +59,7 @@ DISPLAY_CONTROLS = (
 # count is what it is. None may carry the phone disclosure's class.
 ALWAYS_VISIBLE_STATUS = (
     "filter-bar-narrowing-note",
+    "hidden-rows",
     "unassigned-count-note",
     "criteria-hidden-coverage",
     "rejected-hidden-coverage",

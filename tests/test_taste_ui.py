@@ -320,8 +320,8 @@ class TestRecommendationSurface:
         body = page.get_data(as_text=True)
         cards_body = cards.get_data(as_text=True)
         assert 'id="recommendation-profile-status"' in body
-        assert "3 positive references and 2 recorded preferences" in body
-        assert "1 preference(s) are not used yet" in body
+        assert "3 listings you liked and 2 preferences" in body
+        assert "1 of your preferences is not applied yet" in body
         assert "A preference" in body and "No mapping" in body
         assert 'data-recommendation-state="reference"' in body
         assert 'data-recommendation-state="candidate"' in body
@@ -375,7 +375,7 @@ class TestRecommendationSurface:
         ):
             body = client.get("/properties?profile_id=all").get_data(as_text=True)
 
-        assert "Las recomendaciones se están preparando" in body
+        assert "Preparando sus primeras recomendaciones" in body
         assert "Candidata" in body
         assert "vistas al mar" in body
 

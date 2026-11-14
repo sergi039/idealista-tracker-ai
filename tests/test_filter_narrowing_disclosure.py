@@ -130,7 +130,7 @@ class TestTheNoteRenders:
         # (the removed one is out of both numbers: Hide removed is on).
         assert "2 properties found" in body
         assert 'id="filter-bar-narrowing-note"' in body
-        assert "Filters: 2 of 4 shown" in body
+        assert "out of 4" in body
 
     def test_the_baseline_is_the_current_subscription_selection(self, client, app):
         with app.app_context():
@@ -142,7 +142,7 @@ class TestTheNoteRenders:
         body = response.get_data(as_text=True)
         # Norte holds 3 live rows; Bogdan's house is outside the selection
         # and must not pad the baseline.
-        assert "Filters: 2 of 3 shown" in body
+        assert "out of 3" in body
 
     def test_the_baseline_keeps_the_toolbar_switches(self, client):
         # Favorites is a toolbar switch, not a filter-bar field: with it on,
@@ -158,7 +158,7 @@ class TestTheNoteRenders:
         )
         assert response.status_code == 200
         body = response.get_data(as_text=True)
-        assert "Filters: 1 of 2 shown" in body
+        assert "out of 2" in body
 
     def test_hide_removed_off_widens_both_numbers(self, client):
         # `mode` marks the request as coming from the filter form, so an
@@ -175,7 +175,7 @@ class TestTheNoteRenders:
         body = response.get_data(as_text=True)
         # The removed sea-view row is back in both the filtered set and the
         # baseline: 3 of the 5 stored listings.
-        assert "Filters: 3 of 5 shown" in body
+        assert "out of 5" in body
 
 
 class TestTheClearLink:

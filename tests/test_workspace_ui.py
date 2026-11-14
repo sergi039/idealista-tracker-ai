@@ -193,7 +193,7 @@ def test_profile_states_do_not_invent_previous_data_or_repeat_work(
     assert response.status_code == 200
     assert f'data-recommendation-profile-state="{state}"' in response.text
     assert ('id="recommendation-refresh-button"' in response.text) is refresh
-    assert ("Previous recommendations remain available." in response.text) is previous
+    assert ('data-recommendation-previous="true"' in response.text) is previous
     paid.assert_not_called()
 
 

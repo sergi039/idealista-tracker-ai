@@ -161,9 +161,8 @@ and the **one Filters trigger** (search and the other fields open in place
 under it); view tabs on one line that scrolls sideways; sort with **one display
 trigger** naming the selected representation and assessment (assessment mode,
 Table/Cards/Map and Actions open under it); the count, every hide and the
-profile state as one paragraph with **one Result details trigger** (refresh,
-unused preferences, previous-evidence note and coverage open under it); the
-list. Nothing is sticky: `#listing-<id>` anchors keep their offset.
+profile state as one line with **one Result details trigger** (the refresh
+button and "About these results" open under it); the list. Nothing is sticky: `#listing-<id>` anchors keep their offset.
 
 Rules that keep it that way:
 
@@ -171,9 +170,11 @@ Rules that keep it that way:
   re-placing the element that exists (`collapse` wrappers that are
   `display: contents` from 768px up, where their triggers are not drawn). Never
   render a second copy for the narrow screen.
-- **A hide is never behind a phone disclosure.** Failing criteria, rejected
-  listings, folded publications, hard exclusions, a narrowing filter bar, the
-  overdue link and the profile state stay in the visible paragraph.
+- **A hide is never behind a phone disclosure.** The "N hidden" summary (it
+  opens onto failing criteria, rejected listings, folded publications, hard
+  exclusions and listings with no subscription, each with its count and the
+  link that brings them back), the clear-filters link, the overdue link and a
+  recommendation state that needs the owner stay in the visible line.
 - **The Decision select and Apply are never folded.** Search is; an applied
   search is still a visible chip.
 - A row is one stacked summary: photo (72px) beside title, municipality and
@@ -194,6 +195,38 @@ Acceptance for later changes: first listing by 480px and at least 2.5 rows per
 extra line. `docs/screenshots/properties-phone-before.png` and
 `properties-phone-after.png` are the same fixture rows drawn by the template
 before and after the change (placeholder pictures, no owner data).
+
+## The status line under the tabs
+
+Owner report 2026-11-14: "small text nobody can read". The line says three
+things, in body-size text (14px, never the 10.5px that `.small` inside a
+12px row compounded to): the count, what the page keeps back, and whether the
+recommendations need the owner. A line is added only if it answers "what does
+the owner lose without it"; a count about data quality belongs in
+**About these results**, a sentence a filter chip already says does not belong
+anywhere.
+
+- **Kept back is one control**: `<details id="hidden-rows">` titled "N hidden".
+  Its rows are disjoint, each carries its own count and the link that undoes
+  it (`criteria=all`, `verdict=all`, `duplicates=show`, All properties,
+  `profile_id=unassigned`); the tooltips that held the explanation are not a
+  way back and are not the only home of the rule. Absent when nothing is kept
+  back.
+- **A narrowing filter bar** says "out of N" and one clear-filters link; the
+  applied filters are chips, so the sentence "Filters: ..." is gone. In the
+  Recommendations collection the number is dropped (the baseline counts the
+  whole selection, the count beside it only recommended rows) and the link
+  stays.
+- **Recommendations are one state and, when the owner can act, one button.**
+  A profile that is current and not on the Recommended tab says nothing in the
+  line (its basis is the first item of About these results). A dirty, pending
+  or failed profile says whether previous recommendations are still shown in
+  the same sentence; there is no separate "previous remain available" line.
+  Unapplied preferences are a disclosure inside About these results, in plain
+  words ("3 of your preferences are not applied yet"), not "preference(s)".
+- **Coverage ("About these results") counts the rows the page draws.** On the
+  Recommended tab the four "K of N" counts are taken after the collection has
+  been selected.
 
 ## Recommendation states
 
