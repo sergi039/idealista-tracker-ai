@@ -84,8 +84,11 @@ Each control has one home:
 
 From 768px up the filter form is one wrapping line, every control the same
 height, chips continuing that line while they fit (owner, 2026-11-14: "the
-filters are a mess again"). Where the bar is narrower than 56rem, search, Apply
-and the chips take the second line together, so Apply never wraps alone. With
+filters are a mess again"). Search never narrows past its whole placeholder
+(19rem, sized for the Spanish one) and takes the space left; the chips wrap
+to the next line before it would shrink. Where the bar is narrower than 64rem,
+search, Apply and the chips take the second line together, so Apply never
+wraps alone. With
 the Filters panel open, at every width, Apply moves below the panel's fields so
 the group still ends in it. Each
 field has one name: a select that names itself in its options (`Decision: all`)

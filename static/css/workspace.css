@@ -80,7 +80,11 @@
    Filters trigger, Apply and the applied chips share a line while they fit. */
 .workspace-filter-form,
 .workspace-filter-primary { display: contents; }
-.app-workspace .properties-filter-search { flex: 1 1 10rem; min-width: 10rem; max-width: none; }
+/* Search is the group's main control: it never narrows past its whole
+   placeholder (the Spanish one needs ~18rem with the icon), takes whatever the
+   line has left, and the applied chips wrap to the next line before it would
+   shrink. */
+.app-workspace .properties-filter-search { flex: 1 1 19rem; min-width: 19rem; max-width: none; }
 .workspace-advanced-filters { flex: 0 0 auto; }
 .workspace-advanced-filters[open] { order: 2; flex-basis: 100%; }
 /* Where the browser exposes the disclosure's content box, the trigger stays
@@ -265,8 +269,22 @@
     .properties-heading > h1 { flex: 0 1 auto; min-width: 0; }
     /* A filter bar too narrow for search and every control on one line puts
        the controls first and search, Apply and the applied chips on the next,
-       so Apply never wraps alone and still follows the last draft field. */
-    @container filters (max-width: 56rem) {
+       so Apply never wraps alone and still follows the last draft field.
+       64rem is where search at its 19rem floor still shares the line with
+       every control in Spanish (measured: ~62rem). */
+    @container filters (max-width: 64rem) {
+        /* A zero-height break, so search starts the second line even where it
+           would still fit after the Filters trigger. An empty flex line still
+           takes a row gap, and a negative margin cannot cancel it, so here the
+           gap is each item's top margin instead: the empty line has none. */
+        .app-workspace #filters-card > .card-body::before { content: ""; order: 1; flex-basis: 100%; }
+        .app-workspace #filters-card > .card-body { row-gap: 0; margin-top: calc(-1 * var(--ui-space-2)); }
+        .app-workspace #filters-card > .card-body > *,
+        .workspace-filter-form > *,
+        .workspace-filter-primary > *,
+        .workspace-advanced-filters > summary { margin-top: var(--ui-space-2); }
+        /* Its own rule: a browser without the pseudo-element drops the list. */
+        .workspace-advanced-filters::details-content { margin-top: var(--ui-space-2); }
         .app-workspace .properties-filter-search { order: 1; flex-basis: 20rem; }
         .workspace-filter-apply { order: 1; }
     }
