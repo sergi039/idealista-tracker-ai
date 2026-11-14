@@ -263,9 +263,9 @@ class TestColumnWidthsAddUp:
     def test_the_reason_widths_do_not_reach_a_phone(self):
         """A phone's cells are grid items. A more specific tablet width leaked
         into them once (a 79px reason cell, rows 130px taller): it must sit
-        inside a `min-width: 768px` guard."""
+        inside a `min-width:768px` guard."""
         tablet = _block(CSS, "@media (max-width: 1199.98px)")
-        guarded = _block(tablet, "@media (min-width: 768px)")
+        guarded = _block(tablet, "@media (min-width:768px)")
         assert ".workspace-data-table.recommendation-table .col-score" in guarded
         assert (
             ".workspace-data-table.recommendation-table .col-score"
@@ -288,14 +288,14 @@ class TestDensityRulesExist:
 
     def test_the_decision_controls_share_a_line_from_the_tablet_width_up(self):
         block = _density_block(CSS)
-        desktop = _block(block, "@media (min-width: 768px)")
+        desktop = _block(block, "@media (min-width:768px)")
         assert re.search(
             r"\.workspace-owner-decision\s*\{\s*display:\s*flex;\s*flex-wrap:\s*wrap",
             desktop,
         )
 
     def test_the_rating_and_the_assessment_share_a_line_without_a_column(self):
-        desktop = _block(_density_block(CSS), "@media (min-width: 768px)")
+        desktop = _block(_density_block(CSS), "@media (min-width:768px)")
         rule = re.search(r"\.workspace-reason-cell\s*\{([^}]*)\}", desktop).group(1)
         assert "display: flex" in rule and "flex-wrap: wrap" in rule
         assert "flex-direction" not in rule

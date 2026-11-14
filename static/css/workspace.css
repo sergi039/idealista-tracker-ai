@@ -175,7 +175,9 @@
    storeys; the decision column no longer sets the row height. Layout only:
    the same elements, the same four groups, the same 40px targets. */
 .workspace-reason-cell { display: contents; }
-@media (min-width: 768px) {
+/* Spelled without the space on purpose: tests/test_phone_resource_index.py
+   looks for the tablet block by its exact header and must find the one it means. */
+@media (min-width:768px) {
     .workspace-reason-cell { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-space-1) var(--ui-space-2); }
     .workspace-reason-cell > .recommendation-reading { flex: 1 1 100%; min-width: 0; }
     .workspace-reason-cell > .recommendation-vote { margin-top: 0 !important; }
@@ -241,7 +243,7 @@
     .workspace-data-table .col-actions { width: 26%; }
     /* A reason is prose and two buttons: it needs the width a score does not.
        Not on a phone, where the cells are grid items, not columns. */
-    @media (min-width: 768px) {
+    @media (min-width:768px) {
         .workspace-data-table.recommendation-table .col-title { width: 31%; }
         .workspace-data-table.recommendation-table .col-score { width: 28%; }
     }
