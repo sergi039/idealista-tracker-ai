@@ -85,7 +85,9 @@ Each control has one home:
 From 768px up the filter form is one wrapping line, every control the same
 height, chips continuing that line while they fit (owner, 2026-11-14: "the
 filters are a mess again"). Where the bar is narrower than 56rem, search, Apply
-and the chips take the second line together, so Apply never wraps alone. Each
+and the chips take the second line together, so Apply never wraps alone. With
+the Filters panel open, at every width, Apply moves below the panel's fields so
+the group still ends in it. Each
 field has one name: a select that names itself in its options (`Decision: all`)
 keeps its caption for assistive technology only. Favorites and Hide removed
 narrow which rows are shown, so they belong to this group, not the scope.
@@ -166,7 +168,7 @@ buttons stay on the row instead of rolling into an overflow menu.
 Below 768px the regions are, in order: title with last sync; applied
 subscription with its rare tools; Favorites and Hide removed; Decision, the
 **one Filters trigger** and Apply (search and the other fields open in place
-under it); view tabs on one line that scrolls sideways; sort with **one display
+under it, Apply then following them); view tabs on one line that scrolls sideways; sort with **one display
 trigger** naming the selected representation and assessment (assessment mode,
 Table/Cards/Map and Actions open under it); the count, every hide and the
 profile state as one paragraph with **one Result details trigger** (refresh,

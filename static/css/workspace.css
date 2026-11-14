@@ -91,6 +91,8 @@
     .workspace-advanced-filters::details-content { order: 2; flex: 1 1 100%; }
     .workspace-advanced-filters:not([open])::details-content { display: none; }
 }
+/* With the fields open, Apply follows them, so the group still ends in it. */
+.workspace-filter-form:has(.workspace-advanced-filters[open]) .workspace-filter-apply { order: 3; }
 .workspace-advanced-filters > summary { cursor: pointer; color: var(--ui-muted); padding: var(--ui-space-2) 0; min-height: var(--ui-control-height); display: inline-flex; align-items: center; gap: var(--ui-space-2); }
 .workspace-advanced-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: var(--ui-space-3); background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); padding: var(--ui-space-4); }
 .workspace-advanced-fields .form-select { width: 100%; min-width: 0; }

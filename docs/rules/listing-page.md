@@ -58,8 +58,8 @@ What the page has now, top to bottom:
    up) — the one subscription multiselect (several at once, the archive,
    `unassigned`, an empty selection) and, only while it holds something, one
    Subscription tools menu. The menu's checkboxes belong to the filter form
-   through `form="filter-form"`, so a no-JavaScript Apply still carries them;
-   with JavaScript they apply when the menu closes.
+   through `form="filter-form"`, so they are drafts like every filter field:
+   the menu's own Apply, the bar's Apply or Enter submits them with the rest.
 2. **Filter bar** (`#filters-card`) — one wrapping line: search, Decision,
    the Favorites / Hide removed switches, the one Filters trigger, then the one
    Apply; the applied conditions continue it as chips. The two switches are
