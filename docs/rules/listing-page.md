@@ -54,18 +54,21 @@ archive section inside that dropdown, Export CSV in the navbar *and* over the
 list, Manual Sync in the header *and* in the navbar slot the page had taken.
 What the page has now, top to bottom:
 
-1. **Toolbar** (`#subscription-switcher`) — the subscription chips, one
-   `More` menu holding what a chip cannot say (several at once, the archive,
-   `unassigned`, an empty selection), and the Favorites / Hide removed
-   switches. Those two are links, not form fields: they apply on click, and
-   the filter form re-posts their state as hidden inputs so Apply cannot
-   switch them off. The menu's checkboxes belong to the filter form through
-   `form="filter-form"`, so a no-JavaScript Apply still carries them; with
-   JavaScript they apply when the menu closes.
-2. **Filter bar** (`#filters-card`) — one wrapping row, no captions above the
-   controls. Each names itself in its first option (`All Types`, `All
-   Municipalities`, `Inv. metr: all`); search leads it. Anything that changes
-   *which* rows are shown lives here, and nothing else does.
+1. **Toolbar** (`#subscription-switcher`, on the title's line from 768px
+   up) — the one subscription multiselect (several at once, the archive,
+   `unassigned`, an empty selection) and, only while it holds something, one
+   Subscription tools menu. The menu's checkboxes belong to the filter form
+   through `form="filter-form"`, so a no-JavaScript Apply still carries them;
+   with JavaScript they apply when the menu closes.
+2. **Filter bar** (`#filters-card`) — one wrapping line: search, Decision,
+   the Favorites / Hide removed switches, the one Filters trigger, then the one
+   Apply; the applied conditions continue it as chips. The two switches are
+   links, not form fields: they apply on click, and the filter form re-posts
+   their state as hidden inputs so Apply cannot switch them off. They moved
+   here from the toolbar on 2026-11-14 because they change *which* rows are
+   shown. Each field has one name (`Decision: all` needs no caption above
+   it). Anything that changes which rows are shown lives here, and nothing
+   else does.
 3. **Result row** — the count, the modes, the cards/list toggle and Export
    CSV: the controls that change how the same rows are drawn.
 

@@ -78,9 +78,17 @@ Each control has one home:
 
 | Zone | Responsibility |
 |---|---|
-| Subscription toolbar | Scope multiselect, archived/unassigned access, Favorites, Hide removed; rare subscription tools disclose on demand |
-| Filter form | Search/type/municipality, additional filters, explicit Apply and Clear |
+| Subscription toolbar | Scope multiselect with archived/unassigned access, and one Subscription tools menu drawn only while it holds something; it shares the title's line from 768px up |
+| Filter form | Search, Decision, Favorites, Hide removed, the one Filters trigger (the other fields and Clear open in place under it), then the one Apply that closes the group; applied conditions follow as chips |
 | Result controls | All properties/Recommended/Needs verification, named assessment modes, sort/order, table/cards/map and collection actions |
+
+From 768px up the filter form is one wrapping line, every control the same
+height, chips continuing that line while they fit (owner, 2026-11-14: "the
+filters are a mess again"). Where the bar is narrower than 56rem, search, Apply
+and the chips take the second line together, so Apply never wraps alone. Each
+field has one name: a select that names itself in its options (`Decision: all`)
+keeps its caption for assistive technology only. Favorites and Hide removed
+narrow which rows are shown, so they belong to this group, not the scope.
 
 All GET filter edits are drafts until **Apply** or Enter submits the form.
 Subscription menu checkboxes use the same form through `form=filter-form`;
@@ -156,8 +164,8 @@ Apply/Clear replace the reference's saved-view Save/Cancel; the three decision
 buttons stay on the row instead of rolling into an overflow menu.
 
 Below 768px the regions are, in order: title with last sync; applied
-subscription with its rare tools; Favorites and Hide removed; Decision, Apply
-and the **one Filters trigger** (search and the other fields open in place
+subscription with its rare tools; Favorites and Hide removed; Decision, the
+**one Filters trigger** and Apply (search and the other fields open in place
 under it); view tabs on one line that scrolls sideways; sort with **one display
 trigger** naming the selected representation and assessment (assessment mode,
 Table/Cards/Map and Actions open under it); the count, every hide and the

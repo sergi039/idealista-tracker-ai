@@ -238,8 +238,8 @@ TRANSLATIONS = {
         # (services/owner_review.py). `undecided` is the state of a listing
         # nobody has judged; it is never rendered as a rejection.
         "owner_verdict": "Verdict",
-        "owner_verdict_all": "Verdict: all",
-        "owner_verdict_default": "Verdict: not rejected",
+        "owner_verdict_all": "Decision: all",
+        "owner_verdict_default": "Decision: not rejected",
         "owner_verdict_interested": "Interested",
         "owner_verdict_waiting": "Waiting",
         "owner_verdict_rejected": "Rejected",
@@ -495,7 +495,7 @@ TRANSLATIONS = {
         "taste_sort_dormant": "Taste ranking is being rebuilt — not ordering yet",
         "taste_sort_dormant_tooltip": "The taste profile was rebuilt and the listings have not all been re-scored against it. A score made against an older profile is never ranked beside a current one, so this order falls back to the date until the re-scoring finishes.",
         "rejected_hidden_line": "Rejected: %s hidden",
-        "rejected_hidden_tooltip": "Listings you turned down are not offered back to you. A favorited one, or one with something still outstanding, is never hidden. Pick 'Verdict: all' to see them.",
+        "rejected_hidden_tooltip": "Listings you turned down are not offered back to you. A favorited one, or one with something still outstanding, is never hidden. Pick 'Decision: all' to see them.",
         "criteria_hidden_line": "Criteria: %s failing hidden",
         "criteria_hidden_tooltip": "Listings with a stated house or plot below the minimum, or a EUR price above the budget, are hidden by default. A favorited or reviewed listing is never hidden. Pick 'show everything' to see them.",
         # The same verdict on the row's OWN page, where the reader arrives
