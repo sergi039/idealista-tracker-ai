@@ -175,7 +175,6 @@
    storeys; the decision column no longer sets the row height. Layout only:
    the same elements, the same four groups, the same 40px targets. */
 .workspace-reason-cell { display: contents; }
-.workspace-row-details > summary { white-space: nowrap; }
 @media (min-width: 768px) {
     .workspace-reason-cell { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-space-1) var(--ui-space-2); }
     .workspace-reason-cell > .recommendation-reading { flex: 1 1 100%; min-width: 0; }
@@ -217,6 +216,8 @@
 #properties-cards-view .recommendation-details > summary { font-size: 0.75rem; }
 .workspace-catalog-example { display: grid; gap: var(--ui-space-6); }
 @media (min-width: 1200px) {
+    /* The label stays on one line where the column follows its width. */
+    .workspace-row-details > summary { white-space: nowrap; }
     .workspace-sidebar { width: var(--ui-nav-width); position: fixed; inset: 0 auto 0 0; display: flex; flex-direction: column; z-index: 1030; background: var(--ui-surface) !important; }
     .workspace-sidebar .offcanvas-body { display: flex; height: 100%; min-height: 0; overflow-y: auto; }
     .workspace-content { margin-left: var(--ui-nav-width); min-width: 0; }
@@ -310,7 +311,7 @@
     .workspace-secondary-scores:not([open]) { display: inline-block; vertical-align: top; }
 }
 @media (min-width: 768px) and (max-width: 1199.98px) {
-    .workspace-with-photo { grid-template-columns: minmax(4.5rem, max-content) minmax(0, 1fr); column-gap: var(--ui-space-2); }
+    .workspace-with-photo { grid-template-columns: 4.5rem minmax(0, 1fr); column-gap: var(--ui-space-2); }
 }
 
 /* ---- Phone (below 768px): a resource index, not a shrunken desktop ----

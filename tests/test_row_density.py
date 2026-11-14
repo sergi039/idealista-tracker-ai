@@ -269,13 +269,17 @@ class TestColumnWidthsAddUp:
 
 
 class TestDensityRulesExist:
-    def test_details_and_checks_cannot_wrap_and_the_column_follows_it(self):
+    def test_details_and_checks_cannot_wrap_where_the_column_follows_its_width(self):
+        """From 1200px the thumbnail column is as wide as the label, so neither
+        language overlaps the copy; a tablet column is too narrow for that and
+        keeps the label free to wrap (a 150px Spanish label left 64px of copy)."""
+        wide = _block(CSS, "@media (min-width: 1200px)")
         assert re.search(
-            r"\.workspace-row-details\s*>\s*summary\s*\{\s*white-space:\s*nowrap", CSS
+            r"\.workspace-row-details\s*>\s*summary\s*\{\s*white-space:\s*nowrap", wide
         )
-        # The column is at least the thumbnail and at most as wide as the
-        # label, so neither language overlaps the copy beside it.
         assert "grid-template-columns: minmax(7rem, max-content) minmax(0, 1fr)" in CSS
+        tablet = _block(CSS, "@media (min-width: 768px) and (max-width: 1199.98px)")
+        assert "grid-template-columns: 4.5rem minmax(0, 1fr)" in tablet
 
     def test_the_decision_controls_share_a_line_from_the_tablet_width_up(self):
         block = _density_block(CSS)
