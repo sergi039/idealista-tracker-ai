@@ -111,16 +111,16 @@
 .app-workspace .properties-coverage { font-size: 0.75rem; margin-bottom: var(--ui-space-3); }
 .app-workspace .properties-coverage > summary { font-size: 0.75rem; padding-block: var(--ui-space-1); }
 .workspace-data-table { width: 100%; table-layout: fixed; }
-.workspace-data-table .col-title { width: 46%; min-width: 0; }
-.workspace-data-table .col-price { width: 16%; min-width: 0; }
-.workspace-data-table .col-score { width: 23%; min-width: 0; }
-.workspace-data-table .col-actions { width: 15%; min-width: 0; }
+.workspace-data-table .col-title { width: 39%; min-width: 0; }
+.workspace-data-table .col-price { width: 13%; min-width: 0; }
+.workspace-data-table .col-score { width: 26%; min-width: 0; }
+.workspace-data-table .col-actions { width: 22%; min-width: 0; }
 .workspace-data-table th.col-actions { text-align: right; }
 .app-workspace .workspace-data-table > thead > tr > th { padding: var(--ui-space-3) var(--ui-space-4); border-bottom-width: 1px; text-transform: uppercase; }
 .app-workspace .workspace-data-table > tbody > tr > td { padding: var(--ui-space-3) var(--ui-space-3); vertical-align: top; background: var(--ui-surface); overflow-wrap: anywhere; font-size: 0.8125rem; }
 .workspace-property-summary { display: flex; gap: var(--ui-space-4); align-items: flex-start; }
-.workspace-photo { flex: 0 0 6rem; width: 6rem; }
-.workspace-photo .listing-thumb { width: 6rem; height: 5.25rem; object-fit: cover; border-radius: var(--ui-radius-control); }
+.workspace-photo { flex: 0 0 7rem; width: 7rem; }
+.workspace-photo .listing-thumb { width: 7rem; height: 3.75rem; object-fit: cover; border-radius: var(--ui-radius-control); }
 .workspace-property-copy { min-width: 0; flex: 1; }
 .app-workspace .workspace-data-table .property-table-title { font-size: 0.875rem; font-weight: 600; color: var(--ui-text); line-height: 1.45; }
 .workspace-municipality { color: var(--ui-muted); font-size: 0.75rem; margin-top: var(--ui-space-1); }
@@ -170,6 +170,51 @@
 .property-favorite-btn { width: var(--ui-control-height); min-height: var(--ui-control-height); flex-shrink: 0; }
 .workspace-source-actions { display: flex; gap: var(--ui-space-2); flex-wrap: wrap; margin-top: var(--ui-space-2); }
 .workspace-source-actions .btn { min-height: var(--ui-control-height); padding: var(--ui-space-1) var(--ui-space-2); font-size: 0.75rem; }
+/* Row density (owner, 2026-11-14: "the card has free space and looks
+   unoptimised"). Related controls share a line instead of stacking in three
+   storeys; the decision column no longer sets the row height. Layout only:
+   the same elements, the same four groups, the same 40px targets. */
+.workspace-reason-cell { display: contents; }
+.workspace-row-details > summary { white-space: nowrap; }
+@media (min-width: 768px) {
+    .workspace-reason-cell { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-space-1) var(--ui-space-2); }
+    .workspace-reason-cell > .recommendation-reading { flex: 1 1 100%; min-width: 0; }
+    .workspace-reason-cell > .recommendation-vote { margin-top: 0 !important; }
+    .workspace-reason-cell > .workspace-secondary-scores[open] { flex: 1 1 100%; }
+    .workspace-owner-decision { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--ui-space-1) var(--ui-space-2); }
+    .workspace-owner-decision > .owner-decision-buttons { order: 1; margin-bottom: 0; }
+    .workspace-owner-decision > .workspace-owner-actions { order: 2; margin-bottom: 0; }
+    .workspace-owner-decision > :not(.owner-decision-buttons):not(.workspace-owner-actions) { order: 3; flex: 0 1 auto; margin-top: 0 !important; }
+    .workspace-owner-decision > div:not(.owner-decision-buttons):not(.workspace-owner-actions) { flex-basis: 100%; }
+    .workspace-property-overview:not(.workspace-with-photo) .workspace-row-details { margin-top: 0; }
+    /* Area and the type badges share a line: three storeys in a 130px column
+       made the price cell, not the object, set the row height. */
+    .workspace-data-table .col-price { white-space: normal; }
+    .workspace-data-table .col-price .col-area { min-width: 0; }
+    .workspace-data-table .col-price .workspace-price-facts { display: inline-flex; align-items: center; max-width: 100%; margin-right: var(--ui-space-2); vertical-align: middle; }
+}
+
+/* Cards: the same economy. A shorter photograph, price, area and place on one
+   line, the travel times in a row, the body without stacked gaps. */
+#properties-cards-view .listing-card-photo,
+#properties-cards-view .listing-card-photo-missing { height: 7.5rem; }
+#properties-cards-view .property-card-body { display: flex; flex-wrap: wrap; align-items: center; align-content: flex-start; gap: var(--ui-space-2) var(--ui-space-3); padding: var(--ui-space-3); }
+#properties-cards-view .property-card-body > * { margin: 0 !important; min-width: 0; }
+#properties-cards-view .property-card-body > .card-title,
+#properties-cards-view .property-card-body > .property-card-facts,
+#properties-cards-view .property-card-body > .property-card-line,
+#properties-cards-view .property-card-body > .property-card-travel { flex: 1 1 100%; }
+#properties-cards-view .property-card-body > .recommendation-reading { flex: 1 1 auto; }
+#properties-cards-view .property-card-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--ui-space-1) var(--ui-space-3); }
+#properties-cards-view .property-card-price { display: flex; flex: 0 0 auto; gap: var(--ui-space-3); --bs-gutter-x: 0; }
+#properties-cards-view .property-card-price > * { width: auto; flex: 0 0 auto; padding: 0; }
+#properties-cards-view .property-card-location > .d-flex { min-width: 0; }
+#properties-cards-view .property-card-travel .properties-travel-times { flex-direction: row !important; flex-wrap: wrap; gap: var(--ui-space-1) var(--ui-space-3); }
+#properties-cards-view .card-footer { padding: var(--ui-space-2) var(--ui-space-3); }
+#properties-cards-view .badge,
+#properties-cards-view .property-card-body small,
+#properties-cards-view .property-card-body .small,
+#properties-cards-view .recommendation-details > summary { font-size: 0.75rem; }
 .workspace-catalog-example { display: grid; gap: var(--ui-space-6); }
 @media (min-width: 1200px) {
     .workspace-sidebar { width: var(--ui-nav-width); position: fixed; inset: 0 auto 0 0; display: flex; flex-direction: column; z-index: 1030; background: var(--ui-surface) !important; }
@@ -185,9 +230,15 @@
     .workspace-collapse { display: none !important; }
     .workspace-topbar-title { display: none; }
     .workspace-data-table .col-title { width: 40%; }
-    .workspace-data-table .col-price { width: 16%; }
-    .workspace-data-table .col-score { width: 22%; }
-    .workspace-data-table .col-actions { width: 22%; }
+    .workspace-data-table .col-price { width: 15%; }
+    .workspace-data-table .col-score { width: 19%; }
+    .workspace-data-table .col-actions { width: 26%; }
+    /* A reason is prose and two buttons: it needs the width a score does not.
+       Not on a phone, where the cells are grid items, not columns. */
+    @media (min-width: 768px) {
+        .workspace-data-table.recommendation-table .col-title { width: 31%; }
+        .workspace-data-table.recommendation-table .col-score { width: 28%; }
+    }
     .workspace-photo { flex-basis: 4.5rem; width: 4.5rem; }
     .workspace-photo .listing-thumb { width: 4.5rem; height: 4.5rem; }
     .workspace-property-summary { gap: var(--ui-space-2); }
@@ -212,7 +263,7 @@
 .app-workspace .workspace-result-status .properties-coverage[open] { flex-basis: 100%; }
 .app-workspace .workspace-data-table > thead > tr > th { padding-block: var(--ui-space-2); }
 .app-workspace .workspace-data-table > tbody > tr > td { padding-block: var(--ui-space-3); }
-.workspace-data-table .col-type .badge { background: var(--ui-canvas) !important; color: var(--ui-muted) !important; font-weight: 400; }
+.workspace-data-table .col-type .badge { background: var(--ui-canvas) !important; color: var(--ui-muted) !important; font-weight: 400; font-size: 0.75rem; }
 .workspace-location-warning { color: var(--ui-warning); font-size: 0.75rem; margin-top: var(--ui-space-1); }
 
 /* Disclosures and dropdown labels share the same usable target as buttons. */
@@ -248,7 +299,7 @@
     .workspace-page-heading h1 { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--ui-space-3); }
     .workspace-page-heading .properties-last-sync { margin: 0 !important; }
     .workspace-location-line { display: flex; flex-wrap: wrap; column-gap: var(--ui-space-2); }
-    .workspace-with-photo { display: grid; grid-template-columns: 6rem minmax(0, 1fr); column-gap: var(--ui-space-3); align-content: start; }
+    .workspace-with-photo { display: grid; grid-template-columns: minmax(7rem, max-content) minmax(0, 1fr); column-gap: var(--ui-space-3); align-content: start; }
     .workspace-with-photo .workspace-property-summary { display: contents; }
     .workspace-with-photo .workspace-photo { grid-column: 1; grid-row: 1; }
     .workspace-with-photo .workspace-property-copy { grid-column: 2; grid-row: 1 / span 2; }
@@ -259,7 +310,7 @@
     .workspace-secondary-scores:not([open]) { display: inline-block; vertical-align: top; }
 }
 @media (min-width: 768px) and (max-width: 1199.98px) {
-    .workspace-with-photo { grid-template-columns: 4.5rem minmax(0, 1fr); column-gap: var(--ui-space-2); }
+    .workspace-with-photo { grid-template-columns: minmax(4.5rem, max-content) minmax(0, 1fr); column-gap: var(--ui-space-2); }
 }
 
 /* ---- Phone (below 768px): a resource index, not a shrunken desktop ----
