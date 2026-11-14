@@ -374,6 +374,29 @@ class TestTheRecommendationStateIsOneSentenceAndOneButton:
         assert status.count('id="recommendation-refresh-button"') == int(refresh)
         assert "remain available" not in status
 
+    @pytest.mark.parametrize("kind", ["current", "dirty"])
+    def test_a_stale_taste_score_joins_the_same_sentence(self, client, world, kind):
+        """`model-profile-dirty` was a second message beside the state. It is
+        part of it now -- even where a current profile is otherwise silent."""
+        body = _with_state(
+            client,
+            "/properties?profile_id=all&view_type=list",
+            dict(_state(kind), model_profile_dirty=True),
+        )
+        status = _status(body)
+        line = status[: status.index('id="properties-coverage"')]
+        state = re.search(
+            r'<span id="recommendation-profile-status".*?</span>\s*</span>|'
+            r'<span id="recommendation-profile-status".*?</span>',
+            line,
+            re.S,
+        )
+        assert state and 'id="model-profile-dirty"' in state.group(0), (
+            "the stale-score sentence must sit inside the one state element"
+        )
+        assert line.count('id="model-profile-dirty"') == 1
+        assert "behind your latest reviews" in _text(state.group(0))
+
     def test_a_current_profile_is_silent_on_the_all_tab_and_read_in_the_panel(
         self, client, world
     ):

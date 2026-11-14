@@ -1608,7 +1608,7 @@
                        collection its basis is read in the coverage panel. #}
                     {% set _rp = recommendation_profile if recommendation_profile is defined and recommendation_profile else none %}
                     {% set _rp_state = _rp.get('state', 'none') if _rp else none %}
-                    {% set _rp_quiet = _rp_state == 'current' and not _reco_collection %}
+                    {% set _rp_quiet = _rp_state == 'current' and not _reco_collection and not _rp.get('model_profile_dirty') %}
                     {% if _rp %}
                         {% set _rp_status %}
                         <span id="recommendation-profile-status" class="workspace-recommendation-state" data-recommendation-profile-state="{{ _rp_state }}"
@@ -1624,10 +1624,13 @@
                             {% else %}
                                 {{ t('recommendation_profile_none') }}
                             {% endif %}
+                            {# The taste score's own staleness is the same state,
+                               said in the same sentence -- not a second message
+                               about recommendations. #}
+                            {% if _rp.get('model_profile_dirty') %}<span id="model-profile-dirty">{{ t('recommendation_model_dirty') }}</span>{% endif %}
                         </span>
                         {% endset %}
                         {% if not _rp_quiet %}{{ _rp_status }}{% endif %}
-                        {% if _rp.get('model_profile_dirty') %}<span id="model-profile-dirty" class="text-warning-emphasis">{{ t('recommendation_model_dirty') }}</span>{% endif %}
                     {% endif %}
                     {{ result_details_toggle() }}
                     {% if _rp and _rp.get('usable_signal_count', 0) and (_rp_state in ('none', 'dirty', 'failed') or _rp.get('model_profile_dirty')) %}
