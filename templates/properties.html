@@ -36,6 +36,8 @@
     'sea_dist': current_filters.sea_dist or None,
     'build': current_filters.build or None,
     'measured': current_filters.measured or None,
+    'added_from': current_filters.added_from or None,
+    'added_to': current_filters.added_to or None,
     'similar': current_filters.similar or None,
     'criteria': current_filters.criteria or None,
     'verdict': current_filters.verdict or None,
@@ -958,7 +960,7 @@
         </div>
 
 
-        {% set applied_filter_keys = [('search', 'search'), ('category', 'type'), ('municipality', 'municipality'), ('subtype', 'workspace_subtype'), ('source', 'source'), ('advertiser', 'workspace_seller'), ('verdict', 'workspace_verdict'), ('action', 'next_action'), ('sea_view', 'workspace_sea'), ('build', 'workspace_build'), ('sea_dist', 'workspace_distance'), ('measured', 'workspace_measured'), ('criteria', 'workspace_criteria'), ('similar', 'workspace_similar'), ('inv_metr', 'workspace_investment'), ('duplicates', 'workspace_duplicates'), ('duplicate_of', 'workspace_duplicate_of')] %}
+        {% set applied_filter_keys = [('search', 'search'), ('category', 'type'), ('municipality', 'municipality'), ('subtype', 'workspace_subtype'), ('source', 'source'), ('advertiser', 'workspace_seller'), ('verdict', 'workspace_verdict'), ('action', 'next_action'), ('sea_view', 'workspace_sea'), ('build', 'workspace_build'), ('sea_dist', 'workspace_distance'), ('measured', 'workspace_measured'), ('added_from', 'workspace_added_from'), ('added_to', 'workspace_added_to'), ('criteria', 'workspace_criteria'), ('similar', 'workspace_similar'), ('inv_metr', 'workspace_investment'), ('duplicates', 'workspace_duplicates'), ('duplicate_of', 'workspace_duplicate_of')] %}
         {% set applied = namespace(count=0) %}
         {% for key, label_key in applied_filter_keys if key != 'search' and base_args.get(key) %}
             {% set applied.count = applied.count + 1 %}
@@ -1188,6 +1190,23 @@
                         <option value="full" {{ 'selected' if current_filters.measured == 'full' }}>{{ t('measured_full') }}</option>
                     </select></label>
 
+                    {# When the listing was added to this app (`created_at`, the
+                       date the row prints under "Added" and the default sort
+                       reads), as two inclusive day bounds. It is the one date
+                       every source carries: an alert email, a pasted link and a
+                       research sheet all get it, while the email's own date
+                       exists for mail only. A row with no date matches neither
+                       bound (services/listing_attribute_filters.py). No `min` /
+                       `max` tie between the two inputs: they would be the
+                       APPLIED bounds, and would refuse a draft that moves the
+                       whole range earlier or later one field at a time. #}
+                    <label>{{ t('workspace_added_from') }}<input type="date" class="form-control form-control-sm properties-filter-select" id="added_from" name="added_from"
+                            value="{{ current_filters.added_from or '' }}"
+                            aria-label="{{ t('workspace_added_from') }}"></label>
+                    <label>{{ t('workspace_added_to') }}<input type="date" class="form-control form-control-sm properties-filter-select" id="added_to" name="added_to"
+                            value="{{ current_filters.added_to or '' }}"
+                            aria-label="{{ t('workspace_added_to') }}"></label>
+
                     {# The subscription's own criteria (house >= 150, plot >= 700).
                        Drawn only while some subscription carries criteria; the
                        default hides measured fails (never a favorited/reviewed
@@ -1387,7 +1406,7 @@
                        export never re-derives a default the page has already
                        resolved. #}
                     <a class="dropdown-item"
-                       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, verdict=current_filters.verdict or None, action=current_filters.action or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, sea_dist=current_filters.sea_dist or None, build=current_filters.build or None, measured=current_filters.measured or None, similar=current_filters.similar or None, criteria=current_filters.criteria or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else 'off', duplicates=current_filters.duplicates or None, duplicate_of=current_filters.duplicate_of or None, mode=current_filters.mode, recommendation_scope=current_filters.recommendation_scope or None, sort=current_filters.sort_by, order=current_filters.order) }}"
+                       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, verdict=current_filters.verdict or None, action=current_filters.action or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, sea_dist=current_filters.sea_dist or None, build=current_filters.build or None, measured=current_filters.measured or None, added_from=current_filters.added_from or None, added_to=current_filters.added_to or None, similar=current_filters.similar or None, criteria=current_filters.criteria or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else 'off', duplicates=current_filters.duplicates or None, duplicate_of=current_filters.duplicate_of or None, mode=current_filters.mode, recommendation_scope=current_filters.recommendation_scope or None, sort=current_filters.sort_by, order=current_filters.order) }}"
                        title="Download filtered data as CSV">
                         <i class="fas fa-download me-1"></i>{{ t('export_csv') }}
                     </a>

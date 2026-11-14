@@ -33,7 +33,11 @@ from models import Land, Property, SearchProfile
 from app import db, limiter
 from services import sea_view_service
 from services import subscription_criteria
+from services import subscription_inflow
 from services.listing_attribute_filters import (
+    added_day_value,
+    filter_by_added_from,
+    filter_by_added_to,
     filter_by_investment_rating,
     filter_by_land_classification,
     filter_by_measured,
@@ -407,6 +411,8 @@ FILTER_BAR_DIMENSIONS = (
     "sea_dist",
     "build",
     "measured",
+    "added_from",
+    "added_to",
     "similar",
 )
 
@@ -482,6 +488,8 @@ def _apply_filter_bar(query, bar, review_today, skip=None, similarity_ctx=None):
     measured_filter = wanted("measured")
     if measured_filter:
         query = filter_by_measured(query, Property, measured_filter)
+    query = filter_by_added_from(query, Property, wanted("added_from"))
+    query = filter_by_added_to(query, Property, wanted("added_to"))
     similar_filter = wanted("similar")
     if similar_filter:
         query = favorite_similarity.apply_filter(
@@ -1721,6 +1729,13 @@ def properties():
         sea_distance_filter = request.args.get("sea_dist", "")
         build_filter = request.args.get("build", "")
         measured_filter = request.args.get("measured", "")
+        # When the listing was added, as two inclusive day bounds
+        # (services/listing_attribute_filters.py). Canonicalised at the
+        # boundary, the `criteria` precedent below: the inputs, the chips and
+        # every link are drawn from these values, so a date that narrowed
+        # nothing is never shown as an applied condition.
+        added_from_filter = added_day_value(request.args.get("added_from", ""))
+        added_to_filter = added_day_value(request.args.get("added_to", ""))
         # The least likeness to the subscription's favorites a row needs
         # (services/favorite_similarity.py). Kept as typed: an unknown value
         # narrows nothing and the control re-renders on its default.
@@ -1745,6 +1760,8 @@ def properties():
             "sea_dist": sea_distance_filter,
             "build": build_filter,
             "measured": measured_filter,
+            "added_from": added_from_filter,
+            "added_to": added_to_filter,
             "similar": similar_filter,
         }
         # Canonicalised at the boundary, for the reason /municipalities gives
@@ -2473,6 +2490,8 @@ def properties():
                 "sea_dist": sea_distance_filter,
                 "build": build_filter,
                 "measured": measured_filter,
+                "added_from": added_from_filter,
+                "added_to": added_to_filter,
                 "similar": similar_filter,
                 "criteria": criteria_filter,
                 "favorites": favorites_filter,
@@ -2783,20 +2802,27 @@ def profiles():
         # is taken off the same group-by rather than dropped (issue #111): a
         # column of per-profile counts that silently sums to less than the
         # table is the page telling the reader something untrue.
+        #
+        # The same group-by now also says WHEN each subscription's listings
+        # arrived and how many of them the owner cared about
+        # (services/subscription_inflow.py), so the totals in the table and
+        # the periods under it are one measurement. One "today" for the
+        # request: every cell and every `added_from` link reads it.
+        inflow_today = subscription_inflow.utc_today()
+        inflow = subscription_inflow.read(db.session, Property, inflow_today)
         counts = {
-            pid: cnt
-            for pid, cnt in db.session.query(
-                Property.search_profile_id, func.count(Property.id)
-            )
-            .group_by(Property.search_profile_id)
-            .all()
+            pid: entry["total"]["added"]
+            for pid, entry in inflow.items()
+            if pid is not None
         }
-        unassigned_count = counts.pop(None, 0)
+        unassigned_count = inflow.get(None, {}).get("total", {}).get("added", 0)
         return render_template(
             "profiles.html",
             profiles=profiles,
             property_counts=counts,
             unassigned_count=unassigned_count,
+            inflow=inflow,
+            inflow_periods=subscription_inflow.periods(inflow_today),
             technical=request.args.get("view") == "technical",
             management=management,
             names={p.id: p.name for p in profiles},
@@ -5020,6 +5046,10 @@ def map_view():
         # measured on production 2026-08-20, the list found 72 listings and the
         # map plotted 470.
         measured_filter = filters.get("measured")
+        # When the listing was added: the list's two day bounds, read through
+        # `FilterArgs` so the List View link carries them back.
+        added_from_filter = filters.get("added_from")
+        added_to_filter = filters.get("added_to")
         # Likeness to the subscription's favorites, the same reading as the
         # list (services/favorite_similarity.py). Read through `FilterArgs`
         # like the rest, so the List View link carries it back.
@@ -5082,6 +5112,8 @@ def map_view():
         # describe two sets across the two surfaces (#445).
         if measured_filter:
             query = filter_by_measured(query, Property, measured_filter)
+        query = filter_by_added_from(query, Property, added_from_filter)
+        query = filter_by_added_to(query, Property, added_to_filter)
         # Same reading and same position as /properties (#445's rule: a
         # filter one surface keeps and another drops is the regression).
         # Built only under a cut: the map draws no chip and has no sort.
@@ -6302,6 +6334,9 @@ def export_properties_csv():
         # against production 2026-08-20, the page found 72 listings and its own
         # export returned 471 rows.
         measured_filter = request.args.get("measured", "")
+        # When the listing was added: the page's two day bounds.
+        added_from_filter = request.args.get("added_from", "")
+        added_to_filter = request.args.get("added_to", "")
         criteria_filter = request.args.get("criteria", "")
         # Likeness to the subscription's favorites: the filter, the sort and
         # the columns below all read the export's one context
@@ -6402,6 +6437,9 @@ def export_properties_csv():
 
         if measured_filter:
             query = filter_by_measured(query, Property, measured_filter)
+
+        query = filter_by_added_from(query, Property, added_from_filter)
+        query = filter_by_added_to(query, Property, added_to_filter)
 
         if similar_filter:
             query = favorite_similarity.apply_filter(

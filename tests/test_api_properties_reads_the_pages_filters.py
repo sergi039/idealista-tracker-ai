@@ -36,7 +36,7 @@ list of filters is the thing that keeps going stale (#445).
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 from flask import template_rendered
@@ -65,6 +65,11 @@ FILTERS = [
     ("inv_metr", "EXCELLENT"),
     ("sea_dist", "800"),
     ("build", "solar"),
+    # When the listing was added (services/listing_attribute_filters.py), two
+    # inclusive day bounds. `added_long_ago` (2020) is the row the lower bound
+    # drops; `match_all` (2024) and that row are the two the upper bound keeps.
+    ("added_from", "2021-01-01"),
+    ("added_to", "2024-12-31"),
     # Likeness to the subscription's favorites (services/favorite_similarity
     # .py). `match_all` is the favorite, so it is the reference the rest are
     # measured against; a row of another kind (`other_subtype`) is never
@@ -174,7 +179,11 @@ def world(app):
     pid = profile.id
 
     rows = {
-        "match_all": _make(pid, "match_all", is_favorite=True),
+        "match_all": _make(
+            pid, "match_all", is_favorite=True, created_at=datetime(2024, 6, 15)
+        ),
+        # The one row `added_from=2021-01-01` drops.
+        "added_long_ago": _make(pid, "added_long_ago", created_at=datetime(2020, 1, 5)),
         "other_category": _make(pid, "other_category", category="housing"),
         "other_subtype": _make(pid, "other_subtype", subtype="house"),
         "other_municipality": _make(pid, "other_municipality", municipality="Gijon"),
