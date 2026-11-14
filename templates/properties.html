@@ -1905,13 +1905,13 @@
                                                 {% endif %}</details></div>
 </td>
 <td class="col-actions"><div class="workspace-owner-decision">
+    {{ owner_decision_buttons(p) }}
     <div class="workspace-owner-actions"><button class="btn btn-link p-0 property-favorite-btn"
                                                         data-property-id="{{ p.id }}"
                                                         title="{{ 'Remove from favorites' if p.is_favorite else 'Add to favorites' }}" aria-pressed="{{ 'true' if p.is_favorite else 'false' }}" aria-label="{{ t('favorites') }}: {{ p.title or p.id }}">
                                                     <i class="fas fa-star {{ 'text-warning' if p.is_favorite else 'text-muted' }}"
                                                        style="font-size: 1.1rem; cursor: pointer;"></i>
                                                 </button><a class="btn btn-outline-secondary" href="{{ url_for('main.property_detail', property_id=p.id) }}">{{ t('workspace_open') }}</a></div>
-    {{ owner_decision_buttons(p) }}
     {% set _decision = owner_decision_for(p) %}
     {{ owner_review_badges(p, review_today) }}
     <span data-owner-undecided{{ ' hidden' if _decision.decided }}>{{ t('workspace_not_decided') }}</span>

@@ -181,9 +181,9 @@
     .workspace-reason-cell > .recommendation-vote { margin-top: 0 !important; }
     .workspace-reason-cell > .workspace-secondary-scores[open] { flex: 1 1 100%; }
     .workspace-owner-decision { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--ui-space-1) var(--ui-space-2); }
-    .workspace-owner-decision > .owner-decision-buttons { order: 1; margin-bottom: 0; }
-    .workspace-owner-decision > .workspace-owner-actions { order: 2; margin-bottom: 0; }
-    .workspace-owner-decision > :not(.owner-decision-buttons):not(.workspace-owner-actions) { order: 3; flex: 0 1 auto; margin-top: 0 !important; }
+    .workspace-owner-decision > .owner-decision-buttons,
+    .workspace-owner-decision > .workspace-owner-actions { margin-bottom: 0; }
+    .workspace-owner-decision > :not(.owner-decision-buttons):not(.workspace-owner-actions) { flex: 0 1 auto; margin-top: 0 !important; }
     .workspace-owner-decision > div:not(.owner-decision-buttons):not(.workspace-owner-actions) { flex-basis: 100%; }
     .workspace-property-overview:not(.workspace-with-photo) .workspace-row-details { margin-top: 0; }
     /* Area and the type badges share a line: three storeys in a 130px column
@@ -209,11 +209,16 @@
 #properties-cards-view .property-card-price > * { width: auto; flex: 0 0 auto; padding: 0; }
 #properties-cards-view .property-card-location > .d-flex { min-width: 0; }
 #properties-cards-view .property-card-travel .properties-travel-times { flex-direction: row !important; flex-wrap: wrap; gap: var(--ui-space-1) var(--ui-space-3); }
+/* Cards take their own height: equal-height cards left a hundred pixels of
+   empty body above the footer whenever a neighbour carried more reasons. */
+#properties-grid { align-items: flex-start; }
+#properties-cards-view .property-card { height: auto !important; }
 #properties-cards-view .card-footer { padding: var(--ui-space-2) var(--ui-space-3); }
 #properties-cards-view .badge,
 #properties-cards-view .property-card-body small,
 #properties-cards-view .property-card-body .small,
 #properties-cards-view .recommendation-details > summary { font-size: 0.75rem; }
+#properties-cards-view .recommendation-details > summary { min-height: var(--ui-control-height); padding-block: var(--ui-space-2); }
 .workspace-catalog-example { display: grid; gap: var(--ui-space-6); }
 @media (min-width: 1200px) {
     /* The label stays on one line where the column follows its width. */

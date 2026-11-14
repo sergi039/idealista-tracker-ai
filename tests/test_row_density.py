@@ -169,6 +169,11 @@ class TestRowMarkup:
                 "waiting",
             ]
             assert "data-owner-undecided" in cell
+            # Keyboard and screen-reader order is the visual order: the three
+            # decisions, then favourite and Open (no CSS `order` reshuffle).
+            assert cell.index("data-owner-decision-id") < cell.index(
+                "property-favorite-btn"
+            )
 
     def test_every_card_keeps_its_anchor_and_its_density_hooks(self, client):
         body = client.get("/properties?mode=combined&view_type=cards").get_data(
