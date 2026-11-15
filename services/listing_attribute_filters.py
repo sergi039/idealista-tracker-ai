@@ -1,6 +1,7 @@
-"""The five attribute filters of the listing surfaces, importable by all of them.
+"""The attribute filters of the listing surfaces, importable by all of them.
 
-`inv_metr`, `sea_view`, `sea_dist`, `build` and `measured` narrow the same
+`inv_metr`, `sea_view`, `sea_dist`, `build`, `measured` and the two date
+bounds `added_from` / `added_to` narrow the same
 table on the same vocabulary wherever they appear, and until 2026-09-01 the
 readings were private to `routes/main_routes.py` — which is exactly how
 `GET /api/properties` came to accept all five and apply none: the closing
@@ -23,6 +24,10 @@ Two contracts every helper here keeps, because callers rely on both:
   where nobody measured — a threshold filter can never read absence as
   nearness, and "unknown coverage" must not pass as "full".
 """
+
+import re
+from datetime import date, datetime, time, timedelta
+from typing import Optional
 
 from sqlalchemy import case, func
 
@@ -220,6 +225,89 @@ def filter_by_land_classification(query, model, raw_value):
     return query.filter(land_classification_expr(model).in_(values))
 
 
+# When the listing was added to this app: `created_at`, the one date every row
+# carries whatever door it came through (alert email, pasted link, research
+# sheet, the legacy mirror), and the date the list prints under "Added" and
+# sorts by. `email_date` is deliberately not read: a listing imported by link
+# has none, and a filter that only some sources can answer is not a date
+# filter "for every source".
+#
+# A day is the calendar day of that stored timestamp, which is UTC -- the same
+# day the row's own "Added" label shows (`created_at.strftime`). The filter and
+# the label are one reading; cutting the filter on another calendar would
+# select a row the page then captions with a date outside the asked range.
+#
+# Two parameters, both inclusive: `added_from=2026-11-01&added_to=2026-11-07`
+# is the seven days the reader named. A row with no `created_at` matches
+# neither -- an unknown date is not inside a range (#98).
+ADDED_FROM_PARAM = "added_from"
+ADDED_TO_PARAM = "added_to"
+
+_ISO_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def read_added_day(raw_value) -> Optional[date]:
+    """The calendar day a date parameter names, or `None`.
+
+    Strictly `YYYY-MM-DD`, what `<input type="date">` submits. Python's own
+    `date.fromisoformat` also reads `20261114` and week dates; a URL spelling
+    the control could never have produced is refused rather than guessed.
+    """
+    text = (raw_value or "").strip()
+    if not _ISO_DAY.fullmatch(text):
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def added_day_value(raw_value) -> str:
+    """The canonical spelling of a date parameter, `""` when it names no day.
+
+    The page renders its inputs, chips and links from this value, so a
+    parameter that narrowed nothing is never drawn as an applied condition.
+    """
+    day = read_added_day(raw_value)
+    return day.isoformat() if day else ""
+
+
+def added_on_or_after(model, day: date):
+    """`day` as the lower bound of "added", as one clause.
+
+    The filter below and the per-period counts on `/profiles`
+    (services/subscription_inflow.py) both read it, so a counted period and
+    the page its link opens cut at the same instant.
+    """
+    return model.created_at >= datetime.combine(day, time.min)
+
+
+def filter_by_added_from(query, model, raw_value):
+    """Keep only rows added on or after the named day.
+
+    An unreadable value hands back the *same* query object, the
+    `filter_bar_active` identity contract.
+    """
+    day = read_added_day(raw_value)
+    if day is None:
+        return query
+    return query.filter(added_on_or_after(model, day))
+
+
+def filter_by_added_to(query, model, raw_value):
+    """Keep only rows added on or before the named day (the whole day)."""
+    day = read_added_day(raw_value)
+    if day is None:
+        return query
+    try:
+        next_day = datetime.combine(day, time.min) + timedelta(days=1)
+    except OverflowError:
+        # 9999-12-31 has no following day to cut at; as an upper bound it
+        # could narrow nothing, so it is read as a value that did not apply.
+        return query
+    return query.filter(model.created_at < next_day)
+
+
 # Every attribute filter in one place, in the order the filter bar draws them,
 # for a surface that applies them as a set and has to SAY which of the values
 # it was sent did not narrow anything. The page applies each behind its own
@@ -232,6 +320,8 @@ ATTRIBUTE_FILTERS = (
     ("sea_dist", filter_by_sea_distance),
     ("build", filter_by_land_classification),
     ("measured", filter_by_measured),
+    (ADDED_FROM_PARAM, filter_by_added_from),
+    (ADDED_TO_PARAM, filter_by_added_to),
 )
 
 # What each parameter accepts, for the sentence a surface owes a caller whose
@@ -243,4 +333,6 @@ ATTRIBUTE_FILTER_VOCABULARY = {
     "sea_dist": tuple(SEA_DISTANCE_FILTER_VALUES),
     "build": tuple(LAND_CLASSIFICATION_FILTER_VALUES) + ("classified",),
     "measured": ("full",),
+    ADDED_FROM_PARAM: ("a day as YYYY-MM-DD",),
+    ADDED_TO_PARAM: ("a day as YYYY-MM-DD",),
 }
