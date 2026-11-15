@@ -535,3 +535,49 @@ class TestSpanish:
         assert "3 ocultos" in text
         assert "fuera de sus criterios" in text and "rechazado" in text
         assert "hidden" not in text and "rejected" not in text
+
+
+class TestOnAPhoneTheStateSentenceSharesALineWithTheToggle:
+    """Measured at 390px (2026-11-15): the line was three lines in the
+    `dirty` state because the sentence was too wide to sit beside "Result
+    details", so the first listing began 501px down against the 480px the
+    phone contract asks for. Layout is measured in a browser; these pin the
+    two things that measurement depends on, so neither is lost silently."""
+
+    # Sentence widths measured at 14px: EN 208px beside a 115px toggle, ES
+    # 155px beside a 168px toggle, inside the 350px the line has.
+    MAX_CHARS = {"en": 32, "es": 26}
+
+    @pytest.mark.parametrize("lang", ["en", "es"])
+    def test_the_dirty_sentence_is_short_enough_to_fit_beside_the_toggle(
+        self, client, world, lang
+    ):
+        with client.session_transaction() as session:
+            session["language"] = lang
+        body = _with_state(client, "/properties?profile_id=all", _state("dirty"))
+        span = re.search(
+            r'<span id="recommendation-profile-status"[^>]*>.*?</span>', body, re.S
+        ).group(0)
+        # The CSS below selects these classes: a renamed class would leave the
+        # rules intact and the layout unprotected.
+        assert 'class="workspace-recommendation-state"' in span
+        assert re.search(
+            r'<button[^>]*class="[^"]*workspace-status-toggle[^"]*"[^>]*'
+            r'id="result-details-toggle"',
+            body,
+        )
+        sentence = _text(span)
+        assert sentence
+        assert len(sentence) <= self.MAX_CHARS[lang], sentence
+
+    def test_the_sentence_moves_whole_and_the_last_item_carries_no_trailing_margin(
+        self,
+    ):
+        css = (ROOT / "static" / "css" / "workspace.css").read_text(encoding="utf-8")
+        phone = css[css.index("@media (max-width: 767.98px)") :]
+        assert re.search(
+            r"\.workspace-result-status > \.workspace-recommendation-state \{[^}]*"
+            r"display: inline-block",
+            phone,
+        )
+        assert re.search(r"\.workspace-status-toggle \{[^}]*margin-right: 0", phone)
