@@ -139,16 +139,16 @@
 .app-workspace .properties-coverage > summary { font-size: 0.875rem; padding-block: var(--ui-space-1); }
 .app-workspace .properties-coverage details > summary { cursor: pointer; }
 .workspace-data-table { width: 100%; table-layout: fixed; }
-.workspace-data-table .col-title { width: 39%; min-width: 0; }
-.workspace-data-table .col-price { width: 13%; min-width: 0; }
-.workspace-data-table .col-score { width: 26%; min-width: 0; }
-.workspace-data-table .col-actions { width: 22%; min-width: 0; }
+.workspace-data-table .col-title { width: 41.5%; min-width: 0; }
+.workspace-data-table .col-price { width: 12%; min-width: 0; }
+.workspace-data-table .col-score { width: 26.5%; min-width: 0; }
+.workspace-data-table .col-actions { width: 20%; min-width: 0; }
 .workspace-data-table th.col-actions { text-align: right; }
 .app-workspace .workspace-data-table > thead > tr > th { padding: var(--ui-space-3) var(--ui-space-4); border-bottom-width: 1px; text-transform: uppercase; }
 .app-workspace .workspace-data-table > tbody > tr > td { padding: var(--ui-space-3) var(--ui-space-3); vertical-align: top; background: var(--ui-surface); overflow-wrap: anywhere; font-size: 0.8125rem; }
 .workspace-property-summary { display: flex; gap: var(--ui-space-4); align-items: flex-start; }
-.workspace-photo { flex: 0 0 7rem; width: 7rem; }
-.workspace-photo .listing-thumb { width: 7rem; height: 3.75rem; object-fit: cover; border-radius: var(--ui-radius-control); }
+.workspace-photo { flex: 0 0 6.25rem; width: 6.25rem; }
+.workspace-photo .listing-thumb { width: 6.25rem; height: 3.25rem; object-fit: cover; border-radius: var(--ui-radius-control); }
 .workspace-property-copy { min-width: 0; flex: 1; }
 .app-workspace .workspace-data-table .property-table-title { font-size: 0.875rem; font-weight: 600; color: var(--ui-text); line-height: 1.45; }
 .workspace-municipality { color: var(--ui-muted); font-size: 0.75rem; margin-top: var(--ui-space-1); }
@@ -202,7 +202,8 @@
    unoptimised"). Related controls share a line instead of stacking in three
    storeys; the decision column no longer sets the row height. Layout only:
    the same elements, the same four groups, the same 40px targets. */
-.workspace-reason-cell { display: contents; }
+.workspace-reason-cell,
+.workspace-price-cell { display: contents; }
 /* Spelled without the space on purpose: tests/test_phone_resource_index.py
    looks for the tablet block by its exact header and must find the one it means. */
 @media (min-width:768px) {
@@ -251,8 +252,6 @@
 #properties-cards-view .recommendation-details > summary { min-height: var(--ui-control-height); padding-block: var(--ui-space-2); }
 .workspace-catalog-example { display: grid; gap: var(--ui-space-6); }
 @media (min-width: 1200px) {
-    /* The label stays on one line where the column follows its width. */
-    .workspace-row-details > summary { white-space: nowrap; }
     .workspace-sidebar { width: var(--ui-nav-width); position: fixed; inset: 0 auto 0 0; display: flex; flex-direction: column; z-index: 1030; background: var(--ui-surface) !important; }
     .workspace-sidebar .offcanvas-body { display: flex; height: 100%; min-height: 0; overflow-y: auto; }
     .workspace-content { margin-left: var(--ui-nav-width); min-width: 0; }
@@ -266,14 +265,16 @@
     .workspace-collapse { display: none !important; }
     .workspace-topbar-title { display: none; }
     .workspace-data-table .col-title { width: 40%; }
-    .workspace-data-table .col-price { width: 15%; }
-    .workspace-data-table .col-score { width: 19%; }
-    .workspace-data-table .col-actions { width: 26%; }
+    .workspace-data-table .col-price { width: 16%; }
+    .workspace-data-table .col-score { width: 20%; }
+    .workspace-data-table .col-actions { width: 24%; }
     /* A reason is prose and two buttons: it needs the width a score does not.
        Not on a phone, where the cells are grid items, not columns. */
     @media (min-width:768px) {
-        .workspace-data-table.recommendation-table .col-title { width: 31%; }
-        .workspace-data-table.recommendation-table .col-score { width: 28%; }
+        .workspace-data-table.recommendation-table .col-title { width: 36%; }
+        .workspace-data-table.recommendation-table .col-price { width: 16%; }
+        .workspace-data-table.recommendation-table .col-score { width: 29%; }
+        .workspace-data-table.recommendation-table .col-actions { width: 19%; }
     }
     .workspace-photo { flex-basis: 4.5rem; width: 4.5rem; }
     .workspace-photo .listing-thumb { width: 4.5rem; height: 4.5rem; }
@@ -281,6 +282,37 @@
     .app-workspace .workspace-data-table > tbody > tr > td { padding: var(--ui-space-4) var(--ui-space-2); }
     .workspace-owner-actions { flex-wrap: wrap; }
 }
+/* Row density, second pass (owner, 2026-11-15: the first pass moved the median
+   row 6%). Measured on a 25-row fixture shaped like production at 1440px the
+   object column set the height of 22 rows in 25: its badges stacked three
+   deep, its title wrapped in 11 rows and the cell carried 12px above and below. */
+@media (min-width:768px) {
+    .app-workspace .workspace-data-table > tbody > tr > td { padding-inline: var(--ui-space-2); }
+    .app-workspace .workspace-property-facts .badge { padding-block: 2px; }
+    .workspace-property-facts { margin-top: var(--ui-space-1); }
+    .workspace-municipality { display: flex; align-items: center; margin-top: 0; min-height: 1.125rem; line-height: 1.125rem; }
+    .workspace-photo > a,
+    .workspace-photo .listing-thumb { display: block; }
+    .workspace-location-line .workspace-location-warning { margin-top: 0; }
+    /* The price cell is one flow: price, then area and the type badges and
+       the status badge side by side where they fit. */
+    .workspace-price-cell { display: flex; flex-wrap: wrap; align-items: center; align-content: flex-start; gap: var(--ui-space-1); }
+    .workspace-price-cell > div:first-child { flex: 1 1 100%; }
+    /* A price is never broken inside its number: the td's overflow-wrap:anywhere
+       would split `295,000€` in a narrow column. */
+    .app-workspace .workspace-data-table .col-price strong { white-space: nowrap; overflow-wrap: normal; }
+    .workspace-data-table .col-price .workspace-price-cell .workspace-price-facts { display: contents; }
+    /* `d-flex` is a Bootstrap utility with !important; the badges join the cell's own flow. */
+    .workspace-data-table .col-price .workspace-price-cell .properties-type-badges { display: contents !important; }
+    .workspace-data-table .col-price .workspace-price-cell .workspace-price-facts { margin: 0; }
+    /* A label that wraps inside the photo column keeps the 40px target: two
+       lines of 12px text are 36px, so the padding is the slack, not the box. */
+    .workspace-with-photo .workspace-row-details > summary { display: flex; align-items: center; padding-block: 2px; line-height: 1.5; }
+    .app-workspace .workspace-reason-cell .recommendation-reference-line .badge { padding-block: 2px; }
+    .workspace-data-table .recommendation-reading { display: flex; flex-direction: column; gap: 2px; }
+    .workspace-data-table .recommendation-reading > * { margin-top: 0; }
+}
+
 @media (prefers-reduced-motion: reduce) {
     .app-workspace *, .app-workspace *::before, .app-workspace *::after { scroll-behavior: auto !important; transition-duration: 0s !important; }
 }
@@ -296,7 +328,7 @@
 .app-workspace .workspace-result-status .properties-coverage { margin: 0 0 0 auto !important; }
 .app-workspace .workspace-result-status .properties-coverage[open] { flex-basis: 100%; }
 .app-workspace .workspace-data-table > thead > tr > th { padding-block: var(--ui-space-2); }
-.app-workspace .workspace-data-table > tbody > tr > td { padding-block: var(--ui-space-3); }
+.app-workspace .workspace-data-table > tbody > tr > td { padding-block: 0.375rem; }
 .workspace-data-table .col-type .badge { background: var(--ui-canvas) !important; color: var(--ui-muted) !important; font-weight: 400; font-size: 0.75rem; }
 .workspace-location-warning { color: var(--ui-warning); font-size: 0.75rem; margin-top: var(--ui-space-1); }
 
@@ -357,7 +389,7 @@
         .workspace-filter-apply { order: 1; }
     }
     .workspace-location-line { display: flex; flex-wrap: wrap; column-gap: var(--ui-space-2); }
-    .workspace-with-photo { display: grid; grid-template-columns: minmax(7rem, max-content) minmax(0, 1fr); column-gap: var(--ui-space-3); align-content: start; }
+    .workspace-with-photo { display: grid; grid-template-columns: 6.25rem minmax(0, 1fr); column-gap: var(--ui-space-3); align-content: start; }
     .workspace-with-photo .workspace-property-summary { display: contents; }
     .workspace-with-photo .workspace-photo { grid-column: 1; grid-row: 1; }
     .workspace-with-photo .workspace-property-copy { grid-column: 2; grid-row: 1 / span 2; }

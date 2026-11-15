@@ -1865,7 +1865,7 @@
         </div>
     </div></details></div>
 </td>
-<td class="col-price">{% if p.price %}
+<td class="col-price"><div class="workspace-price-cell">{% if p.price %}
                                                     <div>
                                                         <strong>{{ '{:,.0f}'.format(p.price|float) }}€</strong>
                                                         {{ duplicate_price_range(p, duplicate_groups) }}
@@ -1905,7 +1905,7 @@
                                                         <span class="badge badge-neutral">{{ p.property_subtype }}</span>
                                                     {% endif %}
                                                     {{ listing_status_badge(p) }}
-                                                </div></div></td>
+                                                </div></div></div></td>
 <td class="col-score"><div class="workspace-reason-cell">
     {% set _recommendation = (recommendation_readings or {}).get(p.id) %}
     {% if active_mode == 'recommendation' %}
