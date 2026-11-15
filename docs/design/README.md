@@ -259,6 +259,16 @@ anywhere.
 - **Coverage ("About these results") counts the rows the page draws.** On the
   Recommended tab the four "K of N" counts are taken after the collection has
   been selected.
+- **On a phone the state sentence and "Result details" share one line**
+  (2026-11-15). In the `dirty` state the line was three lines (count and
+  hidden, the sentence, the toggle) and the first listing began at 501px on
+  production against the 480px acceptance above. The sentence moves whole
+  (`inline-block`, never split) and is short enough to sit beside the toggle
+  (EN 208px beside 115px, ES 155px beside 168px, in the 350px the line has);
+  the toggle carries no trailing margin. Font size stays 14px and nothing is
+  hidden behind the toggle that was not before. Pinned by
+  `tests/test_status_line.py::TestOnAPhoneTheStateSentenceSharesALineWithTheToggle`;
+  the pixels are measured, not asserted.
 
 ## Recommendation states
 

@@ -466,7 +466,9 @@
     .workspace-result-status { display: block; min-height: 0; padding-top: var(--ui-space-2); line-height: 1.6; }
     .workspace-result-status > * { margin-right: var(--ui-space-3); }
     .workspace-result-status > .workspace-hidden-rows:not([open]) { display: inline-block; vertical-align: middle; }
-    .workspace-status-toggle { padding-inline: 0; vertical-align: baseline; }
+    /* The state sentence moves as a whole, never split across two lines. */
+    .workspace-result-status > .workspace-recommendation-state { display: inline-block; vertical-align: middle; }
+    .workspace-status-toggle { padding-inline: 0; margin-right: 0; vertical-align: baseline; }
     .workspace-result-status > details.show { display: block; margin-right: 0; }
     .workspace-result-status > details > summary { min-height: var(--ui-control-height); padding-block: var(--ui-space-2); cursor: pointer; }
     /* The refresh form is `d-inline` (an !important utility), so its closed

@@ -265,7 +265,7 @@ class TestRetrain:
         _ledger()
 
         dirty_html = client.get(page_url).data.decode()
-        assert "missing your latest feedback" in dirty_html
+        assert "Latest feedback not applied yet" in dirty_html
         assert 'id="recommendation-refresh-button"' in dirty_html
         refresh_form = dirty_html[dirty_html.index("taste/recommendations/refresh") :]
         assert 'name="csrf_token"' in refresh_form
