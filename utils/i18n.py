@@ -2046,7 +2046,7 @@ TRANSLATIONS["es"].update(
         "workspace_sort_desc": "descendente",
         "workspace_decision": "Tu decisión",
         "workspace_open": "Abrir",
-        "workspace_facts": "Detalles y comprobaciones",
+        "workspace_facts": "Detalles y revisión",
         "workspace_source": "Anuncio original",
         "workspace_table": "Tabla",
         "workspace_cards": "Tarjetas",
