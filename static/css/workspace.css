@@ -99,9 +99,9 @@
 .workspace-filter-form:has(.workspace-advanced-filters[open]) .workspace-filter-apply { order: 3; }
 .workspace-advanced-filters > summary { cursor: pointer; color: var(--ui-muted); padding: var(--ui-space-2) 0; min-height: var(--ui-control-height); display: inline-flex; align-items: center; gap: var(--ui-space-2); }
 .workspace-advanced-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: var(--ui-space-3); background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); padding: var(--ui-space-4); }
-.workspace-advanced-fields .form-select { width: 100%; min-width: 0; }
+.workspace-advanced-fields .form-select, .workspace-advanced-fields .form-control { width: 100%; min-width: 0; }
 .workspace-advanced-fields > label { min-width: 0; font-size: 0.75rem; color: var(--ui-muted); }
-.workspace-advanced-fields > label > .form-select { margin-top: var(--ui-space-1); color: var(--ui-text); }
+.workspace-advanced-fields > label > .form-select, .workspace-advanced-fields > label > .form-control { margin-top: var(--ui-space-1); color: var(--ui-text); }
 .workspace-filter-meta { order: 1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-space-2); flex: 0 1 auto; min-width: 0; }
 /* Jinja leaves whitespace in an empty list, which `:empty` would count. */
 .workspace-filter-meta:not(:has(> *)) { display: none; }
@@ -529,6 +529,7 @@
 /* Subscription management keeps the same rows and controls at narrow widths. */
 .search-management-table { table-layout: auto; width: 100%; }
 .search-management-table td { overflow-wrap: anywhere; }
+.inflow-table td { font-variant-numeric: tabular-nums; }
 .search-management-table summary,
 .search-management-table label,
 .search-management-confirm .form-check { min-height: var(--ui-control-height); }

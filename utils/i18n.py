@@ -2183,6 +2183,37 @@ TRANSLATIONS["es"].update(
 TRANSLATIONS["en"]["search_action_technical"] = "Move to Technical subscriptions"
 TRANSLATIONS["es"]["search_action_technical"] = "Mover a Suscripciones técnicas"
 
+# The date filter on /properties and the per-period counts on /profiles
+# (services/listing_attribute_filters.py, services/subscription_inflow.py).
+TRANSLATIONS["en"].update(
+    {
+        "workspace_added_from": "Added from",
+        "workspace_added_to": "Added until",
+        "inflow_title": "Listings added by period",
+        "inflow_help": "How many listings each search brought in, and how many of them you made a favorite or marked Interested. Every stored listing counts, withdrawn and rejected ones included. Days are UTC, as in the Added column.",
+        "inflow_last_days_one": "Last %s day",
+        "inflow_last_days_other": "Last %s days",
+        "inflow_since": "since",
+        "inflow_all_time": "All time",
+        "inflow_interest": "of interest",
+        "inflow_empty": "No listings are stored yet.",
+    }
+)
+TRANSLATIONS["es"].update(
+    {
+        "workspace_added_from": "Añadido desde",
+        "workspace_added_to": "Añadido hasta",
+        "inflow_title": "Anuncios añadidos por periodo",
+        "inflow_help": "Cuántos anuncios trajo cada búsqueda y cuántos de ellos marcaste como favorito o Interesa. Cuentan todos los anuncios guardados, incluidos los retirados y los descartados. Los días son UTC, como en la columna Añadido.",
+        "inflow_last_days_one": "Último %s día",
+        "inflow_last_days_other": "Últimos %s días",
+        "inflow_since": "desde",
+        "inflow_all_time": "Todo el tiempo",
+        "inflow_interest": "de interés",
+        "inflow_empty": "Aún no hay anuncios guardados.",
+    }
+)
+
 
 def get_current_language():
     """Get current language from session"""
