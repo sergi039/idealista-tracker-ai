@@ -412,17 +412,20 @@ class TestColumnWidths:
         self, width, recommendation
     ):
         """Measured: at 1200px a price column of 10.5% broke `295,000€` in two
-        (codex, then a browser at 1200px); the decision buttons need 230px
-        beside each other, so from 1440px the decision column is 20% and
-        below that they wrap to a second line instead of overflowing."""
+        (codex, then a browser at 1200px). The three decision buttons,
+        favourite and Open need 230px beside each other plus 16px of cell
+        padding: 21% of the 1174px table at 1440px is 247px. 20% left 235px
+        and put the star, Open and the status on a second line (owner, review
+        of #685); the browser measure counts the rows whose five controls
+        share a `top`."""
         widths = _widths(width, recommendation)
         assert widths["col-price"] >= (12 if width in DESKTOP else 16)
-        assert widths["col-actions"] >= (20 if width in DESKTOP else 19)
+        assert widths["col-actions"] >= (21 if width in DESKTOP else 19)
 
     def test_the_recommendation_reason_is_given_room_at_both_ends_of_the_range(self):
         """The reason is prose plus two rating buttons and the Assessment
         disclosure; Spanish needs about 300px for them on one line at 1440px."""
-        assert _widths(1440, True)["col-score"] >= 26.5
+        assert _widths(1440, True)["col-score"] >= 26
         assert _widths(834, True)["col-score"] >= 29
 
     @pytest.mark.parametrize("width", PHONE)

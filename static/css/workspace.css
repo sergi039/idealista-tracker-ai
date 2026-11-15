@@ -139,10 +139,10 @@
 .app-workspace .properties-coverage > summary { font-size: 0.875rem; padding-block: var(--ui-space-1); }
 .app-workspace .properties-coverage details > summary { cursor: pointer; }
 .workspace-data-table { width: 100%; table-layout: fixed; }
-.workspace-data-table .col-title { width: 41.5%; min-width: 0; }
+.workspace-data-table .col-title { width: 41%; min-width: 0; }
 .workspace-data-table .col-price { width: 12%; min-width: 0; }
-.workspace-data-table .col-score { width: 26.5%; min-width: 0; }
-.workspace-data-table .col-actions { width: 20%; min-width: 0; }
+.workspace-data-table .col-score { width: 26%; min-width: 0; }
+.workspace-data-table .col-actions { width: 21%; min-width: 0; }
 .workspace-data-table th.col-actions { text-align: right; }
 .app-workspace .workspace-data-table > thead > tr > th { padding: var(--ui-space-3) var(--ui-space-4); border-bottom-width: 1px; text-transform: uppercase; }
 .app-workspace .workspace-data-table > tbody > tr > td { padding: var(--ui-space-3) var(--ui-space-3); vertical-align: top; background: var(--ui-surface); overflow-wrap: anywhere; font-size: 0.8125rem; }
