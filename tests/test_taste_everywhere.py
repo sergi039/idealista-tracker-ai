@@ -265,7 +265,7 @@ class TestRetrain:
         _ledger()
 
         dirty_html = client.get(page_url).data.decode()
-        assert "Recommendations need a refresh" in dirty_html
+        assert "missing your latest feedback" in dirty_html
         assert 'id="recommendation-refresh-button"' in dirty_html
         refresh_form = dirty_html[dirty_html.index("taste/recommendations/refresh") :]
         assert 'name="csrf_token"' in refresh_form
@@ -282,7 +282,7 @@ class TestRetrain:
         db.session.commit()
 
         pending_html = client.get(page_url).data.decode()
-        assert "Recommendations are being prepared" in pending_html
+        assert "Updating recommendations" in pending_html
         assert 'id="recommendation-refresh-button"' not in pending_html
 
         job = db.session.get(BackgroundJob, "recommendation-refresh-job")
@@ -292,7 +292,7 @@ class TestRetrain:
         db.session.commit()
 
         failed_html = client.get(page_url).data.decode()
-        assert "Recommendations could not be refreshed" in failed_html
+        assert "The last update failed" in failed_html
         assert 'id="recommendation-refresh-button"' in failed_html
 
 

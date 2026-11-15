@@ -46,6 +46,22 @@ the elements that exist -- the rule below holds at every width -- and a hide is
 never folded. `tests/test_phone_resource_index.py` pins the markup those rules
 need; the positions are a browser measurement.
 
+**The line under the tabs says three things and stays body-size** (owner
+report, 2026-11-14: "small text nobody can read"): the count, what the page
+keeps back, whether the recommendations need the owner. Everything a standing
+rule hides (failing criteria, rejected, folded publications, hard exclusions,
+listings with no subscription) is ONE "N hidden" disclosure, `#hidden-rows`,
+whose rows each carry their own count and the link that brings those rows back;
+it is never behind the phone trigger and the rule "a hide must be disclosed"
+is unchanged -- only its form is. The recommendation profile is one sentence
+(whether the previous recommendations are still shown is part of it) and one
+button; "Filters: N of M shown" is gone because the chips say it, and the
+Recommended tab keeps the clear link without the number (its baseline counts a
+different collection). The coverage counts of "About these results" are taken
+after the Recommended selection, over the rows drawn. Layout contract:
+`docs/design/README.md`, "The status line under the tabs".
+`tests/test_status_line.py` pins it.
+
 **Every one of those controls exists exactly once** (owner decision,
 2026-08-09, superseding "the page is a copy of the /lands layout"). The page
 had grown a duplicate of nearly everything: a subscription dropdown in the

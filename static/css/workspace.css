@@ -102,14 +102,23 @@
 .workspace-result-tools .btn.active { color: var(--ui-accent); background: var(--ui-accent-soft); border-color: var(--ui-border); }
 .workspace-mode-options { display: flex; gap: var(--ui-space-2); align-items: center; }
 .workspace-mode-options .btn { min-height: var(--ui-control-height); font-size: 0.75rem; }
-.workspace-result-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-space-2); min-height: var(--ui-control-height); padding-block: 0; color: var(--ui-muted); font-size: 0.75rem; }
-.workspace-result-status #recommendation-profile-status { font-size: inherit; }
-.workspace-result-status form .btn { min-height: var(--ui-control-height); padding: var(--ui-space-1) var(--ui-space-2); font-size: 0.75rem; }
+/* One line of body-size text: the count, what is kept back, and whether the
+   recommendations need the owner. Nothing in it is smaller than the text it
+   sits beside; `.small` inside it used to compound to 10.5px. */
+.workspace-result-status { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--ui-space-4); min-height: var(--ui-control-height); padding-block: 0; color: var(--ui-muted); font-size: 0.875rem; }
+.workspace-result-status form .btn { min-height: var(--ui-control-height); padding: var(--ui-space-1) var(--ui-space-2); font-size: 0.8125rem; }
+.workspace-result-status .workspace-recommendation-state[data-recommendation-profile-state="failed"] { color: var(--ui-text); }
+.workspace-hidden-rows > summary { min-height: var(--ui-control-height); padding-block: var(--ui-space-2); cursor: pointer; }
+.workspace-hidden-rows[open] { flex-basis: 100%; }
+.workspace-hidden-row { display: flex; align-items: center; min-height: var(--ui-control-height); }
+.workspace-hidden-list { display: grid; gap: var(--ui-space-1); margin: 0 0 var(--ui-space-2); padding: 0 0 0 var(--ui-space-4); list-style: none; color: var(--ui-text); }
+.workspace-result-note { margin: 0 0 var(--ui-space-2); color: var(--ui-muted); font-size: 0.875rem; }
 .workspace-result-status .result-count { color: var(--ui-text); font-size: 0.8125rem; }
 .workspace-applied-notes { display: flex; align-items: center; gap: var(--ui-space-2); flex-wrap: wrap; font-size: 0.75rem; }
 .workspace-applied-notes:empty { display: none; }
-.app-workspace .properties-coverage { font-size: 0.75rem; margin-bottom: var(--ui-space-3); }
-.app-workspace .properties-coverage > summary { font-size: 0.75rem; padding-block: var(--ui-space-1); }
+.app-workspace .properties-coverage { font-size: 0.875rem; margin-bottom: var(--ui-space-3); }
+.app-workspace .properties-coverage > summary { font-size: 0.875rem; padding-block: var(--ui-space-1); }
+.app-workspace .properties-coverage details > summary { cursor: pointer; }
 .workspace-data-table { width: 100%; table-layout: fixed; }
 .workspace-data-table .col-title { width: 46%; min-width: 0; }
 .workspace-data-table .col-price { width: 16%; min-width: 0; }
@@ -207,7 +216,7 @@
 .workspace-page-heading { margin-bottom: var(--ui-space-2); }
 .app-workspace #subscription-switcher { margin-bottom: var(--ui-space-2) !important; }
 .app-workspace #filters-card { margin-bottom: var(--ui-space-2) !important; }
-.workspace-result-status > strong { color: var(--ui-text); font-size: 0.8125rem; }
+.workspace-result-status > strong { color: var(--ui-text); font-size: inherit; }
 .app-workspace .workspace-result-status .properties-coverage { margin: 0 0 0 auto !important; }
 .app-workspace .workspace-result-status .properties-coverage[open] { flex-basis: 100%; }
 .app-workspace .workspace-data-table > thead > tr > th { padding-block: var(--ui-space-2); }
@@ -324,8 +333,7 @@
     /* Count, what is hidden and why, and the profile state: one paragraph. */
     .workspace-result-status { display: block; min-height: 0; padding-top: var(--ui-space-2); line-height: 1.6; }
     .workspace-result-status > * { margin-right: var(--ui-space-3); }
-    .workspace-result-status > #criteria-hidden-coverage,
-    .workspace-result-status > #rejected-hidden-coverage { white-space: nowrap; }
+    .workspace-result-status > .workspace-hidden-rows:not([open]) { display: inline-block; vertical-align: middle; }
     .workspace-status-toggle { padding-inline: 0; vertical-align: baseline; }
     .workspace-result-status > details.show { display: block; margin-right: 0; }
     .workspace-result-status > details > summary { min-height: var(--ui-control-height); padding-block: var(--ui-space-2); cursor: pointer; }
