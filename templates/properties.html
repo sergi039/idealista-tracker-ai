@@ -725,21 +725,22 @@
 
 <div class="row">
     <div class="col-12">
-        <div class="workspace-page-heading">
+        {# Three rows of controls, one job each (owner, 2026-11-14: "the
+           filters are a mess again"): this heading row says WHICH
+           subscriptions are on the page; the filter bar under it says which
+           of their listings are shown; the result row says how they are
+           drawn. The subscription control therefore shares the title's line
+           from the tablet width up instead of taking a row of its own. #}
+        <div class="workspace-page-heading properties-heading">
             <h1 class="mb-0">{{ t('properties') }}
                 <small class="text-body-secondary fw-normal properties-last-sync">{{ t('last_sync') }}: <span id="last-sync">{{ t('loading') }}...</span></small>
             </h1>
-        </div>
 
-        {# One subscription control, not two (2026-08-09). The saved searches
-           are chips, named and counted the way idealista.com lists them; the
-           menu beside them holds everything a chip cannot express -- several
-           subscriptions at once, the retired ones, and listings that carry no
+        {# One subscription control, not two (2026-08-09). The menu holds
+           every saved search, named and counted the way idealista.com lists
+           them, several at once, the retired ones, and listings that carry no
            subscription at all. The filter bar below used to repeat that whole
-           dropdown, and the archive had a second dropdown of its own up here.
-           Favorites and Hide removed sit on this row for the same reason:
-           they are one-click scope switches, not fields you fill in and
-           submit. #}
+           dropdown, and the archive had a second dropdown of its own up here. #}
         {# Hidden subscriptions are in neither group: they are off this page
            entirely (2026-08-17). One only appears here when `profile_id`
            names it, and then under its own heading -- calling it archived
@@ -900,20 +901,28 @@
                 </span>
             {% endif %}
 
-            <details class="scope-maintenance"><summary>{{ t('workspace_maintenance') }} {{ icon('chevron-down') }}</summary><div class="scope-maintenance-body">
+            {# Rare maintenance for the subscription on screen, one menu
+               like the two beside it. Drawn only while it holds something:
+               a trigger that opens nothing is not a control. #}
+            {% set _has_taste_tools = taste_version is defined and taste_version %}
+            {% if selected_profile_id or _has_taste_tools %}
+            <div class="dropdown scope-maintenance">
+                <button class="btn btn-outline-secondary dropdown-toggle" type="button" id="subscription-tools-toggle"
+                        data-bs-toggle="dropdown" aria-expanded="false">{{ t('workspace_maintenance') }}</button>
+                <div class="dropdown-menu dropdown-menu-end scope-maintenance-body" aria-labelledby="subscription-tools-toggle">
             {# Travel targets and the recalculation belong to one saved
                search, so they only appear when exactly one is on screen --
                beside the subscription they act on, not inside the filters. #}
             {% if selected_profile_id %}
-                <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('main.edit_profile', profile_id=selected_profile_id) }}"
+                <a class="dropdown-item" href="{{ url_for('main.edit_profile', profile_id=selected_profile_id) }}"
                    title="Edit travel presets/targets for this subscription">
                     <i class="fas fa-sliders-h me-1"></i>Edit subscription
                 </a>
-                <form method="POST" action="{{ url_for('main.recalculate_profile_travel', profile_id=selected_profile_id) }}" class="d-inline">
+                <form method="POST" action="{{ url_for('main.recalculate_profile_travel', profile_id=selected_profile_id) }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                     <input type="hidden" name="mode" value="all">
                     <input type="hidden" name="limit" value="100">
-                    <button class="btn btn-outline-primary btn-sm" type="submit"
+                    <button class="dropdown-item" type="submit"
                             title="Recalculate travel for up to 100 active properties in this subscription">
                         <i class="fas fa-route me-1"></i>Recalculate travel
                     </button>
@@ -925,36 +934,20 @@
                second press attaches instead of paying twice. Drawn only
                while a profile exists (taste_version) — with none there is
                nothing to retrain. #}
-            {% if taste_version is defined and taste_version %}
-                <form method="POST" action="{{ url_for('main.retrain_taste') }}" class="d-inline"
+            {% if _has_taste_tools %}
+                <form method="POST" action="{{ url_for('main.retrain_taste') }}"
                       onsubmit='return confirm({{ t("taste_retrain_confirm")|tojson }});'>
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                    <button class="btn btn-outline-danger btn-sm" type="submit"
+                    <button class="dropdown-item text-danger" type="submit"
                             title="{{ t('taste_retrain_title') }}">
                         <i class="fas fa-heart me-1"></i>{{ t('taste_retrain_button') }}
                     </button>
                 </form>
             {% endif %}
-
-            </div></details>
-            {# Two switches, not two form fields: they change what is on
-               screen straight away, the way the subscription chips do. The
-               filter form re-posts their state as hidden inputs so Apply
-               cannot silently switch them off. #}
-            <div class="scope-utilities">
-                <a class="btn btn-sm scope-switch btn-outline-secondary" role="button"
-                   href="{{ url_for('main.properties', **dict(base_args, favorites=none if current_filters.favorites else 'on', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}"
-                   title="Show only the listings you starred"
-                   aria-pressed="{{ 'true' if current_filters.favorites else 'false' }}">
-                    <i class="fas fa-star me-1 {{ '' if current_filters.favorites else 'text-warning' }}"></i>{{ t('favorites') }}
-                </a>
-                <a class="btn btn-sm scope-switch btn-outline-secondary" role="button"
-                   href="{{ url_for('main.properties', **dict(base_args, hide_removed=none if current_filters.hide_removed else 'on', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}"
-                   title="Hide listings that were removed or sold"
-                   aria-pressed="{{ 'true' if current_filters.hide_removed else 'false' }}">
-                    <i class="fas fa-eye-slash me-1"></i>{{ t('hide_removed') }}
-                </a>
+                </div>
             </div>
+            {% endif %}
+        </div>
         </div>
 
 
@@ -974,9 +967,9 @@
                     {% endif %}
                     <input type="hidden" name="view_type" value="{{ view_type }}">
                     <input type="hidden" name="order" value="{{ current_filters.order }}">
-                    {# The two switches above are links, so their state has to
-                       travel with the form or pressing Apply would turn them
-                       off behind the owner's back. #}
+                    {# Favorites and Hide removed below are links, so their state
+                       has to travel with the form or pressing Apply would turn
+                       them off behind the owner's back. #}
                     {% if current_filters.favorites %}
                         <input type="hidden" name="favorites" value="on">
                     {% endif %}
@@ -1008,7 +1001,10 @@
                        row, even if all are undecided. Counts come from the
                        page's own selection (_owner_verdict_choices). #}
                     {% if verdicts %}
-                    <label class="properties-queue-switch">{{ t('workspace_verdict') }}<select class="form-select form-select-sm properties-filter-select" id="verdict" name="verdict"
+                    {# One name, not two: every option already says "Decision: ...",
+                       so the caption above the box is for assistive technology
+                       only, like the other self-naming selects on this row. #}
+                    <label class="properties-queue-switch"><span class="visually-hidden">{{ t('workspace_verdict') }}</span><select class="form-select form-select-sm properties-filter-select" id="verdict" name="verdict"
                             aria-label="{{ t('workspace_verdict') }}">
                         <option value="">{{ t('owner_verdict_default') }}</option>
                         <option value="all" {{ 'selected' if current_filters.verdict == 'all' }}>{{ t('owner_verdict_all') }}</option>
@@ -1022,7 +1018,22 @@
                     {% elif current_filters.verdict %}
                         <input type="hidden" name="verdict" value="{{ current_filters.verdict }}"/>
                     {% endif %}
-                        <button type="submit" class="btn btn-primary btn-sm">{{ t('apply') }}</button>
+                        {# Two switches, not two form fields: they change what is
+                           on screen straight away. They narrow which rows are
+                           shown, so since 2026-11-14 they sit in the filter
+                           bar, not beside the subscription. #}
+                        <a class="btn btn-sm scope-switch btn-outline-secondary" role="button"
+                           href="{{ url_for('main.properties', **dict(base_args, favorites=none if current_filters.favorites else 'on', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}"
+                           title="Show only the listings you starred"
+                           aria-pressed="{{ 'true' if current_filters.favorites else 'false' }}">
+                            <i class="fas fa-star me-1 {{ '' if current_filters.favorites else 'text-warning' }}"></i>{{ t('favorites') }}
+                        </a>
+                        <a class="btn btn-sm scope-switch btn-outline-secondary" role="button"
+                           href="{{ url_for('main.properties', **dict(base_args, hide_removed=none if current_filters.hide_removed else 'on', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}"
+                           title="Hide listings that were removed or sold"
+                           aria-pressed="{{ 'true' if current_filters.hide_removed else 'false' }}">
+                            <i class="fas fa-eye-slash me-1"></i>{{ t('hide_removed') }}
+                        </a>
                     </div>
                     <details class="workspace-advanced-filters" id="additional-filters">
                         <summary>{{ icon('sliders') }}{{ t('workspace_filters') }}{% if applied.count %} · {{ applied.count }}{% endif %} {{ icon('chevron-down') }}</summary>
@@ -1240,6 +1251,9 @@
                                title="Clear every filter">{{ t('clear_filters') }}</a>
                         </div>
                     </details>
+                    {# The one Apply closes the group: it comes after the Filters
+                       trigger and, in reading order, after the fields it opens. #}
+                    <button type="submit" class="btn btn-primary btn-sm workspace-filter-apply">{{ t('apply') }}</button>
                 </form>
                 <div class="workspace-filter-meta" id="active-filter-chips">
                     {% for key, label_key in applied_filter_keys %}
@@ -1248,8 +1262,7 @@
                         {% endif %}
                     {% endfor %}
                 </div>
-                <div class="workspace-applied-notes">
-</div>
+                <div class="workspace-applied-notes"></div>
 
             </div>
         </div>
