@@ -1925,7 +1925,7 @@
                                                     {% endif %}
                                                     {{ listing_status_badge(p) }}
                                                 </div></div></td>
-<td class="col-score">
+<td class="col-score"><div class="workspace-reason-cell">
     {% set _recommendation = (recommendation_readings or {}).get(p.id) %}
     {% if active_mode == 'recommendation' %}
         {% if _recommendation %}{{ recommendation_reading(_recommendation) }}{% else %}<span class="text-body-secondary">{{ t('workspace_no_reading') }}</span>{% endif %}
@@ -1976,16 +1976,16 @@
                                                               style="background-color: {{ '#0d6efd' if _sim.state == 'ok' else '#6c757d' }}; font-size: 0.75rem;"
                                                               title="{% if _sim.state == 'thin' %}{{ t('similarity_thin_hint')|format(_facts|join(', ')) }}{% elif _sim.state == 'rejected' %}{{ t('similarity_rejected') }}{% else %}{{ t('similarity_chip_title')|format('%.1f'|format(_sim.score), _sim.reference_id, _facts|join(', ')) }}{% endif %}">&asymp; {{ '%.1f'|format(_sim.score) }}{% if _sim.compared_count < _sim.fact_count %} <span class="opacity-75">{{ _sim.compared_count }}/{{ _sim.fact_count }}</span>{% endif %}</span>
                                                     {% endif %}
-                                                {% endif %}</details>
+                                                {% endif %}</details></div>
 </td>
 <td class="col-actions"><div class="workspace-owner-decision">
+    {{ owner_decision_buttons(p) }}
     <div class="workspace-owner-actions"><button class="btn btn-link p-0 property-favorite-btn"
                                                         data-property-id="{{ p.id }}"
                                                         title="{{ 'Remove from favorites' if p.is_favorite else 'Add to favorites' }}" aria-pressed="{{ 'true' if p.is_favorite else 'false' }}" aria-label="{{ t('favorites') }}: {{ p.title or p.id }}">
                                                     <i class="fas fa-star {{ 'text-warning' if p.is_favorite else 'text-muted' }}"
                                                        style="font-size: 1.1rem; cursor: pointer;"></i>
                                                 </button><a class="btn btn-outline-secondary" href="{{ url_for('main.property_detail', property_id=p.id) }}">{{ t('workspace_open') }}</a></div>
-    {{ owner_decision_buttons(p) }}
     {% set _decision = owner_decision_for(p) %}
     {{ owner_review_badges(p, review_today) }}
     <span data-owner-undecided{{ ' hidden' if _decision.decided }}>{{ t('workspace_not_decided') }}</span>
@@ -2085,7 +2085,7 @@
                             </div>
 
                             <!-- Card Body -->
-                            <div class="card-body">
+                            <div class="card-body property-card-body">
                                 <h6 class="card-title">
                                     <a href="{{ url_for('main.property_detail', property_id=p.id) }}"
                                        class="text-decoration-none table-title property-table-title"
@@ -2094,7 +2094,7 @@
                                     </a>
                                 </h6>
 
-                                <div class="mb-2 d-flex flex-wrap gap-1">
+                                <div class="mb-2 d-flex flex-wrap gap-1 property-card-facts">
                                     {% if show_subscription %}{{ subscription_badge(p, profile_names) }}{% endif %}
                                     {{ source_badge(p) }}
                                     {{ duplicate_badge(p, duplicate_groups, base_args, current_filters) }}
@@ -2108,8 +2108,10 @@
                                 {{ recommendation_reading(_recommendation) }}
                                 {{ recommendation_vote(p, active_mode == 'recommendation') }}
 
+                                {# Price, area and place share one line where they fit. #}
+                                <div class="property-card-line">
                                 <!-- Price and Area -->
-                                <div class="row mb-3">
+                                <div class="row mb-3 property-card-price">
                                     <div class="col-6">
                                         {% if p.price %}
                                             <div>
@@ -2148,7 +2150,7 @@
                                 </div>
 
                                 <!-- Location -->
-                                <div class="mb-3">
+                                <div class="mb-3 property-card-location">
                                     {% if p.location_lat is not none and p.location_lon is not none %}
                                         <div class="d-flex align-items-center">
                                             <a href="https://www.google.com/maps/search/?api=1&amp;query={{ p.location_lat }},{{ p.location_lon }}"
@@ -2174,9 +2176,10 @@
                                         </div>
                                     {% endif %}
                                 </div>
+                                </div>
 
                                 <!-- Travel Times -->
-                                {{ travel_badges(p, travel_display_targets) }}
+                                <div class="property-card-travel">{{ travel_badges(p, travel_display_targets) }}</div>
                             </div>
 
                             <!-- Card Footer with Actions -->

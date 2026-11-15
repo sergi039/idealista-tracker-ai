@@ -133,6 +133,11 @@ the decision group has one set of decision buttons.
 Use compact rows by default: align price, assessment and actions to the top,
 give the object the largest column, and place the closed facts disclosure under
 its photo on desktop/tablet. Opening the disclosure uses the full object column.
+Related controls share a line (owner, 2026-11-14): the three decision buttons,
+favourite and Open; the recommendation rating and the Assessment disclosure;
+a card's price, area and place, and its travel times. The thumbnail column is
+as wide as the disclosure's label (it does not wrap, in either language); the
+height of a row is set by the object, not by a stack of controls.
 Missing-photo rows keep their details in normal flow. Do not reserve a blank
 full-width row for a closed disclosure, truncate important warnings or reduce
 the established control targets to meet a density budget.
