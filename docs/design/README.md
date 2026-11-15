@@ -146,7 +146,7 @@ under the title.
 Density budget (owner, 2026-11-15), measured on a 25-row list shaped like
 production (Recommended, housing; long titles, three badges, the approximate
 warning, "Details · Photo similarities", Live, folded publications), closed
-disclosures: at 1440px the median row is at most 112px, the longest at most
+disclosures: at 1440px and above the three decision buttons, favourite and Open stand on one line (a 246px cell; below 1440px they wrap to two, as on main), the median row is at most 112px, the longest at most
 130px and five rows fit under a 284px page header in 900px; at 834px the
 median is at most 190px and the longest at most 240px. The 390px phone is
 unchanged by these rules. A reason with a "Details" line is three lines (the
