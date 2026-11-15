@@ -1183,7 +1183,7 @@ class TestTheList:
         # rule instead, and the tooltip reports THAT count rather than the zero
         # its own rows would give -- the same blocker, one rule over.
         assert tooltip and "1 you rejected" in unescape(tooltip.group(1))
-        assert "Rejected: 1 hidden" in body
+        assert "1 rejected" in body
         # And its own page still shows what it would have scored.
         text = _card(
             client.get(f"/properties/{ids['neighbour']}").get_data(as_text=True)
@@ -1233,7 +1233,7 @@ class TestTheList:
             as_text=True
         )
         assert ids["neighbour"] not in set(_shown(bare))
-        assert "Rejected: 1 hidden" in bare
+        assert "1 rejected" in bare
         # And the way back is on that page: naming the verdict lifts the hide.
         lifted = client.get(
             "/properties?profile_id=all&per_page=100&verdict=all"

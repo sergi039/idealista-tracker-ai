@@ -62,30 +62,49 @@
 .workspace-menu-button { display: inline-flex; }
 .app-workspace main.container { width: 100%; max-width: none; margin-top: 0 !important; padding: var(--ui-space-6); }
 .workspace-footer { margin: 0 !important; padding: var(--ui-space-4) var(--ui-space-6); font-size: 0.75rem; color: var(--ui-muted); }
-.workspace-page-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--ui-space-4); margin-bottom: var(--ui-space-4); }
+.workspace-page-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--ui-space-2) var(--ui-space-4); margin-bottom: var(--ui-space-4); }
 .workspace-page-heading .properties-last-sync { display: block; margin: var(--ui-space-2) 0 0 !important; font-size: 0.75rem; letter-spacing: 0; }
-.app-workspace #subscription-switcher { margin-bottom: var(--ui-space-3) !important; gap: var(--ui-space-3) !important; }
+.app-workspace #subscription-switcher { margin-bottom: 0 !important; gap: var(--ui-space-2) !important; justify-content: flex-end; min-width: 0; }
 .properties-subscription-menu { min-width: min(23rem, calc(100vw - 3rem)); max-width: calc(100vw - 3rem); max-height: 65vh; overflow-y: auto; }
 .subscription-menu-search { margin-bottom: var(--ui-space-3); }
 .subscription-menu-actions { position: sticky; bottom: 0; background: var(--ui-surface); padding-top: var(--ui-space-3); margin-top: var(--ui-space-3); border-top: 1px solid var(--ui-border); }
 .app-workspace #profile-select-dropdown { max-width: min(26rem, 100%); }
 .app-workspace #profile-select-label { white-space: normal; text-align: left; }
-.scope-utilities { margin-left: auto; display: flex; align-items: center; gap: var(--ui-space-2); flex-wrap: wrap; }
+.scope-switch { display: inline-flex; align-items: center; white-space: nowrap; }
 .scope-switch[aria-pressed="true"] { background: var(--ui-accent-soft); color: var(--ui-accent); border-color: var(--ui-border); }
-.scope-maintenance > summary { list-style: none; min-height: var(--ui-control-height); display: inline-flex; align-items: center; padding: var(--ui-space-2); color: var(--ui-muted); cursor: pointer; }
-.scope-maintenance[open] { flex-basis: 100%; }
-.scope-maintenance .scope-maintenance-body { display: flex; flex-wrap: wrap; gap: var(--ui-space-2); padding: var(--ui-space-3) 0; }
-.app-workspace #filters-card { background: transparent; border: 0; margin-bottom: var(--ui-space-3) !important; }
-.app-workspace #filters-card > .card-body { padding: 0 !important; }
-.workspace-filter-primary { display: flex; align-items: center; gap: var(--ui-space-2); flex-wrap: wrap; width: 100%; }
-.app-workspace .properties-filter-search { flex: 1 1 15rem; min-width: 10rem; max-width: none; }
-.workspace-advanced-filters { width: 100%; }
+.scope-maintenance .scope-maintenance-body form { margin: 0; }
+.app-workspace #filters-card { background: transparent; border: 0; margin-bottom: var(--ui-space-3) !important; container: filters / inline-size; }
+.app-workspace #filters-card > .card-body { padding: 0 !important; display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-space-2); }
+/* One flex line for the whole filter group: the form and its first row lend
+   their controls to the card body, so search, Decision, the two switches, the
+   Filters trigger, Apply and the applied chips share a line while they fit. */
+.workspace-filter-form,
+.workspace-filter-primary { display: contents; }
+/* Search is the group's main control: it never narrows past its whole
+   placeholder (the Spanish one needs ~18rem with the icon), takes whatever the
+   line has left, and the applied chips wrap to the next line before it would
+   shrink. */
+.app-workspace .properties-filter-search { flex: 1 1 19rem; min-width: 19rem; max-width: none; }
+.workspace-advanced-filters { flex: 0 0 auto; }
+.workspace-advanced-filters[open] { order: 2; flex-basis: 100%; }
+/* Where the browser exposes the disclosure's content box, the trigger stays
+   in the row and only the fields take the line below it. */
+@supports selector(::details-content) {
+    .workspace-advanced-filters,
+    .workspace-advanced-filters[open] { display: contents; }
+    .workspace-advanced-filters::details-content { order: 2; flex: 1 1 100%; }
+    .workspace-advanced-filters:not([open])::details-content { display: none; }
+}
+/* With the fields open, Apply follows them, so the group still ends in it. */
+.workspace-filter-form:has(.workspace-advanced-filters[open]) .workspace-filter-apply { order: 3; }
 .workspace-advanced-filters > summary { cursor: pointer; color: var(--ui-muted); padding: var(--ui-space-2) 0; min-height: var(--ui-control-height); display: inline-flex; align-items: center; gap: var(--ui-space-2); }
 .workspace-advanced-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: var(--ui-space-3); background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); padding: var(--ui-space-4); }
 .workspace-advanced-fields .form-select, .workspace-advanced-fields .form-control { width: 100%; min-width: 0; }
 .workspace-advanced-fields > label { min-width: 0; font-size: 0.75rem; color: var(--ui-muted); }
 .workspace-advanced-fields > label > .form-select, .workspace-advanced-fields > label > .form-control { margin-top: var(--ui-space-1); color: var(--ui-text); }
-.workspace-filter-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-space-2); width: 100%; }
+.workspace-filter-meta { order: 1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-space-2); flex: 0 1 auto; min-width: 0; }
+/* Jinja leaves whitespace in an empty list, which `:empty` would count. */
+.workspace-filter-meta:not(:has(> *)) { display: none; }
 .filter-chip { display: inline-flex; align-items: center; gap: var(--ui-space-2); padding: var(--ui-space-1) var(--ui-space-2); background: var(--ui-accent-soft); color: var(--ui-accent); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); text-decoration: none; font-size: 0.75rem; max-width: 100%; min-height: var(--ui-control-height); }
 .filter-chip span { overflow-wrap: anywhere; }
 .workspace-result-controls { display: flex; align-items: center; justify-content: space-between; gap: var(--ui-space-3); flex-wrap: wrap; border-bottom: 1px solid var(--ui-border); padding-bottom: var(--ui-space-2); }
@@ -102,14 +121,23 @@
 .workspace-result-tools .btn.active { color: var(--ui-accent); background: var(--ui-accent-soft); border-color: var(--ui-border); }
 .workspace-mode-options { display: flex; gap: var(--ui-space-2); align-items: center; }
 .workspace-mode-options .btn { min-height: var(--ui-control-height); font-size: 0.75rem; }
-.workspace-result-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-space-2); min-height: var(--ui-control-height); padding-block: 0; color: var(--ui-muted); font-size: 0.75rem; }
-.workspace-result-status #recommendation-profile-status { font-size: inherit; }
-.workspace-result-status form .btn { min-height: var(--ui-control-height); padding: var(--ui-space-1) var(--ui-space-2); font-size: 0.75rem; }
+/* One line of body-size text: the count, what is kept back, and whether the
+   recommendations need the owner. Nothing in it is smaller than the text it
+   sits beside; `.small` inside it used to compound to 10.5px. */
+.workspace-result-status { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--ui-space-4); min-height: var(--ui-control-height); padding-block: 0; color: var(--ui-muted); font-size: 0.875rem; }
+.workspace-result-status form .btn { min-height: var(--ui-control-height); padding: var(--ui-space-1) var(--ui-space-2); font-size: 0.8125rem; }
+.workspace-result-status .workspace-recommendation-state[data-recommendation-profile-state="failed"] { color: var(--ui-text); }
+.workspace-hidden-rows > summary { min-height: var(--ui-control-height); padding-block: var(--ui-space-2); cursor: pointer; }
+.workspace-hidden-rows[open] { flex-basis: 100%; }
+.workspace-hidden-row { display: flex; align-items: center; min-height: var(--ui-control-height); }
+.workspace-hidden-list { display: grid; gap: var(--ui-space-1); margin: 0 0 var(--ui-space-2); padding: 0 0 0 var(--ui-space-4); list-style: none; color: var(--ui-text); }
+.workspace-result-note { margin: 0 0 var(--ui-space-2); color: var(--ui-muted); font-size: 0.875rem; }
 .workspace-result-status .result-count { color: var(--ui-text); font-size: 0.8125rem; }
-.workspace-applied-notes { display: flex; align-items: center; gap: var(--ui-space-2); flex-wrap: wrap; font-size: 0.75rem; }
+.workspace-applied-notes { display: flex; align-items: center; gap: var(--ui-space-2); flex-wrap: wrap; font-size: 0.75rem; order: 3; flex-basis: 100%; }
 .workspace-applied-notes:empty { display: none; }
-.app-workspace .properties-coverage { font-size: 0.75rem; margin-bottom: var(--ui-space-3); }
-.app-workspace .properties-coverage > summary { font-size: 0.75rem; padding-block: var(--ui-space-1); }
+.app-workspace .properties-coverage { font-size: 0.875rem; margin-bottom: var(--ui-space-3); }
+.app-workspace .properties-coverage > summary { font-size: 0.875rem; padding-block: var(--ui-space-1); }
+.app-workspace .properties-coverage details > summary { cursor: pointer; }
 .workspace-data-table { width: 100%; table-layout: fixed; }
 .workspace-data-table .col-title { width: 46%; min-width: 0; }
 .workspace-data-table .col-price { width: 16%; min-width: 0; }
@@ -198,16 +226,14 @@
     .app-workspace *, .app-workspace *::before, .app-workspace *::after { scroll-behavior: auto !important; transition-duration: 0s !important; }
 }
 
-/* The disclosure trigger shares the first filter row; no second empty row. */
-.workspace-filter-form { position: relative; }
-.workspace-filter-primary { padding-right: 9rem; }
-.workspace-advanced-filters > summary { position: absolute; top: 0; right: 0; max-width: calc(9rem - var(--ui-space-2)); border: 1px solid var(--ui-border); padding: var(--ui-space-2); border-radius: var(--ui-radius-control); }
-.workspace-advanced-filters[open] .workspace-advanced-fields { margin-top: var(--ui-space-3); }
+/* The disclosure trigger is a control of the filter row, drawn like one. */
+.workspace-advanced-filters > summary { list-style: none; border: 1px solid var(--ui-border); padding: var(--ui-space-2) var(--ui-space-3); border-radius: var(--ui-radius-control); white-space: nowrap; }
+.workspace-advanced-filters > summary::-webkit-details-marker { display: none; }
+.workspace-advanced-filters[open] .workspace-advanced-fields { margin-top: var(--ui-space-1); }
 .app-workspace main.container { padding-top: var(--ui-space-4); }
 .workspace-page-heading { margin-bottom: var(--ui-space-2); }
-.app-workspace #subscription-switcher { margin-bottom: var(--ui-space-2) !important; }
 .app-workspace #filters-card { margin-bottom: var(--ui-space-2) !important; }
-.workspace-result-status > strong { color: var(--ui-text); font-size: 0.8125rem; }
+.workspace-result-status > strong { color: var(--ui-text); font-size: inherit; }
 .app-workspace .workspace-result-status .properties-coverage { margin: 0 0 0 auto !important; }
 .app-workspace .workspace-result-status .properties-coverage[open] { flex-basis: 100%; }
 .app-workspace .workspace-data-table > thead > tr > th { padding-block: var(--ui-space-2); }
@@ -247,6 +273,30 @@
     .owner-decision-text-compact { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
     .workspace-page-heading h1 { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--ui-space-3); }
     .workspace-page-heading .properties-last-sync { margin: 0 !important; }
+    /* Title and subscription share one line; each shrinks before it wraps. */
+    .properties-heading { flex-wrap: nowrap; }
+    .properties-heading > h1 { flex: 0 1 auto; min-width: 0; }
+    /* A filter bar too narrow for search and every control on one line puts
+       the controls first and search, Apply and the applied chips on the next,
+       so Apply never wraps alone and still follows the last draft field.
+       64rem is where search at its 19rem floor still shares the line with
+       every control in Spanish (measured: ~62rem). */
+    @container filters (max-width: 64rem) {
+        /* A zero-height break, so search starts the second line even where it
+           would still fit after the Filters trigger. An empty flex line still
+           takes a row gap, and a negative margin cannot cancel it, so here the
+           gap is each item's top margin instead: the empty line has none. */
+        .app-workspace #filters-card > .card-body::before { content: ""; order: 1; flex-basis: 100%; }
+        .app-workspace #filters-card > .card-body { row-gap: 0; margin-top: calc(-1 * var(--ui-space-2)); }
+        .app-workspace #filters-card > .card-body > *,
+        .workspace-filter-form > *,
+        .workspace-filter-primary > *,
+        .workspace-advanced-filters > summary { margin-top: var(--ui-space-2); }
+        /* Its own rule: a browser without the pseudo-element drops the list. */
+        .workspace-advanced-filters::details-content { margin-top: var(--ui-space-2); }
+        .app-workspace .properties-filter-search { order: 1; flex-basis: 20rem; }
+        .workspace-filter-apply { order: 1; }
+    }
     .workspace-location-line { display: flex; flex-wrap: wrap; column-gap: var(--ui-space-2); }
     .workspace-with-photo { display: grid; grid-template-columns: 6rem minmax(0, 1fr); column-gap: var(--ui-space-3); align-content: start; }
     .workspace-with-photo .workspace-property-summary { display: contents; }
@@ -281,24 +331,24 @@
     .workspace-page-heading .properties-last-sync { margin: 0 !important; }
 
     /* Scope: the applied subscription and its rare tools, then the switches. */
-    .app-workspace #subscription-switcher { gap: var(--ui-space-2) !important; }
+    .app-workspace #subscription-switcher { gap: var(--ui-space-2) !important; flex: 1 1 100%; justify-content: flex-start; }
     #subscription-switcher > .dropdown { flex: 1 1 11rem; min-width: 0; }
     .app-workspace #profile-select-dropdown { width: 100%; max-width: 100%; justify-content: flex-start; text-align: left; }
     .app-workspace #profile-select-label { flex: 1 1 auto; min-width: 0; }
     #subscription-switcher > #subscription-draft-note,
     #subscription-switcher > #profile-selection-truncated { flex-basis: 100%; }
-    .scope-utilities { margin-left: 0; flex: 1 1 100%; flex-wrap: nowrap; }
-    .scope-utilities .scope-switch { flex: 1 1 0; min-width: 0; }
+    #subscription-switcher > .scope-maintenance { flex: 0 1 auto; }
 
-    /* The promoted filter stays visible with the one Apply; the Filters
-       trigger shares their row. Search and the other fields open in place. */
-    .workspace-filter-primary { padding-right: 0; }
-    .properties-queue-switch { flex: 1 1 0; min-width: 0; margin: 0; font-size: 0; }
+    /* The two switches take a line in halves; the promoted filter, the one
+       Filters trigger and the one Apply share the next. Search and the other
+       fields open in place below them, the applied chips come last. */
+    .app-workspace #filters-card .scope-switch { order: -1; flex: 1 1 calc(50% - var(--ui-space-1)); min-width: 0; justify-content: center; }
+    .workspace-filter-meta { order: 3; }
+    .properties-queue-switch { flex: 1 1 0; min-width: 0; margin: 0; }
     .app-workspace .properties-queue-switch > .form-select { width: 100%; min-width: 0; padding-left: var(--ui-space-2); padding-right: 1.75rem; background-position: right var(--ui-space-2) center; font-size: 0.8125rem; text-overflow: ellipsis; }
-    .workspace-filter-primary > .btn[type="submit"] { margin-right: calc(var(--ui-filter-trigger) + var(--ui-space-2)); }
     .workspace-advanced-filters > summary { width: var(--ui-filter-trigger); max-width: none; justify-content: center; }
     .workspace-advanced-filters > summary > .ui-icon:first-child { display: none; }
-    .workspace-filter-primary .properties-filter-search { order: 3; flex: 1 1 100%; min-width: 0; max-width: none; }
+    .workspace-filter-primary .properties-filter-search { order: 2; flex: 1 1 100%; min-width: 0; max-width: none; }
     .workspace-filter-form:not(:has(.workspace-advanced-filters[open])) .properties-filter-search { display: none; }
     .workspace-advanced-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--ui-space-2); padding: var(--ui-space-3); }
 
@@ -324,8 +374,7 @@
     /* Count, what is hidden and why, and the profile state: one paragraph. */
     .workspace-result-status { display: block; min-height: 0; padding-top: var(--ui-space-2); line-height: 1.6; }
     .workspace-result-status > * { margin-right: var(--ui-space-3); }
-    .workspace-result-status > #criteria-hidden-coverage,
-    .workspace-result-status > #rejected-hidden-coverage { white-space: nowrap; }
+    .workspace-result-status > .workspace-hidden-rows:not([open]) { display: inline-block; vertical-align: middle; }
     .workspace-status-toggle { padding-inline: 0; vertical-align: baseline; }
     .workspace-result-status > details.show { display: block; margin-right: 0; }
     .workspace-result-status > details > summary { min-height: var(--ui-control-height); padding-block: var(--ui-space-2); cursor: pointer; }

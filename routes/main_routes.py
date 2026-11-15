@@ -390,6 +390,28 @@ def _recommendation_selection(
     )
 
 
+def _coverage_counts(query, taste_version):
+    """The four "K of N" numbers of the coverage panel, over one set of rows.
+
+    One home, because the page takes them twice in the Recommendations
+    collection (once for the selection, once for the rows it draws) and the
+    two readings must not drift: listings whose status somebody established,
+    listings holding a complete hazard scan, scores resting on every enabled
+    criterion, and listings scored against the current taste profile (None
+    while no profile exists).
+    """
+    return (
+        query.filter(verified_expression(Property)).count(),
+        query.filter(hazard_complete_expression(Property)).count(),
+        query.filter(score_coverage_share_expr(Property) >= 0.999).count(),
+        query.filter(
+            taste_service.scored_current_expression(Property, taste_version)
+        ).count()
+        if taste_version is not None
+        else None,
+    )
+
+
 # The filter bar's dimensions, in the order the page applies them. One home
 # for the page's own rows AND for every count drawn beside its controls: a
 # counted option is a promise about the page that picking it opens, and the
@@ -2024,16 +2046,12 @@ def properties():
         # line have to be about the same set of rows. The predicate comes from
         # the module the badges read, so the header and the ticks under it
         # cannot disagree (services/listing_verification.py).
-        listing_verified_count = query.filter(verified_expression(Property)).count()
 
         # And the same disclosure for the hazard scan (#437). The badge is
         # drawn only for a row where something qualifies, so "no badge" covers
         # both "scanned, nothing there" and "nobody looked" -- and the second
         # of those is what this line exists to make visible. Same filtered
         # set, same predicate the badge reads.
-        hazard_scanned_count = query.filter(
-            hazard_complete_expression(Property)
-        ).count()
 
         # And for the score itself (#493). The number this page sorts by is a
         # weighted average over the criteria that answered, renormalised past
@@ -2053,9 +2071,6 @@ def properties():
         # `score_coverage_share_expr` is NULL there, "unknown coverage must
         # not pass as full" is that helper's own rule, and counting it would
         # be #98 inside the line that exists to prevent #98.
-        score_full_basis_count = query.filter(
-            score_coverage_share_expr(Property) >= 0.999
-        ).count()
 
         # And for the taste ranking (#498): the version once per request, so
         # every row is judged against the same profile, and the disclosure
@@ -2064,13 +2079,12 @@ def properties():
         # and the ordering cannot disagree. None means no profile exists yet
         # and the taste surfaces stay dormant.
         taste_version = taste_service.current_profile_version()
-        taste_scored_count = (
-            query.filter(
-                taste_service.scored_current_expression(Property, taste_version)
-            ).count()
-            if taste_version is not None
-            else None
-        )
+        (
+            listing_verified_count,
+            hazard_scanned_count,
+            score_full_basis_count,
+            taste_scored_count,
+        ) = _coverage_counts(query, taste_version)
 
         # Whether the taste ORDER is actually ordering. A score made against
         # an older profile never ranks interleaved with current ones, so while
@@ -2205,6 +2219,30 @@ def properties():
             query, duplicate_fold_result = duplicate_fold.fold_query(
                 query, effective_fold_params
             )
+            # The collection has just been cut down to the rows it draws, and
+            # every "K of N" line is printed against that N. Counted before
+            # the cut, the K was of the whole selection: measured on
+            # production 2026-11-14, the Recommended tab said "278 of 98
+            # verified" and "1937 of 98 listings hold a complete scan". So
+            # the same four counts are taken again, over the rows shown. The
+            # taste ORDER above keeps its own reading: whether a sort has
+            # anything to rank by is a question about the selection.
+            (
+                listing_verified_count,
+                hazard_scanned_count,
+                score_full_basis_count,
+                taste_scored_count,
+            ) = _coverage_counts(query, taste_version)
+            if similarity_summary is not None:
+                # What was withheld is not among the rows shown, so its count
+                # is carried over rather than recounted.
+                similarity_summary = dict(
+                    favorite_similarity.summarize(
+                        similarity_ctx,
+                        (row_id for (row_id,) in query.with_entities(Property.id)),
+                    ),
+                    rejected=similarity_summary.get("rejected", 0),
+                )
 
         # Sorting (safe allow-list). An unknown sort -- an old /lands bookmark
         # asking for travel_time_nearest_beach, say -- falls back to the

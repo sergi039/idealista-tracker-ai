@@ -214,9 +214,10 @@ class TestTheSeventyReproductionIsGone:
             )
         )
         badge = _chip_badge(body, "Land at Norte")
-        note = re.search(r"Filters: (\d+) of (\d+) shown", body)
-        assert note, "the narrowing note is missing"
-        assert int(note.group(1)) == badge == 2, (
+        shown = re.search(r"<strong>(\d+) properties found</strong>", body)
+        note = re.search(r"out of (\d+)", body)
+        assert shown and note, "the count or the narrowing note is missing"
+        assert int(shown.group(1)) == badge == 2, (
             "the badge is the page its own link opens, filters kept"
         )
-        assert int(note.group(2)) == 3, "the baseline: live rows before the bar"
+        assert int(note.group(1)) == 3, "the baseline: live rows before the bar"

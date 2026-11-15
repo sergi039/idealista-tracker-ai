@@ -718,7 +718,7 @@
                        measured against, from the same predicate the filter
                        applied (services/favorite_similarity.py). #}
                     {% if similarity_enabled is defined and similarity_enabled and similarity_summary and pagination %}
-                        <span id="similarity-coverage" class="text-body-secondary small"
+                        <span id="similarity-coverage"
                               title="{{ t('similarity_counts_line')|format(similarity_summary.thin, similarity_summary.different_kind, similarity_summary.no_reference, similar_set_aside if similar_set_aside is not none else similarity_summary.rejected, similarity_summary.base_only, similarity_summary.plot_compared) }} {{ t('similar_coverage_tooltip') }}">
                             <i class="fas fa-equals me-1"></i>{% if similar_count is defined and similar_count is not none %}{{ t('similar_coverage')|format(similar_count, similarity_cut|int) }}{% else %}{{ t('similar_rankable')|format(similarity_summary.ok, pagination.total) }}{% endif %} {% if similarity_reference_profiles is defined and similarity_reference_profiles > 1 %}{{ t('similarity_references_each')|format(similarity_reference_count) }}{% else %}{{ tn('similarity_references', similarity_reference_count) }}{% endif %}{% if similar_set_aside is defined and similar_set_aside %} {{ t('similar_set_aside')|format(similar_set_aside) }}{% endif %}{% if similar_hidden_by_favorites is defined and similar_hidden_by_favorites %} {{ t('similar_hidden_by_favorites') }}{% endif %}
                         </span>
@@ -727,21 +727,22 @@
 
 <div class="row">
     <div class="col-12">
-        <div class="workspace-page-heading">
+        {# Three rows of controls, one job each (owner, 2026-11-14: "the
+           filters are a mess again"): this heading row says WHICH
+           subscriptions are on the page; the filter bar under it says which
+           of their listings are shown; the result row says how they are
+           drawn. The subscription control therefore shares the title's line
+           from the tablet width up instead of taking a row of its own. #}
+        <div class="workspace-page-heading properties-heading">
             <h1 class="mb-0">{{ t('properties') }}
                 <small class="text-body-secondary fw-normal properties-last-sync">{{ t('last_sync') }}: <span id="last-sync">{{ t('loading') }}...</span></small>
             </h1>
-        </div>
 
-        {# One subscription control, not two (2026-08-09). The saved searches
-           are chips, named and counted the way idealista.com lists them; the
-           menu beside them holds everything a chip cannot express -- several
-           subscriptions at once, the retired ones, and listings that carry no
+        {# One subscription control, not two (2026-08-09). The menu holds
+           every saved search, named and counted the way idealista.com lists
+           them, several at once, the retired ones, and listings that carry no
            subscription at all. The filter bar below used to repeat that whole
-           dropdown, and the archive had a second dropdown of its own up here.
-           Favorites and Hide removed sit on this row for the same reason:
-           they are one-click scope switches, not fields you fill in and
-           submit. #}
+           dropdown, and the archive had a second dropdown of its own up here. #}
         {# Hidden subscriptions are in neither group: they are off this page
            entirely (2026-08-17). One only appears here when `profile_id`
            names it, and then under its own heading -- calling it archived
@@ -902,20 +903,28 @@
                 </span>
             {% endif %}
 
-            <details class="scope-maintenance"><summary>{{ t('workspace_maintenance') }} {{ icon('chevron-down') }}</summary><div class="scope-maintenance-body">
+            {# Rare maintenance for the subscription on screen, one menu
+               like the two beside it. Drawn only while it holds something:
+               a trigger that opens nothing is not a control. #}
+            {% set _has_taste_tools = taste_version is defined and taste_version %}
+            {% if selected_profile_id or _has_taste_tools %}
+            <div class="dropdown scope-maintenance">
+                <button class="btn btn-outline-secondary dropdown-toggle" type="button" id="subscription-tools-toggle"
+                        data-bs-toggle="dropdown" aria-expanded="false">{{ t('workspace_maintenance') }}</button>
+                <div class="dropdown-menu dropdown-menu-end scope-maintenance-body" aria-labelledby="subscription-tools-toggle">
             {# Travel targets and the recalculation belong to one saved
                search, so they only appear when exactly one is on screen --
                beside the subscription they act on, not inside the filters. #}
             {% if selected_profile_id %}
-                <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('main.edit_profile', profile_id=selected_profile_id) }}"
+                <a class="dropdown-item" href="{{ url_for('main.edit_profile', profile_id=selected_profile_id) }}"
                    title="Edit travel presets/targets for this subscription">
                     <i class="fas fa-sliders-h me-1"></i>Edit subscription
                 </a>
-                <form method="POST" action="{{ url_for('main.recalculate_profile_travel', profile_id=selected_profile_id) }}" class="d-inline">
+                <form method="POST" action="{{ url_for('main.recalculate_profile_travel', profile_id=selected_profile_id) }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                     <input type="hidden" name="mode" value="all">
                     <input type="hidden" name="limit" value="100">
-                    <button class="btn btn-outline-primary btn-sm" type="submit"
+                    <button class="dropdown-item" type="submit"
                             title="Recalculate travel for up to 100 active properties in this subscription">
                         <i class="fas fa-route me-1"></i>Recalculate travel
                     </button>
@@ -927,36 +936,20 @@
                second press attaches instead of paying twice. Drawn only
                while a profile exists (taste_version) — with none there is
                nothing to retrain. #}
-            {% if taste_version is defined and taste_version %}
-                <form method="POST" action="{{ url_for('main.retrain_taste') }}" class="d-inline"
+            {% if _has_taste_tools %}
+                <form method="POST" action="{{ url_for('main.retrain_taste') }}"
                       onsubmit='return confirm({{ t("taste_retrain_confirm")|tojson }});'>
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                    <button class="btn btn-outline-danger btn-sm" type="submit"
+                    <button class="dropdown-item text-danger" type="submit"
                             title="{{ t('taste_retrain_title') }}">
                         <i class="fas fa-heart me-1"></i>{{ t('taste_retrain_button') }}
                     </button>
                 </form>
             {% endif %}
-
-            </div></details>
-            {# Two switches, not two form fields: they change what is on
-               screen straight away, the way the subscription chips do. The
-               filter form re-posts their state as hidden inputs so Apply
-               cannot silently switch them off. #}
-            <div class="scope-utilities">
-                <a class="btn btn-sm scope-switch btn-outline-secondary" role="button"
-                   href="{{ url_for('main.properties', **dict(base_args, favorites=none if current_filters.favorites else 'on', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}"
-                   title="Show only the listings you starred"
-                   aria-pressed="{{ 'true' if current_filters.favorites else 'false' }}">
-                    <i class="fas fa-star me-1 {{ '' if current_filters.favorites else 'text-warning' }}"></i>{{ t('favorites') }}
-                </a>
-                <a class="btn btn-sm scope-switch btn-outline-secondary" role="button"
-                   href="{{ url_for('main.properties', **dict(base_args, hide_removed=none if current_filters.hide_removed else 'on', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}"
-                   title="Hide listings that were removed or sold"
-                   aria-pressed="{{ 'true' if current_filters.hide_removed else 'false' }}">
-                    <i class="fas fa-eye-slash me-1"></i>{{ t('hide_removed') }}
-                </a>
+                </div>
             </div>
+            {% endif %}
+        </div>
         </div>
 
 
@@ -976,9 +969,9 @@
                     {% endif %}
                     <input type="hidden" name="view_type" value="{{ view_type }}">
                     <input type="hidden" name="order" value="{{ current_filters.order }}">
-                    {# The two switches above are links, so their state has to
-                       travel with the form or pressing Apply would turn them
-                       off behind the owner's back. #}
+                    {# Favorites and Hide removed below are links, so their state
+                       has to travel with the form or pressing Apply would turn
+                       them off behind the owner's back. #}
                     {% if current_filters.favorites %}
                         <input type="hidden" name="favorites" value="on">
                     {% endif %}
@@ -1010,7 +1003,10 @@
                        row, even if all are undecided. Counts come from the
                        page's own selection (_owner_verdict_choices). #}
                     {% if verdicts %}
-                    <label class="properties-queue-switch">{{ t('workspace_verdict') }}<select class="form-select form-select-sm properties-filter-select" id="verdict" name="verdict"
+                    {# One name, not two: every option already says "Decision: ...",
+                       so the caption above the box is for assistive technology
+                       only, like the other self-naming selects on this row. #}
+                    <label class="properties-queue-switch"><span class="visually-hidden">{{ t('workspace_verdict') }}</span><select class="form-select form-select-sm properties-filter-select" id="verdict" name="verdict"
                             aria-label="{{ t('workspace_verdict') }}">
                         <option value="">{{ t('owner_verdict_default') }}</option>
                         <option value="all" {{ 'selected' if current_filters.verdict == 'all' }}>{{ t('owner_verdict_all') }}</option>
@@ -1024,7 +1020,22 @@
                     {% elif current_filters.verdict %}
                         <input type="hidden" name="verdict" value="{{ current_filters.verdict }}"/>
                     {% endif %}
-                        <button type="submit" class="btn btn-primary btn-sm">{{ t('apply') }}</button>
+                        {# Two switches, not two form fields: they change what is
+                           on screen straight away. They narrow which rows are
+                           shown, so since 2026-11-14 they sit in the filter
+                           bar, not beside the subscription. #}
+                        <a class="btn btn-sm scope-switch btn-outline-secondary" role="button"
+                           href="{{ url_for('main.properties', **dict(base_args, favorites=none if current_filters.favorites else 'on', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}"
+                           title="Show only the listings you starred"
+                           aria-pressed="{{ 'true' if current_filters.favorites else 'false' }}">
+                            <i class="fas fa-star me-1 {{ '' if current_filters.favorites else 'text-warning' }}"></i>{{ t('favorites') }}
+                        </a>
+                        <a class="btn btn-sm scope-switch btn-outline-secondary" role="button"
+                           href="{{ url_for('main.properties', **dict(base_args, hide_removed=none if current_filters.hide_removed else 'on', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}"
+                           title="Hide listings that were removed or sold"
+                           aria-pressed="{{ 'true' if current_filters.hide_removed else 'false' }}">
+                            <i class="fas fa-eye-slash me-1"></i>{{ t('hide_removed') }}
+                        </a>
                     </div>
                     <details class="workspace-advanced-filters" id="additional-filters">
                         <summary>{{ icon('sliders') }}{{ t('workspace_filters') }}{% if applied.count %} · {{ applied.count }}{% endif %} {{ icon('chevron-down') }}</summary>
@@ -1259,6 +1270,9 @@
                                title="Clear every filter">{{ t('clear_filters') }}</a>
                         </div>
                     </details>
+                    {# The one Apply closes the group: it comes after the Filters
+                       trigger and, in reading order, after the fields it opens. #}
+                    <button type="submit" class="btn btn-primary btn-sm workspace-filter-apply">{{ t('apply') }}</button>
                 </form>
                 <div class="workspace-filter-meta" id="active-filter-chips">
                     {% for key, label_key in applied_filter_keys %}
@@ -1267,8 +1281,7 @@
                         {% endif %}
                     {% endfor %}
                 </div>
-                <div class="workspace-applied-notes">
-</div>
+                <div class="workspace-applied-notes"></div>
 
             </div>
         </div>
@@ -1423,6 +1436,18 @@
 </div>
                 </div></div></div>
             </div>
+            {# The status row says three things and nothing else (owner report,
+               2026-11-14: "small text nobody can read"): how many rows, how many
+               the page is keeping back, and whether the recommendations need
+               the owner. Everything that explains those numbers is one click
+               away, in `#hidden-rows` and `#properties-coverage`. A new line
+               here has to answer "what does the owner lose without it"; a
+               count about data quality belongs in the coverage panel. #}
+            {% set _reco_collection = active_mode == 'recommendation' %}
+            {% set _unassigned_hidden = unassigned_count if unassigned_count and not profile_selection.include_unassigned else 0 %}
+            {% set _hidden_total = (criteria_hidden_count|default(0, true)) + (rejected_hidden_count|default(0, true))
+                                   + (duplicates_folded_count|default(0, true)) + (recommendation_excluded_count|default(0, true))
+                                   + _unassigned_hidden %}
             <div class="workspace-result-status">
                     <strong>{{ pagination.total if pagination else properties|length }} {{ t('properties_found') }}</strong>
                     {% if similarity_notice %}{{ similarity_coverage() }}{% endif %}
@@ -1449,25 +1474,23 @@
                           and search_interpretation is defined and search_interpretation
                           and search_interpretation.is_listing_reference %}
                         {% if search_reveal is defined and search_reveal and search_reveal.state == 'hidden' %}
-                            <span id="search-read-as" class="text-body-secondary small">
-                                <i class="fas fa-circle-info me-1"></i>{% if search_interpretation.listing_id %}{{ t('search_reads_as_listing')|format(search_interpretation.listing_id) }}{% else %}{{ t('search_reads_as_link')|format(search_interpretation.url_fragment|truncate(80, True)) }}{% endif %}
+                            <span id="search-read-as">
+                                {% if search_interpretation.listing_id %}{{ t('search_reads_as_listing')|format(search_interpretation.listing_id) }}{% else %}{{ t('search_reads_as_link')|format(search_interpretation.url_fragment|truncate(80, True)) }}{% endif %}
                                 {% if search_reveal.by_subscription %}{{ t('search_hidden_by_subscription')|format(search_reveal.property_id) }}{% else %}{{ t('search_hidden_by_filters')|format(search_reveal.property_id) }}{% endif %}
                                 (<a id="search-reveal-link" href="{{ search_reveal.href }}">{{ t('search_reveal_link') }}</a>)
                             </span>
                         {% else %}
-                            <span id="search-read-as" class="text-body-secondary small">
-                                <i class="fas fa-circle-info me-1"></i>{% if search_interpretation.listing_id %}{{ t('search_read_as_listing')|format(search_interpretation.listing_id) }}{% else %}{{ t('search_read_as_link')|format(search_interpretation.url_fragment|truncate(80, True)) }}{% endif %}
+                            <span id="search-read-as">
+                                {% if search_interpretation.listing_id %}{{ t('search_read_as_listing')|format(search_interpretation.listing_id) }}{% else %}{{ t('search_read_as_link')|format(search_interpretation.url_fragment|truncate(80, True)) }}{% endif %}
                             </span>
                         {% endif %}
                     {% endif %}
-                    {# The filter bar narrowed this count, and the chips above
-                       carry unfiltered badges beside it -- so without this
-                       line "All subscriptions" under a sticky filter reads as
-                       a broken selection ("23 properties found" against a
-                       chip saying 60). The baseline is the same subscription
-                       selection plus the toolbar switches, which is exactly
-                       the set the clear link lands on: the link is `base_args`
-                       with every filter-bar key dropped, so it keeps the
+                    {# The filter bar narrowed this count. The applied filters
+                       are chips above, so this adds only what a chip cannot
+                       say: how many rows the same subscription selection holds
+                       without them, and one link that drops them all. The
+                       baseline is the set that link lands on: `base_args` with
+                       every filter-bar key dropped, so it keeps the
                        subscriptions, Favorites, Hide removed and the view
                        state, and resets nothing else. Rendered only on a real
                        narrowing -- a filter that matched everything hid
@@ -1486,79 +1509,96 @@
                        backed out: it contradicts this page's deliberate design that clearing
                        resets the criteria mode, which its own test pins. That is the author's
                        call to make, not a review fix. #}
+                    {# The Recommendations collection gets the link without the
+                       number. The baseline counts every row of the selection,
+                       the count beside it only the recommended ones, so "98 out
+                       of 1871" there compared two different collections
+                       (measured on production 2026-11-14): clearing the
+                       filters lands on the recommended rows, not on 1871. #}
                     {% if pagination and filter_bar_scope_total is defined
                           and filter_bar_scope_total is not none
                           and filter_bar_scope_total > pagination.total %}
-                        <span id="filter-bar-narrowing-note" class="text-body-secondary small">
-                            <i class="fas fa-filter me-1"></i>{{ t('filter_bar_narrowing')|format(pagination.total, filter_bar_scope_total) }}
-                            (<a id="clear-filters-link"
-                                href="{{ clear_filters_url }}">{{ t('clear_filters_link') }}</a>)
+                        <span id="filter-bar-narrowing-note">
+                            {% if not _reco_collection %}{{ t('filter_bar_out_of')|format(filter_bar_scope_total) }} &middot;{% endif %}
+                            <a id="clear-filters-link"
+                               href="{{ clear_filters_url }}">{{ t('clear_filters_link') }}</a>
                         </span>
                     {% endif %}
-                    {# Whether that total covers the listings with no subscription
-                       at all (issue #111). `all` means every *active* subscription,
-                       so those rows are outside every selection but their own --
-                       a bare total would be a claim the page cannot back up. The
-                       count is computed under the filters currently applied, and
-                       the link replaces the subscription selection rather than
-                       adding to it, so the number disclosed here is the number
-                       that page shows. #}
-                    {% if unassigned_count %}
-                        {% if profile_selection.include_unassigned %}
-                            <span id="unassigned-count-note" class="text-body-secondary small">({{ tn('unassigned_included', unassigned_count) }})</span>
-                        {% else %}
-                            <span id="unassigned-count-note" class="text-body-secondary small">&mdash; {{ tn('unassigned_not_shown', unassigned_count) }}
-                                {# `criteria=None` drops the criteria mode from this one link
-                                   (#502 review). The count is taken before the criteria filter
-                                   is applied, and every criteria expression leads with
-                                   `search_profile_id IS NOT NULL` — so under
-                                   criteria=pass/fail/unknown the link advertised N listings and
-                                   landed on a page that is always empty. A row with no
-                                   subscription has no subscription criteria to be judged
-                                   against; carrying the mode over states a filter that cannot
-                                   match. #}
-                                (<a id="unassigned-count-link"
-                                    href="{{ url_for('main.properties', **dict(base_args, profile_id='unassigned', criteria=None, page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">{{ t('show_them') }}</a>)</span>
-                        {% endif %}
+                    {# Everything the page keeps back by a standing rule, as one
+                       number with its reasons one click away -- so a hide
+                       cannot read as "these listings do not exist", and so it
+                       does not take a sentence per reason either. Each reason
+                       carries its own count and the link that brings those
+                       rows back; a tooltip is not a way back. The reasons are
+                       disjoint (each is applied to what the one before it
+                       left), which is what lets the summary add them up.
+                       Absent when nothing is kept back: a zero would be a
+                       standing line about nothing.
+
+                       The summary is never behind the phone's Result details
+                       trigger and never inside the coverage panel. #}
+                    {% if _hidden_total %}
+                        <details id="hidden-rows" class="workspace-hidden-rows">
+                            <summary>{{ tn('hidden_rows_summary', _hidden_total) }}</summary>
+                            <ul class="workspace-hidden-list">
+                                {# What the default criteria view hid (measured
+                                   fails the owner has not judged). #}
+                                {% if criteria_hidden_count is defined and criteria_hidden_count %}
+                                    <li class="workspace-hidden-row"><span id="criteria-hidden-coverage" title="{{ t('criteria_hidden_tooltip') }}">{{ tn('hidden_rows_criteria', criteria_hidden_count) }}
+                                        (<a id="criteria-hidden-show-link" href="{{ url_for('main.properties', **dict(base_args, criteria='all', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">{{ t('show_them') }}</a>)</span></li>
+                                {% endif %}
+                                {# The listings the owner turned down (owner
+                                   report 2026-09-07: property 1405, rejected,
+                                   still sitting in the ranked suggestions). #}
+                                {% if rejected_hidden_count is defined and rejected_hidden_count %}
+                                    <li class="workspace-hidden-row"><span id="rejected-hidden-coverage" title="{{ t('rejected_hidden_tooltip') }}">{{ tn('hidden_rows_rejected', rejected_hidden_count) }}
+                                        (<a id="rejected-hidden-show-link" href="{{ url_for('main.properties', **dict(base_args, verdict='all', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">{{ t('show_them') }}</a>)</span></li>
+                                {% endif %}
+                                {# Publications of the same home folded into
+                                   one row (#633). `duplicates=show` is the only
+                                   reveal; there is no second control. #}
+                                {% if duplicates_folded_count is defined and duplicates_folded_count %}
+                                    <li class="workspace-hidden-row"><span id="duplicates-folded-coverage" title="{{ t('dup_fold_line_title') }}">{{ tn('dup_fold_line', duplicates_folded_count) }}
+                                        (<a id="duplicates-show-link" href="{{ url_for('main.properties', **dict(base_args, duplicates='show', duplicate_of=None, page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">{{ t('show_them') }}</a>)</span></li>
+                                {% endif %}
+                                {# A confirmed hard conflict is left out of the
+                                   Recommendations collection only; the row is
+                                   still in the catalog, which is where the
+                                   link goes. #}
+                                {% if recommendation_excluded_count %}
+                                    <li class="workspace-hidden-row"><span id="recommendation-hard-exclusions">{{ tn('hidden_rows_recommendation', recommendation_excluded_count) }}
+                                        <a id="recommendation-hard-exclusions-link" href="{{ url_for('main.properties', **dict(base_args, mode='combined', recommendation_scope=None, sort='created_at', order='desc', page=1)) }}">{{ t('workspace_all') }}</a></span></li>
+                                {% endif %}
+                                {# The listings with no subscription at all
+                                   (issue #111). `all` means every *active*
+                                   subscription, so those rows are outside every
+                                   selection but their own. The count is taken
+                                   under the filters currently applied, and the
+                                   link replaces the subscription selection
+                                   rather than adding to it, so the number here
+                                   is the number that page shows. #}
+                                {% if _unassigned_hidden %}
+                                    <li class="workspace-hidden-row"><span id="unassigned-count-note">{{ tn('unassigned_not_shown', unassigned_count) }}
+                                        {# `criteria=None` drops the criteria mode from this one link
+                                           (#502 review). The count is taken before the criteria filter
+                                           is applied, and every criteria expression leads with
+                                           `search_profile_id IS NOT NULL` — so under
+                                           criteria=pass/fail/unknown the link advertised N listings and
+                                           landed on a page that is always empty. A row with no
+                                           subscription has no subscription criteria to be judged
+                                           against; carrying the mode over states a filter that cannot
+                                           match. #}
+                                        (<a id="unassigned-count-link"
+                                            href="{{ url_for('main.properties', **dict(base_args, profile_id='unassigned', criteria=None, page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">{{ t('show_them') }}</a>)</span></li>
+                                {% endif %}
+                            </ul>
+                        </details>
                     {% endif %}
-                    {# And for the taste ranking (#498): how many of these rows
-                       are scored against the CURRENT profile. Rendered only
-                       while a profile exists -- with none the feature is
-                       dormant and a "0 of N" would announce a ranking nobody
-                       has built. #}
-                    {# What the default criteria view hid, so a filter that
-                       hides cannot read as "these listings do not exist".
-                       Rendered only when something WAS hidden: a zero would
-                       be noise on every page load. #}
-                    {% if criteria_hidden_count is defined and criteria_hidden_count %}
-                        <span id="criteria-hidden-coverage" class="text-body-secondary small"
-                              title="{{ t('criteria_hidden_tooltip') }}">
-                            <i class="fas fa-filter me-1"></i>{{ t('criteria_hidden_line')|format(criteria_hidden_count) }}
-                        </span>
-                    {% endif %}
-                    {# The listings the owner turned down, withheld by the same
-                       standing policy and disclosed the same way -- a filter
-                       that hides silently reads as "these listings do not
-                       exist" (owner report 2026-09-07: property 1405, rejected,
-                       still sitting in the ranked suggestions). #}
-                    {% if rejected_hidden_count is defined and rejected_hidden_count %}
-                        <span id="rejected-hidden-coverage" class="text-body-secondary small"
-                              title="{{ t('rejected_hidden_tooltip') }}">
-                            <i class="fas fa-ban me-1"></i>{{ t('rejected_hidden_line')|format(rejected_hidden_count) }}
-                        </span>
-                    {% endif %}
-                    {# Publications of the same home folded into one row (#633):
-                       the same shape as the two hides above -- a count and the
-                       one link that reveals them. `duplicates=show` is the only
-                       reveal; there is no second control. #}
-                    {% if duplicates_folded_count is defined and duplicates_folded_count %}
-                        <span id="duplicates-folded-coverage" class="text-body-secondary small"
-                              title="{{ t('dup_fold_line_title') }}">
-                            <i class="fas fa-clone me-1"></i>{{ tn('dup_fold_line', duplicates_folded_count) }}
-                            (<a id="duplicates-show-link" href="{{ url_for('main.properties', **dict(base_args, duplicates='show', duplicate_of=None, page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">{{ t('show_them') }}</a>)
-                        </span>
-                    {% elif duplicates_skipped is defined and duplicates_skipped %}
-                        <span id="duplicates-fold-skipped" class="text-warning small">
+                    {# A selection too large to fold says so: without it the
+                       repeated publications read as a rule that stopped
+                       working. #}
+                    {% if not duplicates_folded_count and duplicates_skipped is defined and duplicates_skipped %}
+                        <span id="duplicates-fold-skipped" class="text-warning">
                             <i class="fas fa-clone me-1"></i>{{ t('dup_fold_skipped')|format(duplicates_skipped_limit) }}
                         </span>
                     {% endif %}
@@ -1568,7 +1608,7 @@
                        and the page comes back in id order -- which reads as a
                        broken control rather than an unavailable one. #}
                     {% if taste_sort_dormant is defined and taste_sort_dormant %}
-                        <span id="taste-sort-dormant" class="text-warning small"
+                        <span id="taste-sort-dormant" class="text-warning"
                               title="{{ t('taste_sort_dormant_tooltip') }}">
                             <i class="fas fa-clock-rotate-left me-1"></i>{{ t('taste_sort_dormant') }}
                         </span>
@@ -1584,7 +1624,7 @@
                        standing line about nothing. #}
                     {% if actions is defined and actions %}
                         {% for choice in actions if choice.value == 'overdue' and choice.count %}
-                            <span id="overdue-count-note" class="small">
+                            <span id="overdue-count-note">
                                 <a id="overdue-count-link" class="text-danger"
                                    href="{{ url_for('main.properties', **dict(base_args, action='overdue', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">
                                     <i class="fas fa-hourglass-end me-1"></i>{{ tn('review_overdue_link', choice.count) }}
@@ -1592,61 +1632,76 @@
                             </span>
                         {% endfor %}
                     {% endif %}
-                                    {% if recommendation_profile is defined and recommendation_profile %}
-                        {% set _rp = recommendation_profile %}
-                        <span id="recommendation-profile-status" class="small" data-recommendation-profile-state="{{ _rp.get('state', 'none') }}">
-                            {% if _rp.get('state') == 'current' %}
-                                <i class="fas fa-compass me-1"></i>{{ t('recommendation_profile_current')|format(_rp.get('positive_reference_count', 0), _rp.get('mapped_clause_count', 0)) }}
-                            {% elif _rp.get('state') == 'dirty' %}
-                                <i class="fas fa-clock-rotate-left me-1"></i>{{ t('recommendation_profile_dirty') }}
-                            {% elif _rp.get('state') == 'pending' %}
-                                <i class="fas fa-hourglass-half me-1"></i>{{ t('recommendation_profile_pending') }}
-                            {% elif _rp.get('state') == 'failed' %}
-                                <i class="fas fa-triangle-exclamation me-1"></i>{{ t('recommendation_profile_failed') }}
+                    {# The recommendations: one sentence and, when the owner
+                       can act on it, one button. The sentence says whether the
+                       rows on screen are the previous recommendations, so no
+                       second line repeats it. An up-to-date profile needs
+                       nobody's attention: outside the Recommendations
+                       collection its basis is read in the coverage panel. #}
+                    {% set _rp = recommendation_profile if recommendation_profile is defined and recommendation_profile else none %}
+                    {% set _rp_state = _rp.get('state', 'none') if _rp else none %}
+                    {% set _rp_quiet = _rp_state == 'current' and not _reco_collection and not _rp.get('model_profile_dirty') %}
+                    {% if _rp %}
+                        {% set _rp_status %}
+                        <span id="recommendation-profile-status" class="workspace-recommendation-state" data-recommendation-profile-state="{{ _rp_state }}"
+                              data-recommendation-previous="{{ 'true' if _rp.get('version') and _rp_state in ('dirty', 'pending', 'failed') else 'false' }}">
+                            {% if _rp_state == 'current' %}
+                                {{ t('recommendation_profile_current')|format(tn('recommendation_liked', _rp.get('positive_reference_count', 0)), tn('recommendation_preferences', _rp.get('mapped_clause_count', 0))) }}
+                            {% elif _rp_state == 'dirty' %}
+                                {{ t('recommendation_profile_dirty' if _rp.get('version') else 'recommendation_profile_dirty_first') }}
+                            {% elif _rp_state == 'pending' %}
+                                {{ t('recommendation_profile_pending' if _rp.get('version') else 'recommendation_profile_pending_first') }}
+                            {% elif _rp_state == 'failed' %}
+                                {{ t('recommendation_profile_failed' if _rp.get('version') else 'recommendation_profile_failed_first') }}
                             {% else %}
-                                <i class="fas fa-compass me-1"></i>{{ t('recommendation_profile_none') }}
+                                {{ t('recommendation_profile_none') }}
                             {% endif %}
+                            {# The taste score's own staleness is the same state,
+                               said in the same sentence -- not a second message
+                               about recommendations. #}
+                            {% if _rp.get('model_profile_dirty') %}<span id="model-profile-dirty">{{ t('recommendation_model_dirty') }}</span>{% endif %}
                         </span>
-                        {{ result_details_toggle() }}
-                        {% if _rp.get('unapplied_clauses') %}
-                            <details id="recommendation-unapplied-preferences" class="small collapse workspace-status-more">
-                                <summary>{{ t('recommendation_profile_unapplied')|format(_rp.unapplied_clauses|length) }}</summary>
-                                <ol class="mt-2 mb-0 text-break">
-                                    {% for clause in _rp.unapplied_clauses %}
-                                        <li>
-                                            {{ clause.text }}
-                                            {% if clause.source_property_id %}
-                                                <a href="{{ url_for('main.property_detail', property_id=clause.source_property_id) }}">#{{ clause.source_property_id }}</a>
-                                            {% endif %}
-                                            <div class="text-body-secondary">{{ clause.reason or t('recommendation_rule_unavailable') }}</div>
-                                        </li>
-                                    {% endfor %}
-                                </ol>
-                            </details>
-                        {% endif %}
-                        {% if _rp.get('model_profile_dirty') %}<span id="model-profile-dirty" class="small text-warning-emphasis">{{ t('recommendation_model_dirty') }}</span>{% endif %}
-                        {% if _rp.get('version') and _rp.get('state') in ('dirty', 'pending', 'failed') %}<span class="small collapse workspace-status-more">{{ t('workspace_previous') }}</span>{% endif %}
-                        {% if _rp.get('usable_signal_count', 0) and (_rp.get('state') in ('none', 'dirty', 'failed') or _rp.get('model_profile_dirty')) %}
-                            <form method="POST" action="{{ url_for('main.refresh_taste_recommendations') }}" class="d-inline collapse workspace-status-more"
-                                  onsubmit='return confirm({{ t("recommendation_refresh_confirm")|tojson }});'>
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                                <button id="recommendation-refresh-button" class="btn btn-outline-primary btn-sm" type="submit"
-                                        title="{{ t('recommendation_refresh_title') }}">
-                                    <i class="fas fa-rotate me-1"></i>{{ t('recommendation_refresh_button') }}
-                                </button>
-                            </form>
-                        {% endif %}
-                    {% else %}
-                        {{ result_details_toggle() }}
+                        {% endset %}
+                        {% if not _rp_quiet %}{{ _rp_status }}{% endif %}
                     {% endif %}
-                    {% if recommendation_excluded_count %}
-                        <span id="recommendation-hard-exclusions" class="text-body-secondary small">
-                            {{ t('recommendation_hard_exclusions')|format(recommendation_excluded_count) }}
-                        </span>
+                    {{ result_details_toggle() }}
+                    {% if _rp and _rp.get('usable_signal_count', 0) and (_rp_state in ('none', 'dirty', 'failed') or _rp.get('model_profile_dirty')) %}
+                        <form method="POST" action="{{ url_for('main.refresh_taste_recommendations') }}" class="d-inline collapse workspace-status-more"
+                              onsubmit='return confirm({{ t("recommendation_refresh_confirm")|tojson }});'>
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                            <button id="recommendation-refresh-button" class="btn btn-outline-primary btn-sm" type="submit"
+                                    title="{{ t('recommendation_refresh_title') }}">
+                                <i class="fas fa-rotate me-1"></i>{{ t('recommendation_refresh_button') }}
+                            </button>
+                        </form>
                     {% endif %}
             <details class="properties-coverage collapse workspace-status-more" id="properties-coverage">
                 <summary>{{ t('properties_coverage_details') }}</summary>
                 <div class="d-flex flex-column align-items-start gap-2 mt-2">
+                    {% if _rp and _rp_quiet %}{{ _rp_status }}{% endif %}
+                    {# The preferences no rule could apply, each with its own
+                       words, the listing it came from and the reason. #}
+                    {% if _rp and _rp.get('unapplied_clauses') %}
+                        <details id="recommendation-unapplied-preferences">
+                            <summary>{{ tn('recommendation_profile_unapplied', _rp.unapplied_clauses|length) }}</summary>
+                            <ol class="mt-2 mb-0 text-break">
+                                {% for clause in _rp.unapplied_clauses %}
+                                    <li>
+                                        {{ clause.text }}
+                                        {% if clause.source_property_id %}
+                                            <a href="{{ url_for('main.property_detail', property_id=clause.source_property_id) }}">#{{ clause.source_property_id }}</a>
+                                        {% endif %}
+                                        <div class="text-body-secondary">{{ clause.reason or t('recommendation_rule_unavailable') }}</div>
+                                    </li>
+                                {% endfor %}
+                            </ol>
+                        </details>
+                    {% endif %}
+                    {# The selection was widened to the listings with no
+                       subscription: said here, since nothing is kept back. #}
+                    {% if unassigned_count and profile_selection.include_unassigned %}
+                        <span id="unassigned-count-note">{{ tn('unassigned_included', unassigned_count) }}</span>
+                    {% endif %}
                     {# How many of those rows carry a status anybody established.
                        The other half of the disclosure the per-row badge cannot
                        make: an unchecked row shows no badge, and without this
@@ -1658,7 +1713,7 @@
                        template with nothing, and a "0 of 0 verified" there would
                        be a claim it cannot back up. #}
                     {% if listing_verified_count is defined and pagination %}
-                        <span id="listing-verification-coverage" class="text-body-secondary small"
+                        <span id="listing-verification-coverage"
                               title="{{ t('listing_status_coverage_tooltip') }}">
                             <i class="fas fa-circle-info me-1"></i>{{ t('listing_status_coverage')|format(listing_verified_count, pagination.total) }}
                         </span>
@@ -1670,7 +1725,7 @@
                        beside it, with the predicate `hazard_badge` reads
                        (services/hazard_service.py). #}
                     {% if hazard_scanned_count is defined and pagination %}
-                        <span id="hazard-scan-coverage" class="text-body-secondary small"
+                        <span id="hazard-scan-coverage"
                               title="{{ t('hazards_coverage_tooltip') }}">
                             <i class="fas fa-circle-info me-1"></i>{{ t('hazards_coverage')|format(hazard_scanned_count, pagination.total) }}
                         </span>
@@ -1685,27 +1740,27 @@
                        filtered set as the count beside it, same predicate the
                        `measured=full` filter uses. #}
                     {% if score_full_basis_count is defined and pagination %}
-                        <span id="score-basis-coverage" class="text-body-secondary small"
+                        <span id="score-basis-coverage"
                               title="{{ t('score_basis_coverage_tooltip') }}">
                             <i class="fas fa-circle-info me-1"></i>{{ t('score_basis_coverage')|format(score_full_basis_count, pagination.total) }}
                         </span>
                     {% endif %}
                     {% if taste_version is defined and taste_version and taste_scored_count is not none and pagination %}
-                        <span id="taste-coverage" class="text-body-secondary small"
+                        <span id="taste-coverage"
                               title="{{ t('taste_coverage_tooltip') }}">
                             <i class="fas fa-heart me-1"></i>{{ t('taste_coverage')|format(taste_scored_count, pagination.total, taste_version) }}
                         </span>
                     {% endif %}
                     {% if not similarity_notice %}{{ similarity_coverage() }}{% endif %}
                     {% if not selected_profile_id and profile_selection.withholds_profile_travel %}
-                        <span class="small text-body-secondary" id="profile-travel-notice">
+                        <span id="profile-travel-notice">
                             <i class="fas fa-circle-info me-1"></i>{{ profile_selection.travel_notice }}
                         </span>
                     {% endif %}
                 </div>
             </details></div>
             <p id="recommendation-entry-help" class="visually-hidden">{{ t('workspace_rank_explanation') }}</p>
-            {% if current_filters.favorites %}<p class="small text-body-secondary mb-2" id="recommendation-favorites-note">{{ t('workspace_favorites_clear_hint') }}</p>{% endif %}
+            {% if current_filters.favorites %}<p class="workspace-result-note" id="recommendation-favorites-note">{{ t('workspace_favorites_clear_hint') }}</p>{% endif %}
 
         </section>
 
