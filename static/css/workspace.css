@@ -307,7 +307,7 @@
     .workspace-data-table .col-price .workspace-price-cell .workspace-price-facts { margin: 0; }
     /* A label that wraps inside the photo column keeps the 40px target: two
        lines of 12px text are 36px, so the padding is the slack, not the box. */
-    .workspace-with-photo .workspace-row-details > summary { display: flex; align-items: center; padding-block: 2px; line-height: 1.5; }
+    .workspace-with-photo .workspace-row-details > summary { padding-block: 2px; line-height: 1.5; }
     .app-workspace .workspace-reason-cell .recommendation-reference-line .badge { padding-block: 2px; }
     .workspace-data-table .recommendation-reading { display: flex; flex-direction: column; gap: 2px; }
     .workspace-data-table .recommendation-reading > * { margin-top: 0; }

@@ -131,7 +131,11 @@ def effective(selector, prop, width, css=CSS):
     wrote, it does not compute specificity between *different* selectors, so a
     more specific rule added elsewhere is invisible to it. That hole is closed
     where it matters by `TestNothingElseDeclaresWhatTheRowsRelyOn`, which lists
-    every rule that may declare these properties."""
+    every rule that may declare these properties. What it cannot see, by
+    design: font sizes or `flex-direction` added to a selector it does not
+    read, attribute selectors, physical longhands other than the two that
+    test closes. Layout is proven by the browser measurement in the PR
+    (docs/rules/testing.md); this pins the stylesheet it was measured on."""
     value, important = None, False
     for conditions, selectors, declarations in _rules(css):
         if selector not in selectors or not _applies(conditions, width):
@@ -464,6 +468,11 @@ class TestTheObjectCell:
         assert effective(summary, "white-space", width) in (None, "normal")
         slim = ".workspace-with-photo .workspace-row-details > summary"
         assert effective(slim, "padding-block", width) == "2px"
+        # `display: flex` on a <summary> removes its native marker: the closed
+        # and open state of the disclosure would have no indicator (codex, 2).
+        assert effective(slim, "display", width) in (None, "list-item")
+        assert effective(summary, "list-style", width) is None
+        assert effective(summary, "list-style-type", width) is None
 
     @pytest.mark.parametrize("width", DESKTOP + TABLET)
     def test_the_thumbnail_is_short_enough_for_a_closed_row_to_be_dense(self, width):
@@ -636,21 +645,21 @@ class TestNothingElseDeclaresWhatTheRowsRelyOn:
     tests above lean on: the full list of rules allowed to declare them."""
 
     def test_only_the_known_rules_set_a_column_width(self):
-        found = declaring("width", r"\.col-(title|price|score|actions)$")
+        found = declaring("width", r"col-(title|price|score|actions)")
         assert sorted({selector for selector, _ in found}) == sorted(
             [f".workspace-data-table .{c}" for c in COLUMNS]
             + [f".workspace-data-table.recommendation-table .{c}" for c in COLUMNS]
         )
-        # base (4) + tablet (4) + tablet Recommended (4)
-        assert len(found) == 12
+        assert all(value.endswith("%") for _, value in found)
 
     def test_only_one_rule_sets_the_padding_of_a_row_cell(self):
         found = declaring("padding-block", r"tr > td$")
         assert {selector for selector, _ in found} == {
             ".app-workspace .workspace-data-table > tbody > tr > td"
         }
-        # table base, density, tablet, phone: every one of them in this file.
-        assert len(found) == 4
+        # A physical longhand would sidestep the logical ones read above.
+        for longhand in ("padding-top", "padding-bottom"):
+            assert declaring(longhand, r"tr > td") == []
 
     def test_nothing_hides_a_row_disclosure(self):
         for selector, value in declaring("display", r"workspace-row-details"):
