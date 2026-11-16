@@ -541,4 +541,17 @@
     .search-management-table thead { display: none; }
     .search-management-table tr { margin-bottom: var(--ui-space-4); border: 1px solid var(--bs-border-color); }
     .search-management-table td::before { content: attr(data-label); display: block; font-size: .75rem; color: var(--bs-secondary-color); }
+    /* The inflow table: a search is one card with its name across the top and
+       its periods in a grid under it, four in a line and two by two on a
+       phone -- stacked one per line, twenty searches were six phone screens.
+       The count's link covers its whole cell here, because a one-digit number
+       is not a target a finger can hit. */
+    .inflow-table tr { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: var(--ui-space-2); }
+    .inflow-table td { position: relative; width: auto; min-height: var(--ui-control-height); }
+    .inflow-table td:first-child { grid-column: 1 / -1; min-height: 0; }
+    .inflow-table td:first-child::before { content: none; }
+    .inflow-table td > a::after { content: ""; position: absolute; inset: 0; }
+}
+@media (max-width: 575.98px) {
+    .inflow-table tr { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
