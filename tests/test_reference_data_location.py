@@ -99,20 +99,29 @@ class TestFourListsOneSet:
             assert (REPO_ROOT / "data" / name).is_file(), name
 
 
-def _docker_build_or_skip() -> None:
-    probe = (
-        subprocess.run(
-            ["docker", "buildx", "version"], capture_output=True, text=True, timeout=30
+def _docker_answers(*args: str) -> bool:
+    """True when `docker <args>` exits 0 within the time allowed."""
+    if not shutil.which("docker"):
+        return False
+    try:
+        probe = subprocess.run(
+            ["docker", *args], capture_output=True, text=True, timeout=30
         )
-        if shutil.which("docker")
-        else None
-    )
-    if probe is not None and probe.returncode == 0:
+    except subprocess.TimeoutExpired:
+        return False
+    return probe.returncode == 0
+
+
+def _docker_build_or_skip() -> None:
+    # `buildx version` answers without a daemon, so it only says the client is
+    # installed; `docker info` is what says a build can run. A machine whose
+    # daemon is off on purpose (the MacBook) skips; CI never does.
+    if _docker_answers("buildx", "version") and _docker_answers("info"):
         return
     # CI is where the image is held to this; a skip there would be a green
     # run that built nothing.
     assert not os.environ.get("CI"), "CI must have docker build (BuildKit)"
-    pytest.skip("docker build is not installed")
+    pytest.skip("docker daemon is not running or buildx is missing")
 
 
 # What the deployment keeps in the directory the build runs beside: on the
