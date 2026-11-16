@@ -49,7 +49,7 @@ import pytest
 from flask import globals as flask_globals
 
 from config import Config
-from tests import data_dir_guard, network_guard, skip_guard
+from tests import data_dir_guard, jinja_cache, network_guard, skip_guard
 from utils.cache import cache as flask_cache
 
 
@@ -470,6 +470,7 @@ def pytest_configure(config: pytest.Config) -> None:
         }
     network_guard.install()
     skip_guard.reset()
+    jinja_cache.install()  # one compiled copy of each template per session (#687)
 
     # The state directory leaves the checkout for the whole session (#639).
     #
