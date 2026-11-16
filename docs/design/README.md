@@ -209,6 +209,11 @@ Rules that keep it that way:
   recommendation state that needs the owner stay in the visible line.
 - **The Decision select and Apply are never folded.** Search is; an applied
   search is still a visible chip.
+- **The Decision select says what is selected.** Where its label does not fit
+  beside the Filters trigger and Apply it takes a line of its own and the two
+  follow it: under 360px in every language, under 420px in Spanish (owner,
+  2026-11-16; "Decisión: sin rechazados" needs 189px and had 133-163px at
+  360-390px). The first listing starts 52px lower on those screens.
 - A row is one stacked summary: photo (72px) beside title, municipality and
   the location warning; facts; price and area; the three decision buttons
   **with their words** beside favourite and Open; the decision state; the

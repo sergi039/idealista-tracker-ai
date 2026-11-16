@@ -543,6 +543,20 @@
     .properties-queue-switch { flex: 1 1 100%; }
 }
 
+/* Spanish on a phone (owner, 2026-11-16; measured on production). "Decisión:
+   sin rechazados" needs 189px and was left 133px at 360px, 148px at 375px and
+   163px at 390px beside the Filters trigger and Apply ("Decisión: sin rec…");
+   the label fits beside them from 416px. Under 420px, in Spanish, the select
+   takes its own line and the two follow it, as it does under 360px in every
+   language. A fixed line rather than "as wide as its content": by content the
+   select kept the Filters trigger beside it and left Apply alone on the next
+   line. Scoped to the language on purpose: docs/design/README.md#phone-layout
+   allows the extra line for "Spanish labels", and in English the label fits
+   at the 390px the acceptance is measured at. */
+@media (max-width: 419.98px) {
+    html[lang="es"] .properties-queue-switch { flex: 1 1 100%; }
+}
+
 /* Subscription management keeps the same rows and controls at narrow widths. */
 .search-management-table { table-layout: auto; width: 100%; }
 .search-management-table td { overflow-wrap: anywhere; }
