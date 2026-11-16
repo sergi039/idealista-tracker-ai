@@ -33,6 +33,7 @@ from app import create_app, db
 from models import Property, SearchProfile
 from services import listing_attribute_filters as laf
 from tests import setup_test_environment
+from tests.test_row_density import effective
 
 # The asked range in every test below: 1 to 7 November 2026, inclusive.
 FROM, TO = "2026-11-01", "2026-11-07"
@@ -230,6 +231,39 @@ class TestTheControl:
         assert lower and upper, "the filter form has no date inputs"
         assert 'type="date"' in lower.group(0) and f'value="{FROM}"' in lower.group(0)
         assert 'type="date"' in upper.group(0) and f'value="{TO}"' in upper.group(0)
+
+    def test_the_pair_opens_the_grid_so_no_width_cuts_it_in_half(self, client):
+        """Measured on production (2026-11-16): tenth and eleventh of fourteen
+        fields, "from" closed a line and "until" opened the next at 1440px (five
+        columns) and at 375px (two). The grid wraps by width and the number of
+        fields before the pair depends on the subscription, so the one position
+        no width can split is the first: cells one and two share a line
+        wherever there are two columns."""
+        body = _page(client, "")
+        grid = re.search(
+            r'<div class="workspace-advanced-fields">(.*?)</details>', body, re.DOTALL
+        )
+        assert grid, "the filter form has no advanced-fields grid"
+        fields = re.findall(r'<(?:select|input)\b[^>]*\bname="(\w+)"', grid.group(1))
+        assert len(fields) > 2, "the grid drew too few fields to prove an order"
+        assert fields[:2] == ["added_from", "added_to"]
+
+    @pytest.mark.parametrize("width", (320, 375, 767))
+    def test_a_phone_draws_the_grid_in_exactly_two_columns(self, width):
+        assert (
+            effective(".workspace-advanced-fields", "grid-template-columns", width)
+            == "repeat(2, minmax(0, 1fr))"
+        )
+
+    @pytest.mark.parametrize("width", (768, 1440, 1920))
+    def test_a_wider_grid_fits_two_columns_in_its_narrowest_box(self, width):
+        """Above the phone rule the columns are as many as fit at 13rem each.
+        The narrowest box that rule ever lays out is the 768px page's, measured
+        at 712px; two columns and their gap need 428px."""
+        assert (
+            effective(".workspace-advanced-fields", "grid-template-columns", width)
+            == "repeat(auto-fit, minmax(13rem, 1fr))"
+        )
 
     def test_each_bound_is_a_removable_condition(self, client):
         """An applied condition stays visible outside the closed panel, and
