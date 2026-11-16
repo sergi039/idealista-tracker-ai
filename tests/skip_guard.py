@@ -51,8 +51,11 @@ ALLOWED: Dict[str, Tuple[str, ...]] = {
     # plugin and the tests FAIL there without it; a laptop with no Docker skips.
     "tests/test_data_dir_single_home.py": ("docker compose is not installed",),
     # Asks a real `docker build` what `.dockerignore` lets out of `data/`
-    # (#639). CI has BuildKit and the tests FAIL there without it.
-    "tests/test_reference_data_location.py": ("docker build is not installed",),
+    # (#639). CI has BuildKit and a daemon and the tests FAIL there without
+    # them; the MacBook keeps its daemon off on purpose and skips.
+    "tests/test_reference_data_location.py": (
+        "docker daemon is not running or buildx is missing",
+    ),
     # The row-decision script's pure logic runs under node, which CI does not
     # provision (tests/js_harness.py); skipped only when node is missing.
     "tests/test_owner_decision_logic.py": ("node executable not found",),

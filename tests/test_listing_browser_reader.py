@@ -326,7 +326,14 @@ def test_browser_shell_sends_validated_source_over_stdin_with_constant_ssh_argv(
         'import sys,json\nfrom pathlib import Path\nPath(sys.argv[1]).write_text(json.dumps({"argv":sys.argv[2:],"stdin":sys.stdin.read()}))\n'
     )
     browser = Path(__file__).resolve().parents[1] / "tools/browser.sh"
-    script = 'function /usr/bin/ssh() { "$TEST_PYTHON" "$TEST_CAPTURE" "$TEST_OUTPUT" "$@"; }; source "$1" "${@:2}"'
+    # tools/browser.sh reads locally when /bin/hostname is the MacBook, so the
+    # hostname is stubbed the same way ssh is: the ssh branch is the one under
+    # test on any machine, the MacBook included.
+    script = (
+        "function /bin/hostname() { echo test-host.invalid; }; "
+        'function /usr/bin/ssh() { "$TEST_PYTHON" "$TEST_CAPTURE" "$TEST_OUTPUT" "$@"; }; '
+        'source "$1" "${@:2}"'
+    )
     import os
 
     env = dict(
