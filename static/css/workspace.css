@@ -528,6 +528,21 @@
     .recommendation-table .workspace-row-details { justify-self: start; }
 }
 
+/* The narrowest phones (owner, 2026-11-16; measured on production at 320px).
+   Two halves of a 288px line are 136px each, and "Ocultar retirados" needs
+   154px with its padding, so its icon sat on the button's border: here the
+   two switches share the line by their content instead. And beside the
+   Filters trigger and Apply the Decision select was left 93px of the 189px
+   its label needs ("Decisió…"; 101px of 171px in English), which no longer
+   says what is selected: here it takes its own line and the two follow it.
+   From 360px the halves hold both labels and the select keeps its place in
+   the line (docs/design/README.md#phone-layout allows the extra line only
+   for "Spanish labels and a 320px screen"). */
+@media (max-width: 359.98px) {
+    .app-workspace #filters-card .scope-switch { flex: 1 1 auto; }
+    .properties-queue-switch { flex: 1 1 100%; }
+}
+
 /* Subscription management keeps the same rows and controls at narrow widths. */
 .search-management-table { table-layout: auto; width: 100%; }
 .search-management-table td { overflow-wrap: anywhere; }
