@@ -1040,6 +1040,34 @@
                     <details class="workspace-advanced-filters" id="additional-filters">
                         <summary>{{ icon('sliders') }}{{ t('workspace_filters') }}{% if applied.count %} · {{ applied.count }}{% endif %} {{ icon('chevron-down') }}</summary>
                         <div class="workspace-advanced-fields">
+                    {# When the listing was added to this app (`created_at`, the
+                       date the row prints under "Added" and the default sort
+                       reads), as two inclusive day bounds. It is the one date
+                       every source carries: an alert email, a pasted link and a
+                       research sheet all get it, while the email's own date
+                       exists for mail only. A row with no date matches neither
+                       bound (services/listing_attribute_filters.py). No `min` /
+                       `max` tie between the two inputs: they would be the
+                       APPLIED bounds, and would refuse a draft that moves the
+                       whole range earlier or later one field at a time.
+
+                       The pair is the grid's FIRST two cells on purpose
+                       (2026-11-16, the owner asked for the split fixed). The
+                       grid wraps wherever the width says, so a pair further in
+                       was cut in half -- "from" ending one line, "until"
+                       opening the next -- whenever "from" landed on a line's
+                       last cell: at 1440px and on a phone, measured on
+                       production. Cells one and two share a line wherever the
+                       grid draws two columns or more, and it never draws
+                       fewer (tests/test_added_date_filter.py pins both
+                       halves). A field added here goes after them. #}
+                    <label>{{ t('workspace_added_from') }}<input type="date" class="form-control form-control-sm properties-filter-select" id="added_from" name="added_from"
+                            value="{{ current_filters.added_from or '' }}"
+                            aria-label="{{ t('workspace_added_from') }}"></label>
+                    <label>{{ t('workspace_added_to') }}<input type="date" class="form-control form-control-sm properties-filter-select" id="added_to" name="added_to"
+                            value="{{ current_filters.added_to or '' }}"
+                            aria-label="{{ t('workspace_added_to') }}"></label>
+
                     <label>{{ t('type')|title }}
                         {# The choices come from the subscriptions on screen, not from
                            the whole table, so a saved search for land stops offering
@@ -1200,23 +1228,6 @@
                         <option value="" {{ 'selected' if not current_filters.measured }}>{{ t('measured_any') }}</option>
                         <option value="full" {{ 'selected' if current_filters.measured == 'full' }}>{{ t('measured_full') }}</option>
                     </select></label>
-
-                    {# When the listing was added to this app (`created_at`, the
-                       date the row prints under "Added" and the default sort
-                       reads), as two inclusive day bounds. It is the one date
-                       every source carries: an alert email, a pasted link and a
-                       research sheet all get it, while the email's own date
-                       exists for mail only. A row with no date matches neither
-                       bound (services/listing_attribute_filters.py). No `min` /
-                       `max` tie between the two inputs: they would be the
-                       APPLIED bounds, and would refuse a draft that moves the
-                       whole range earlier or later one field at a time. #}
-                    <label>{{ t('workspace_added_from') }}<input type="date" class="form-control form-control-sm properties-filter-select" id="added_from" name="added_from"
-                            value="{{ current_filters.added_from or '' }}"
-                            aria-label="{{ t('workspace_added_from') }}"></label>
-                    <label>{{ t('workspace_added_to') }}<input type="date" class="form-control form-control-sm properties-filter-select" id="added_to" name="added_to"
-                            value="{{ current_filters.added_to or '' }}"
-                            aria-label="{{ t('workspace_added_to') }}"></label>
 
                     {# The subscription's own criteria (house >= 150, plot >= 700).
                        Drawn only while some subscription carries criteria; the
