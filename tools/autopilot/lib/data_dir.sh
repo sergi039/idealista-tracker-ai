@@ -251,6 +251,12 @@ idealista_data_dir() {
     case "$value" in
         /) _data_dir_refuse "Compose would mount / at /app/data; refusing"; return 1 ;;
         *'$'*) _data_dir_refuse "Compose reports a state directory with a '\$' in it; refusing"; return 1 ;;
+        # A control character - a line break above all - would make the one
+        # exact line asked of grep below several patterns, or a path that is
+        # not the one it looks like. Refused before grep sees it. (A line
+        # break at the very end never reaches here: `$(...)` drops it, which
+        # is why the parser of Compose's answer refuses line breaks itself.)
+        *[[:cntrl:]]*) _data_dir_refuse "Compose reports a state directory with a control character in it; refusing"; return 1 ;;
         /*) ;;
         *)
             _data_dir_refuse "Compose reports a state directory that is not an absolute path"

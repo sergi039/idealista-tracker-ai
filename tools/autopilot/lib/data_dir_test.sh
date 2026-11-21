@@ -398,4 +398,22 @@ for answer in "$SECRET_PATH" "relative/hunter2" "${OTHER}" "${WORK}/a\$hunter2";
 done
 pass "no refusal quotes what Compose rendered"
 
+# 19. A control character in what Compose rendered (review of #694). The
+# review's input is a line break inside the path, held against Compose itself
+# in tests/test_data_dir_single_home.py. Here the two guards one at a time:
+# a line break at the END of the source, which `$(...)` would silently drop,
+# is the parser's to refuse; a tab inside the path is the reader's - and .env
+# says exactly that path, so nothing else would stop it.
+new_repo
+printf 'IDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
+printf '{"services":{"app":{"volumes":[{"type":"bind","source":"%s\\n","target":"/app/data"}]}}}\n' "$STATE" >"${WORK}/compose.json"
+resolve "$REPO"
+expect_refusal "a source that ends in a line break is refused" "exactly one host directory"
+TABBED="${WORK}/with$(printf '\t')tab"
+mkdir -p "$TABBED"
+printf 'IDEALISTA_DATA_DIR=%s\n' "$TABBED" >"${REPO}/.env"
+printf '{"services":{"app":{"volumes":[{"type":"bind","source":"%s/with\\ttab","target":"/app/data"}]}}}\n' "$WORK" >"${WORK}/compose.json"
+resolve "$REPO"
+expect_refusal "a source with a control character in it is refused" "control character"
+
 printf '\nALL %d PASSED (%s %s)\n' "$passed" "$SHELL_UNDER_TEST" "$("$SHELL_UNDER_TEST" -c 'echo $BASH_VERSION')"

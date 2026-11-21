@@ -604,6 +604,25 @@ def test_only_the_plain_line_is_an_answer(tmp_path, spelling):
     assert answer.returncode == 1 and answer.stdout == "", (spelling, answer.stdout)
 
 
+def test_a_value_that_renders_with_a_line_break_is_refused(tmp_path):
+    """Review of #694: `IDEALISTA_DATA_DIR="${STATE_ROOT}\\nMARKER="` with a
+    `MARKER=` line after it. Compose renders a directory whose path holds a
+    line break; as a `grep -F -x` pattern that is two lines, and the second is
+    in `.env` for every STATE_ROOT. Both directories exist; neither is given."""
+    _docker_compose_or_skip()
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    checkout = _stand_in_checkout(
+        tmp_path, compose, VARIABLE + '="${STATE_ROOT}\\nMARKER="\nMARKER='
+    )
+    for who in ("one", "two"):
+        state_root = tmp_path / who
+        rendered = f"{state_root}\nMARKER="
+        os.makedirs(rendered)
+        assert _what_compose_mounts(checkout, STATE_ROOT=str(state_root)) == rendered
+        answer = _resolve(checkout, STATE_ROOT=str(state_root))
+        assert answer.returncode == 1 and answer.stdout == "", answer.stdout
+
+
 def test_a_copy_of_the_example_env_file_is_answered(tmp_path):
     """`cp .env.example .env` is how a checkout gets its `.env`. Any mention
     of the variable there - a commented-out example too - is a mention the
