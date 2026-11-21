@@ -323,9 +323,9 @@ class TestYaencontreIngestion:
     def test_a_second_searchs_alert_is_journaled_on_the_stored_rows(
         self, app, uid_file, imap
     ):
-        """#632, end to end: the alert of ANOTHER saved search re-delivers ten
-        stored listings. Nothing is created and no row changes subscription;
-        each row's journal names the second search and the email."""
+        """#632, end to end: another saved search's alert re-delivers ten stored
+        listings. Nothing is created, no row changes subscription, and each
+        row's journal names the second search and the email."""
         body = (DATA / "yaencontre_alert_boiro.html").read_text()
         sender = "yaencontre <no-reply@envios.yaencontre.com>"
         subject = "Tenemos más inmuebles para tu búsqueda en Boiro (personalizada)"
@@ -346,8 +346,7 @@ class TestYaencontreIngestion:
             db.session.commit()
             galicia_id = galicia.id
 
-            # A later email, which now resolves to the new subscription. Read
-            # twice: the second read is the held-UID / full-sync re-read.
+            # A later email, resolving to the new subscription; read twice.
             _FakeIMAPClient.payloads = {2: _wrap_email(subject, body, sender)}
             for _ in range(2):
                 again = _service()

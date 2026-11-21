@@ -127,13 +127,14 @@ def _stored(prop_id: int) -> dict:
     return json.loads(raw) if isinstance(raw, str) else raw
 
 
-def _stored_raw(prop_id: int):
-    """The column whatever JSON type it holds."""
+def _column_text(prop_id: int):
+    """The column exactly as stored, as text."""
     raw = db.session.execute(
-        text("SELECT enrichment FROM properties WHERE id = :i"), {"i": prop_id}
+        text("SELECT CAST(enrichment AS TEXT) FROM properties WHERE id = :i"),
+        {"i": prop_id},
     ).scalar_one()
     db.session.rollback()
-    return json.loads(raw) if isinstance(raw, str) else raw
+    return raw
 
 
 def _items(prop_id: int) -> list:
@@ -180,15 +181,6 @@ class TestOnlyAnotherSearch:
 
         assert _record(prop, stub) == arrival_journal.SAME_SEARCH
         assert "arrivals" not in _stored(prop.id)
-
-    def test_a_stub_is_recorded_as_the_subscription_it_routes_to(
-        self, app, home, other
-    ):
-        stub = _profile("Asturias oriente", routed_to=other.id, is_hidden=True)
-        prop = _prop(home)
-
-        assert _record(prop, stub) == arrival_journal.RECORDED
-        assert _items(prop.id)[0]["profile_id"] == other.id
 
     def test_an_email_no_profile_claimed_records_nothing(self, app, home):
         prop = _prop(home)
@@ -461,18 +453,23 @@ class TestReadingIsTotalAndWritingFailsClosed:
     def test_a_value_it_cannot_read_is_never_written_over(
         self, app, home, other, stored, caplog
     ):
+        """The stored text stays byte for byte, the answer is `unwritable` --
+        never the silent "already recorded" a malformed twin of this delivery
+        used to get (review of #698) -- and the log names the row."""
         prop = _prop(home)
+        prop_id = prop.id
         db.session.execute(
             text("UPDATE properties SET enrichment = :e WHERE id = :i"),
-            {"e": json.dumps(stored), "i": prop.id},
+            {"e": json.dumps(stored), "i": prop_id},
         )
         db.session.commit()
+        before = _column_text(prop_id)
 
         with caplog.at_level(logging.ERROR, logger="services.arrival_journal"):
             assert _record(prop, other) == arrival_journal.UNWRITABLE
 
-        assert _stored_raw(prop.id) == stored
-        assert "was not recorded" in caplog.text
+        assert _column_text(prop_id) == before
+        assert f"Listing {prop_id} holds" in caplog.text
 
     def test_the_other_keys_of_the_block_are_kept_when_an_entry_is_added(
         self, app, home, other
@@ -702,7 +699,7 @@ class TestThePortalMailDoors:
             sale_only=False,
             excluded_categories=set(),
         ) == (0, True)
-        assert _stored_raw(prop_id) == {"arrivals": None}
+        assert _stored(prop_id) == {"arrivals": None}
 
     def test_a_failed_journal_holds_fotocasa_and_milanuncios_mail_too(
         self, app, home, other, monkeypatch

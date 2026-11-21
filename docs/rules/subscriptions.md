@@ -141,7 +141,12 @@ Its refusals are in the module's docstring and are load bearing: only ANOTHER
 search; one entry per delivery (portal + required email id); a bound; one
 writer whose guard is its first statement and whose decisions are made on
 the LOCKED row; a block never written over unless every part of it has the
-shape written. A journal that FAILS costs the email nothing it created: it
+shape written. **Consequence, on purpose:** a row whose block holds one
+malformed item records no further arrivals until somebody repairs the block
+by hand -- each attempt answers `unwritable`, logs an error naming the row,
+and the email is consumed. That replaced a silent loss: such an item used to
+make the delivery look "already recorded". A journal that FAILS costs the
+email nothing it created: it
 is logged, the loop goes on and the UID is held; an answer on the facts
 (unreadable block, no delivery id) is logged and the email is consumed.
 Idealista is unchanged: a second saved search still gets its own row.

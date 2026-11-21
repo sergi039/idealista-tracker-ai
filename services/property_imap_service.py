@@ -1524,9 +1524,8 @@ class PropertyIMAPService:
                 record_advertiser=False,
             ):
                 created += 1
-        # False only when the arrival journal failed for a stored card: the
-        # email is re-read, which is a no-op for every card (a price equal to
-        # the stored one changes nothing) except the entry that did not land.
+        # False only when the arrival journal failed for a stored card; the
+        # re-read is a no-op for everything that did land.
         return created, not self._arrival_failed
 
     def _ingest_milanuncios_email(

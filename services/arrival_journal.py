@@ -17,9 +17,8 @@ change (migration 030); nothing reads the journal yet except `read()`.
 
 An entry means: "an email that resolves to this subscription named a listing
 already stored under another one". After a full re-read of the mailbox that
-can be the listing's own first email, if matchers or routes changed since:
-true about where that alert belongs now, not a second delivery. `received_at`
-beside the row's `email_date` tells the two apart.
+can be the listing's own first email, if matchers or routes changed since;
+`received_at` beside the row's `email_date` tells the two apart.
 
 Five rules, each a refusal somebody would otherwise have to rediscover:
 
