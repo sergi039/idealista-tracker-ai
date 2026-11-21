@@ -13,6 +13,90 @@ must be an ancestor of `main`.
 
 ## Open
 
+### `tools/backup_attachments.sh` has no schedule
+
+- **Anchor:** `tools/backup_attachments.sh`; LaunchAgent
+  `com.idealista.db-backup` (the database only); `docs/rules/owner-review.md`
+  (attachments).
+- **Measured 2026-11-21** (#640): no LaunchAgent or crontab runs the script,
+  and no copy of the attachments exists under `~/IdealistaRank-backups`.
+  `property_attachment` has 0 rows and `data/attachments/` does not exist, so
+  nothing has been lost yet.
+- **What breaks, for whom:** the first document or photo the owner attaches
+  exists in one copy; the nightly dump carries its row but not its bytes, so a
+  restore gives a row whose file is in no archive.
+- **Check:** `launchctl list | grep idealista` shows `com.idealista.db-backup`
+  and no attachments agent.
+
+### The neighbour measurement is never shown to the owner
+
+- **Anchor:** `templates/property_detail.html` (no `enrichment["neighbours"]`
+  card; the only "neighbours" there is the hazards card, #437);
+  `services/neighbours_service.py` (`read_verdict`).
+- **Measured 2026-11-21** on production (#570): 19 rows `ok`, 4 `no_parcel`.
+  The block is read only by `services/neighbours_service.py`,
+  `services/taste_descriptors.py` and `utils/backfill_neighbours.py`.
+- **What breaks, for whom:** the owner presses Enrich, the measurement is
+  written and reaches the taste prompt, but neither the building counts nor a
+  `no_parcel` appear on the property page, although neighbours are his most
+  frequent rejection reason. Owner decision 2026-11-21: `neighbor_privacy`
+  stays `unknown`. Of the six rows rejected for neighbours, 970 and 1010 are
+  one listing whose parcel was established by hand on 2026-11-21
+  (15041A50405012: 1221 m² plot and 483 m² built, as listed); 971, 1759 and
+  3552 have no parcel; 976 has none either: the candidate found for it
+  (0302708NJ9400S, 2008 m² against 10,000 m² listed) was recorded and
+  removed the same day on the owner's decision of 2026-11-21. One parcel
+  gives no threshold; it returns when more measurable rejected rows exist.
+- **Check:** `grep -n neighbours templates/property_detail.html` finds only the
+  hazards card.
+
+### A stored score is a snapshot of the day it was written, and nothing refreshes it
+
+- **Anchor:** `services/property_scoring_service.py` (`calculate_for_property`);
+  `services/property_comparables.py` (`collect_comparables`);
+  `services/scheduler_service.py` (no scoring job).
+- **Measured 2026-11-11** on production, by rescoring every scored row with
+  no code or config change: 2598 of 3799 `score_total` values moved, mean
+  6.51 points, 1103 by more than 5, 35 from NULL to a value. 2213 of the
+  changed rows had last been scored in August or September. The size and
+  value components are ranks against a peer pool, and the pool had grown by
+  thousands of rows since. Scores are written at ingest, on an Enrich press
+  and on a weight save; nothing recomputes the rest.
+- **Also measured:** a row keeps the weights of the subscription it was scored
+  in. 108 rows scored with `pool_score` 0.1 now sit in subscriptions 24 and 27,
+  which carry no such weight (row 1299: 0.1 stored, 0.0 on rescore; the three
+  subscriptions that have the weight still have it).
+- **What breaks, for whom:** `/properties` sorted by score ranks the owner's
+  rows against a market months old, and against each other on unequal dates.
+  All rows were rescored once on the owner's command 2026-11-11 (snapshot
+  `data/scores_before_rescore_2026-11-11.json`); the drift starts again from
+  that day.
+
+### The row decision, the fold and the duplicates panel were never pressed in a browser
+
+- **Anchor:** `static/js/owner-decision.js`; `services/duplicate_fold.py`;
+  `POST /properties/<id>/duplicate-link`; `utils/listing_filter_memory.py`.
+- **State 2026-11-21:** #630 and #633 are covered by server tests and a node
+  test of the pure functions only. `tools/browser.sh` could not run on the
+  MacBook (`@playwright/cli@0.1.24` not installed there, and installing needs
+  the owner), and the mini may not run a browser.
+- **What breaks, for whom:** unknown, which is the finding: a click that fails
+  silently in the real page (the queue not shrinking, the back link losing the
+  row, the fold badge breaking a narrow row) would not turn any test red. PR
+  656 changed the same buttons in the recommendations mode afterwards.
+- **Check:** pressed once at two widths: a decision button on a New row (the
+  row leaves, the count drops by one); the Reviewed filter shows it; page 3,
+  open a listing, back (same page, same row); a "2 publications" badge and the
+  `duplicates=show` line; "different" then "undo" in the detail panel.
+
+### Row 3920 still carries the saved search's 150 m²
+
+- **Anchor:** `utils/repair_area_from_subject.py` (outcome `no_card`).
+- **Measured 2026-11-10:** #645's repair recovered 107 areas; 3920's stored
+  mail text has no card block at the row's price, so the tool refused to guess.
+- **What breaks, for whom:** one listing passes "house from 150 m²" on a number
+  that is the search's name, and its price per m² is wrong.
+
 ### Yaencontre rows have no plot source except the per-press cadastre
 
 - **Anchor:** `services/plot_text.py` (`apply_to_property`); `docs/rules/portal-network-safety.md`.

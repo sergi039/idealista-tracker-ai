@@ -298,3 +298,89 @@ Restore is the manual command in `MIGRATION_RUNBOOK.md` /
   the sign-in screen. Repeat it after any change to the Access policy, the
   tunnel or its ingress; nothing else is acceptance.
 - Another tunnel or proxy to this app without the same protection is forbidden.
+
+## Where the deployment's state lives (#639)
+
+The app container persists one directory, mounted at `/app/data`: the mail
+cursor and its retry list, the Google spend ledger, attachments, score
+snapshots, the in-flight markers. The deploy watcher keeps its own files next
+to them (`.deployed_sha`, the deferral count, the stall alarm, its logs, the
+review journal), because it has to read what a job writes inside the container.
+
+On the host that directory has **one home: `IDEALISTA_DATA_DIR` in the
+checkout's `.env`**. `docker-compose.yml` mounts `${IDEALISTA_DATA_DIR:-./data}`
+and every host tool asks `tools/autopilot/lib/data_dir.sh <repo>` -- the deploy
+watcher, `merge_bot.sh`, `autopilot.sh`, `run_issue.sh`,
+`tools/backfill_status.sh`, `tools/backfill_supervisor.sh` and
+`tools/backup_attachments.sh`. Unset, both answer `<repo>/data`, which is what
+all eight spelled out by hand before; so the variable existing changes nothing
+until a machine's `.env` sets it. **On the mini it is not set yet: the state is
+still inside the checkout, and moving it is a separate, owner-commanded step.**
+
+- The name is not `DATA_DIR` on purpose. `.env` is also the app service's
+  `env_file` and `config.py` reads `DATA_DIR`; a host path under that name
+  would become the directory the app writes *inside* the container. That side
+  stays `/app/data`, and every documented `--snapshot data/x.json` stays true.
+- **Compose decides where the state is, and the reader keeps no second
+  opinion.** It parses neither `docker-compose.yml` nor `.env`: a second
+  parser of either can disagree with Compose (a variable mentioned in a comment
+  after the real bind, `KEY: value`, a byte-order mark, a value inside another
+  key's quotes), and every such disagreement is a host tool looking at a
+  directory the app is not using. With the variable named nowhere the answer
+  is `<repo>/data`, and Docker is not asked. With its name anywhere in `.env`,
+  a comment included, the answer is what `docker compose -f docker-compose.yml config` binds at
+  `/app/data` for the `app` service, asked from the checkout the way the
+  watcher runs Compose.
+  An answer that is not exactly one existing host directory, or no Docker or
+  `python3` to ask with, is a refusal; nothing creates the directory and
+  nothing falls back to `<repo>/data`. A watcher tick that cannot resolve it
+  dies on stderr (`data/autopilot-deploy.launchd.log`) before it builds,
+  restarts or writes anything; such a tick is not counted by the stall alarm,
+  whose counter is a file in the directory that could not be named.
+  `tests/test_data_dir_single_home.py` holds the reader to Compose itself.
+- **Set in a process's environment, the variable is refused - set empty
+  included** (so are `COMPOSE_ENV_FILES` and `COMPOSE_DISABLE_ENV_FILE`, which
+  decide whether `.env` is read): Compose would follow an export only when run
+  from that process. An empty export is not "unset" to Compose: it outranks
+  `.env` and the mount renders `./data`. Measured on Compose v5.7; the other
+  switches (`COMPOSE_FILE` with `-f`, `COMPOSE_PROJECT_NAME`,
+  `COMPOSE_PROFILES`) do not move the mount, and a test asks Compose itself.
+- **Compose's answer counts only when it is the text of the one `.env`
+  line.** Three review findings on #678 were one class, "Compose's answer
+  depends on the process that asks": an export, `${X}/state` (from that
+  process's environment), `~/state` (from its `HOME`; measured: two HOMEs,
+  two existing directories). So the answer is taken only if it is, character
+  for character, `IDEALISTA_DATA_DIR=<answer>` on the one line that names the
+  variable. Whatever Compose derives from the asking process renders
+  something other than the text written; every answer given is therefore the
+  text of `.env`, the same for every process. The price: quotes, `export`, a
+  comment on the line, a trailing slash, a relative path or the name on two
+  lines are refused, and a watcher tick with such a `.env` stops before it
+  deploys. **A commented-out line counts as a mention too**: skipping
+  comments is a second parser of `.env`. With `NOTE='first line` /
+  `#' IDEALISTA_DATA_DIR=./state` the second line starts with `#`, and Compose
+  closes NOTE's value on it and sets the variable (review of #694, held
+  against Compose itself). So `.env.example` does not spell the name at all.
+- **A search of `.env` that failed is a refusal, not "not named".** grep ends
+  0 (found) or 1 (not found) when it ran; 2 or 127 is "could not look". Its
+  status and its count are both read.
+- **A linked git worktree is refused as a root** (its `.git` is a file): the
+  stack is not started from one, it has no `.env`, and its `data/` is nobody's
+  state. Run the host tools from the checkout the stack was started in. A
+  second clone or a plain copy of the checkout is not recognised.
+- The bind is written in the long form for `create_host_path: false`: a source
+  that does not exist is an error, not an empty directory the app starts on.
+- Not seen: an override file or a second compose file a person passes to
+  Compose by hand. The watcher passes `-f docker-compose.yml`, the file the
+  reader asks about; its `AUTOPILOT_COMPOSE_FILE` is a seam for the harnesses
+  that the installed LaunchAgent does not set, and a watcher run with another
+  file there deploys from a file the reader never asked.
+- Run it, do not source it: `"$(/bin/bash tools/autopilot/lib/data_dir.sh "$repo")"`.
+  It lives in `tools/autopilot/lib/`, so the watcher's handover parse gate
+  (#293) vets it before a fast-forward like the other contracts there.
+- A new host script that needs the directory asks the reader;
+  `tests/test_data_dir_single_home.py` fails on a ninth `${REPO_DIR}/data`.
+- What stays in the checkout's `data/` whatever the variable says: the four
+  committed reference files (`docs/rules/reference-data.md`),
+  `data/.orchestrator` (an agreement between sessions, not state) and the
+  launchd stdout logs, whose paths are fixed in the installed plists.
