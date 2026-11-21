@@ -154,6 +154,10 @@ What that means in practice:
 - The app must stay bound to loopback. `docker-compose.yml` publishes it as
   `127.0.0.1:5001:5001` — dropping that prefix exposes the whole database,
   the settings UI and the paid AI/enrichment endpoints to your network.
+- The one tunnel that reaches the app from outside is closed by Cloudflare
+  Access (the owner's home IP passes without a sign-in, any other IP gets the
+  sign-in screen; verified 2026-11-21). No other tunnel or proxy without the
+  same protection.
 - Browser API writes require the session-bound CSRF token rendered by the
   app. Fetch and HTMX callers send it automatically; programmatic writes need
   a matching session cookie and token. This does not replace access control.

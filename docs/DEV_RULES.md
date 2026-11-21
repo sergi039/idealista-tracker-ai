@@ -55,9 +55,13 @@ named differently.
 
 ## Hard rules
 
-- The app is published on **`127.0.0.1` only** — there is no authentication.
-  Change the port through `APP_HOST_PORT`; never widen the bind address, and
-  never put the app behind a tunnel or proxy without adding auth first.
+- The app is published on **`127.0.0.1` only** — there is no authentication
+  in the app. Change the port through `APP_HOST_PORT`; never widen the bind
+  address. One tunnel reaches it from outside, closed by Cloudflare Access (the
+  owner's home IP passes without a sign-in, any other IP gets the sign-in
+  screen; verified 2026-11-21 from an outside IP). Any other tunnel or proxy
+  without the same protection is forbidden, and a change to the Access policy
+  is re-checked from an outside IP.
 - Do not reintroduce a hard-coded `container_name`, network `name` or volume
   `name` in `docker-compose.yml`. `tests/test_isolation_rules.py` fails if the
   variables disappear, and it also fails if their defaults stop rendering
