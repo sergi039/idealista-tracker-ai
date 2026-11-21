@@ -1643,8 +1643,9 @@ class PropertySubscription(db.Model):
     The invariants are the database's (triggers in migration 030), because
     SQLite runs none of them: a membership never names a routed stub, the
     catch-all or the listing's own home, a route moves memberships with it,
-    and a subscription holding one cannot be deleted. Nothing writes or reads
-    this table yet.
+    and a subscription holding one cannot be deleted. A membership is
+    inserted or deleted, never updated: the database refuses an UPDATE of
+    either key column. Nothing writes or reads this table yet.
     """
 
     __tablename__ = "property_subscription"

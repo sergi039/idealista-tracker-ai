@@ -6,13 +6,11 @@
 --
 -- WHY A TABLE. A portal listing is one row whichever door it comes through
 -- (`<source>:<id>` is UNIQUE), so a second saved search that delivers it finds
--- the row and creates nothing. Until #632 it also recorded nothing: measured
--- on production 2026-11-21, 2501 portal rows and no way to tell from anything
--- stored how many of them a second search had delivered. A second row per
--- subscription (what the idealista path does) would split the owner's
--- verdict, favourite, timeline, attachments and paid enrichment across twins
--- that are never deleted; a JSON list could not be filtered without casting
--- stored JSON, and could not be kept on the right side of a route.
+-- the row and creates nothing. A second row per subscription (what the
+-- idealista path does) would split the owner's verdict, favourite, timeline,
+-- attachments and paid enrichment across twins that are never deleted; a JSON
+-- list could not be filtered without casting stored JSON, and could not be
+-- kept on the right side of a route.
 --
 -- THIS MIGRATION ADDS THE TABLE AND ITS INVARIANTS AND NOTHING READS IT YET.
 -- No writer exists until the next change, so the table is empty after this
@@ -22,41 +20,77 @@
 -- `docker exec` is a supported workflow, and the recovery path after a bad
 -- deploy is a roll-forward revert whose code may no longer know this table
 -- (the runner refuses to start an image that does not know an applied
--- migration, so the previous image is never the recovery). Four rules, each
--- enforced below whoever writes:
+-- migration, so the previous image is never the recovery).
+--
+-- A MEMBERSHIP IS INSERTED OR DELETED, NEVER RE-POINTED. An UPDATE of either
+-- key column is refused outright. That is what keeps the rules below to one
+-- door: every membership that exists got there through the INSERT triggers,
+-- the route's own move included.
 --
 -- 1. A membership never points at a routed stub. The properties trigger's own
 --    function, `canonicalize_search_profile()` (migrations 025-027), runs on
---    this table unchanged: it only reads and rewrites `NEW.search_profile_id`,
---    under the same ascending FOR KEY SHARE pair, so a membership written
---    against a stub lands on the stub's target and waits for a route decision
---    in flight exactly as a listing insert does. A BEFORE INSERT trigger runs
---    before ON CONFLICT picks its arbiter row, so `ON CONFLICT DO NOTHING`
---    sees the rewritten key.
+--    every INSERT here unchanged: it only reads and rewrites
+--    `NEW.search_profile_id`, under the same ascending FOR KEY SHARE pair, so
+--    a membership written against a stub lands on the stub's target and waits
+--    for a route decision in flight exactly as a listing insert does. A BEFORE
+--    INSERT trigger runs before ON CONFLICT picks its arbiter row, so
+--    `ON CONFLICT DO NOTHING` sees the rewritten key.
 -- 2. A route moves the stub's memberships with it, in the routing statement's
---    own transaction: AFTER UPDATE OF routed_to deletes the ones the target
---    already has (as the listing's home or as a membership) and re-points the
---    rest. "A stub holds nothing" stays true for both tables.
--- 3. A membership equal to the listing's home, or naming the catch-all, is
---    not stored. An insert of one is skipped (RETURN NULL: not an error, the
---    fact is already true or names no search at all), and a home that moves
---    onto a subscription the listing was already a member of drops that
---    membership. INSERT only for the skip, on purpose: skipping an UPDATE
---    would leave the old row in place, which for the route move in rule 2
---    means leaving a membership on a stub.
+--    own transaction: AFTER UPDATE OF routed_to re-INSERTS each of them
+--    against the target -- through rules 1 and 3, `ON CONFLICT DO NOTHING`
+--    for the ones the target already has -- and deletes the stub's rows. "A
+--    stub holds nothing" stays true for both tables.
+-- 3. A membership is never the listing's own home, and never the catch-all.
+--    The insert is skipped (RETURN NULL: not an error, the fact is already
+--    true or names no search at all), and a home that moves onto a
+--    subscription the listing already belonged to drops that membership.
+--
+--    The home is read UNDER A ROW LOCK on the listing, `FOR SHARE`, and the
+--    class is the whole point. The routing trigger takes FOR KEY SHARE on
+--    `search_profiles` because the writer it must wait for, `route_profile()`,
+--    announces itself with FOR UPDATE. Nothing announces a change of home: it
+--    is a plain `UPDATE properties`, which locks the row FOR NO KEY UPDATE --
+--    and FOR KEY SHARE does not conflict with that. FOR SHARE does. So:
+--      * home change first, membership insert second: the insert waits on the
+--        listing's row, and READ COMMITTED then hands it the row as committed
+--        -- the new home -- so a membership equal to it is skipped;
+--      * membership insert first, home change second: the UPDATE waits on the
+--        same row, and its AFTER trigger then sees the committed membership
+--        and deletes it.
+--    Without the lock both orders commit a membership equal to the home
+--    (review of #705). Lock order, for whoever adds a writer: a membership
+--    insert takes `search_profiles` (KEY SHARE, ascending pair) and then the
+--    listing's `properties` row (SHARE); a home change takes the `properties`
+--    row (NO KEY UPDATE), then `search_profiles` (KEY SHARE), then deletes
+--    membership rows. The two meet on one conflicting object, the listing's
+--    row: KEY SHARE does not conflict with KEY SHARE, and the insert's own
+--    row does not exist for the other side to wait on. One of each cannot
+--    deadlock. A route in flight is a third party and keeps the cycle it
+--    already had with a concurrent home change onto its pair (027): loud,
+--    detected, never a misfile.
 -- 4. A subscription that still holds a membership cannot be deleted: the
 --    profile-side foreign key is NO ACTION. The two code paths that delete a
 --    profile move or count memberships first; anything else is refused loudly
 --    instead of dropping a membership silently.
 --
+-- EVERY STATEMENT THAT COULD BREAK RULE 3, and what answers it:
+--   INSERT membership                 -> skipped under FOR SHARE (trigger b)
+--   INSERT racing a home change       -> the row lock above, both orders
+--   UPDATE membership key columns     -> refused
+--   UPDATE properties.search_profile_id -> the home trigger deletes the twin
+--   UPDATE search_profiles.routed_to  -> re-insert through trigger b
+--   INSERT properties                 -> no membership can exist yet (FK)
+--   DELETE on either table            -> cannot create the equality
+--   COPY / multi-row INSERT           -> row triggers fire per row
+--
 -- WHAT IS NOT CLOSED, stated so nobody assumes it: a raw
 -- `UPDATE search_profiles SET routed_to` without the FOR UPDATE protocol was
 -- never serialized against the canonicalizing trigger (027 says so for
 -- `properties`), so an insert that read the old route can still land a
--- membership on the stub; and the "equal to home" skip reads the home
--- unlocked, so a home move racing a membership insert can leave one redundant
--- row. Both are harmless to readers, which use set semantics (EXISTS / UNION),
--- and the next home write or route removes the row.
+-- membership on the stub; making another subscription the catch-all does not
+-- remove the memberships that already name it; and a session that disables
+-- triggers (`session_replication_role`) is outside every rule here. Readers
+-- use set semantics (EXISTS / UNION), so such a row is counted once.
 --
 -- Triggers on one table and event fire in name order, which is why the two
 -- BEFORE INSERT triggers below are named `..._a_...` and `..._b_...`: the
@@ -82,7 +116,7 @@ CREATE INDEX IF NOT EXISTS ix_property_subscription_search_profile_id
 DROP TRIGGER IF EXISTS trg_property_subscription_a_canonical_profile
     ON property_subscription;
 CREATE TRIGGER trg_property_subscription_a_canonical_profile
-    BEFORE INSERT OR UPDATE OF search_profile_id ON property_subscription
+    BEFORE INSERT ON property_subscription
     FOR EACH ROW EXECUTE FUNCTION canonicalize_search_profile();
 
 -- Rule 3, the insert half.
@@ -99,9 +133,11 @@ BEGIN
         RETURN NULL;
     END IF;
 
+    -- FOR SHARE, not FOR KEY SHARE: see rule 3 in the header.
     SELECT search_profile_id INTO home
         FROM properties
-        WHERE id = NEW.property_id;
+        WHERE id = NEW.property_id
+        FOR SHARE;
     IF home IS NOT DISTINCT FROM NEW.search_profile_id THEN
         RETURN NULL;
     END IF;
@@ -115,6 +151,28 @@ DROP TRIGGER IF EXISTS trg_property_subscription_b_skip_redundant
 CREATE TRIGGER trg_property_subscription_b_skip_redundant
     BEFORE INSERT ON property_subscription
     FOR EACH ROW EXECUTE FUNCTION skip_redundant_property_subscription();
+
+-- A membership is never re-pointed.
+CREATE OR REPLACE FUNCTION refuse_property_subscription_repoint()
+RETURNS trigger AS $$
+BEGIN
+    -- The USING MESSAGE form, as in migration 014: the ordinary form takes
+    -- percent placeholders, and a lone percent sign does not survive the
+    -- driver.
+    RAISE EXCEPTION USING
+        ERRCODE = 'restrict_violation',
+        MESSAGE = 'property_subscription (' || OLD.property_id || ', '
+            || OLD.search_profile_id
+            || ') cannot be re-pointed: a membership is inserted or deleted, '
+            || 'never updated';
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_property_subscription_key_is_never_updated
+    ON property_subscription;
+CREATE TRIGGER trg_property_subscription_key_is_never_updated
+    BEFORE UPDATE OF property_id, search_profile_id ON property_subscription
+    FOR EACH ROW EXECUTE FUNCTION refuse_property_subscription_repoint();
 
 -- Rule 3, the home half.
 CREATE OR REPLACE FUNCTION drop_property_subscription_equal_to_home()
@@ -139,23 +197,15 @@ CREATE TRIGGER trg_properties_home_drops_redundant_subscription
 CREATE OR REPLACE FUNCTION move_property_subscriptions_on_route()
 RETURNS trigger AS $$
 BEGIN
-    DELETE FROM property_subscription ps
-        WHERE ps.search_profile_id = NEW.id
-          AND (
-              EXISTS (
-                  SELECT 1 FROM properties p
-                  WHERE p.id = ps.property_id
-                    AND p.search_profile_id = NEW.routed_to
-              )
-              OR EXISTS (
-                  SELECT 1 FROM property_subscription other
-                  WHERE other.property_id = ps.property_id
-                    AND other.search_profile_id = NEW.routed_to
-              )
-          );
+    INSERT INTO property_subscription
+            (property_id, search_profile_id, first_seen_at, source)
+        SELECT ps.property_id, NEW.routed_to, ps.first_seen_at, ps.source
+            FROM property_subscription ps
+            WHERE ps.search_profile_id = NEW.id
+            ORDER BY ps.property_id
+        ON CONFLICT DO NOTHING;
 
-    UPDATE property_subscription
-        SET search_profile_id = NEW.routed_to
+    DELETE FROM property_subscription
         WHERE search_profile_id = NEW.id;
 
     RETURN NULL;

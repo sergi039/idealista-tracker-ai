@@ -127,12 +127,24 @@ curation SQL is a supported workflow and SQLite runs none of them: a
 membership written against a routed stub lands on the stub's target (the
 properties trigger's own `canonicalize_search_profile()`, same lock
 protocol); setting `routed_to` moves the stub's memberships in the routing
-statement's own transaction, dropping the ones the target already has; a
-membership naming the catch-all or the listing's own home is skipped, and a
-home that moves onto a subscription the listing already belonged to drops
-that membership; a subscription that still holds a membership cannot be
-deleted (the profile-side foreign key is NO ACTION on purpose). Nothing
-writes or reads the table yet: this is the schema alone.
+statement's own transaction by re-inserting them against the target through
+the same insert triggers and deleting the stub's rows; a membership naming
+the catch-all or the listing's own home is skipped, and a home that moves
+onto a subscription the listing already belonged to drops that membership; a
+subscription that still holds a membership cannot be deleted (the
+profile-side foreign key is NO ACTION on purpose).
+
+A membership is inserted or deleted, never re-pointed: an UPDATE of either
+key column is refused, so every row got there through the INSERT triggers
+(review of #705: an UPDATE path re-pointed a membership onto the listing's
+home). The insert reads the home under `FOR SHARE` on the listing's row, not
+`FOR KEY SHARE`: a home change is a plain `UPDATE properties`, which takes
+FOR NO KEY UPDATE, and only FOR SHARE conflicts with it. So a membership
+insert and a home change on the same listing serialize in either order, and
+neither order commits a membership equal to the home (two-session tests in
+`tests/test_postgres_migrations.py`). The migration header lists every
+statement that could break the rule and what answers it. Nothing writes or
+reads the table yet: this is the schema alone.
 
 `auto_route_from_pattern` lives on the TARGET (`^Galicia\s` on production's
 profile 24): a profile ingestion auto-creates whose name matches is born
