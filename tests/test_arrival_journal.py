@@ -14,8 +14,7 @@ a trace. `services/arrival_journal.py` now appends one entry to
 * the write discipline: the journal is re-read from the stored row, not from
   the copy in memory (the #339 shape), and a pending session is refused;
 * all four doors: fotocasa, milanuncios and yaencontre mail, the late
-  duplicate, and the paste-links confirm;
-* the read-only count, `utils/report_arrivals.py`.
+  duplicate, and the paste-links confirm.
 
 Not proved here: two processes racing for one row. The suite is one SQLite
 connection and SQLite ignores `FOR UPDATE`; what is proved is the half that
@@ -47,7 +46,6 @@ from services import (  # noqa: E402
 from services.enrichment_write import EnrichmentWriteContractError  # noqa: E402
 from services.fotocasa_source import parse_listing  # noqa: E402
 from services.property_imap_service import PropertyIMAPService  # noqa: E402
-from utils import report_arrivals  # noqa: E402
 
 DATA = pathlib.Path(__file__).parent / "data"
 FOTOCASA_URL = "https://www.fotocasa.es/en/buy/land/aviles/llaranes/190280914/d"
@@ -133,6 +131,15 @@ def _stored(prop_id: int) -> dict:
     db.session.rollback()
     if raw is None:
         return {}
+    return json.loads(raw) if isinstance(raw, str) else raw
+
+
+def _stored_raw(prop_id: int):
+    """The column whatever JSON type it holds."""
+    raw = db.session.execute(
+        text("SELECT enrichment FROM properties WHERE id = :i"), {"i": prop_id}
+    ).scalar_one()
+    db.session.rollback()
     return json.loads(raw) if isinstance(raw, str) else raw
 
 
@@ -246,12 +253,36 @@ class TestIdempotentAndBounded:
 
         _record(prop, other, ref="imap_7")
         _record(prop, other, ref="imap_8")
-        _record(prop, third, ref="imap_7")
+        _record(prop, third, ref="imap_9")
+        # The same id from another portal is another delivery.
+        _record(prop, third, ref="imap_9", source="milanuncios")
 
+        assert [(i["profile_id"], i["source"], i["ref"]) for i in _items(prop.id)] == [
+            (other.id, "fotocasa", "imap_7"),
+            (other.id, "fotocasa", "imap_8"),
+            (third.id, "fotocasa", "imap_9"),
+            (third.id, "milanuncios", "imap_9"),
+        ]
+
+    def test_a_replay_after_the_subscription_was_routed_is_still_one_delivery(
+        self, app, home, other
+    ):
+        """Review of #698: the key is the delivery, never the subscription.
+
+        `imap_7` arrives through `other`; `other` is then routed onto a third
+        subscription; the same UID is read again. It resolves to the third
+        subscription now, and it is still the email already recorded.
+        """
+        third = _profile("Cantabria")
+        prop = _prop(home)
+        assert _record(prop, other) == arrival_journal.RECORDED
+
+        other.routed_to = third.id
+        db.session.commit()
+
+        assert _record(prop, other) == arrival_journal.ALREADY_RECORDED
         assert [(i["profile_id"], i["ref"]) for i in _items(prop.id)] == [
-            (other.id, "imap_7"),
-            (other.id, "imap_8"),
-            (third.id, "imap_7"),
+            (other.id, "imap_7")
         ]
 
     def test_a_full_journal_says_truncated_and_stops_growing(
@@ -351,10 +382,120 @@ class TestTheWriteReadsTheStoredRow:
         db.session.rollback()
         assert "arrivals" not in _stored(prop.id)
 
-    def test_a_malformed_journal_reads_as_empty(self, app, home):
-        for block in (None, [], "x", {"items": "x"}, {"items": [1, "a"]}):
-            prop = Property(enrichment={"arrivals": block})
-            assert arrival_journal.read(prop) == {"items": [], "truncated": False}
+    def test_a_home_the_listing_has_left_is_another_search_again(
+        self, app, home, other
+    ):
+        """Review of #698, the inverse of the test above: the session still
+        holds home A, the stored row has moved to B, and A's alert arrives.
+        Judged from the copy that is "the same search" and the arrival is
+        lost; judged from the locked row it is a second search."""
+        prop = _prop(home)
+        home_id, other_id = home.id, other.id
+        assert prop.search_profile_id == home_id
+        db.session.execute(
+            text("UPDATE properties SET search_profile_id = :p WHERE id = :i"),
+            {"p": other_id, "i": prop.id},
+        )
+        assert prop.search_profile_id == home_id  # still the stale copy
+
+        assert _record(prop, home) == arrival_journal.RECORDED
+        assert [i["profile_id"] for i in _items(prop.id)] == [home_id]
+
+    def test_a_route_set_meanwhile_is_the_route_that_counts(self, app, home, other):
+        """The subscription is re-read too: it was routed onto the home behind
+        this session, so its alert is the home's own search now."""
+        prop = _prop(home)
+        assert other.routed_to is None
+        db.session.execute(
+            text("UPDATE search_profiles SET routed_to = :h WHERE id = :o"),
+            {"h": home.id, "o": other.id},
+        )
+        assert other.routed_to is None  # still the stale copy
+
+        assert _record(prop, other) == arrival_journal.SAME_SEARCH
+        assert "arrivals" not in _stored(prop.id)
+
+    def test_an_edit_pending_elsewhere_is_refused_before_any_lookup(
+        self, app, home, other
+    ):
+        """Review of #698: the guard runs before the first query.
+
+        An unrelated row carries an uncommitted edit and the subscription is
+        not loaded. Looking the subscription up autoflushes the edit, after
+        which the session looks clean and the journal's commit persists it.
+        """
+        prop = _prop(home)
+        unrelated = _prop(home, source_email_id="fotocasa:2")
+        unrelated_id, other_id = unrelated.id, other.id
+        assert (prop.search_profile_id, unrelated.title) == (home.id, "Arrival fixture")
+        db.session.expire(other)
+        unrelated.title = "an edit nobody committed"
+
+        with pytest.raises(EnrichmentWriteContractError):
+            arrival_journal.record(
+                prop,
+                profile_id=other_id,
+                source="fotocasa",
+                method=arrival_journal.METHOD_ALERT_EMAIL,
+                ref="imap_7",
+            )
+
+        db.session.rollback()
+        assert "arrivals" not in _stored(prop.id)
+        assert db.session.get(Property, unrelated_id).title == "Arrival fixture"
+
+
+class TestReadingIsTotalAndWritingFailsClosed:
+    def test_any_stored_value_reads_without_raising(self, app):
+        empty = {"items": [], "truncated": False}
+        for value in (["legacy"], "text", 7, {"arrivals": []}, {"arrivals": "x"}):
+            assert arrival_journal.read(Property(enrichment=value)) == {
+                **empty,
+                "readable": False,
+            }
+        assert arrival_journal.read(
+            Property(enrichment={"arrivals": {"items": "x"}})
+        ) == {**empty, "readable": False}
+        for value in (None, {}, {"sea": 1}):
+            assert arrival_journal.read(Property(enrichment=value)) == {
+                **empty,
+                "readable": True,
+            }
+
+    def test_only_well_formed_entries_are_handed_to_a_reader(self, app):
+        good = {"profile_id": 3, "source": "fotocasa", "ref": "imap_1"}
+        block = {"items": [1, "a", {}, {"profile_id": True}, good], "truncated": True}
+
+        assert arrival_journal.read(Property(enrichment={"arrivals": block})) == {
+            "items": [good],
+            "truncated": True,
+            "readable": True,
+        }
+
+    @pytest.mark.parametrize(
+        "stored", [["legacy"], {"arrivals": ["legacy"]}, {"arrivals": {"items": 1}}]
+    )
+    def test_a_value_it_cannot_read_is_never_written_over(
+        self, app, home, other, stored
+    ):
+        prop = _prop(home)
+        db.session.execute(
+            text("UPDATE properties SET enrichment = :e WHERE id = :i"),
+            {"e": json.dumps(stored), "i": prop.id},
+        )
+        db.session.commit()
+
+        assert _record(prop, other) == arrival_journal.UNWRITABLE
+        assert _stored_raw(prop.id) == stored
+
+    def test_odd_stored_entries_are_kept_when_one_is_added(self, app, home, other):
+        prop = _prop(home, enrichment={"arrivals": {"items": [1, {"note": "x"}]}})
+
+        assert _record(prop, other) == arrival_journal.RECORDED
+
+        items = _stored(prop.id)["arrivals"]["items"]
+        assert items[:2] == [1, {"note": "x"}]
+        assert items[2]["profile_id"] == other.id
 
 
 def _service() -> PropertyIMAPService:
@@ -597,112 +738,3 @@ class TestThePasteLinksDoor:
         (entry,) = _items(prop_id)
         assert entry["ref"] == f"import:{job_id}"
         assert entry["profile_id"] == other_id
-
-
-class _Row:
-    def __init__(self, row_id, home, items=None, truncated=False):
-        self.id = row_id
-        self.search_profile_id = home
-        self.enrichment = (
-            None
-            if items is None
-            else {"arrivals": {"items": items, "truncated": truncated}}
-        )
-
-
-def _item(profile_id, ref="imap_1", source="yaencontre"):
-    return {"profile_id": profile_id, "ref": ref, "source": source}
-
-
-class TestTheReadOnlyCount:
-    def test_it_counts_listings_entries_and_pairs(self):
-        rows = [
-            _Row(1, 24),
-            _Row(2, 24, [_item(7, "imap_1"), _item(7, "imap_2")]),
-            _Row(3, 1, [_item(24, "imap_3", "fotocasa"), _item(7, "imap_4")]),
-            _Row(4, 24, [_item(7, "imap_5")], truncated=True),
-        ]
-
-        report = report_arrivals.collect(rows, {1: None, 7: None, 24: None})
-
-        assert report["rows_scanned"] == 4
-        assert report["rows_with_a_journal"] == 3
-        assert report["rows_truncated"] == 1
-        assert report["entries"] == 5
-        assert report["entries_absorbed_by_a_later_route"] == 0
-        assert report["listings_delivered_by_a_second_search"] == 3
-        assert report["by_source"] == {"fotocasa": 1, "yaencontre": 4}
-        assert report["pairs"] == [
-            {
-                "home_profile_id": 24,
-                "arrival_profile_id": 7,
-                "listings": 2,
-                "entries": 3,
-            },
-            {
-                "home_profile_id": 1,
-                "arrival_profile_id": 24,
-                "listings": 1,
-                "entries": 1,
-            },
-            {
-                "home_profile_id": 1,
-                "arrival_profile_id": 7,
-                "listings": 1,
-                "entries": 1,
-            },
-        ]
-
-    def test_a_search_since_routed_onto_the_home_is_absorbed_not_counted(self):
-        rows = [_Row(1, 24, [_item(31), _item(7, "imap_2")])]
-
-        report = report_arrivals.collect(rows, {7: None, 24: None, 31: 24})
-
-        assert report["entries"] == 2
-        assert report["entries_absorbed_by_a_later_route"] == 1
-        assert report["listings_delivered_by_a_second_search"] == 1
-        assert [p["arrival_profile_id"] for p in report["pairs"]] == [7]
-
-    def test_a_row_whose_every_entry_was_absorbed_is_not_a_second_search(self):
-        rows = [_Row(1, 24, [_item(31)])]
-
-        report = report_arrivals.collect(rows, {24: None, 31: 24})
-
-        assert report["rows_with_a_journal"] == 1
-        assert report["listings_delivered_by_a_second_search"] == 0
-        assert report["pairs"] == []
-
-    def test_the_command_reads_the_table_and_writes_nothing(
-        self, app, home, other, capsys
-    ):
-        prop = _prop(home)
-        _record(prop, other)
-        before = _stored(prop.id)
-
-        assert report_arrivals.main(["--format", "json"], app=app) == 0
-
-        report = json.loads(capsys.readouterr().out)
-        assert report["rows_scanned"] == 1
-        assert report["listings_delivered_by_a_second_search"] == 1
-        assert report["pairs"] == [
-            {
-                "home_profile_id": home.id,
-                "arrival_profile_id": other.id,
-                "listings": 1,
-                "entries": 1,
-            }
-        ]
-        assert _stored(prop.id) == before
-
-    def test_the_text_output_names_the_subscriptions_and_its_blind_spots(
-        self, app, home, other, capsys
-    ):
-        prop = _prop(home)
-        _record(prop, other)
-
-        assert report_arrivals.main([], app=app) == 0
-
-        out = capsys.readouterr().out
-        assert "Listings a second search delivered:    1" in out
-        assert f"{home.id} Galicia costa <- {other.id} Asturias: 1, 1" in out
-        assert "Not counted" in out

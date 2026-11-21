@@ -137,20 +137,27 @@ paste-links confirm. An entry holds the subscription after
 
 It is deliberately not a membership: `search_profile_id` is untouched, so
 every filter, count, score, criteria verdict and the `routed_to` rule are what
-they were, and nothing reads the journal except `arrival_journal.read()` and
-the read-only `python -m utils.report_arrivals`. Production carries one live
+they were, and nothing reads the journal except `arrival_journal.read()` (a
+read-only count over it is a separate change). Production carries one live
 visible subscription, so a membership would change nothing on screen today;
-the reviewed plan for a membership table waits on the issue for a second one.
+the membership table is its own change (migration 030).
 
-Four refusals are load bearing. Only ANOTHER search is recorded: the row's own
+Five refusals are load bearing. Only ANOTHER search is recorded: the row's own
 home (two stubs routed onto one target included) is not a second
 subscription, and an email no profile claimed names none. One entry per
-(subscription, email id), so a held UID, a full sync or a second press of a
-confirm adds nothing. A journal stops at `MAX_ITEMS` and says `truncated`.
-And `record()` is the ONE writer, through `services/enrichment_write.py`,
-which is why every call site sits after its own commit and why a journal
-failure is not swallowed: it holds the UID. Idealista is unchanged: a second
-saved search still gets its own row (`tests/test_property_profile_dedup.py`).
+DELIVERY -- (portal, email id), not the subscription -- so a held UID, a full
+sync, a second press of a confirm, or a replay after the email's subscription
+was routed elsewhere adds nothing. A journal stops at `MAX_ITEMS` and says
+`truncated`. `record()` is the ONE writer, through
+`services/enrichment_write.py`: the pending-work guard runs before any query
+(a lookup can autoflush somebody's edit past it), and the home, the route and
+the journal are all read from the LOCKED row, because the copy in memory may
+hold a home the listing has left; every call site sits after its own commit,
+and a journal failure is not swallowed: it holds the UID. And `read()` is
+total: a column or block that is not this module's shape reads as "not
+readable" and `record()` will not write over it. Idealista is unchanged: a
+second saved search still gets its own row
+(`tests/test_property_profile_dedup.py`).
 
 **The owner's criteria are enforced here because no portal can express
 them.** He asks for a house of at least 150 m² on a plot of at least 700,
