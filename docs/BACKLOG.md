@@ -25,9 +25,12 @@ must be an ancestor of `main`.
   written and reaches the taste prompt, but neither the building counts nor a
   `no_parcel` appear on the property page, although neighbours are his most
   frequent rejection reason. Owner decision 2026-11-21: `neighbor_privacy`
-  stays `unknown`, because none of the six rows rejected for neighbours
-  (970, 971, 976, 1010, 1759, 3552) is measurable; a threshold returns when
-  measurable rejected rows exist.
+  stays `unknown`. Of the six rows rejected for neighbours, 970 and 1010 are
+  one listing whose parcel was established by hand on 2026-11-21
+  (15041A50405012: 1221 m² plot and 483 m² built, as listed); 971, 1759 and
+  3552 have no parcel; 976 carries only a probable one (0302708NJ9400S,
+  2008 m² against 10,000 m² listed). One parcel is not enough for a
+  threshold; it returns when measurable rejected rows exist.
 - **Check:** `grep -n neighbours templates/property_detail.html` finds only the
   hazards card.
 
