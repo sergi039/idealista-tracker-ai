@@ -27,7 +27,7 @@ from services import (
     yaencontre_source,
 )
 from services.settings_service import SettingsService
-from services import plot_text
+from services import arrival_journal, plot_text
 from services.search_profile_service import SearchProfileService
 from services.property_classification_service import PropertyClassificationService
 from utils.email_parser import EmailParser
@@ -1192,7 +1192,9 @@ class PropertyIMAPService:
             # Before the fetch, so a listing already here through either door
             # (this ingester or the paste-links import) costs no request and
             # no gate wait. The key both doors write is `fotocasa:<id>`.
-            if fotocasa_import.existing_by_listing_id(listing_id) is not None:
+            known = fotocasa_import.existing_by_listing_id(listing_id)
+            if known is not None:
+                self._record_arrival(known, "fotocasa", email_data)
                 continue
 
             if self._portal_fetching_stopped("fotocasa", email_data):
@@ -1308,10 +1310,39 @@ class PropertyIMAPService:
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
+            # A concurrent writer stored this listing a moment ago. For the
+            # journal that is the same event as finding it stored (#632).
+            known = fotocasa_import.existing_by_listing_id(
+                int(row["listing_id"]), source
+            )
+            if known is not None:
+                self._record_arrival(known, source, email_data)
             return False
 
         self._enrich_new_property(prop)
         return True
+
+    def _record_arrival(
+        self, prop: Property, source: str, email_data: Dict[str, Any]
+    ) -> None:
+        """Note that this email's saved search delivered a listing already stored.
+
+        The row is not touched beyond its journal (#632,
+        `services/arrival_journal.py`): no fetch, no `search_profile_id`
+        change. A failure is not swallowed -- it reaches `run_ingestion`'s
+        own branch, which holds the UID, and the re-read is a no-op for every
+        entry that did land.
+        """
+        arrival_journal.record(
+            prop,
+            profile_id=email_data.get("search_profile_id"),
+            source=source,
+            method=arrival_journal.METHOD_ALERT_EMAIL,
+            ref=email_data.get("source_email_id"),
+            received_at=self._parse_email_received_at(
+                email_data.get("email_received_at")
+            ),
+        )
 
     @staticmethod
     def _apply_price_update(
@@ -1422,6 +1453,9 @@ class PropertyIMAPService:
                     self._rescore_after_price_update([known], known.id)
                     db.session.commit()
                     self.portal_price_updated_count += 1
+                # After the price commit: the journal owns its transaction
+                # and refuses a session with anything pending.
+                self._record_arrival(known, yaencontre_source.SOURCE_NAME, email_data)
                 continue
             if self._create_portal_row(
                 dict(card),
@@ -1478,12 +1512,11 @@ class PropertyIMAPService:
             if listing_id is None or listing_id in seen_ids:
                 continue
             seen_ids.add(listing_id)
-            if (
-                fotocasa_import.existing_by_listing_id(
-                    listing_id, milanuncios_source.SOURCE_NAME
-                )
-                is not None
-            ):
+            known = fotocasa_import.existing_by_listing_id(
+                listing_id, milanuncios_source.SOURCE_NAME
+            )
+            if known is not None:
+                self._record_arrival(known, milanuncios_source.SOURCE_NAME, email_data)
                 continue
 
             row = milanuncios_source.fetch_listing(target, session=http)
