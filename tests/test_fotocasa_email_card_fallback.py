@@ -14,6 +14,7 @@ card's municipality is kept, the page's other fields complete the row.
 """
 
 import pathlib
+import time
 from datetime import datetime, timezone
 from email.message import EmailMessage
 
@@ -217,6 +218,29 @@ class TestCardParser:
         )
         (card,) = cards_in_email(html)
         assert card.price is None
+
+    def test_a_strike_on_the_anchor_itself_is_a_previous_price(self):
+        """The style can sit on the anchor, not inside it: the struck amount
+        and the asking one are two anchors of one listing."""
+        struck = (
+            _card_html(190280904)
+            .replace('<a href="', '<a style="text-decoration:line-through" href="', 2)
+            .replace("295.000 €", "320.000 €", 1)
+        )
+        (card,) = cards_in_email(struck)
+        assert card.price != 320000.0
+
+    def test_a_hostile_body_is_read_in_linear_time(self):
+        """Anchors opened and never closed must not make the read quadratic."""
+        hostile = '<a href="x" ' * 8000 + _card_html(190280905)
+        started = time.monotonic()
+        cards = cards_in_email(hostile)
+        assert time.monotonic() - started < 5
+        assert [c.listing_id for c in cards] == [190280905]
+
+    def test_an_oversized_body_is_not_read_for_cards(self):
+        body = _card_html(190280906) + " " * fotocasa_source.MAX_ALERT_BODY_CHARS
+        assert cards_in_email(body) == []
 
     def test_one_card_per_listing_in_email_order(self):
         cards = cards_in_email(_card_html(190280911) + _card_html(190280912))

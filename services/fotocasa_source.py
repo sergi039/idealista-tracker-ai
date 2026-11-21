@@ -220,10 +220,16 @@ def listing_urls_in_text(text: Optional[str]) -> List[str]:
     return found
 
 
-_ANCHOR = re.compile(
-    r'<a\b[^>]*href="(?P<href>[^"]+)"[^>]*>(?P<inner>.*?)</a>',
-    re.IGNORECASE | re.DOTALL,
+# One anchor, read from its own chunk of the text (see `_anchors`): a pattern
+# that searched the whole body for `<a ... </a>` backtracks quadratically on a
+# body that opens anchors it never closes.
+_ANCHOR_OPEN = re.compile(
+    r"<a\b(?P<attrs>[^>]*)>(?P<inner>.*)", re.IGNORECASE | re.DOTALL
 )
+_ANCHOR_START = re.compile(r"<a\b", re.IGNORECASE)
+_HREF = re.compile(r'\bhref="(?P<href>[^"]+)"', re.IGNORECASE)
+# Beyond this an alert body is not read for cards: a real one is ~70 KB.
+MAX_ALERT_BODY_CHARS = 2_000_000
 _PRICE_TEXT = re.compile(r"[0-9][0-9.,]*\s*€")
 _STRUCK = re.compile(r"\bline-through\b|<(?:s|del|strike)\b", re.IGNORECASE)
 _FACTS_TEXT = re.compile(r"\d\s*(?:m²|m2|habs?\b|baños?\b)", re.IGNORECASE)
@@ -298,6 +304,35 @@ def _split_heading(heading: str) -> tuple[Optional[str], Optional[str]]:
     return (head.strip() or None), (tail.strip() or None)
 
 
+def _anchors(body: str):
+    """`(href, whole anchor markup, inner markup)` for every closed anchor.
+
+    One pass over the text split at each `</a>`, taking the last `<a` of each
+    chunk: linear however many anchors a hostile body opens and never closes.
+    The whole markup is returned because a strike-through can sit on the
+    anchor's own style as well as inside it.
+    """
+    if len(body) > MAX_ALERT_BODY_CHARS:
+        logger.warning("Alert body of %d characters is not read for cards", len(body))
+        return
+    for chunk in body.split("</a>")[:-1]:
+        starts = [m.start() for m in _ANCHOR_START.finditer(chunk)]
+        if not starts:
+            continue
+        start = starts[-1]
+        opened = _ANCHOR_OPEN.match(chunk, start)
+        if opened is None:
+            continue
+        found = _HREF.search(opened.group("attrs"))
+        if found is None:
+            continue
+        yield (
+            html_entities.unescape(found.group("href")),
+            chunk[start:],
+            opened.group("inner"),
+        )
+
+
 def cards_in_email(body: Optional[str]) -> List[FotocasaCard]:
     """Every listing card in a fotocasa alert email body, one per listing id.
 
@@ -312,17 +347,15 @@ def cards_in_email(body: Optional[str]) -> List[FotocasaCard]:
     """
     lines: Dict[int, List[tuple[str, str]]] = {}
     hrefs: Dict[int, str] = {}
-    for match in _ANCHOR.finditer(body or ""):
-        href = html_entities.unescape(match.group("href"))
+    for href, markup, inner in _anchors(body or ""):
         listing_id = listing_id_from_url(href)
         if listing_id is None:
             continue
         hrefs.setdefault(listing_id, href)
-        text = _text_of(match.group("inner"))
+        text = _text_of(inner)
+        lines.setdefault(listing_id, [])
         if text:
-            lines.setdefault(listing_id, []).append((text, match.group("inner")))
-        else:
-            lines.setdefault(listing_id, [])
+            lines[listing_id].append((text, markup))
 
     cards: List[FotocasaCard] = []
     for listing_id, href in hrefs.items():
