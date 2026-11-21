@@ -247,8 +247,10 @@ row removed.
 alert does not touch it. Rows are found by `enrichment.import.email_only = true`
 and `enrichment.import.method = 'alert_email_card'` (a later change, with its own
 review, fills them from a page that answers). The municipality is kept only when
-INE knows the name (`municipality_codes.match`); a district is unknown, never
-stored. **Emails on the retry list before this shipped stay on the old rule**
+INE knows the name (`municipality_codes.match`) **and the link's own municipality
+segment names it** (a district can share a name with another place's
+municipality); otherwise it is unknown, never stored. Two different unstruck
+prices on one card (or a struck one we cannot tell apart) leave the price unknown. **Emails on the retry list before this shipped stay on the old rule**
 until the owner sets `FOTOCASA_EMAIL_CARD_FOR_HELD=true` (default false); they
 are told apart by a stamp, not membership: entries created since carry
 `card_fallback_aware` (`HeldUids.hold(stamp=...)`, written once), so an email
