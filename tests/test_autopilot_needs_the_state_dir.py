@@ -91,8 +91,9 @@ def _run(tmp_path: Path, checkout: Path, staged: Path, script: str):
 
 
 def _refuses(checkout: Path, tmp_path: Path) -> None:
-    """docker-compose.yml does not read the variable yet, so naming it is
-    refused. The directory it names exists: following it would be possible."""
+    """The variable is named, so the reader asks Compose - and the stub
+    answers nothing. The directory `.env` names exists: taking the file's
+    word for it instead of Compose's would be possible."""
     state = tmp_path / "state"
     state.mkdir()
     (checkout / ".env").write_text(f"DB_PASSWORD=x\nIDEALISTA_DATA_DIR={state}\n")
@@ -142,10 +143,15 @@ def test_without_an_answer_the_script_stops_before_it_touches_anything(
 
     assert result.returncode == 1, (result.stdout, result.stderr)
     assert "refusing to run" in result.stderr, result.stderr
-    assert not calls.exists(), calls.read_text()
+    # The reader's own question to Compose is the one command allowed: it is
+    # how a named variable is resolved, it renders a file and starts nothing.
+    called = calls.read_text().splitlines() if calls.exists() else []
+    assert [
+        c for c in called if not (c.startswith("docker compose ") and " config " in c)
+    ] == [], called
     # Nothing written: not in <checkout>/data on a guess, not in the directory
     # the variable names, not anywhere else under the run's own root.
-    after = [p for p in _tree(tmp_path) if not p.startswith("bin")]
+    after = [p for p in _tree(tmp_path) if not p.startswith(("bin", "calls.log"))]
     assert after == before
 
 
