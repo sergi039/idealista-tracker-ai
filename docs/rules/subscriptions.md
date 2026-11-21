@@ -173,21 +173,44 @@ things about it are load bearing:
   *returned in this press* (`ok`, the subject still the row's, a reference;
   never a stored block from an earlier press: a lookup that raised or was
   refused answers `kept_previous` or nothing, and nothing is written) and writes the polygon area -- already compared with Catastro's declared
-  `areaValue` -- to `plot_area`, with `enrichment["plot_from_cadastre"]`
-  (value, reference, source, extractor version, subject, UTC time). It starts no
-  Catastro request (the metric outline is read from the cache the neighbour step
-  just filled, under `lookup_budget(0)`; a miss leaves the plot `unknown` until
-  the next press), no command line, no sweep: one row per press, and the route is 5 a minute. Only a
-  house (not a flat, not a row of unknown kind); a plot somebody stated is never
-  overwritten, asked again under the row lock; a refusal or an unplaced parcel
-  writes nothing and stays `unknown`. **What it cannot know**: a parcel is not
-  always the plot a listing sells (a property of two parcels reads small, a
-  house sold with part of a finca reads large) -- the block names the reference
-  so the figure can be checked. **Its reach is small and measured**: on
-  production 2026-11-21, of the 1,831 plot-`unknown` rows of subscription 24
-  that pass price and house size, 22 carry a `precise` coordinate and 1 a
-  cadastral reference; the other 1,809 are locality centres or privacy circles,
-  which this app never turns into a parcel.
+  `areaValue` and **rounded down** to the column's 0.01, so a 699.96 m2 parcel
+  never reads 700 -- to `plot_area`, with `enrichment["plot_from_cadastre"]`
+  (value as text, parcel reference, source, extractor version, subject, UTC
+  time). It starts no Catastro request (the metric outline is read from the
+  cache the neighbour step just filled, under `lookup_budget(0)`; a miss leaves
+  the plot `unknown` until the next press), no command line, no sweep: one row
+  per press, and the route is 5 a minute. Only a house (not a flat, not a row of
+  unknown kind); a plot somebody stated is never overwritten, asked again under
+  the row lock; a refusal or an unplaced parcel writes nothing and stays
+  `unknown`. **A value lives only as long as its subject**: while `plot_area`
+  still equals the block's value and the row's subject (`neighbours.subject`:
+  reference, coordinate, accuracy, asked address, municipality) or its kind has
+  changed, the plot is taken back (NULL, block removed) under the row lock --
+  by the next Enrich press even when Catastro is silent, and at once, in the
+  same transaction, by every writer of the reference: the route
+  `POST /properties/<id>/cadastre` (a new number, an empty field, the
+  "Catastro did not answer" branch) and `cadastre_service.apply_to_property`.
+  A press that also establishes the new parcel writes its area in the same
+  commit. Not closed between presses, on purpose: a coordinate, accuracy or
+  address changed by a CLI (`refresh_coordinates`, `refresh_property_accuracy`)
+  or the one-off `import_review_notes` -- the next press retires it, and the
+  value is only ever `unknown` or a measured figure, never a guess. A plot that
+  is not the block's value (stated, hand-set, from the text, typed over ours) is
+  never touched. **What it cannot know, in both directions**: one parcel is not
+  always the plot a listing sells. It **overstates** the plot when several units
+  stand on the parcel, and it **understates** it when the property lies on
+  several parcels (usual in rural Galicia) -- and then a row can move from
+  `unknown` to `fail` on the plot criterion. On `/properties` such a row is
+  hidden by the default criteria filter like any measured fail: it is counted
+  in the "Criteria: N failing hidden" line, which links to "show everything"
+  (a favorited or reviewed row is never hidden). The source
+  (`catastro_inspire_parcel`) and the parcel number are on record in the row's
+  `enrichment["plot_from_cadastre"]` (it is in the API's `enrichment`; no page
+  renders it today), so the figure can be checked against the Catastro viewer. **Its reach is small and
+  measured**: on production 2026-11-21, of the 1,831 plot-`unknown` rows of
+  subscription 24 that pass price and house size, 22 carry a `precise`
+  coordinate and 1 a cadastral reference; the other 1,809 are locality centres
+  or privacy circles, which this app never turns into a parcel.
 * **A row the owner has judged is never hidden.** Favorited or reviewed
   beats the filter: a listing somebody already decided about must not
   vanish because a bound says so.
