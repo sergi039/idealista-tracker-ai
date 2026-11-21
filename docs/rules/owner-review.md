@@ -191,7 +191,10 @@ through every `pg_dump`. Four rules:
   *moves* rather than deletes. `tools/backup_attachments.sh` exists because
   "back up this app" stopped meaning one `pg_dump`: the dump goes first and the
   bytes second, since the other order puts a row in the backup whose file is in
-  no archive.
+  no archive. As of 2026-11-21 the script has no schedule (the nightly
+  LaunchAgent dumps the database only) and production holds no attachments yet
+  (`property_attachment` has 0 rows), so there is nothing to copy; schedule it
+  with the first upload.
 
 **774's own thread was converted on production on 2026-08-20**
 (`utils/import_review_notes.py`, snapshot at
