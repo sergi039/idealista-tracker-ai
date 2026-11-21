@@ -58,10 +58,8 @@ logger = logging.getLogger(__name__)
 # purpose: a portal that is refusing answers three times and the run stops
 # asking it, so a long list must not crowd new mail out of the batch.
 HELD_RETRY_MAX_PER_RUN = 20
-# Written on every entry created from now on (`HeldUids.hold(stamp=...)`): the
-# email was first held by a run that already stores a fotocasa listing from its
-# card (#636). An entry without it was waiting before that shipped, and what
-# becomes of those is the owner's call (`FOTOCASA_EMAIL_CARD_FOR_HELD`).
+# Stamped on every retry-list entry created since the card fallback shipped
+# (#636); an entry without it is older, and the owner decides about those.
 HELD_STAMP = {"card_fallback_aware": True}
 # How many held UIDs the run's history line names before it says "...".
 HELD_UIDS_SHOWN = 10
@@ -1163,36 +1161,22 @@ class PropertyIMAPService:
     ) -> tuple[int, bool]:
         """Create rows for the fotocasa listings one alert email names.
 
-        Returns ``(created, all_done)``. ``all_done=False`` means a listing
-        could be stored neither from its page nor from the email's own card,
-        so the caller must hold the UID cursor behind this email and let the
-        next run re-read it, exactly as #24 holds it for an idealista email
-        that raised. Every row committed before is safe to re-meet: the
-        `fotocasa:<id>` dedup key makes the re-run skip it without a fetch.
+        Returns ``(created, all_done)``; ``all_done=False`` means a listing
+        could be stored neither from its page nor from the email's card, so
+        the caller holds the UID (#24). Rows committed before a failure are
+        skipped on the re-run by the `fotocasa:<id>` key.
 
-        The page comes first and supplies every field, through the same
-        `preview_row`/`build_property` pair the paste-links import uses --
-        one builder, so the doors cannot disagree about the dedup key, the
-        NULL `listing_status_source` or the portal pin.
-
-        **A page that cannot be read does not hold the email any more** (#636,
-        owner decision 2026-11-21): fotocasa's "SENTIMOS LA INTERRUPCIÓN"
-        block (a 200), a timeout, an HTTP error, a payload this parser cannot
-        read, or a run that stopped asking after
-        `PORTAL_MAX_CONSECUTIVE_REFUSALS` -- in each the listing is stored from
-        the email's card (price, heading, facts, link; the way yaencontre
-        always is), marked `email_only`, and a later page read completes that
-        same row (`complete_from_page`) rather than adding a second. A refusal
-        is never read as "gone". Without a card (an email this parser could not
-        read a listing out of) the old rule stands and the email is held.
-        Held emails are left on their old rule until the owner enables
-        `FOTOCASA_EMAIL_CARD_FOR_HELD`.
-
-        A page that answers "this URL no longer serves that listing"
-        (`not_the_listing_page`: the advert was taken down and the server
-        redirected) is a consumed skip, not a held one -- the server answered,
-        and re-asking tomorrow gets the same answer, so holding the cursor on
-        it would stall ingestion forever over a listing that is gone.
+        The page comes first, through `preview_row`/`build_property`, the one
+        builder of every door. **A page that cannot be read does not hold the
+        email** (#636, owner decision 2026-11-21): a block that is a 200, a
+        timeout, an HTTP error, an unreadable payload, or a run that stopped
+        asking after `PORTAL_MAX_CONSECUTIVE_REFUSALS` -- the listing is stored
+        from the card (marked `email_only`), and a later page read completes
+        that row. A refusal is never "gone". No usable card: the old hold.
+        Emails already held before this shipped keep the old rule until
+        `FOTOCASA_EMAIL_CARD_FOR_HELD`. `not_the_listing_page` (the server
+        redirected: the advert is down) is a consumed skip: asking again gets
+        the same answer.
         """
         import requests
 
@@ -1244,10 +1228,8 @@ class PropertyIMAPService:
                 )
 
             card = cards.get(listing_id)
-            # No card, a held email the owner has not released, or a card
-            # whose link does not say sale or rent (`deal_type` unknown: the
-            # builder would store it as a sale, and a rental must not slip in
-            # that way): the old rule, the email waits.
+            # No card, a held email not released, or a link that is neither
+            # sale nor rent (the builder would store it as a sale): it waits.
             if card is None or not card_allowed or card.get("deal_type") is None:
                 all_done = False
                 continue
@@ -1271,14 +1253,9 @@ class PropertyIMAPService:
         return created, all_done
 
     def _card_fallback_allowed(self, email_data: Dict[str, Any]) -> bool:
-        """May this email's listings be stored from its cards?
-
-        Yes, except for an email that was already waiting on the retry list
-        when the fallback shipped -- its entry has no `card_fallback_aware`
-        stamp -- unless the owner switched the flag on: the old list is
-        theirs to decide about. An email first held after that, for whatever
-        reason, is not one of them, and a retry of it may use its card.
-        """
+        """Yes, except for an email on the retry list since before the fallback
+        shipped (its entry has no `card_fallback_aware` stamp), unless the owner
+        set `FOTOCASA_EMAIL_CARD_FOR_HELD`: those are theirs to decide about."""
         entry = self._held.entry(email_data.get("uid")) if self._held else None
         waiting_before = entry is not None and not entry.get("card_fallback_aware")
         return not waiting_before or bool(
@@ -1288,14 +1265,10 @@ class PropertyIMAPService:
     def _complete_email_only_row(
         self, prop: Property, url: str, email_data: Dict[str, Any], http: Any
     ) -> None:
-        """Give a row made from an email card the page, if the portal answers now.
-
-        One attempt per repeat mention, under the same refusal allowance as
-        every other fetch of the run. A refusal changes nothing and is not a
-        reason to hold the email: the row exists. "No longer served" does not
-        mark the row removed either -- listing status is established by
-        `ListingStatusService` and the owner, not by a failed page read.
-        """
+        """Give an email-only row the page, if the portal answers now: one
+        attempt per repeat mention, under the run's refusal allowance. A refusal
+        or "no longer served" changes nothing -- the row exists, and listing
+        status is not established by a failed read."""
         from services import fotocasa_import
 
         if self._portal_fetching_stopped("fotocasa", email_data):

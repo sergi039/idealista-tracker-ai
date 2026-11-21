@@ -194,12 +194,8 @@ class HeldUids:
         self, uid: int, reason: str, *, stamp: Optional[Dict[str, object]] = None
     ) -> None:
         """Record one more failed try of ``uid`` and persist; raises on failure.
-
-        ``stamp`` is written once, when the entry is created, and survives
-        every later try: it says under which rule the email was first held, so
-        a rule that changes later can tell the emails already waiting from
-        the ones held under it.
-        """
+        ``stamp`` is written once, at creation, and kept: it says under which
+        rule the email was first held."""
         now = datetime.now(timezone.utc).isoformat()
         previous = self._entries.get(uid)
         entry = dict(previous or {"first_held_at": now, "attempts": 0, **(stamp or {})})

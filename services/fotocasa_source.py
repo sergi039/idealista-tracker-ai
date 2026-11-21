@@ -261,14 +261,10 @@ _RENT_WORDS = ("alquiler", "alquilar", "rent", "lloguer")
 
 @dataclass
 class FotocasaCard:
-    """One listing card of a fotocasa alert email, read.
-
-    The card is all the email says about a listing: the asking price, a
-    heading of the shape "casa-chalet, Arteixo" (type, then municipality), a
-    facts line ("5 habs · 251 m² · 3 baños") and the link. No coordinate, no
-    description, no seller. A field the card does not state is None, never a
-    guess; what the URL itself states (the type word and the transaction) is
-    read from the URL and from nothing else.
+    """One alert-email card: price, heading "casa-chalet, Arteixo", facts line
+    "5 habs · 251 m² · 3 baños", link. No coordinate, description or seller. A
+    field it does not state is None, never a guess; the transaction and the
+    land type are read from the URL alone.
     """
 
     url: str
@@ -284,14 +280,9 @@ class FotocasaCard:
 
 
 def _strip_tags(fragment: str) -> str:
-    """The text of a markup fragment, one pass, tags replaced by a space.
-
-    Not `re.sub(r"<[^>]+>", ...)`: on a fragment with many `<` and no `>`
-    that pattern rescans the rest of the text from every `<`. Here each `<`
-    is paired with the next `>` by `str.find`, and an unterminated `<` ends
-    the scan with the rest kept as text, so the cost is linear whatever the
-    input holds.
-    """
+    """The text of a fragment, tags replaced by a space, in one pass. Not
+    `re.sub(r"<[^>]+>", ...)`, which rescans the rest from every `<` that has
+    no `>`; an unterminated `<` here ends the scan, the rest kept as text."""
     out: List[str] = []
     i = 0
     while True:
@@ -346,13 +337,9 @@ def _split_heading(heading: str) -> tuple[Optional[str], Optional[str]]:
 
 
 def _anchors(body: str):
-    """`(href, whole anchor markup, inner markup)` for every closed anchor.
-
-    One pass over the text split at each `</a>`, taking the last `<a` of each
-    chunk: linear however many anchors a hostile body opens and never closes.
-    The whole markup is returned because a strike-through can sit on the
-    anchor's own style as well as inside it.
-    """
+    """`(href, whole anchor markup, inner markup)` of every closed anchor, in one
+    linear pass (split at `</a>`, last `<a` of each chunk). The whole markup is
+    returned because a strike-through can sit on the anchor's own style."""
     if len(body) > MAX_ALERT_BODY_CHARS:
         logger.warning("Alert body of %d characters is not read for cards", len(body))
         return
@@ -375,16 +362,12 @@ def _anchors(body: str):
 
 
 def cards_in_email(body: Optional[str]) -> List[FotocasaCard]:
-    """Every listing card in a fotocasa alert email body, one per listing id.
+    """Every listing card of an alert body, one per listing id. Pure.
 
-    Pure -- no network, no clock, no database. The anchors of one listing
-    share its URL and each carries one line of the card, so a line is told by
-    its content: a lone amount in euros is the price, a line with m², habs or
-    baños is the facts, the button is skipped and the first line left that has
-    the comma of "type, municipality" is the heading (any other text is not
-    read as one: an unknown button would become a title). A struck-through amount is a previous price and is not read. A
-    card that states none of price, area or heading is not returned: a row
-    with nothing but an id is no listing.
+    The anchors of one listing share its URL, one line each, told by content:
+    a lone euro amount is the price (a struck one is not), m²/habs/baños the
+    facts, the button is skipped, the first other line with a comma is the
+    heading. A card stating none of price, area or heading is not returned.
     """
     lines: Dict[int, List[tuple[str, str]]] = {}
     hrefs: Dict[int, str] = {}

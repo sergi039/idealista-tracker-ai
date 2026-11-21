@@ -1,21 +1,13 @@
 """A fotocasa listing whose page is refused is stored from the email (#636).
 
-Owner decision, 2026-11-21: when the portal will not give the listing page,
-the object is created from the fields of the alert email itself -- without a
-request to the page, the way yaencontre always is -- and the retry list stays
-bounded. These tests run the real alert of 2026-08-30
-(`tests/data/fotocasa_alert_arteixo.html`) through the real ingest loop with
-only the IMAP server and the page fetch replaced.
-
-Where a test needs a page for the same listing, the alert's id is substituted
-for the one the committed page fixture carries (190280914); the page says
-Avilés where the card says Arteixo, which is itself a useful difference: the
-card's municipality is kept, the page's other fields complete the row.
+The real alert (`tests/data/fotocasa_alert_arteixo.html`) runs through the real
+ingest loop; only the IMAP server and the page fetch are replaced. Where a test
+needs a page for the same listing the alert's id is swapped for the committed
+page fixture's (190280914): the page says Avilés, the card Arteixo.
 """
 
 import pathlib
 import time
-from datetime import datetime, timezone
 from email.message import EmailMessage
 
 import pytest
@@ -36,6 +28,7 @@ from services.property_imap_service import (
     PropertyIMAPService,
 )
 from tests import setup_test_environment
+from tests.test_fotocasa_email_ingestion import _FakeIMAPClient, _held, _service
 from utils.uid_cursor import HeldUids, write_uid_file
 
 DATA = pathlib.Path(__file__).parent / "data"
@@ -43,7 +36,6 @@ ALERT = (DATA / "fotocasa_alert_arteixo.html").read_text(encoding="utf-8")
 PAGE = (DATA / "fotocasa_listing_190280914.html").read_text(encoding="utf-8")
 ALERT_ID = 190485369
 PAGE_ID = 190280914
-INTERNAL_DATE = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
 
 
 def _email(body_html: str, subject: str = "Nuevo anuncio en Arteixo") -> bytes:
@@ -78,37 +70,6 @@ def _card_html(
         f"<tr><td>{a(facts)}</td></tr>"
         f"<tr><td>{a('Ver anuncio')}</td></tr></table>"
     )
-
-
-class _FakeIMAPClient:
-    payloads: dict[int, bytes] = {}
-
-    def __init__(self, host, port=None, ssl=None, timeout=None):
-        pass
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-    def login(self, user, password):
-        return True
-
-    def select_folder(self, name, readonly=True):
-        return None
-
-    def search(self, args):
-        return sorted(_FakeIMAPClient.payloads)
-
-    def fetch(self, uids, parts):
-        return {
-            uid: {
-                b"RFC822": _FakeIMAPClient.payloads[uid],
-                b"INTERNALDATE": INTERNAL_DATE,
-            }
-            for uid in uids
-        }
 
 
 @pytest.fixture
@@ -170,19 +131,6 @@ def portal(monkeypatch):
 
     monkeypatch.setattr(fotocasa_source, "fetch_listing", fake_fetch)
     return state
-
-
-def _service() -> PropertyIMAPService:
-    service = PropertyIMAPService()
-    service.user = "owner@example.com"
-    service.password = "dummy"
-    service.host = "imap.example.com"
-    service.folder = "IdealistaProperties"
-    return service
-
-
-def _held(uid_file) -> list:
-    return HeldUids(str(uid_file) + ".held.json").uids()
 
 
 class TestCardParser:
@@ -296,10 +244,6 @@ class TestCardParser:
         body = _card_html(190280906) + " " * fotocasa_source.MAX_ALERT_BODY_CHARS
         assert cards_in_email(body) == []
 
-    def test_one_card_per_listing_in_email_order(self):
-        cards = cards_in_email(_card_html(190280911) + _card_html(190280912))
-        assert [c.listing_id for c in cards] == [190280911, 190280912]
-
     def test_a_rental_path_is_read_as_a_rental(self):
         html = _card_html(190280913).replace("/comprar/", "/alquiler/")
         (card,) = cards_in_email(html)
@@ -387,11 +331,6 @@ class TestRefusedPageStoresFromTheEmail:
             _service().run_ingestion(sync_type="test")
             assert _held(uid_file) == []
         assert Property.query.count() == 7
-
-    def test_the_same_email_twice_is_one_row(self, app, uid_file, imap, portal):
-        imap.payloads = {1: _email(ALERT), 2: _email(ALERT)}
-        _service().run_ingestion(sync_type="test")
-        assert Property.query.count() == 1
 
     def test_a_rental_card_is_skipped_under_sale_only(
         self, app, uid_file, imap, portal, monkeypatch

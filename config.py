@@ -175,12 +175,9 @@ class Config:
         "YAENCONTRE_ALERT_SENDERS", "yaencontre.com"
     )
 
-    # A fotocasa alert whose page the portal will not give is stored from the
-    # email's own card (#636, owner decision 2026-11-21). The emails already
-    # waiting on the retry list when that shipped are left alone until the
-    # owner decides what happens to them: with this false a held email is
-    # retried as before and only emails new since then are stored from the
-    # card. Defaults to false; "true" drains the list on the next runs.
+    # A fotocasa alert whose page is refused is stored from its card (#636).
+    # Emails already on the retry list before that shipped keep the old rule
+    # until the owner decides; "true" lets the cards drain them.
     FOTOCASA_EMAIL_CARD_FOR_HELD = (
         os.environ.get("FOTOCASA_EMAIL_CARD_FOR_HELD", "false").lower() == "true"
     )

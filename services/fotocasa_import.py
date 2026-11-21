@@ -215,16 +215,11 @@ def is_email_only(prop) -> bool:
 def complete_from_page(prop, row: Dict[str, Any]) -> bool:
     """Fill what an email-only row does not know from a page that was read.
 
-    Only unknown values are filled, so what the card stated and the owner has
-    seen stays; the card's heading ("casa-chalet, Arteixo") is the one thing a
-    page replaces, because it is a stub by construction. The coordinate is set
-    only where the row has none -- a measurement made at an existing one is
-    not moved from here -- but the portal's pin is recorded either way, where
-    `portal_coordinate` reads it. Returns True when the row changed.
-
-    Re-checked under the row's lock, because the free enrichers write the same
-    `enrichment` column and a concurrent completion must not lose theirs
-    (`services/enrichment_write.py`).
+    Only unknown values are filled; the card's stub heading is the one thing
+    replaced. The coordinate is set only where the row has none (a measurement
+    made at one is not moved) but the portal's pin is recorded either way.
+    Returns True when the row changed. Done under the row lock: the free
+    enrichers write the same `enrichment` column (`services/enrichment_write`).
     """
     from copy import deepcopy
 
@@ -446,9 +441,8 @@ def build_property(
     # Without this a row classified `land` keeps whatever `area_type` the
     # payload implied, and a parcel is counted as floor space.
     PropertyClassificationService.reconcile_area_type(prop)
-    # `reconcile_area_type` reads "a surface and no type" as built. A card
-    # that did not say what its surface is (`cards_in_email`) keeps it
-    # unknown; land stays plot, which is the classifier's evidence.
+    # `reconcile_area_type` calls "a surface and no type" built; a card that
+    # did not name its surface keeps it unknown (land stays plot).
     if (
         method == EMAIL_ONLY_METHOD
         and (row.get("area_type") or "unknown") == "unknown"

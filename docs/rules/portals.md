@@ -227,55 +227,40 @@ is the existing chain (matchers, then the catch-all). The fixtures under
 and `tests/test_fotocasa_email_ingestion.py` pin all of it.
 
 **A fotocasa page the portal will not give no longer holds the email: the row is
-made from the email's own card** (owner decision 2026-11-21, #636). Measured
-on production that day: the retry list held 41 emails, every one for "its
-listing page could not be read", the oldest since 2026-11-10 and five of them
-retried 20 times or more -- a list that only a lifted block could shorten, and
-which a portal that stays refusing grows by every new alert. The card of the
-real alert (`tests/data/fotocasa_alert_arteixo.html`) says price, a heading
-"casa-chalet, Arteixo" (type, municipality), "5 habs · 251 m² · 3 baños" and
-the link; `fotocasa_source.cards_in_email` reads that, and the transaction and
-the land type only from the URL's own words. When the page is refused (a block
-that is a 200, a timeout, an HTTP error, an unreadable payload) **or the run has
-already stopped asking** after `PORTAL_MAX_CONSECUTIVE_REFUSALS`, the ingest
-builds the row through the same `build_property` (`fotocasa_import.card_row`,
-`method = alert_email_card`), with the `fotocasa:<id>` key, no coordinate, no
-description, no advertiser block and a stated area only as stated; an unstated
-field stays unknown. The email is then consumed: its object exists, so it
-leaves the retry list and the list grows only by an email whose card this parser
-cannot read (the old rule, still the rule for it). **A refusal is not "gone"**:
-only an answered `not_the_listing_page` consumes an email *without* a row, and
-a stored row is never marked removed by a failed read.
+made from the email's card** (owner decision 2026-11-21, #636). Measured on
+production that day: 41 emails on the retry list, all "its listing page could
+not be read", the oldest since 2026-11-10 -- a list only a lifted block could
+shorten. The card of the real alert says price, a heading "casa-chalet,
+Arteixo", "5 habs · 251 m² · 3 baños" and the link; `fotocasa_source.cards_in_email`
+reads that, and the transaction and land type only from the URL. When the page is refused (a 200 block, a timeout, an HTTP
+error, an unreadable payload) or the run has stopped asking after
+`PORTAL_MAX_CONSECUTIVE_REFUSALS`, the ingest builds the row through the same
+`build_property` (`fotocasa_import.card_row`, `method = alert_email_card`,
+`import["email_only"] = true`): `fotocasa:<id>` key, no coordinate, no
+description, no advertiser block, unstated fields unknown. The email is then
+consumed and leaves the retry list, which grows only by an email whose card
+cannot be read (the old hold). **A refusal is not "gone"**: only an answered
+`not_the_listing_page` consumes without a row, and a failed read never marks a
+row removed.
 
-The row carries `enrichment["import"]["email_only"] = true`. A later alert that
-names the listing again reads the page once (under the same refusal allowance);
-if it answers, `fotocasa_import.complete_from_page` fills **only what the row
-did not know** under the row lock -- description, plot, coordinate (only where
-the row has none; the portal pin is recorded beside it either way, #393), the
-import provenance and the advertiser verdict -- replaces the card's stub
-heading, drops the marker and writes `completed_from_page_at`. It never adds a
-second row, never overwrites a price or area the card stated, and never moves a
-coordinate a measurement was made at. The paste-links import still shows such a
-row as a duplicate. **Emails already on the retry list when this shipped stay on
-the old rule** until the owner sets `FOTOCASA_EMAIL_CARD_FOR_HELD=true` (default
-false): what happens to them is the owner's call. They are told apart by a
-stamp, not by membership: every entry created from now on carries
-`card_fallback_aware` (`HeldUids.hold(stamp=...)`, written once and kept across
-retries), so an email first held later -- a database hiccup, say -- may use its
-card on the retry, and an old entry never gets the stamp.
+A later alert naming the listing reads the page once; if it answers,
+`complete_from_page` fills only what the row did not know, under the row lock
+(description, plot, a coordinate only where none exists with the portal pin
+recorded either way, provenance, the advertiser verdict), replaces the stub
+heading and drops the marker: never a second row, never an overwritten price or
+area, never a moved coordinate. The paste-links import still shows such a row as a duplicate. **Emails on the retry list before this shipped stay on the old rule**
+until the owner sets `FOTOCASA_EMAIL_CARD_FOR_HELD=true` (default false); they
+are told apart by a stamp, not membership: entries created since carry
+`card_fallback_aware` (`HeldUids.hold(stamp=...)`, written once), so an email
+first held later may use its card on the retry.
 
-**The card guesses nothing it does not state.** A surface is `built` only
-beside rooms or baths, `plot` only where the URL or the heading says land, and
-otherwise `unknown` -- `reconcile_area_type` would call "a surface and no type"
-built, so `build_property` puts it back for an `email_only` row -- and the page
-names it later. A link that says neither sale nor rent leaves no card to store
-(the builder would call it a sale): the email waits. The heading's first
-segment is the type and its last the municipality. The email is untrusted
-HTML: anchors are read in one linear pass, tags stripped with `str.find`
-(never a `<[^>]+>` rescan), a line over `MAX_CARD_LINE_CHARS`, a link over
-`MAX_URL_CHARS`, a body over `MAX_ALERT_BODY_CHARS` and cards past
-`MAX_CARDS_PER_EMAIL` are not read, so a spoofed mail can neither stall a run
-nor mint rows by the thousand.
+**The card guesses nothing it does not state.** A surface is `built` only beside
+rooms or baths, `plot` only where the URL or heading says land, else `unknown`
+(`build_property` undoes `reconcile_area_type`'s "built" for an `email_only`
+row); a link that is neither sale nor rent leaves no card, the email waits. The
+email is untrusted HTML: a linear anchor pass, tags stripped with `str.find`,
+length caps (`MAX_*` in `fotocasa_source`) and at most `MAX_CARDS_PER_EMAIL`
+cards, so a spoofed mail can neither stall a run nor mint rows by the thousand.
 `tests/test_fotocasa_email_card_fallback.py` pins all of it.
 
 **The portal's own photographs, captured on the way past and put on the page**
