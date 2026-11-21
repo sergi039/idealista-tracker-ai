@@ -83,6 +83,7 @@ LOCK_ORDER_MIGRATION = "026_canonicalize_locks_in_id_order"
 ROUTE_RETRY_MIGRATION = "027_retry_route_resolution_on_stale_read"
 CATCH_ALL_HIDDEN_MIGRATION = "028_catch_all_never_hidden"
 DUPLICATE_LINK_MIGRATION = "029_create_property_duplicate_link"
+SUBSCRIPTION_MIGRATION = "030_create_property_subscription"
 DUPLICATE_LINK_CHECKS = {
     "ck_property_duplicate_link_order",
     "ck_property_duplicate_link_verdict",
@@ -514,6 +515,7 @@ def test_013_frees_the_label_on_a_database_that_already_holds_rows(
             ROUTE_RETRY_MIGRATION,
             CATCH_ALL_HIDDEN_MIGRATION,
             DUPLICATE_LINK_MIGRATION,
+            SUBSCRIPTION_MIGRATION,
         ]
 
         # Two *identified* subscriptions may now share the label...
@@ -1744,6 +1746,7 @@ def test_017_deduplicates_existing_rows_and_adds_the_unique_constraint(
             ROUTE_RETRY_MIGRATION,
             CATCH_ALL_HIDDEN_MIGRATION,
             DUPLICATE_LINK_MIGRATION,
+            SUBSCRIPTION_MIGRATION,
         ]
 
         with engine.begin() as connection:
@@ -1938,6 +1941,7 @@ def test_017_deduplicates_existing_land_variants_and_adds_the_unique_constraint(
             ROUTE_RETRY_MIGRATION,
             CATCH_ALL_HIDDEN_MIGRATION,
             DUPLICATE_LINK_MIGRATION,
+            SUBSCRIPTION_MIGRATION,
         ]
 
         with engine.begin() as connection:
@@ -4137,4 +4141,371 @@ def test_two_sessions_appending_to_one_arrival_journal_keep_both_entries(
         assert second_waited, "the second session did not wait for the row lock"
     finally:
         release.set()
+
+
+# --- migration 030: a listing's additional subscriptions (#632) -------------
+
+SUBSCRIPTION_TRIGGERS = {
+    "trg_property_subscription_a_canonical_profile": "property_subscription",
+    "trg_property_subscription_b_skip_redundant": "property_subscription",
+    "trg_properties_home_drops_redundant_subscription": "properties",
+    "trg_search_profiles_route_moves_subscriptions": "search_profiles",
+}
+
+
+def _profile(connection, name, **values) -> int:
+    values = {"name": name, "is_active": True, **values}
+    columns = ", ".join(values)
+    placeholders = ", ".join(f":{column}" for column in values)
+    return connection.execute(
+        text(  # noqa: S608
+            f"INSERT INTO search_profiles ({columns}) VALUES ({placeholders}) "
+            "RETURNING id"
+        ),
+        values,
+    ).scalar_one()
+
+
+def _join(connection, property_id, profile_id, on_conflict="") -> None:
+    connection.execute(
+        text(  # noqa: S608
+            "INSERT INTO property_subscription (property_id, search_profile_id) "
+            f"VALUES (:p, :s) {on_conflict}"
+        ),
+        {"p": property_id, "s": profile_id},
+    )
+
+
+def _memberships(engine) -> set:
+    with engine.connect() as connection:
+        return {
+            tuple(row)
+            for row in connection.execute(
+                text("SELECT property_id, search_profile_id FROM property_subscription")
+            )
+        }
+
+
+def test_030_the_table_and_its_constraints_exist_and_bite(postgres_url):
+    """The table's rules are the database's: one row per pair, a known source,
+    a listing takes its memberships with it, and a subscription that still
+    holds one cannot be deleted. Refusals are matched by constraint NAME."""
+    from sqlalchemy.exc import IntegrityError as PgIntegrityError
+
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+        with engine.connect() as connection:
+            found = dict(
+                connection.execute(
+                    text(
+                        "SELECT tgname, tgrelid::regclass::text FROM pg_trigger "
+                        "WHERE NOT tgisinternal AND tgname = ANY(:names)"
+                    ),
+                    {"names": list(SUBSCRIPTION_TRIGGERS)},
+                ).all()
+            )
+        assert found == SUBSCRIPTION_TRIGGERS
+
+        with engine.begin() as connection:
+            home = _profile(connection, "030 home")
+            other = _profile(connection, "030 other")
+            kept = _insert_property(
+                connection, source_email_id="sub:1", search_profile_id=home
+            )
+            gone = _insert_property(
+                connection, source_email_id="sub:2", search_profile_id=home
+            )
+            _join(connection, kept, other)
+            _join(connection, gone, other)
+            stamped = connection.execute(
+                text(
+                    "SELECT first_seen_at, source FROM property_subscription "
+                    "WHERE property_id = :p"
+                ),
+                {"p": kept},
+            ).one()
+        assert stamped.first_seen_at is not None
+        assert stamped.source == "ingest"
+
+        with pytest.raises(PgIntegrityError, match="property_subscription_pkey"):
+            with engine.begin() as connection:
+                _join(connection, kept, other)
+
+        with pytest.raises(PgIntegrityError, match="ck_property_subscription_source"):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "UPDATE property_subscription SET source = 'guess' "
+                        "WHERE property_id = :p"
+                    ),
+                    {"p": kept},
+                )
+
+        # A deleted listing takes its memberships with it.
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM properties WHERE id = :p"), {"p": gone}
+            )
+        assert _memberships(engine) == {(kept, other)}
+
+        # A subscription that still holds a membership cannot be deleted.
+        with pytest.raises(
+            PgIntegrityError, match="property_subscription_search_profile_id_fkey"
+        ):
+            with engine.begin() as connection:
+                connection.execute(
+                    text("DELETE FROM search_profiles WHERE id = :s"), {"s": other}
+                )
+        assert _memberships(engine) == {(kept, other)}
+    finally:
+        engine.dispose()
+
+
+def test_030_a_membership_never_names_a_stub_the_catch_all_or_the_home(postgres_url):
+    """Whoever writes: raw SQL here, exactly as curation through docker exec.
+
+    A stub's membership lands on the stub's target (the properties trigger's
+    own function, on this table), and `ON CONFLICT DO NOTHING` sees the
+    rewritten key. The catch-all and the listing's own home are not
+    memberships and are skipped without an error.
+    """
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+        with engine.begin() as connection:
+            catch_all = _profile(connection, "030 catch-all", is_default=True)
+            home = _profile(connection, "030 home")
+            other = _profile(connection, "030 other")
+            stub_to_other = _profile(connection, "030 stub a", routed_to=other)
+            stub_to_home = _profile(connection, "030 stub b", routed_to=home)
+            prop = _insert_property(
+                connection, source_email_id="sub:canon", search_profile_id=home
+            )
+
+            _join(connection, prop, stub_to_other)
+        assert _memberships(engine) == {(prop, other)}
+
+        with engine.begin() as connection:
+            # The same fact again, through the stub and directly: one row.
+            _join(connection, prop, stub_to_other, "ON CONFLICT DO NOTHING")
+            _join(connection, prop, other, "ON CONFLICT DO NOTHING")
+            # Not memberships at all.
+            _join(connection, prop, catch_all)
+            _join(connection, prop, home)
+            _join(connection, prop, stub_to_home)
+        assert _memberships(engine) == {(prop, other)}
+    finally:
+        engine.dispose()
+
+
+def test_030_a_route_moves_the_memberships_and_a_home_move_drops_its_own(
+    postgres_url,
+):
+    """ "A stub holds nothing" for this table too, by the routing statement.
+
+    Four listings cover the cases: a membership that moves, one the target
+    already has as a membership, one the target already has as the home, and
+    a listing whose home is the stub and which already belongs to the target.
+    """
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+        with engine.begin() as connection:
+            elsewhere = _profile(connection, "030 elsewhere")
+            target = _profile(connection, "030 target")
+            stub = _profile(connection, "030 stub")
+            moves = _insert_property(
+                connection, source_email_id="sub:r1", search_profile_id=elsewhere
+            )
+            both = _insert_property(
+                connection, source_email_id="sub:r2", search_profile_id=elsewhere
+            )
+            at_target = _insert_property(
+                connection, source_email_id="sub:r3", search_profile_id=target
+            )
+            at_stub = _insert_property(
+                connection, source_email_id="sub:r4", search_profile_id=stub
+            )
+            _join(connection, moves, stub)
+            _join(connection, both, stub)
+            _join(connection, both, target)
+            _join(connection, at_target, stub)
+            _join(connection, at_stub, target)
+
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "SELECT id FROM search_profiles WHERE id IN (:s, :t) "
+                    "ORDER BY id FOR UPDATE"
+                ),
+                {"s": stub, "t": target},
+            )
+            connection.execute(
+                text("UPDATE search_profiles SET routed_to = :t WHERE id = :s"),
+                {"t": target, "s": stub},
+            )
+        after_route = _memberships(engine)
+        assert stub not in {profile for _, profile in after_route}
+        assert after_route == {(moves, target), (both, target), (at_stub, target)}
+
+        # The listings move next, as `route_profile` moves them: the one that
+        # was already a member of its new home stops being a member.
+        with engine.begin() as connection:
+            connection.execute(
+                text("UPDATE properties SET search_profile_id = :t WHERE id = :p"),
+                {"t": target, "p": at_stub},
+            )
+        assert _memberships(engine) == {(moves, target), (both, target)}
+    finally:
+        engine.dispose()
+
+
+def test_030_route_profile_carries_the_memberships_on_postgres(
+    postgres_url, monkeypatch
+):
+    """The one writer of `routed_to`, unchanged, against the new triggers."""
+    _migrated(postgres_url)
+    (application,) = _duplicate_link_apps(postgres_url, monkeypatch)
+    from models import Property as _Property, SearchProfile as _SearchProfile
+    from services.search_profile_service import SearchProfileService
+
+    engine = create_engine(postgres_url)
+    try:
+        with application.app_context():
+            elsewhere = _SearchProfile(name="030 svc elsewhere", is_active=True)
+            target = _SearchProfile(name="030 svc target", is_active=True)
+            stub = _SearchProfile(name="030 svc stub", is_active=True)
+            db.session.add_all([elsewhere, target, stub])
+            db.session.commit()
+            member = _Property(
+                source_email_id="sub:svc1", title="x", search_profile_id=elsewhere.id
+            )
+            homed = _Property(
+                source_email_id="sub:svc2", title="x", search_profile_id=stub.id
+            )
+            db.session.add_all([member, homed])
+            db.session.commit()
+            ids = (member.id, homed.id, target.id, stub.id)
+            db.session.remove()
+        member_id, homed_id, target_id, stub_id = ids
+        with engine.begin() as connection:
+            _join(connection, member_id, stub_id)
+            _join(connection, homed_id, target_id)
+
+        with application.app_context():
+            outcome = SearchProfileService.route_profile(stub_id, target_id)
+            db.session.remove()
+
+        assert outcome == {"status": "ok", "moved": 1}
+        assert _memberships(engine) == {(member_id, target_id)}
+    finally:
+        engine.dispose()
+
+
+def test_030_a_membership_written_during_a_route_lands_on_the_target(postgres_url):
+    """025's serialization, for this table, judged by where the row ends up.
+
+    A membership naming a subscription is written while a route writer holds
+    that subscription FOR UPDATE and is about to route it. The insert has to
+    wait for the decision and then land on the TARGET. Waiting alone proves
+    nothing here -- the foreign key's own lock makes any insert wait -- so
+    the assertion is the destination: without the canonicalizing trigger the
+    row lands on the freshly routed stub (measured by removing it).
+    """
+    import threading
+
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+        with engine.begin() as connection:
+            home = _profile(connection, "030 wait home")
+            target = _profile(connection, "030 wait target")
+            stub = _profile(connection, "030 wait stub")
+            prop = _insert_property(
+                connection, source_email_id="sub:wait", search_profile_id=home
+            )
+
+        failure: dict[str, object] = {}
+
+        def join_while_the_route_is_held() -> None:
+            try:
+                with engine.begin() as connection:
+                    connection.execute(text("SET lock_timeout = '20s'"))
+                    _join(connection, prop, stub)
+            except Exception as exc:  # noqa: BLE001
+                failure["v"] = exc
+
+        with engine.connect() as connection:
+            connection.execute(
+                text(
+                    "SELECT id FROM search_profiles WHERE id IN (:s, :t) "
+                    "ORDER BY id FOR UPDATE"
+                ),
+                {"s": stub, "t": target},
+            )
+            thread = threading.Thread(target=join_while_the_route_is_held, daemon=True)
+            thread.start()
+            thread.join(2)
+            assert thread.is_alive(), "the insert did not wait for the route writer"
+            assert _memberships(engine) == set()
+            connection.execute(
+                text("UPDATE search_profiles SET routed_to = :t WHERE id = :s"),
+                {"t": target, "s": stub},
+            )
+            connection.commit()
+        thread.join(30)
+
+        assert not thread.is_alive()
+        assert failure == {}
+        assert _memberships(engine) == {(prop, target)}
+    finally:
+        engine.dispose()
+
+
+def test_030_is_idempotent_and_keeps_its_rows_and_one_trigger_each(postgres_url):
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+        with engine.begin() as connection:
+            home = _profile(connection, "030 again home")
+            other = _profile(connection, "030 again other")
+            prop = _insert_property(
+                connection, source_email_id="sub:again", search_profile_id=home
+            )
+            _join(connection, prop, other)
+        sql = (MIGRATIONS_DIR / f"{SUBSCRIPTION_MIGRATION}.sql").read_text(
+            encoding="utf-8"
+        )
+        for _ in range(2):
+            with engine.begin() as connection:
+                connection.exec_driver_sql(sql)
+        assert _memberships(engine) == {(prop, other)}
+        with engine.connect() as connection:
+            counts = dict(
+                connection.execute(
+                    text(
+                        "SELECT tgname, count(*) FROM pg_trigger "
+                        "WHERE NOT tgisinternal AND tgname = ANY(:names) "
+                        "GROUP BY tgname"
+                    ),
+                    {"names": list(SUBSCRIPTION_TRIGGERS)},
+                ).all()
+            )
+        assert counts == dict.fromkeys(SUBSCRIPTION_TRIGGERS, 1)
+        # And the rules still bite after the re-run.
+        with engine.begin() as connection:
+            _join(connection, prop, home)
+        assert _memberships(engine) == {(prop, other)}
+    finally:
         engine.dispose()

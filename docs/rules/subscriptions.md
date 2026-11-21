@@ -117,6 +117,23 @@ future ones elsewhere, a split wearing a success message. Both rows are
 locked `FOR UPDATE` in ascending id order and the existing listings move in
 the same transaction, so a route is never half-applied.
 
+**A listing's additional subscriptions have a table, and its rules are the
+database's** (#632, migration 030, `property_subscription`). The row's
+`search_profile_id` stays its one HOME -- scoring, travel targets, criteria,
+taste and similarity read that and stay single-valued -- and a row in the
+table says only that another subscription delivered the listing too. Four
+rules are enforced by triggers and a foreign key, for every writer, because
+curation SQL is a supported workflow and SQLite runs none of them: a
+membership written against a routed stub lands on the stub's target (the
+properties trigger's own `canonicalize_search_profile()`, same lock
+protocol); setting `routed_to` moves the stub's memberships in the routing
+statement's own transaction, dropping the ones the target already has; a
+membership naming the catch-all or the listing's own home is skipped, and a
+home that moves onto a subscription the listing already belonged to drops
+that membership; a subscription that still holds a membership cannot be
+deleted (the profile-side foreign key is NO ACTION on purpose). Nothing
+writes or reads the table yet: this is the schema alone.
+
 `auto_route_from_pattern` lives on the TARGET (`^Galicia\s` on production's
 profile 24): a profile ingestion auto-creates whose name matches is born
 routed and hidden. That is what stops the four undelivered alerts from each
