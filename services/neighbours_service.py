@@ -39,6 +39,7 @@ MAX_FEATURES = 5000
 MAX_BBOX_AREA_M2 = 4_000_000
 _UNSET = object()
 PLAN_CHANGED = "shortlist plan changed during lookup; dry-run again"
+KEPT_PREVIOUS = "kept_previous"
 
 
 def _dict(value):
@@ -531,7 +532,10 @@ class NeighboursService:
                 and previous.get("status") == "ok"
                 and previous.get("subject") == subject(prop)
             ):
-                return previous
+                # Kept because this run could not measure, so the stored block
+                # is not what this run established: the caller is told (the
+                # marker is on the returned copy, never stored).
+                return {**previous, KEPT_PREVIOUS: True}
             enrichment["neighbours"] = fetched
             prop.enrichment = enrichment
         return fetched
