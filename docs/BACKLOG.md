@@ -288,3 +288,17 @@ must be an ancestor of `main`.
   `find "$(tools/autopilot/lib/data_dir.sh "$PWD")" -type f -exec sh -c 'head -c 15 "$1" | grep -q "^SQLite format 3" && echo "$1"' _ {} \;`
   prints nothing in the main checkout on the mini. A fix treats every `file:`
   URI naming a path inside a protected directory as a write, `mode=ro` included.
+
+### The reader's exact-line check and a rendered path with a line break (#694, third review)
+
+- **Anchor:** `tools/autopilot/lib/data_dir.sh` (`*[[:cntrl:]]*`, and `"\n" in source` in the parser of Compose's answer).
+- **Found 2026-11-21** by the review of #694: with `IDEALISTA_DATA_DIR="${STATE_ROOT}\nMARKER="`
+  and a `MARKER=` line, Compose renders a path with a line break, and as a
+  `grep -F -x` pattern that is two lines, the second of them in `.env` for
+  every `STATE_ROOT`. Tried against Compose v5.7: the reader refused both
+  callers, because the parser already rejects a line break - a guard that had
+  no test and sat outside the reviewed diff.
+- **Closed by** the change that adds this entry: a test of the review's input
+  against Compose itself, and a refusal of any control character before grep.
+  Not covered: a path with a line break at its very end is refused by the
+  parser alone (`$(...)` drops it before the reader's own check can see it).

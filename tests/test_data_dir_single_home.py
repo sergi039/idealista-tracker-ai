@@ -37,6 +37,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 LIB = REPO_ROOT / "tools" / "autopilot" / "lib" / "data_dir.sh"
 LIB_TEST = REPO_ROOT / "tools" / "autopilot" / "lib" / "data_dir_test.sh"
 WATCHER_TEST = REPO_ROOT / "tools" / "autopilot" / "deploy_data_dir_test.sh"
+MOVE_TEST = REPO_ROOT / "tools" / "move_data_dir_test.sh"
 
 # The harness is a few dozen runs of a short shell script. The bound is there
 # to fail a hang.
@@ -127,6 +128,28 @@ def test_the_watcher_keeps_its_files_where_the_state_is():
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
     assert result.stdout.count("OK: ") == 5, result.stdout
+
+
+def test_moving_the_state_directory_never_leaves_the_app_down():
+    """tools/move_data_dir.sh against a stateful stub docker: the move, the
+    rollback, every preflight refusal, and a failure at each step after the
+    app is stopped - including a signal - ending on the original directory."""
+    for tool in ("git", "python3", "shasum"):
+        assert shutil.which(tool), f"the harness needs {tool} on PATH"
+    result = subprocess.run(
+        ["/bin/bash", str(MOVE_TEST)],
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT_SECONDS,
+        cwd=REPO_ROOT,
+        env=_environment(),
+    )
+    assert result.returncode == 0, (
+        "tools/move_data_dir.sh can leave the deployment stopped, split or "
+        "changed after a failed move\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert "ALL 7 GROUPS PASSED" in result.stdout, result.stdout
 
 
 def _resolve(repo: Path, **extra: str) -> subprocess.CompletedProcess:
@@ -604,6 +627,25 @@ def test_only_the_plain_line_is_an_answer(tmp_path, spelling):
     assert answer.returncode == 1 and answer.stdout == "", (spelling, answer.stdout)
 
 
+def test_a_value_that_renders_with_a_line_break_is_refused(tmp_path):
+    """Review of #694: `IDEALISTA_DATA_DIR="${STATE_ROOT}\\nMARKER="` with a
+    `MARKER=` line after it. Compose renders a directory whose path holds a
+    line break; as a `grep -F -x` pattern that is two lines, and the second is
+    in `.env` for every STATE_ROOT. Both directories exist; neither is given."""
+    _docker_compose_or_skip()
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    checkout = _stand_in_checkout(
+        tmp_path, compose, VARIABLE + '="${STATE_ROOT}\\nMARKER="\nMARKER='
+    )
+    for who in ("one", "two"):
+        state_root = tmp_path / who
+        rendered = f"{state_root}\nMARKER="
+        os.makedirs(rendered)
+        assert _what_compose_mounts(checkout, STATE_ROOT=str(state_root)) == rendered
+        answer = _resolve(checkout, STATE_ROOT=str(state_root))
+        assert answer.returncode == 1 and answer.stdout == "", answer.stdout
+
+
 def test_a_copy_of_the_example_env_file_is_answered(tmp_path):
     """`cp .env.example .env` is how a checkout gets its `.env`. Any mention
     of the variable there - a commented-out example too - is a mention the
@@ -614,6 +656,36 @@ def test_a_copy_of_the_example_env_file_is_answered(tmp_path):
     answer = _resolve(tmp_path)
     assert answer.returncode == 0, answer.stderr
     assert answer.stdout == f"{tmp_path}/data\n"
+
+
+def test_another_compose_file_is_read_against_the_checkout(tmp_path):
+    """`data_dir.sh --compose-source <repo> <file>` is how the deploy gate asks
+    what a commit that is not checked out would mount. The file is a copy that
+    lies outside the checkout; `.env` and `./data` must still be the
+    checkout's, or the answer is about some other deployment."""
+    _docker_compose_or_skip()
+    state = tmp_path / "state"
+    state.mkdir()
+    checkout = _stand_in_checkout(
+        tmp_path, _SHAPES["variable mounted, long form"], f"{VARIABLE}={state}"
+    )
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    for shape, expected in (
+        ("variable mounted, long form", state),
+        ("literal bind, variable in an inline comment", checkout / "data"),
+    ):
+        copy = elsewhere / "target.yml"
+        copy.write_text(_SHAPES[shape], encoding="utf-8")
+        asked = subprocess.run(
+            ["/bin/bash", str(LIB), "--compose-source", str(checkout), str(copy)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=_environment(),
+        )
+        assert asked.returncode == 0, asked.stderr
+        assert _same_directory(asked.stdout.strip(), expected), (shape, asked.stdout)
 
 
 def test_the_container_side_is_not_fed_the_host_path():
