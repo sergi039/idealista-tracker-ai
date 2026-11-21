@@ -79,3 +79,12 @@ def test_supervisor_restarts_only_what_it_should():
         "as idle, reused a snapshot path, or gave up while healthy\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
+    # The scenarios about where the state directory is (#639) ran: a harness
+    # that lost them would still exit 0.
+    for line in (
+        "the run log is read from the configured state directory",
+        "the supervisor lock is taken in the configured state directory",
+        "an unresolvable state directory stops the supervisor before docker",
+        "a Compose that cannot be asked stops the supervisor before it touches the job",
+    ):
+        assert f"ok   {line}" in result.stdout, line

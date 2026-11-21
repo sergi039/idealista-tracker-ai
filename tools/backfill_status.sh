@@ -58,7 +58,7 @@ DATA_DIR_HOST="$(/bin/bash "${REPO_ROOT}/tools/autopilot/lib/data_dir.sh" "$REPO
 case "$DATA_DIR_HOST" in
     /*) ;;
     *)
-        echo "VERDICT: unknown - the reader of the state directory answered '${DATA_DIR_HOST}', which is not an absolute path; treat as busy" >&2
+        echo "VERDICT: unknown - the reader of the state directory answered something that is not an absolute path; treat as busy" >&2
         exit 2
         ;;
 esac
