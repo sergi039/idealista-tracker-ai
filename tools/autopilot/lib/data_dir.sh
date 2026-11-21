@@ -117,11 +117,21 @@ _data_dir_refuse() {
 # Refuses a directory that carries the tombstone, whichever way it was reached:
 # by default, or because Compose would mount it.
 _data_dir_refuse_tombstone() {
-    local dir="$1" moved_to
-    # -L as well: a symbolic link of that name whose target is gone is still a
-    # tombstone, and -e follows the link.
-    [ -e "${dir}/${IDEALISTA_DATA_DIR_TOMBSTONE}" ] || [ -L "${dir}/${IDEALISTA_DATA_DIR_TOMBSTONE}" ] || return 0
-    moved_to="$(sed -n 's/^moved_to=//p' "${dir}/${IDEALISTA_DATA_DIR_TOMBSTONE}" 2>/dev/null | head -n 1)"
+    local dir="$1" moved_to="" tombstone="${1}/${IDEALISTA_DATA_DIR_TOMBSTONE}"
+    # The tombstone is the FACT that an entry of that name exists - a file, a
+    # directory, a FIFO, a link whose target is gone (-L: -e follows links).
+    # The refusal is decided here and never depends on reading it.
+    [ -e "$tombstone" ] || [ -L "$tombstone" ] || return 0
+    # What it holds is a hint for the message, read only from a regular file
+    # that is not a link (a FIFO of that name would block this reader, and the
+    # watcher with it, for ever), a bounded number of bytes, and reduced to
+    # printable characters on one line before it reaches a log. Any failure
+    # here is "not recorded", not an error.
+    if [ -f "$tombstone" ] && [ ! -L "$tombstone" ]; then
+        moved_to="$(LC_ALL=C head -c 4096 "$tombstone" 2>/dev/null |
+            LC_ALL=C sed -n 's/^moved_to=//p' 2>/dev/null | head -n 1 |
+            LC_ALL=C tr -cd '[:print:]' | cut -c 1-512)"
+    fi
     _data_dir_refuse "${dir} carries ${IDEALISTA_DATA_DIR_TOMBSTONE}: the deployment's state was moved to '${moved_to:-an unrecorded directory}' and Compose would no longer mount it. Put ${IDEALISTA_DATA_DIR_KEY}=${moved_to:-/the/moved/directory} back in .env, or run tools/move_data_dir.sh --rollback"
     return 1
 }

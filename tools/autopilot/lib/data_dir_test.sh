@@ -373,6 +373,77 @@ ln -s "${WORK}/gone" "${REPO}/data/.moved-to"
 resolve "$REPO"
 expect_refusal "a dangling symbolic link named as the tombstone still refuses" "carries .moved-to"
 
+# 12e2. The tombstone is the fact that the entry exists; what it holds is a
+#       hint, and no kind of entry may turn the refusal into a wait, a crash
+#       or a line of junk in the watcher's log (review of #700). A reader
+#       still running after ten seconds is a failure here, not a hung harness.
+resolve_bounded() {
+    local repo="$1" pid waited=0
+    : >"${WORK}/docker.log"
+    RC=0
+    env -u IDEALISTA_DATA_DIR -u COMPOSE_ENV_FILES -u COMPOSE_DISABLE_ENV_FILE DOCKER_BIN="$STUB" \
+        "$SHELL_UNDER_TEST" "$LIB" "$repo" >"${WORK}/out" 2>"${WORK}/err" &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 100 ]; do
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null
+        RC=124
+        # Whatever it started is still waiting on the FIFO, and would outlive
+        # this harness: a writer lets it read end-of-file and go. The writer
+        # itself gets a second, in case nothing was reading.
+        ( : >"${repo}/data/.moved-to" ) 2>/dev/null &
+        local writer=$!
+        sleep 1
+        # Usually gone already; a failed kill must not end the harness here,
+        # before it has said what failed.
+        kill "$writer" 2>/dev/null || :
+        wait "$writer" 2>/dev/null || :
+    fi
+    wait "$pid" 2>/dev/null || [ "$RC" = "124" ] || RC=$?
+    OUT="$(cat "${WORK}/out")"
+    ERR="$(cat "${WORK}/err")"
+}
+expect_tombstone_refusal() {
+    # expect_tombstone_refusal <label> [text the stderr must also carry]
+    [ "$RC" != "124" ] || fail "$1: the reader was still waiting on the tombstone after ten seconds"
+    expect_refusal "$1" "carries .moved-to"
+    case "$ERR" in *"${2:-}"*) ;; *) fail "$1: stderr does not mention '${2:-}'" ;; esac
+    [ "$(printf '%s\n' "$ERR" | wc -l | tr -d ' ')" = "1" ] || fail "$1: the refusal is not one line"
+}
+new_repo
+mkfifo "${REPO}/data/.moved-to"
+resolve_bounded "$REPO"
+expect_tombstone_refusal "a FIFO named as the tombstone refuses, and is not read" "an unrecorded directory"
+rm -f "${REPO}/data/.moved-to"
+mkfifo "${WORK}/a-fifo"
+ln -s "${WORK}/a-fifo" "${REPO}/data/.moved-to"
+resolve_bounded "$REPO"
+expect_tombstone_refusal "a link to a FIFO named as the tombstone refuses" "an unrecorded directory"
+rm -f "${REPO}/data/.moved-to"
+printf '\377' >"${REPO}/data/.moved-to"
+resolve_bounded "$REPO"
+expect_tombstone_refusal "a tombstone that is not text refuses" "an unrecorded directory"
+printf 'moved_to=%s\n' "$STATE" >"${REPO}/data/.moved-to"
+chmod 000 "${REPO}/data/.moved-to"
+resolve_bounded "$REPO"
+if [ "$(id -u)" = "0" ]; then
+    expect_tombstone_refusal "a tombstone that may not be read refuses"
+else
+    expect_tombstone_refusal "a tombstone that may not be read refuses" "an unrecorded directory"
+fi
+chmod 600 "${REPO}/data/.moved-to"
+printf 'moved_to=/x\033[31m\ty\r\nmoved_at=1\n' >"${REPO}/data/.moved-to"
+resolve_bounded "$REPO"
+expect_tombstone_refusal "a tombstone with control characters refuses" "'/x[31my'"
+case "$ERR" in *"$(printf '\033')"* | *"$(printf '\t')"* | *"$(printf '\r')"*) fail "a control character from the tombstone reached stderr" ;; esac
+{ head -c 8192 /dev/zero | tr '\0' 'a'; printf '\nmoved_to=/late\n'; } >"${REPO}/data/.moved-to"
+resolve_bounded "$REPO"
+expect_tombstone_refusal "only the head of a large tombstone is read" "an unrecorded directory"
+rm -f "${REPO}/data/.moved-to" "${WORK}/a-fifo"
+
 # 12f. `--default` names the directory inside the checkout and reads nothing:
 #      not .env, not the environment, not the tombstone, and not Compose.
 new_repo
