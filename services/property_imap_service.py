@@ -1332,15 +1332,14 @@ class PropertyIMAPService:
         """Note that this email's saved search delivered a listing already stored.
 
         Only the row's journal is touched (#632, `services/arrival_journal.py`).
-        The journal is its own transaction and every call site sits AFTER the
-        commit of whatever the email created or changed, so the rollback
-        below can only undo the journal's own attempt.
+        It is its own transaction and every call site sits AFTER the commit
+        of whatever the email created or changed, so the rollback below can
+        only undo the journal's own attempt.
 
         A journal that FAILED must not cost the email its other listings: it
         is logged, the loop goes on, and the handler answers "not all done",
-        which holds the UID (a repeat is a no-op for entries that landed). An
-        answer on the facts (an unreadable block, no delivery id) is the same
-        tomorrow: the journal logs it and the email is consumed.
+        which holds the UID. An answer on the facts (unreadable block, no
+        delivery id) is the same tomorrow: logged there, email consumed.
         """
         try:
             arrival_journal.record(

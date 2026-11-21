@@ -4051,3 +4051,90 @@ def test_029_concurrent_set_link_in_opposite_order_finishes_with_one_row(
             assert _duplicate_link_count(engine, low, high) == 0
     finally:
         engine.dispose()
+
+
+def test_two_sessions_appending_to_one_arrival_journal_keep_both_entries(
+    postgres_url, monkeypatch
+):
+    """#632: the arrival journal's read-modify-write, between two sessions.
+
+    SQLite ignores FOR UPDATE, so only this proves the row is LOCKED. The
+    first session has read the journal and decided, and has not committed,
+    when the second starts on the same row. With the lock the second waits
+    and appends to what the first wrote; with a refresh that does not lock,
+    both read an empty journal and the later commit erases the earlier entry.
+    """
+    import threading
+
+    from services import arrival_journal
+
+    _migrated(postgres_url)
+    first_app, second_app = _duplicate_link_apps(postgres_url, monkeypatch, count=2)
+    from models import Property as _Property, SearchProfile as _SearchProfile
+
+    with first_app.app_context():
+        home = _SearchProfile(name="journal home", is_active=True)
+        other = _SearchProfile(name="journal other", is_active=True)
+        db.session.add_all([home, other])
+        db.session.commit()
+        row = _Property(
+            source_email_id="journal:1", title="x", search_profile_id=home.id
+        )
+        db.session.add(row)
+        db.session.commit()
+        prop_id, other_id = row.id, other.id
+        db.session.remove()
+
+    decided, release = threading.Event(), threading.Event()
+    decide = arrival_journal._decide_and_write
+
+    def decide_then_wait(prop, **kwargs):
+        result = decide(prop, **kwargs)
+        if kwargs["ref"] == "imap_7":
+            decided.set()
+            assert release.wait(30)
+        return result
+
+    monkeypatch.setattr(arrival_journal, "_decide_and_write", decide_then_wait)
+    outcomes: dict = {}
+
+    def _append(application, ref):
+        try:
+            with application.app_context():
+                outcomes[ref] = arrival_journal.record(
+                    db.session.get(_Property, prop_id),
+                    profile_id=other_id,
+                    source="fotocasa",
+                    method=arrival_journal.METHOD_ALERT_EMAIL,
+                    ref=ref,
+                )
+                db.session.remove()
+        except BaseException as exc:  # noqa: BLE001 -- surfaced via `outcomes`
+            outcomes[ref] = exc
+
+    first = threading.Thread(target=_append, args=(first_app, "imap_7"))
+    second = threading.Thread(target=_append, args=(second_app, "imap_8"))
+    engine = create_engine(postgres_url)
+    try:
+        first.start()
+        assert decided.wait(15), "the first session never reached its decision"
+        second.start()
+        second.join(2)
+        second_waited = second.is_alive()
+        release.set()
+        first.join(15)
+        second.join(15)
+
+        assert outcomes == {"imap_7": "recorded", "imap_8": "recorded"}
+        with engine.connect() as connection:
+            stored = connection.execute(
+                text("SELECT enrichment FROM properties WHERE id = :i"), {"i": prop_id}
+            ).scalar_one()
+        assert [item["ref"] for item in stored["arrivals"]["items"]] == [
+            "imap_7",
+            "imap_8",
+        ]
+        assert second_waited, "the second session did not wait for the row lock"
+    finally:
+        release.set()
+        engine.dispose()

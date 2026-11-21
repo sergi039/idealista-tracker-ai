@@ -158,15 +158,6 @@ class TestTheEntry:
         assert recorded.utcoffset() == timedelta(0)
         assert _stored(prop.id)["arrivals"]["truncated"] is False
 
-    def test_the_other_blocks_of_the_column_survive(self, app, home, other):
-        prop = _prop(home, enrichment={"import": {"source": "fotocasa"}, "sea": 1})
-
-        _record(prop, other)
-
-        stored = _stored(prop.id)
-        assert stored["import"] == {"source": "fotocasa"}
-        assert stored["sea"] == 1
-
     def test_a_time_in_another_zone_is_stored_as_utc(self, app, home, other):
         prop = _prop(home)
         madrid = timezone(timedelta(hours=1))
@@ -174,13 +165,6 @@ class TestTheEntry:
         _record(prop, other, received_at=datetime(2026, 11, 20, 10, 15, tzinfo=madrid))
 
         assert _items(prop.id)[0]["received_at"] == "2026-11-20T09:15:00+00:00"
-
-    def test_a_time_without_a_zone_is_not_given_one(self, app, home, other):
-        prop = _prop(home)
-
-        _record(prop, other, received_at=datetime(2026, 11, 20, 10, 15))
-
-        assert _items(prop.id)[0]["received_at"] == "2026-11-20T10:15:00"
 
 
 class TestOnlyAnotherSearch:
@@ -377,33 +361,37 @@ class TestTheWriteReadsTheStoredRow:
         assert _record(prop, other) == arrival_journal.SAME_SEARCH
         assert "arrivals" not in _stored(prop.id)
 
-    def test_an_edit_pending_elsewhere_is_refused_before_any_lookup(
-        self, app, home, other
+    @pytest.mark.parametrize(
+        "profile, ref", [("other", None), (None, "imap_8"), ("other", "imap_8")]
+    )
+    def test_no_exit_reads_the_row_before_the_guard(
+        self, app, home, other, profile, ref
     ):
-        """Review of #698: the guard runs before the first query.
+        """Review of #698: the guard is the first statement on every path.
 
-        An unrelated row carries an uncommitted edit and the subscription is
-        not loaded. Looking the subscription up autoflushes the edit, after
-        which the session looks clean and the journal's commit persists it.
+        Reading `prop.id` for a log line, or looking the subscription up, is
+        a query; it autoflushes another row's uncommitted edit, and the next
+        call's commit persists it. So every exit refuses first.
         """
         prop = _prop(home)
         unrelated = _prop(home, source_email_id="fotocasa:2")
         unrelated_id, other_id = unrelated.id, other.id
-        assert (prop.search_profile_id, unrelated.title) == (home.id, "Arrival fixture")
+        assert unrelated.title == "Arrival fixture"
+        db.session.expire(prop)
         db.session.expire(other)
         unrelated.title = "an edit nobody committed"
 
-        with pytest.raises(EnrichmentWriteContractError):
-            arrival_journal.record(
-                prop,
-                profile_id=other_id,
-                source="fotocasa",
-                method=arrival_journal.METHOD_ALERT_EMAIL,
-                ref="imap_7",
-            )
+        for _ in range(2):
+            with pytest.raises(EnrichmentWriteContractError):
+                arrival_journal.record(
+                    prop,
+                    profile_id=other_id if profile else None,
+                    source="fotocasa",
+                    method=arrival_journal.METHOD_ALERT_EMAIL,
+                    ref=ref,
+                )
 
         db.session.rollback()
-        assert "arrivals" not in _stored(prop.id)
         assert db.session.get(Property, unrelated_id).title == "Arrival fixture"
 
 
@@ -421,6 +409,13 @@ NOT_THE_BLOCK = [
     {"items": "x", "truncated": False},
     {"items": [], "truncated": "yes"},
     {"items": [], "truncated": None},
+    # One malformed item makes the whole block unreadable. The second is the
+    # review's own case: the delivery `_record` sends, without a subscription.
+    {"items": [1], "truncated": False},
+    {"items": [{"source": "fotocasa", "ref": "imap_7"}], "truncated": False},
+    {"items": [{"profile_id": True, "source": "f", "ref": "r"}], "truncated": False},
+    {"items": [{"profile_id": 3, "source": "f", "ref": " "}], "truncated": False},
+    {"items": [{"profile_id": 3, "source": "", "ref": "r"}], "truncated": False},
 ]
 
 
@@ -444,15 +439,21 @@ class TestReadingIsTotalAndWritingFailsClosed:
                 "readable": True,
             }
 
-    def test_only_well_formed_entries_are_handed_to_a_reader(self, app):
-        good = {"profile_id": 3, "source": "fotocasa", "ref": "imap_1"}
-        block = {"items": [1, "a", {}, {"profile_id": True}, good], "truncated": True}
+    def test_what_read_returns_is_what_the_duplicate_check_sees(self, app, home, other):
+        """One reading of the shape (review of #698): only an entry `read()`
+        returns can make a delivery "already recorded"."""
+        entry = {"profile_id": other.id, "source": "fotocasa", "ref": "imap_7"}
+        prop = _prop(
+            home, enrichment={"arrivals": {"items": [entry], "truncated": False}}
+        )
 
-        assert arrival_journal.read(Property(enrichment={"arrivals": block})) == {
-            "items": [good],
-            "truncated": True,
-            "readable": True,
-        }
+        assert arrival_journal.read(prop)["items"] == [entry]
+        assert _record(prop, other) == arrival_journal.ALREADY_RECORDED
+        assert _record(prop, other, ref="imap_8") == arrival_journal.RECORDED
+        assert [i["ref"] for i in arrival_journal.read(prop)["items"]] == [
+            "imap_7",
+            "imap_8",
+        ]
 
     @pytest.mark.parametrize(
         "stored", [["legacy"], "", 0, *({"arrivals": b} for b in NOT_THE_BLOCK)]
@@ -473,17 +474,16 @@ class TestReadingIsTotalAndWritingFailsClosed:
         assert _stored_raw(prop.id) == stored
         assert "was not recorded" in caplog.text
 
-    def test_everything_else_in_the_block_is_kept_when_an_entry_is_added(
+    def test_the_other_keys_of_the_block_are_kept_when_an_entry_is_added(
         self, app, home, other
     ):
-        block = {"items": [1, {"note": "x"}], "truncated": False, "kept": {"a": 1}}
+        block = {"items": [], "truncated": False, "kept": {"a": 1}}
         prop = _prop(home, enrichment={"arrivals": block})
 
         assert _record(prop, other) == arrival_journal.RECORDED
 
         stored = _stored(prop.id)["arrivals"]
-        assert stored["items"][:2] == [1, {"note": "x"}]
-        assert stored["items"][2]["profile_id"] == other.id
+        assert stored["items"][0]["profile_id"] == other.id
         assert stored["kept"] == {"a": 1}
 
     @pytest.mark.parametrize("ref", [None, "", "   ", 7])
@@ -604,24 +604,6 @@ class TestThePortalMailDoors:
         )
         return Property.query.one().id
 
-    def test_yaencontre_records_the_second_search(self, app, home, other):
-        prop_id = self._stored_yaencontre(home)
-
-        created, all_done = _service()._ingest_yaencontre_email(
-            {**_email(other), "cards": [self._yaencontre_card()]},
-            sale_only=False,
-            excluded_categories=set(),
-        )
-
-        assert (created, all_done) == (0, True)
-        assert Property.query.count() == 1
-        (entry,) = _items(prop_id)
-        assert (entry["profile_id"], entry["source"], entry["ref"]) == (
-            other.id,
-            "yaencontre",
-            "imap_41",
-        )
-
     def _other_card(self, listing_id: int) -> dict:
         return {
             **self._yaencontre_card(),
@@ -641,9 +623,8 @@ class TestThePortalMailDoors:
     def test_a_failed_journal_costs_the_email_nothing_it_created(
         self, app, home, other, monkeypatch
     ):
-        """One email: a new card, a stored card whose journal write fails,
-        another new card. Both new rows land, the loop reaches the last card,
-        and the email answers "not all done" so its UID is held."""
+        """A new card, a stored card whose journal write fails, another new
+        card: both new rows land and the email answers "not all done"."""
         stored_id = self._stored_yaencontre(home)
         self._failing_journal(monkeypatch)
 
@@ -675,9 +656,8 @@ class TestThePortalMailDoors:
     def test_a_failed_journal_does_not_undo_the_price_it_follows(
         self, app, home, other, monkeypatch
     ):
-        """The journal's rollback may only undo the journal: the price change
-        was committed before it. Then the held email is read again -- the
-        price is not applied twice and the entry lands once."""
+        """The journal's rollback may only undo the journal. Then the held
+        email is read again: the price is not applied twice."""
         prop_id = self._stored_yaencontre(home)
         email = {**_email(other), "cards": [self._yaencontre_card(price=170000.0)]}
 

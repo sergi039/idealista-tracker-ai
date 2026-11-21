@@ -27,32 +27,31 @@ Five rules, each a refusal somebody would otherwise have to rediscover:
   two stubs routed onto one target included -- is not a second subscription,
   and an email no profile claimed names none.
 * **Idempotent on the delivery, not on the subscription.** One entry per
-  (portal, email id): a held UID or a full sync adds nothing, and neither
-  does a replay after the email's subscription was routed elsewhere, which a
-  key that included the subscription counted twice (review of #698). The id
-  is REQUIRED: "no id" as a key made two id-less deliveries one, and the
-  second search's arrival was dropped (`no_delivery_id`). Entries are never
-  rewritten or removed.
+  (portal, email id): a held UID, a full sync or a replay after the email's
+  subscription was routed elsewhere adds nothing. The id is REQUIRED: "no
+  id" as a key made two id-less deliveries one (`no_delivery_id`).
 * **Bounded.** `MAX_ITEMS` entries a row, then `truncated: true` and no more
   writes, so a full journal cannot be read as a complete one.
 * **One writer, every decision under the row lock.** `record()` goes through
-  `services/enrichment_write.py` (#339). The pending-work guard runs FIRST,
-  before any query: a lookup can autoflush somebody's uncommitted edit, the
-  guard then sees a clean session and the journal's commit persists it. The
-  home, the route and the journal are read from the locked row -- the copy in
-  memory may hold a home the listing has left, and "same search" decided from
-  it loses the arrival.
-* **Total, and fail-closed.** `read()` answers for any stored value. The
-  block is readable only in the exact shape written here -- an object with a
-  list under `items` and a boolean under `truncated`; anything else under the
-  key, an explicit JSON `null` included, is "not readable" and `record()`
-  will not write over it (`unwritable`). Only an ABSENT key is an empty
-  journal. A row whose whole `enrichment` is NULL is a new row, not a stored
-  value, and is written to.
+  `services/enrichment_write.py` (#339). Its pending-work guard is its FIRST
+  statement, ahead of every read of an ORM attribute, a log line included:
+  such a read can be a query, a query autoflushes somebody's uncommitted
+  edit, and the journal's commit then persists it. The home, the route and
+  the journal are read from the locked row; the copy in memory may hold a
+  home the listing has left. Two sessions on one row are proved on
+  PostgreSQL (`tests/test_postgres_migrations.py`).
+* **Total, fail-closed, one reading of the shape.** `read()` answers for any
+  stored value. The block is readable only as an object with a boolean under
+  `truncated` and, under `items`, a list in which EVERY item is an entry
+  (`_is_entry`). Anything else under the key -- an explicit JSON `null`, one
+  malformed item -- makes the whole block "not readable" and `record()` will
+  not write over it (`unwritable`). The duplicate check reads through the
+  same function, so an item `read()` would not return can never count as
+  "already recorded". Only an ABSENT key is an empty journal; a row whose
+  whole `enrichment` is NULL is a new row and is written to.
 
 Not journaled yet (`docs/rules/subscriptions.md`): a link pasted on the
-import page for a listing stored under another subscription. That door
-writes a batch and needs the entry in the batch's own transaction.
+import page for a listing stored under another subscription.
 """
 
 import logging
@@ -80,15 +79,30 @@ UNWRITABLE = "unwritable"
 NO_DELIVERY_ID = "no_delivery_id"
 
 
+def _is_id(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _is_entry(item: Any) -> bool:
+    """The one definition of an entry: who, which portal, which delivery."""
+    if not isinstance(item, dict):
+        return False
+    profile_id = item.get("profile_id")
+    return (
+        isinstance(profile_id, int)
+        and not isinstance(profile_id, bool)
+        and _is_id(item.get("source"))
+        and _is_id(item.get("ref"))
+    )
+
+
 def _stored(prop: Any) -> Optional[Dict[str, Any]]:
     """The stored block, an empty one where none is stored, or None.
 
-    None means "not readable": the column is not an object, or the key is
-    present and holds anything but the exact shape `record()` writes -- an
-    object with a list under `items` and a boolean under `truncated`. An
-    explicit JSON null under the key is such a value: somebody stored it, and
-    it is not this module's to replace. Only an absent key (or a row with no
-    enrichment at all) is an empty journal.
+    None is "not readable": the column is not an object, or the key holds
+    anything but the exact shape `record()` writes. An explicit JSON null is
+    such a value, and so is a block with one malformed item. Only an absent
+    key (or a row with no enrichment at all) is an empty journal.
     """
     enrichment = getattr(prop, "enrichment", None)
     if enrichment is None:
@@ -100,45 +114,38 @@ def _stored(prop: Any) -> Optional[Dict[str, Any]]:
     block = enrichment[ENRICHMENT_KEY]
     if (
         not isinstance(block, dict)
-        or not isinstance(block.get("items"), list)
         or not isinstance(block.get("truncated"), bool)
+        or not isinstance(block.get("items"), list)
+        or not all(_is_entry(item) for item in block["items"])
     ):
         return None
     return block
 
 
-def _is_entry(item: Any) -> bool:
-    profile_id = item.get("profile_id") if isinstance(item, dict) else None
-    return isinstance(profile_id, int) and not isinstance(profile_id, bool)
-
-
 def read(prop: Any) -> Dict[str, Any]:
     """The row's journal: `{"items": [...], "truncated": bool, "readable": bool}`.
 
-    Total: it answers for any stored value and never raises. `items` holds
-    only well-formed entries (a dict naming an integer subscription), so a
-    caller can use them without checking; `readable` is False when the column
-    or the block is not this module's shape, so "nothing recorded" and
-    "could not be read" stay two answers.
+    Total: it answers for any stored value and never raises. Every item is an
+    entry, so a caller can use them without checking; `readable` is False
+    when the column or the block is not this module's shape, so "nothing
+    recorded" and "could not be read" stay two answers.
     """
     stored = _stored(prop)
     if stored is None:
         return {"items": [], "truncated": False, "readable": False}
     return {
-        "items": [item for item in stored["items"] if _is_entry(item)],
+        "items": list(stored["items"]),
         "truncated": stored["truncated"],
         "readable": True,
     }
 
 
-def _delivered(items: List[Any], source: str, ref: str) -> bool:
-    """Whether this delivery -- this portal's email id -- is already in `items`."""
-    return any(
-        isinstance(item, dict)
-        and item.get("source") == source
-        and item.get("ref") == ref
-        for item in items
-    )
+def _delivered(items: List[Dict[str, Any]], source: str, ref: str) -> bool:
+    """Whether this delivery -- this portal's email id -- is among `items`.
+
+    `items` come from `_stored`, so each one is an entry `read()` returns.
+    """
+    return any(item["source"] == source and item["ref"] == ref for item in items)
 
 
 def _utc_text(value: Optional[datetime]) -> Optional[str]:
@@ -168,31 +175,31 @@ def record(
 
     Returns what happened, one of the module's seven words. Owns its
     transaction: it commits on success and rolls back on failure, so the
-    caller must hand it a session with nothing pending
-    (`enrichment_write.check_writable` refuses otherwise).
+    caller must hand it a session with nothing pending.
 
     `ref` identifies the delivery and has no default meaning: without a
     non-empty one nothing is written.
     """
     from services import enrichment_write
 
+    # The first statement, on purpose. It issues no query; everything after
+    # it may, and until the row is locked nothing below reads an attribute
+    # of `prop` -- not even for a log line.
+    locked = enrichment_write.check_writable(prop, commit=True)
+
     if profile_id is None:
         return NO_PROFILE
-    if not isinstance(ref, str) or not ref.strip():
+    if not _is_id(ref):
         logger.error(
-            "An arrival of listing %s through subscription %s by %s carries no "
-            "delivery id and was not recorded",
-            getattr(prop, "id", None),
+            "An arrival through subscription %s by %s carries no delivery id "
+            "and was not recorded",
             profile_id,
             source,
         )
         return NO_DELIVERY_ID
 
-    # Before anything that can query. Nothing above this line touches the
-    # database, and `check_writable` itself issues no statement.
-    locked = enrichment_write.check_writable(prop, commit=True)
     with enrichment_write.locked_write(prop, locked=locked, commit=True):
-        outcome, arrival_profile_id = _decide_and_write(
+        outcome, arrival_profile_id, prop_id, home_id = _decide_and_write(
             prop,
             profile_id=profile_id,
             source=source,
@@ -201,12 +208,14 @@ def record(
             received_at=received_at,
         )
 
+    # Locals only: after the commit `prop` is expired, and reading it again
+    # would be one more query for the sake of a log line.
     if outcome == RECORDED:
         logger.info(
             "Listing %s (home subscription %s) also arrived through "
             "subscription %s by %s %s",
-            prop.id,
-            prop.search_profile_id,
+            prop_id,
+            home_id,
             arrival_profile_id,
             source,
             ref,
@@ -215,7 +224,7 @@ def record(
         logger.error(
             "Listing %s holds an enrichment value the arrival journal cannot "
             "read; the arrival through subscription %s by %s %s was not recorded",
-            prop.id,
+            prop_id,
             arrival_profile_id,
             source,
             ref,
@@ -231,42 +240,41 @@ def _decide_and_write(
     method: str,
     ref: str,
     received_at: Optional[datetime],
-) -> Tuple[str, Optional[int]]:
+) -> Tuple[str, Optional[int], Any, Any]:
     """Everything `record()` decides, on the row it has just locked.
 
-    Nothing here trusts a copy from before the lock: `prop` was refreshed
-    with the lock, and the subscription is re-read from the database so a
-    route set since this session loaded it is the route that counts.
+    Returns the outcome, the arrival's subscription, and the row's id and
+    home as read under the lock. The subscription is re-read too, so a route
+    set since this session loaded it is the route that counts.
     """
     from app import db
     from models import SearchProfile
     from services.search_profile_service import SearchProfileService
 
+    prop_id, home_id = prop.id, prop.search_profile_id
     canonical = SearchProfileService.canonical_profile(
         db.session.get(SearchProfile, profile_id, populate_existing=True)
     )
     if canonical is None:
-        return NO_PROFILE, None
-    arrival_profile_id = int(canonical.id)
+        return NO_PROFILE, None, prop_id, home_id
+    arrival = int(canonical.id)
 
-    if prop.search_profile_id == arrival_profile_id:
-        return SAME_SEARCH, arrival_profile_id
+    if home_id == arrival:
+        return SAME_SEARCH, arrival, prop_id, home_id
     stored = _stored(prop)
     if stored is None:
-        return UNWRITABLE, arrival_profile_id
+        return UNWRITABLE, arrival, prop_id, home_id
     if _delivered(stored["items"], source, ref):
-        return ALREADY_RECORDED, arrival_profile_id
+        return ALREADY_RECORDED, arrival, prop_id, home_id
     if stored["truncated"]:
-        return TRUNCATED, arrival_profile_id
+        return TRUNCATED, arrival, prop_id, home_id
 
-    # Raw items, malformed ones included, and any other key of the block:
-    # whatever is stored is kept as it is.
     items = list(stored["items"])
     full = len(items) >= MAX_ITEMS
     if not full:
         items.append(
             {
-                "profile_id": arrival_profile_id,
+                "profile_id": arrival,
                 "source": source,
                 "method": method,
                 "ref": ref,
@@ -276,8 +284,8 @@ def _decide_and_write(
         )
     # A copy of the column, never a mutation of the stored dict: the JSON
     # column is not a MutableDict, and an in-place change is not a change
-    # SQLAlchemy writes.
+    # SQLAlchemy writes. Any other key of the block is kept as it is.
     enrichment = dict(prop.enrichment or {})
     enrichment[ENRICHMENT_KEY] = {**stored, "items": items, "truncated": full}
     prop.enrichment = enrichment
-    return (TRUNCATED if full else RECORDED), arrival_profile_id
+    return (TRUNCATED if full else RECORDED), arrival, prop_id, home_id

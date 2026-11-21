@@ -137,16 +137,14 @@ under another subscription is not journaled yet.
 It is not a membership: `search_profile_id` is untouched, so every filter,
 count, score, criteria verdict and the `routed_to` rule are what they were,
 and nothing reads the journal yet (the membership table is migration 030).
-The refusals are in the module's docstring and are load bearing: only
-ANOTHER search; one entry per delivery (portal + required email id, never the
-subscription); a bound with `truncated`; one writer whose guard runs before
-any query and whose every decision is made on the LOCKED row; and a block
-that is never written over unless it has the exact shape written, an explicit
-JSON `null` included. In ingestion every call site sits after its own commit,
-so a journal that FAILS costs the email nothing it created: it is logged, the
-loop goes on and the UID is held, while an answer on the facts (unreadable
-block, no delivery id) is logged and the email is consumed. Idealista is
-unchanged: a second saved search still gets its own row.
+Its refusals are in the module's docstring and are load bearing: only ANOTHER
+search; one entry per delivery (portal + required email id); a bound; one
+writer whose guard is its first statement and whose decisions are made on
+the LOCKED row; a block never written over unless every part of it has the
+shape written. A journal that FAILS costs the email nothing it created: it
+is logged, the loop goes on and the UID is held; an answer on the facts
+(unreadable block, no delivery id) is logged and the email is consumed.
+Idealista is unchanged: a second saved search still gets its own row.
 
 **The owner's criteria are enforced here because no portal can express
 them.** He asks for a house of at least 150 m² on a plot of at least 700,
