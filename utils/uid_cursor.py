@@ -185,11 +185,20 @@ class HeldUids:
         )
         return sorted(ordered[: max(0, int(limit))])
 
-    def hold(self, uid: int, reason: str) -> None:
-        """Record one more failed try of ``uid`` and persist; raises on failure."""
+    def entry(self, uid: int) -> Optional[Dict[str, object]]:
+        """A copy of the record for ``uid``, or None when it is not held."""
+        found = self._entries.get(uid)
+        return dict(found) if found is not None else None
+
+    def hold(
+        self, uid: int, reason: str, *, stamp: Optional[Dict[str, object]] = None
+    ) -> None:
+        """Record one more failed try of ``uid`` and persist; raises on failure.
+        ``stamp`` is written once, at creation, and kept: it says under which
+        rule the email was first held."""
         now = datetime.now(timezone.utc).isoformat()
         previous = self._entries.get(uid)
-        entry = dict(previous or {"first_held_at": now, "attempts": 0})
+        entry = dict(previous or {"first_held_at": now, "attempts": 0, **(stamp or {})})
         entry["attempts"] = int(entry.get("attempts") or 0) + 1
         entry["last_attempt_at"] = now
         entry["reason"] = reason
