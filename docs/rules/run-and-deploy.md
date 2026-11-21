@@ -292,7 +292,7 @@ Restore is the manual command in `MIGRATION_RUNBOOK.md` /
   the sign-in screen. The policy itself was not read, so a rule by country or
   range is not excluded by that probe. A request from the home network
   therefore gets the page and a `CF_Authorization` cookie with no login: that is
-  the policy, not a leak, and a probe from the mini or the MacBook proves
+  how the home network is let in, and a probe from the mini or the MacBook proves
   nothing about outside access.
 - The proof is a request from an outside IP (a phone off Wi-Fi) that ends at
   the sign-in screen. Repeat it after any change to the Access policy, the
