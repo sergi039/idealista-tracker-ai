@@ -123,6 +123,31 @@ routed and hidden. That is what stops the four undelivered alerts from each
 putting a chip back, and it is why the pattern may not sit on a routed stub
 — the CHECK refuses that, because a pattern on a stub would chain.
 
+**A listing a second saved search delivers is journaled, and that is all**
+(#632, owner decision 2026-11-21). A portal listing is one row with one
+`search_profile_id`; when another saved search delivered it again, ingestion
+found the row and moved on without a trace (that day: 2501 portal rows, no
+recorded second arrival, nothing to backfill from).
+`services/arrival_journal.py` appends one entry to `enrichment["arrivals"]`
+where portal MAIL meets a stored listing again: the fotocasa, milanuncios and
+yaencontre handlers and the late duplicate in `_create_portal_row`.
+**Known gap:** a link pasted on the import page for a listing already stored
+under another subscription is not journaled yet.
+
+It is not a membership: `search_profile_id` is untouched, so every filter,
+count, score, criteria verdict and the `routed_to` rule are what they were,
+and nothing reads the journal yet (the membership table is migration 030).
+The refusals are in the module's docstring and are load bearing: only
+ANOTHER search; one entry per delivery (portal + required email id, never the
+subscription); a bound with `truncated`; one writer whose guard runs before
+any query and whose every decision is made on the LOCKED row; and a block
+that is never written over unless it has the exact shape written, an explicit
+JSON `null` included. In ingestion every call site sits after its own commit,
+so a journal that FAILS costs the email nothing it created: it is logged, the
+loop goes on and the UID is held, while an answer on the facts (unreadable
+block, no delivery id) is logged and the email is consumed. Idealista is
+unchanged: a second saved search still gets its own row.
+
 **The owner's criteria are enforced here because no portal can express
 them.** He asks for a house of at least 150 m² on a plot of at least 700,
 and not one of the four portals filters by plot — measured when the alerts
