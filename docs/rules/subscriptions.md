@@ -169,9 +169,10 @@ things about it are load bearing:
   unknown; only the per-press cadastre can state their plot.
 * **A house the text cannot place gets its plot from the parcel an Enrich
   press placed** (#634, `services/plot_cadastre.py`): it runs right after
-  `NeighboursService` in `_advisory_pass`, reads the parcel that step recorded
-  (`enrichment["neighbours"]`: `ok`, the subject still the row's, a reference)
-  and writes the polygon area -- already compared with Catastro's declared
+  `NeighboursService` in `_advisory_pass`, is handed what that step
+  *returned in this press* (`ok`, the subject still the row's, a reference;
+  never a stored block from an earlier press: a lookup that raised or was
+  refused answers `kept_previous` or nothing, and nothing is written) and writes the polygon area -- already compared with Catastro's declared
   `areaValue` -- to `plot_area`, with `enrichment["plot_from_cadastre"]`
   (value, reference, source, extractor version, subject, UTC time). It starts no
   Catastro request (the metric outline is read from the cache the neighbour step
