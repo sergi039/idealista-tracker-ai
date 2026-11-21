@@ -51,9 +51,10 @@ def _card_html(
     heading: str = "<strong>casa-chalet</strong>, Arteixo",
     facts: str = "5 habs · 251 m² · 3 baños",
     kind: str = "vivienda",
+    town: str = "arteixo",
 ) -> str:
     url = (
-        f"https://www.fotocasa.es/es/comprar/{kind}/arteixo/x/{listing_id}/d"
+        f"https://www.fotocasa.es/es/comprar/{kind}/{town}/x/{listing_id}/d"
         "?stc=em&amp;utm_medium=email"
     )
 
@@ -250,6 +251,46 @@ class TestCardParser:
         assert card.deal_type is None, "an unknown transaction stays unknown"
 
 
+def _bare_link(listing_id: int) -> str:
+    return f"https://www.fotocasa.es/es/comprar/vivienda/arteixo/x/{listing_id}/d"
+
+
+class TestWhatTheMarkupAroundTheCardSays:
+    def test_a_strike_around_the_anchor_is_a_previous_price(self):
+        u = _bare_link(190280960)
+        body = (
+            f'<del><a href="{u}">320.000 €</a></del><a href="{u}">295.000 €</a>'
+            f'<a href="{u}"><b>casa</b>, Arteixo</a>'
+        )
+        (card,) = cards_in_email(body)
+        assert card.price == 295000.0
+
+    def test_a_price_that_cannot_be_chosen_is_not_written(self):
+        u = _bare_link(190280961)
+        two = f'<a href="{u}">320.000 €</a><a href="{u}">295.000 €</a>'
+        (card,) = cards_in_email(two + f'<a href="{u}">1 hab · 90 m²</a>')
+        assert card.price is None and card.area == 90.0
+        struck = f'<s><a href="{u}">320.000 €</a></s><a href="{u}">90 m²</a>'
+        (card,) = cards_in_email(struck)
+        assert card.price is None
+
+    def test_a_strike_that_closes_does_not_leak_into_the_next_card(self):
+        a, b = _bare_link(190280962), _bare_link(190280963)
+        body = (
+            f'<del><a href="{a}">320.000 €</a></del><a href="{a}">295.000 €</a>'
+            f'<a href="{b}">150.000 €</a>'
+        )
+        cards = {c.listing_id: c for c in cards_in_email(body)}
+        assert cards[190280962].price == 295000.0
+        assert cards[190280963].price == 150000.0
+
+    def test_markup_case_and_single_quotes_do_not_hide_a_card(self):
+        u = _bare_link(190280964)
+        body = f"<A HREF='{u}'>295.000 €</A><a href='{u}'>3 habs · 90 m²</A >"
+        (card,) = cards_in_email(body)
+        assert card.price == 295000.0 and card.area == 90.0
+
+
 class TestRefusedPageStoresFromTheEmail:
     def test_a_blocked_page_creates_the_row_and_consumes_the_email(
         self, app, uid_file, imap, portal
@@ -443,6 +484,32 @@ class TestMunicipalityOnlyWhenIneKnowsIt:
         imap.payloads = {1: _email(ALERT)}
         _service().run_ingestion(sync_type="test")
         assert Property.query.one().municipality == "Arteixo"
+
+
+class TestMunicipalityNeedsTheLinkToConfirmIt:
+    @staticmethod
+    def _municipality(heading: str, town: str) -> object:
+        (card,) = cards_in_email(_card_html(190280970, heading=heading, town=town))
+        return fotocasa_import.card_row(card)["municipality"]
+
+    def test_a_district_named_like_another_municipality_is_unknown(self):
+        """ "piso, Salamanca" under /madrid-capital/salamanca/ is a district of
+        Madrid; INE alone would accept the name."""
+        assert self._municipality("piso, Salamanca", "madrid-capital") is None
+
+    def test_the_link_naming_the_same_place_confirms_it(self):
+        assert self._municipality("casa, Arteixo", "arteixo") == "Arteixo"
+
+    def test_a_link_naming_another_place_does_not(self):
+        assert self._municipality("casa, Arteixo", "oleiros") is None
+
+    def test_capital_is_not_part_of_the_name(self):
+        assert (
+            fotocasa_source.url_municipality_slug(
+                "https://www.fotocasa.es/es/comprar/vivienda/madrid-capital/x/1234567/d"
+            )
+            == "madrid"
+        )
 
 
 class TestAnIntegrityErrorIsNotAlwaysADuplicate:
