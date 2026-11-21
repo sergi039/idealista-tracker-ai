@@ -495,24 +495,122 @@ else
 fi
 rm -rf "$dir"
 
-# 19. Where `data/` is on the host comes from the one reader (#639), and what
-# the reader refuses stops the supervisor before it inspects or restarts
-# anything. .env names IDEALISTA_DATA_DIR and the stub's Compose gives no
-# answer: neither that directory nor <repo>/data is taken on a guess.
+# 19. With the checkout's .env naming another directory (#639), the run log
+# the container writes as /app/data/run.log is <that directory>/run.log here.
+# A supervisor still reading <repo>/data/run.log would never see the job
+# finish, and would restart a completed paid run when its process exited.
+dir="$(mktemp -d)"
+mkdir -p "$dir/state" "$dir/data" "$dir/bin"
+printf 'IDEALISTA_DATA_DIR=%s\n' "$dir/state" > "$dir/.env"
+printf '{"services":{"app":{"volumes":[{"type":"bind","source":"%s","target":"/app/data"}]}}}\n' "$dir/state" > "$dir/compose.json"
+# Scenario 5's stub, except that the job finishes in the configured directory.
+cat >"$dir/bin/docker" <<STUB
+#!/bin/bash
+echo "\$@" >> "$dir/docker-calls.log"
+case "\$1" in
+  compose) cat "$dir/compose.json"; exit 0 ;;
+  ps) printf '%s\n' 'idealista-app' ;;
+  exec)
+    if [ "\$2" = "-d" ]; then exit 0; fi
+    if [ ! -f "$dir/.done-written" ]; then
+      : > "$dir/.done-written"
+      printf '%s\n' 'INFO:__main__:Done: 10 processed' >> "$dir/state/run.log"
+    fi
+    printf '%s\n' 'python -m utils.backfill_pool --snapshot data/x.json'
+    exit 0
+    ;;
+esac
+exit 0
+STUB
+chmod +x "$dir/bin/docker"
+( unset IDEALISTA_DATA_DIR; run_supervisor "$dir" ) >/dev/null 2>&1
+rc=$?
+if [ "$rc" -eq 0 ] && grep -q "reported done" "$dir/supervisor.log" 2>/dev/null &&
+   [ "$(starts_in "$dir")" -eq 0 ] && [ ! -e "$dir/data/run.log" ]; then
+    pass "the run log is read from the configured state directory"
+else
+    fail "the run log is read from the configured state directory" \
+        "rc=$rc starts=$(starts_in "$dir") $(cat "$dir/supervisor.log" 2>/dev/null)"
+fi
+rm -rf "$dir"
+
+# 19b. The lock lives there too - asserted as state, not as log lines. A live
+# decoy lock sits in <repo>/data, where the lock used to be. A supervisor is
+# started and left running: while it runs its lock FILE exists in the
+# configured directory and holds the pid of a live process; a second supervisor
+# started meanwhile exits 2 and the lock is still the first one's; when the
+# first exits its lock is gone and the decoy is as it was. A supervisor that
+# consulted the configured directory without taking its lock there would write
+# every log line the old version of this check read - and let a second one
+# start on the same paid job.
+dir="$(mktemp -d)"
+mkdir -p "$dir/state" "$dir/data"
+printf 'IDEALISTA_DATA_DIR=%s\n' "$dir/state" > "$dir/.env"
+printf '{"services":{"app":{"volumes":[{"type":"bind","source":"%s","target":"/app/data"}]}}}\n' "$dir/state" > "$dir/compose.json"
+make_stub "$dir" "python -m utils.backfill_pool --snapshot data/x.json" "idealista-app"
+lock="$dir/state/.supervisor.idealista-app.utils.backfill_pool.lock"
+decoy="$dir/data/.supervisor.idealista-app.utils.backfill_pool.lock"
+printf '%s\n' "$$" > "$decoy"
+( unset IDEALISTA_DATA_DIR; run_supervisor "$dir" ) >/dev/null 2>&1 &
+first=$!
+held=""
+for _ in $(seq 1 100); do
+    held="$(cat "$lock" 2>/dev/null)"
+    [ -n "$held" ] && break
+    sleep 0.1
+done
+holder_alive=no
+[ -n "$held" ] && [ "$held" != "$$" ] && kill -0 "$held" 2>/dev/null && holder_alive=yes
+( unset IDEALISTA_DATA_DIR; run_supervisor "$dir" ) >/dev/null 2>&1
+second_rc=$?
+during="$(cat "$lock" 2>/dev/null)"
+wait "$first"
+if [ "$holder_alive" = yes ] && [ "$second_rc" -eq 2 ] && [ "$during" = "$held" ] \
+    && [ ! -e "$lock" ] && [ "$(cat "$decoy" 2>/dev/null)" = "$$" ] && [ "$(starts_in "$dir")" -eq 0 ]; then
+    pass "the supervisor lock is taken in the configured state directory"
+else
+    fail "the supervisor lock is taken in the configured state directory" \
+        "holder=${held:-none} alive=$holder_alive second_rc=$second_rc during=${during:-none} lock_left=$([ -e "$lock" ] && echo yes || echo no) decoy=$(cat "$decoy" 2>/dev/null)"
+fi
+rm -rf "$dir"
+
+# 20. A state directory that cannot be resolved stops the supervisor before
+# it inspects or restarts anything.
+dir="$(mktemp -d)"
+mkdir -p "$dir/data"
+printf 'IDEALISTA_DATA_DIR=%s\n' "$dir/no-such-directory" > "$dir/.env"
+printf '{"services":{"app":{"volumes":[{"type":"bind","source":"%s","target":"/app/data"}]}}}\n' "$dir/no-such-directory" > "$dir/compose.json"
+make_stub "$dir" "sh -c sleep 1" "idealista-app"
+( unset IDEALISTA_DATA_DIR; run_supervisor "$dir" ) >/dev/null 2>"$dir/stderr"
+rc=$?
+# The one docker call allowed is the reader's question to Compose. The reason
+# is read as well: exit 2 is every refusal this script has.
+if [ "$rc" -eq 2 ] && grep -q "not an existing directory" "$dir/stderr" &&
+   ! grep -qv '^compose ' "$dir/docker-calls.log" 2>/dev/null && [ ! -e "$dir/no-such-directory" ]; then
+    pass "an unresolvable state directory stops the supervisor before docker"
+else
+    fail "an unresolvable state directory stops the supervisor before docker" "rc=$rc $(cat "$dir/stderr" 2>/dev/null)"
+fi
+rm -rf "$dir"
+
+# 21. A Compose that cannot be asked stops the supervisor too: the variable is
+# named, nothing confirms the directory, and neither it nor <repo>/data is
+# taken on a guess.
 dir="$(mktemp -d)"
 mkdir -p "$dir/state" "$dir/data"
 printf 'IDEALISTA_DATA_DIR=%s\n' "$dir/state" > "$dir/.env"
 make_stub "$dir" "sh -c sleep 1" "idealista-app"
-( unset IDEALISTA_DATA_DIR; run_supervisor "$dir" ) >/dev/null 2>&1
+( unset IDEALISTA_DATA_DIR; run_supervisor "$dir" ) >/dev/null 2>"$dir/stderr"
 rc=$?
-if [ "$rc" -eq 2 ] && ! grep -qv '^compose ' "$dir/docker-calls.log" 2>/dev/null && [ -z "$(ls -A "$dir/state")" ]; then
+if [ "$rc" -eq 2 ] && grep -q "what Compose would mount at /app/data is unknown" "$dir/stderr" &&
+   ! grep -qv '^compose ' "$dir/docker-calls.log" 2>/dev/null && [ -z "$(ls -A "$dir/state")" ]; then
     pass "a Compose that cannot be asked stops the supervisor before it touches the job"
 else
-    fail "a Compose that cannot be asked stops the supervisor before it touches the job" "rc=$rc $(cat "$dir/docker-calls.log" 2>/dev/null)"
+    fail "a Compose that cannot be asked stops the supervisor before it touches the job" "rc=$rc $(cat "$dir/stderr" "$dir/docker-calls.log" 2>/dev/null)"
 fi
 rm -rf "$dir"
 
-# 19b. A reader that answers nothing has not said where the state is. The
+# 22. A reader that answers nothing has not said where the state is. The
 # script asks its own checkout's copy, so the stub root carries the supervisor
 # and an emptied reader: exit 0, no output. Taken as an answer, the lock and
 # the run log would be looked for under `/`.
@@ -543,7 +641,7 @@ else
 fi
 rm -rf "$dir"
 
-# 19c. A linked git worktree (its `.git` is a file) is not where the stack
+# 23. A linked git worktree (its `.git` is a file) is not where the stack
 # runs from: a supervisor started in one would take a lock in a data/ no
 # container mounts, beside the real supervisor's, and both would restart the
 # paid job.
@@ -560,7 +658,7 @@ else
 fi
 rm -rf "$dir"
 
-# 19d. The supervisor's own log defaults to a file in the state directory, like
+# 24. The supervisor's own log defaults to a file in the state directory, like
 # the run log and the lock - not to `data/...` read against the caller's
 # working directory, which from anywhere but the repository root is a data/ of
 # its own.

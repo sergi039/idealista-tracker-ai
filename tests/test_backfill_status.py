@@ -56,3 +56,13 @@ def test_status_answers_what_docker_top_cannot():
         "safe, or an unreadable probe as idle, or a marker as a lock\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
+    # The scenarios about where the state directory is (#639) ran: a harness
+    # that lost them would still exit 0.
+    for line in (
+        "OK: the status tool reads the locks, the markers and the alarm from "
+        "the configured state directory",
+        "OK: an unresolvable state directory is unknown, never idle",
+        "OK: when Compose cannot be asked the state directory is unknown, "
+        "never guessed",
+    ):
+        assert line in result.stdout, line

@@ -56,7 +56,7 @@ data_dir="$(/bin/bash "$project_dir/tools/autopilot/lib/data_dir.sh" "$project_d
 case "$data_dir" in
     /*) ;;
     *)
-        echo "the reader of the state directory answered '$data_dir', which is not an absolute path -- nothing was backed up" >&2
+        echo "the reader of the state directory answered something that is not an absolute path -- nothing was backed up" >&2
         exit 1
         ;;
 esac

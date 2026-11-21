@@ -208,7 +208,7 @@ DATA_DIR_HOST="$(/bin/bash "$SCRIPT_DIR/autopilot/lib/data_dir.sh" "$REPO_ROOT")
 }
 case "$DATA_DIR_HOST" in
     /*) ;;
-    *) echo "the reader of the state directory answered '$DATA_DIR_HOST', which is not an absolute path" >&2; exit 2 ;;
+    *) echo "the reader of the state directory answered something that is not an absolute path" >&2; exit 2 ;;
 esac
 RUN_LOG_HOST="$DATA_DIR_HOST/${RUN_LOG#data/}"
 
