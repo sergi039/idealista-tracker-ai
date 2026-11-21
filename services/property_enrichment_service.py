@@ -422,8 +422,9 @@ class PropertyEnrichmentService:
 
         # Shortlist only: an explicit Enrich press, never ingestion's free
         # pass or an unattended sweep. Own locked write after decisive commit.
+        established = None
         try:
-            self.neighbours_service.enrich(prop, commit=True)
+            established = self.neighbours_service.enrich(prop, commit=True)
         except Exception as e:
             db.session.rollback()
             logger.warning(
@@ -431,10 +432,11 @@ class PropertyEnrichmentService:
             )
 
         # The plot of a house that states none, from the parcel the step above
-        # just placed (#634): no lookup of its own, own locked write, and only
-        # on this explicit press.
+        # placed IN THIS PRESS (#634): it is handed that call's answer, so a
+        # lookup that failed here leaves it nothing; no request of its own,
+        # own locked write, and only on this explicit press.
         try:
-            plot_cadastre.enrich(prop, commit=True)
+            plot_cadastre.enrich(prop, established, commit=True)
         except Exception as e:
             db.session.rollback()
             logger.warning(

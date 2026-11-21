@@ -9,8 +9,11 @@ source left is Catastro, and only for a row whose parcel is *established*.
 parcel under the strictest rules the app has -- a saved reference, else one
 zero-distance parcel under a `precise` coordinate, else an exact numbered
 address, never a privacy circle or a nearby guess -- and records it, with the
-subject it was resolved for, in `enrichment["neighbours"]`. This step runs right
-after it inside the same Enrich press and reads that block. **It starts no
+subject it was resolved for. This step runs right after it inside the same
+Enrich press and is handed what that call returned **in this press**: a lookup
+that raised, was refused or ran out of clock establishes nothing, and the
+neighbour step's own "kept the earlier block" answer (`kept_previous`) is not a
+parcel either. **It starts no
 Catastro request at all**: the metric outline is read from the cache the
 neighbour step just filled, under a spent lookup budget (`lookup_budget(0)`,
 which refuses every request before it starts), so a cache that cannot be reached
@@ -73,19 +76,29 @@ def needs_plot(prop: Any) -> bool:
     return getattr(prop, "plot_area", None) is None or _blank(prop.plot_area)
 
 
-def _established_parcel(prop: Any) -> Optional[Dict[str, str]]:
-    """The reference and subject the neighbour step settled on, or None."""
-    block = (getattr(prop, "enrichment", None) or {}).get("neighbours")
-    if not isinstance(block, dict) or block.get("status") != "ok":
+def _established_parcel(
+    prop: Any, result: Optional[Dict[str, Any]]
+) -> Optional[Dict[str, str]]:
+    """The reference and subject THIS press's neighbour step settled on, or None.
+
+    `result` is what `NeighboursService.enrich` returned in this press -- not the
+    block it stored. A stored `ok` from an earlier press says nothing about this
+    one: when this press's lookup raised, was refused or ran out of clock, the
+    neighbour step keeps its old block and says so (`kept_previous`), and a
+    parcel nobody established now is not a ground to write a plot.
+    """
+    if not isinstance(result, dict) or result.get("status") != "ok":
         return None
-    if block.get("subject") != neighbours.subject(prop):
+    if result.get(neighbours.KEPT_PREVIOUS):
         return None
-    reference = cadastre.normalize_reference(block.get("reference"))
+    if result.get("subject") != neighbours.subject(prop):
+        return None
+    reference = cadastre.normalize_reference(result.get("reference"))
     if not reference:
         return None
     return {
         "reference": cadastre.parcel_reference(reference),
-        "subject": block["subject"],
+        "subject": result["subject"],
     }
 
 
@@ -107,15 +120,18 @@ def parcel_area_m2(reference: str) -> float:
     return area
 
 
-def enrich(prop: Any, *, commit: bool = True) -> Optional[Dict[str, Any]]:
+def enrich(
+    prop: Any, established: Optional[Dict[str, Any]], *, commit: bool = True
+) -> Optional[Dict[str, Any]]:
     """Write the parcel's area as the plot of this row; None when nothing was.
 
-    Call it after `NeighboursService.enrich` in the same press. Every refusal is
-    a return of None, so the row stays `unknown` and nothing is recorded.
+    `established` is what `NeighboursService.enrich` returned in this same press
+    (None when it raised). Every refusal is a return of None, so the row stays
+    `unknown` and nothing is recorded.
     """
     if not needs_plot(prop):
         return None
-    parcel = _established_parcel(prop)
+    parcel = _established_parcel(prop, established)
     if parcel is None:
         return None
 
@@ -131,7 +147,7 @@ def enrich(prop: Any, *, commit: bool = True) -> Optional[Dict[str, Any]]:
         # while Catastro answered wins, and so does a row that has since moved.
         if not needs_plot(prop):
             return None
-        if _established_parcel(prop) != parcel:
+        if _established_parcel(prop, established) != parcel:
             return None
         block = {
             "value": area,
