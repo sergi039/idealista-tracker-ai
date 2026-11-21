@@ -13,6 +13,24 @@ must be an ancestor of `main`.
 
 ## Open
 
+### The neighbour measurement is never shown to the owner
+
+- **Anchor:** `templates/property_detail.html` (no `enrichment["neighbours"]`
+  card; the only "neighbours" there is the hazards card, #437);
+  `services/neighbours_service.py` (`read_verdict`).
+- **Measured 2026-11-21** on production (#570): 19 rows `ok`, 4 `no_parcel`.
+  The block is read only by `services/neighbours_service.py`,
+  `services/taste_descriptors.py` and `utils/backfill_neighbours.py`.
+- **What breaks, for whom:** the owner presses Enrich, the measurement is
+  written and reaches the taste prompt, but neither the building counts nor a
+  `no_parcel` appear on the property page, although neighbours are his most
+  frequent rejection reason. Owner decision 2026-11-21: `neighbor_privacy`
+  stays `unknown`, because none of the six rows rejected for neighbours
+  (970, 971, 976, 1010, 1759, 3552) is measurable; a threshold returns when
+  measurable rejected rows exist.
+- **Check:** `grep -n neighbours templates/property_detail.html` finds only the
+  hazards card.
+
 ### Yaencontre rows have no plot source except the per-press cadastre
 
 - **Anchor:** `services/plot_text.py` (`apply_to_property`); `docs/rules/portal-network-safety.md`.
