@@ -226,6 +226,41 @@ is the existing chain (matchers, then the catch-all). The fixtures under
 2026-08-30 artifacts, token-redacted; `tests/test_portal_alert_ingestion.py`
 and `tests/test_fotocasa_email_ingestion.py` pin all of it.
 
+**A fotocasa page the portal will not give no longer holds the email: the row is
+made from the email's own card** (owner decision 2026-11-21, #636). Measured
+on production that day: the retry list held 41 emails, every one for "its
+listing page could not be read", the oldest since 2026-11-10 and five of them
+retried 20 times or more -- a list that only a lifted block could shorten, and
+which a portal that stays refusing grows by every new alert. The card of the
+real alert (`tests/data/fotocasa_alert_arteixo.html`) says price, a heading
+"casa-chalet, Arteixo" (type, municipality), "5 habs · 251 m² · 3 baños" and
+the link; `fotocasa_source.cards_in_email` reads that, and the transaction and
+the land type only from the URL's own words. When the page is refused (a block
+that is a 200, a timeout, an HTTP error, an unreadable payload) **or the run has
+already stopped asking** after `PORTAL_MAX_CONSECUTIVE_REFUSALS`, the ingest
+builds the row through the same `build_property` (`fotocasa_import.card_row`,
+`method = alert_email_card`), with the `fotocasa:<id>` key, no coordinate, no
+description, no advertiser block and a stated area only as stated; an unstated
+field stays unknown. The email is then consumed: its object exists, so it
+leaves the retry list and the list grows only by an email whose card this parser
+cannot read (the old rule, still the rule for it). **A refusal is not "gone"**:
+only an answered `not_the_listing_page` consumes an email *without* a row, and
+a stored row is never marked removed by a failed read.
+
+The row carries `enrichment["import"]["email_only"] = true`. A later alert that
+names the listing again reads the page once (under the same refusal allowance);
+if it answers, `fotocasa_import.complete_from_page` fills **only what the row
+did not know** under the row lock -- description, plot, coordinate (only where
+the row has none; the portal pin is recorded beside it either way, #393), the
+import provenance and the advertiser verdict -- replaces the card's stub
+heading, drops the marker and writes `completed_from_page_at`. It never adds a
+second row, never overwrites a price or area the card stated, and never moves a
+coordinate a measurement was made at. The paste-links import still shows such a
+row as a duplicate. **Emails already on the retry list when this shipped stay on
+the old rule** until the owner sets `FOTOCASA_EMAIL_CARD_FOR_HELD=true` (default
+false): what happens to them is the owner's call.
+`tests/test_fotocasa_email_card_fallback.py` pins all of it.
+
 **The portal's own photographs, captured on the way past and put on the page**
 (#548, #550; 2026-09-04..06). Measured on production: of 1893 rows exactly one
 row's `enrichment` and four rows' `attributes` mentioned an image, while the

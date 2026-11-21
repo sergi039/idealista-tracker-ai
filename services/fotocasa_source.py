@@ -72,6 +72,7 @@ import requests
 
 from services import portal_photos
 from utils.http import HTTP_USER_AGENT, RateGate, request_with_retries
+from utils.idealista_extractors import extract_area_m2, extract_price
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +218,145 @@ def listing_urls_in_text(text: Optional[str]) -> List[str]:
         seen.add(listing_id)
         found.append(candidate)
     return found
+
+
+_ANCHOR = re.compile(
+    r'<a\b[^>]*href="(?P<href>[^"]+)"[^>]*>(?P<inner>.*?)</a>',
+    re.IGNORECASE | re.DOTALL,
+)
+_PRICE_TEXT = re.compile(r"[0-9][0-9.,]*\s*€")
+_STRUCK = re.compile(r"\bline-through\b|<(?:s|del|strike)\b", re.IGNORECASE)
+_FACTS_TEXT = re.compile(r"\d\s*(?:m²|m2|habs?\b|baños?\b)", re.IGNORECASE)
+_BEDROOMS = re.compile(r"(\d+)\s*habs?\b", re.IGNORECASE)
+_BATHROOMS = re.compile(r"(\d+)\s*baños?\b", re.IGNORECASE)
+# The button every card ends with; never the card's heading.
+_CALL_TO_ACTION = ("ver anuncio", "ver anuncios", "ver inmueble")
+
+# The transaction word of a canonical path (`/es/comprar/...`,
+# `/en/buy/...`), in the languages fotocasa serves it in. A word not listed
+# says nothing: the deal type then stays unknown rather than defaulting here.
+_SALE_WORDS = ("comprar", "buy")
+_RENT_WORDS = ("alquiler", "alquilar", "rent", "lloguer")
+
+
+@dataclass
+class FotocasaCard:
+    """One listing card of a fotocasa alert email, read.
+
+    The card is all the email says about a listing: the asking price, a
+    heading of the shape "casa-chalet, Arteixo" (type, then municipality), a
+    facts line ("5 habs · 251 m² · 3 baños") and the link. No coordinate, no
+    description, no seller. A field the card does not state is None, never a
+    guess; what the URL itself states (the type word and the transaction) is
+    read from the URL and from nothing else.
+    """
+
+    url: str
+    listing_id: int
+    title: Optional[str] = None
+    price: Optional[float] = None
+    area: Optional[float] = None
+    area_type: str = "unknown"
+    deal_type: Optional[str] = None
+    municipality: Optional[str] = None
+    building_type: Optional[str] = None
+    attributes: Dict[str, Any] = field(default_factory=dict)
+
+
+def _text_of(fragment: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", fragment)
+    return re.sub(r"\s+", " ", html_entities.unescape(text)).strip()
+
+
+def _path_segment(url: str, index: int) -> Optional[str]:
+    try:
+        parts = [p for p in urlsplit(url).path.split("/") if p]
+    except ValueError:
+        return None
+    return parts[index].lower() if len(parts) > index else None
+
+
+def _deal_type_from_url(url: str) -> Optional[str]:
+    word = _path_segment(url, 1)
+    if word in _SALE_WORDS:
+        return "sale"
+    if word in _RENT_WORDS:
+        return "rent"
+    return None
+
+
+def _split_heading(heading: str) -> tuple[Optional[str], Optional[str]]:
+    """`(type, municipality)` of a heading like "casa-chalet , Arteixo".
+
+    Both None unless the heading has the comma: a bare word could be either
+    half and nothing here says which.
+    """
+    cleaned = re.sub(r"\s+,", ",", heading)
+    head, comma, tail = cleaned.rpartition(",")
+    if not comma:
+        return None, None
+    return (head.strip() or None), (tail.strip() or None)
+
+
+def cards_in_email(body: Optional[str]) -> List[FotocasaCard]:
+    """Every listing card in a fotocasa alert email body, one per listing id.
+
+    Pure -- no network, no clock, no database. The anchors of one listing
+    share its URL and each carries one line of the card, so a line is told by
+    its content: a lone amount in euros is the price, a line with m², habs or
+    baños is the facts, the button is skipped and the first line left that has
+    the comma of "type, municipality" is the heading (any other text is not
+    read as one: an unknown button would become a title). A struck-through amount is a previous price and is not read. A
+    card that states none of price, area or heading is not returned: a row
+    with nothing but an id is no listing.
+    """
+    lines: Dict[int, List[tuple[str, str]]] = {}
+    hrefs: Dict[int, str] = {}
+    for match in _ANCHOR.finditer(body or ""):
+        href = html_entities.unescape(match.group("href"))
+        listing_id = listing_id_from_url(href)
+        if listing_id is None:
+            continue
+        hrefs.setdefault(listing_id, href)
+        text = _text_of(match.group("inner"))
+        if text:
+            lines.setdefault(listing_id, []).append((text, match.group("inner")))
+        else:
+            lines.setdefault(listing_id, [])
+
+    cards: List[FotocasaCard] = []
+    for listing_id, href in hrefs.items():
+        url = normalize_url(href) or href
+        card = FotocasaCard(url=url, listing_id=listing_id)
+        heading: Optional[str] = None
+        for text, markup in lines[listing_id]:
+            if text.lower() in _CALL_TO_ACTION:
+                continue
+            if _PRICE_TEXT.fullmatch(text):
+                if card.price is None and not _STRUCK.search(markup):
+                    card.price = extract_price(text)
+            elif _FACTS_TEXT.search(text):
+                if card.area is None:
+                    card.area = extract_area_m2(text)
+                bedrooms = _BEDROOMS.search(text)
+                bathrooms = _BATHROOMS.search(text)
+                if bedrooms:
+                    card.attributes["bedrooms"] = int(bedrooms.group(1))
+                if bathrooms:
+                    card.attributes["bathrooms"] = int(bathrooms.group(1))
+            elif heading is None and "," in text:
+                heading = text
+        if heading is not None:
+            card.building_type, card.municipality = _split_heading(heading)
+            card.title = re.sub(r"\s+,", ",", heading)
+        if card.price is None and card.area is None and card.title is None:
+            continue
+        if card.area is not None:
+            plot_word = (card.building_type or "").lower() in _PLOT_URL_TYPES
+            card.area_type = "plot" if plot_word or url_says_plot(url) else "built"
+        card.deal_type = _deal_type_from_url(url)
+        cards.append(card)
+    return cards
 
 
 def normalize_url(url: Optional[str]) -> Optional[str]:

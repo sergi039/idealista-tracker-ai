@@ -71,6 +71,12 @@ STATUS_REJECTED = "rejected"
 # portal's stored URL. Ids are only unique *within* a portal -- fotocasa and
 # milanuncios can both have a listing 190280914 -- which is why the pattern
 # is per source and the dash/`.htm`/`/d` anchors are part of it.
+# `enrichment["import"]["method"]` of a row made from the alert email's own
+# card because the portal would not give the page (#636, owner decision
+# 2026-11-21). The row also carries `import["email_only"] = True` until a page
+# read completes it (`complete_from_page`).
+EMAIL_ONLY_METHOD = "alert_email_card"
+
 PORTAL_URL_PATTERNS = {
     "fotocasa": "%/{listing_id}/d%",
     "milanuncios": "%-{listing_id}.htm",
@@ -173,6 +179,110 @@ def preview_row(listing) -> Dict[str, Any]:
         row["status"] = STATUS_REFUSED
         row["reason"] = listing.refusal
     return row
+
+
+def card_row(card) -> Dict[str, Any]:
+    """The `build_property` input for one alert-email card, no page read.
+
+    Same keys as `preview_row`, so the one builder serves both. Everything the
+    card does not state stays None -- no coordinate, no description, no seller
+    -- and `build_property` then records "the source did not say" instead of a
+    value (#98).
+    """
+    return {
+        "url": card.url,
+        "listing_id": card.listing_id,
+        "status": STATUS_NEW,
+        "reason": None,
+        "title": card.title,
+        "price": card.price,
+        "area": card.area,
+        "area_type": card.area_type,
+        "deal_type": card.deal_type,
+        "municipality": card.municipality,
+        "building_type": card.building_type,
+        "attributes": dict(card.attributes or {}),
+    }
+
+
+def is_email_only(prop) -> bool:
+    """True for a row made from an email card that no page read has completed."""
+    enrichment = getattr(prop, "enrichment", None)
+    block = enrichment.get("import") if isinstance(enrichment, dict) else None
+    return isinstance(block, dict) and block.get("email_only") is True
+
+
+def complete_from_page(prop, row: Dict[str, Any]) -> bool:
+    """Fill what an email-only row does not know from a page that was read.
+
+    Only unknown values are filled, so what the card stated and the owner has
+    seen stays; the card's heading ("casa-chalet, Arteixo") is the one thing a
+    page replaces, because it is a stub by construction. The coordinate is set
+    only where the row has none -- a measurement made at an existing one is
+    not moved from here -- but the portal's pin is recorded either way, where
+    `portal_coordinate` reads it. Returns True when the row changed.
+
+    Re-checked under the row's lock, because the free enrichers write the same
+    `enrichment` column and a concurrent completion must not lose theirs
+    (`services/enrichment_write.py`).
+    """
+    from copy import deepcopy
+
+    from services import plot_text
+    from services.enrichment_write import check_writable, locked_write
+
+    writable = check_writable(prop, True)
+    with locked_write(prop, locked=writable, commit=True):
+        if not is_email_only(prop):
+            return False
+        source = (prop.enrichment.get("import") or {}).get("source") or SOURCE_NAME
+        fresh = build_property(
+            row,
+            profile_id=prop.search_profile_id,
+            classification=(prop.property_category, prop.property_subtype),
+            method="alert_email",
+            source=source,
+        )
+
+        if fresh.title:
+            prop.title = fresh.title
+        for name in ("description", "price", "area", "plot_area", "municipality"):
+            if getattr(prop, name) is None and getattr(fresh, name) is not None:
+                setattr(prop, name, getattr(fresh, name))
+        if (prop.area_type or "unknown") == "unknown" and fresh.area_type:
+            prop.area_type = fresh.area_type
+        if fresh.attributes:
+            prop.attributes = {**fresh.attributes, **(prop.attributes or {})}
+        if (
+            prop.location_lat is None
+            and prop.location_lon is None
+            and fresh.location_lat is not None
+        ):
+            prop.location_lat = fresh.location_lat
+            prop.location_lon = fresh.location_lon
+            prop.location_accuracy = fresh.location_accuracy
+
+        enrichment = deepcopy(prop.enrichment or {})
+        imported = dict(enrichment.get("import") or {})
+        for key, value in (fresh.enrichment.get("import") or {}).items():
+            if key in ("source", "method", "listing_id", "imported_at"):
+                continue
+            if imported.get(key) in (None, "", {}, []):
+                imported[key] = value
+        imported.pop("email_only", None)
+        imported["completed_from_page_at"] = datetime.utcnow().isoformat()
+        enrichment["import"] = imported
+        if advertiser.ENRICHMENT_KEY not in enrichment:
+            verdict = fresh.enrichment.get(advertiser.ENRICHMENT_KEY)
+            if verdict is not None:
+                enrichment[advertiser.ENRICHMENT_KEY] = verdict
+        prop.enrichment = enrichment
+        plot_text.apply_to_property(
+            prop,
+            [("description", prop.description), ("title", prop.title)],
+            portal=source,
+        )
+        return True
 
 
 def read_urls(urls: List[str], *, session=None) -> List[Dict[str, Any]]:
@@ -381,6 +491,8 @@ def build_property(
             "portal_accuracy": row.get("portal_accuracy") or {},
         },
     }
+    if method == EMAIL_ONLY_METHOD:
+        prop.enrichment["import"]["email_only"] = True
     # The portal's own photographs, beside its own accuracy claim and for the
     # same reason. The key is written ONLY when the row really carries a list,
     # because a missing key means "nobody captured any" and an empty list means

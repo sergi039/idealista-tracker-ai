@@ -175,6 +175,16 @@ class Config:
         "YAENCONTRE_ALERT_SENDERS", "yaencontre.com"
     )
 
+    # A fotocasa alert whose page the portal will not give is stored from the
+    # email's own card (#636, owner decision 2026-11-21). The emails already
+    # waiting on the retry list when that shipped are left alone until the
+    # owner decides what happens to them: with this false a held email is
+    # retried as before and only emails new since then are stored from the
+    # card. Defaults to false; "true" drains the list on the next runs.
+    FOTOCASA_EMAIL_CARD_FOR_HELD = (
+        os.environ.get("FOTOCASA_EMAIL_CARD_FOR_HELD", "false").lower() == "true"
+    )
+
     # Gmail API (legacy, kept for compatibility)
     GMAIL_API_KEY = os.environ.get("GMAIL_API_KEY")
     GMAIL_CLIENT_ID = os.environ.get("GMAIL_CLIENT_ID")

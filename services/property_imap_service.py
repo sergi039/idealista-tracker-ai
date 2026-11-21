@@ -191,6 +191,9 @@ class PropertyIMAPService:
                     **base,
                     "type": "fotocasa_listings",
                     "urls": fotocasa_urls,
+                    # What the email itself says about each listing, for the
+                    # day the page is refused (#636).
+                    "cards": [asdict(c) for c in fotocasa_source.cards_in_email(body)],
                     "search_profile_id": profile.id if profile else None,
                 }
 
@@ -1155,20 +1158,30 @@ class PropertyIMAPService:
     ) -> tuple[int, bool]:
         """Create rows for the fotocasa listings one alert email names.
 
-        Returns ``(created, all_done)``. ``all_done=False`` means at least one
-        listing page could not be read for a reason that may pass -- fotocasa's
-        "SENTIMOS LA INTERRUPCIÓN" block (a 200, `services/fotocasa_source.py`),
-        a timeout, an HTTP error, or a payload this parser cannot read -- so
-        the caller must hold the UID cursor behind this email and let the next
-        run re-read it, exactly as #24 holds it for an idealista email that
-        raised. Every row committed before the failure is safe to re-meet: the
+        Returns ``(created, all_done)``. ``all_done=False`` means a listing
+        could be stored neither from its page nor from the email's own card,
+        so the caller must hold the UID cursor behind this email and let the
+        next run re-read it, exactly as #24 holds it for an idealista email
+        that raised. Every row committed before is safe to re-meet: the
         `fotocasa:<id>` dedup key makes the re-run skip it without a fetch.
 
-        The email supplies only the links, the arrival date and the profile;
-        every listing field comes off the listing page, through the same
+        The page comes first and supplies every field, through the same
         `preview_row`/`build_property` pair the paste-links import uses --
-        one builder, so the two doors cannot disagree about the dedup key,
-        the NULL `listing_status_source` or the portal pin.
+        one builder, so the doors cannot disagree about the dedup key, the
+        NULL `listing_status_source` or the portal pin.
+
+        **A page that cannot be read does not hold the email any more** (#636,
+        owner decision 2026-11-21): fotocasa's "SENTIMOS LA INTERRUPCIÓN"
+        block (a 200), a timeout, an HTTP error, a payload this parser cannot
+        read, or a run that stopped asking after
+        `PORTAL_MAX_CONSECUTIVE_REFUSALS` -- in each the listing is stored from
+        the email's card (price, heading, facts, link; the way yaencontre
+        always is), marked `email_only`, and a later page read completes that
+        same row (`complete_from_page`) rather than adding a second. A refusal
+        is never read as "gone". Without a card (an email this parser could not
+        read a listing out of) the old rule stands and the email is held.
+        Held emails are left on their old rule until the owner enables
+        `FOTOCASA_EMAIL_CARD_FOR_HELD`.
 
         A page that answers "this URL no longer serves that listing"
         (`not_the_listing_page`: the advert was taken down and the server
@@ -1183,6 +1196,8 @@ class PropertyIMAPService:
         http = requests.Session()
         created = 0
         all_done = True
+        cards = {card.get("listing_id"): card for card in email_data.get("cards") or []}
+        card_allowed = self._card_fallback_allowed(email_data)
 
         for url in email_data.get("urls") or []:
             listing_id = fotocasa_source.listing_id_from_url(url)
@@ -1192,15 +1207,25 @@ class PropertyIMAPService:
             # Before the fetch, so a listing already here through either door
             # (this ingester or the paste-links import) costs no request and
             # no gate wait. The key both doors write is `fotocasa:<id>`.
-            if fotocasa_import.existing_by_listing_id(listing_id) is not None:
+            known = fotocasa_import.existing_by_listing_id(listing_id)
+            if known is not None:
+                if fotocasa_import.is_email_only(known):
+                    self._complete_email_only_row(known, url, email_data, http)
                 continue
 
-            if self._portal_fetching_stopped("fotocasa", email_data):
-                all_done = False
-                break
-
-            listing = fotocasa_source.fetch_listing(url, session=http)
-            if not listing.ok:
+            if not self._portal_fetching_stopped("fotocasa", email_data):
+                listing = fotocasa_source.fetch_listing(url, session=http)
+                if listing.ok:
+                    self._portal_refusals["fotocasa"] = 0
+                    if self._create_portal_row(
+                        fotocasa_import.preview_row(listing),
+                        source="fotocasa",
+                        email_data=email_data,
+                        sale_only=sale_only,
+                        excluded_categories=excluded_categories,
+                    ):
+                        created += 1
+                    continue
                 if listing.refusal == fotocasa_source.REFUSAL_NOT_A_LISTING:
                     logger.info(
                         "Fotocasa listing %s from %s is no longer served at its "
@@ -1212,21 +1237,82 @@ class PropertyIMAPService:
                 self._count_portal_refusal(
                     "fotocasa", listing_id, listing.refusal, email_data
                 )
+
+            card = cards.get(listing_id)
+            if card is None or not card_allowed:
                 all_done = False
                 continue
-
-            self._portal_refusals["fotocasa"] = 0
-
+            logger.info(
+                "Fotocasa listing %s from %s: page not read; storing it from "
+                "the email's card",
+                listing_id,
+                email_data.get("source_email_id"),
+            )
             if self._create_portal_row(
-                fotocasa_import.preview_row(listing),
+                fotocasa_import.card_row(fotocasa_source.FotocasaCard(**card)),
                 source="fotocasa",
                 email_data=email_data,
                 sale_only=sale_only,
                 excluded_categories=excluded_categories,
+                record_advertiser=False,
+                method=fotocasa_import.EMAIL_ONLY_METHOD,
             ):
                 created += 1
 
         return created, all_done
+
+    def _card_fallback_allowed(self, email_data: Dict[str, Any]) -> bool:
+        """May this email's listings be stored from its cards?
+
+        Not for an email that was already waiting on the retry list when the
+        fallback shipped, unless the owner switched it on: the list is theirs
+        to decide about. `_held_now` is this run's own failures, which are
+        not "already waiting".
+        """
+        uid = email_data.get("uid")
+        was_waiting = (
+            self._held is not None and uid in self._held and uid not in self._held_now
+        )
+        return not was_waiting or bool(
+            getattr(Config, "FOTOCASA_EMAIL_CARD_FOR_HELD", False)
+        )
+
+    def _complete_email_only_row(
+        self, prop: Property, url: str, email_data: Dict[str, Any], http: Any
+    ) -> None:
+        """Give a row made from an email card the page, if the portal answers now.
+
+        One attempt per repeat mention, under the same refusal allowance as
+        every other fetch of the run. A refusal changes nothing and is not a
+        reason to hold the email: the row exists. "No longer served" does not
+        mark the row removed either -- listing status is established by
+        `ListingStatusService` and the owner, not by a failed page read.
+        """
+        from services import fotocasa_import
+
+        if self._portal_fetching_stopped("fotocasa", email_data):
+            return
+        listing = fotocasa_source.fetch_listing(url, session=http)
+        if not listing.ok:
+            if listing.refusal != fotocasa_source.REFUSAL_NOT_A_LISTING:
+                self._count_portal_refusal(
+                    "fotocasa", listing.listing_id, listing.refusal, email_data
+                )
+            return
+        self._portal_refusals["fotocasa"] = 0
+        had_coordinate = prop.location_lat is not None
+        try:
+            changed = fotocasa_import.complete_from_page(
+                prop, fotocasa_import.preview_row(listing)
+            )
+        except Exception as error:
+            db.session.rollback()
+            logger.warning(
+                "Completing fotocasa row %s from its page failed: %s", prop.id, error
+            )
+            return
+        if changed and not had_coordinate and prop.location_lat is not None:
+            self._enrich_new_property(prop)
 
     def _portal_fetching_stopped(self, portal: str, email_data: Dict[str, Any]) -> bool:
         """True when this run has already given up on the portal's host."""
@@ -1235,7 +1321,7 @@ class PropertyIMAPService:
             return False
         logger.warning(
             "Skipping the remaining %s fetches this run after %s refusals in "
-            "a row; UID %s is held and re-read next run",
+            "a row (UID %s)",
             portal,
             refusals,
             email_data.get("uid"),
@@ -1263,6 +1349,7 @@ class PropertyIMAPService:
         sale_only: bool,
         excluded_categories: set[str],
         record_advertiser: bool = True,
+        method: str = "alert_email",
     ) -> bool:
         """The shared tail of every portal ingest: filter, build, commit, enrich.
 
@@ -1289,7 +1376,7 @@ class PropertyIMAPService:
             row,
             profile_id=profile_id,
             classification=classification,
-            method="alert_email",
+            method=method,
             email_date=email_date,
             email_subject=email_data.get("email_subject"),
             email_sender=email_data.get("email_sender"),
