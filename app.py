@@ -1,5 +1,6 @@
 import logging
 import os
+import stat
 from datetime import timedelta
 from flask import Flask
 from flask_limiter import Limiter
@@ -64,6 +65,69 @@ limiter = Limiter(
 )
 
 
+# How much of the tombstone is read for its hint, and how much of the hint is
+# repeated in the refusal.
+_TOMBSTONE_HINT_READ_BYTES = 4096
+_TOMBSTONE_HINT_SHOWN_CHARS = 512
+
+
+def _tombstone_hint(tombstone):
+    """Where the tombstone says the state went, or "" - never an exception and
+    never a wait.
+
+    The tombstone is the FACT that an entry of that name exists; what it holds
+    is a convenience for the message. So nothing here can turn the refusal
+    into something else: only a regular file is opened (a FIFO of that name
+    would block the start for ever, a device or a socket is not text), without
+    following a link and without blocking, a bounded number of bytes is read,
+    they are decoded with replacement, and the value is reduced to printable
+    characters on one line before it reaches a log.
+    """
+    try:
+        if not stat.S_ISREG(os.lstat(tombstone).st_mode):
+            return ""
+        flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(tombstone, flags)
+        try:
+            # Checked again on the descriptor: the entry may have been
+            # replaced between the lstat and the open.
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                return ""
+            raw = os.read(descriptor, _TOMBSTONE_HINT_READ_BYTES)
+        finally:
+            os.close(descriptor)
+    except OSError:
+        return ""
+    for line in raw.decode("utf-8", errors="replace").splitlines():
+        if line.startswith("moved_to="):
+            value = line[len("moved_to=") :]
+            shown = "".join(ch for ch in value if ch.isprintable()).strip()
+            return shown[:_TOMBSTONE_HINT_SHOWN_CHARS]
+    return ""
+
+
+def _state_directory_problem(data_dir):
+    """Why `data_dir` may not be used as the state directory, or None.
+
+    One reason today: it carries the tombstone tools/move_data_dir.sh leaves
+    behind, so it is where the state used to be rather than where it is.
+    """
+    tombstone = os.path.join(data_dir, Config.STATE_TOMBSTONE_NAME)
+    # lexists - an lstat, which neither follows a link nor opens anything: a
+    # dangling link of that name, a FIFO, a directory are all the name the
+    # mover left. The decision is made here and never depends on reading it.
+    if not os.path.lexists(tombstone):
+        return None
+    moved_to = _tombstone_hint(tombstone)
+    return (
+        f"DATA_DIR {data_dir} carries {Config.STATE_TOMBSTONE_NAME}: the "
+        f"deployment's state was moved to "
+        f"{moved_to or 'another directory'} and this process was started on "
+        "the directory it left. On the host, IDEALISTA_DATA_DIR in .env must "
+        "name the moved directory (or run tools/move_data_dir.sh --rollback)"
+    )
+
+
 def _validate_config(app_config):
     """Fail-fast validation of critical configuration at startup.
 
@@ -74,6 +138,17 @@ def _validate_config(app_config):
         return
 
     errors = []
+
+    # The state directory must not be the one the state was moved out of
+    # (#639). tools/move_data_dir.sh leaves a tombstone in the checkout's
+    # `data/`; a container that mounts that directory again - a hand
+    # `docker compose up` after the IDEALISTA_DATA_DIR line was lost from .env -
+    # would start with no mail cursor and re-read the mailbox from the
+    # beginning, which is the incident of 2026-11-09. Refusing to start is the
+    # loud version of that mistake.
+    tombstone_problem = _state_directory_problem(Config.DATA_DIR)
+    if tombstone_problem:
+        errors.append(tombstone_problem)
 
     # DATABASE_URL must be set and look like a valid URI
     db_url = app_config.get("DATABASE_URL") or app_config.get("SQLALCHEMY_DATABASE_URI")
