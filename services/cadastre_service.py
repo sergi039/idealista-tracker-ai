@@ -824,6 +824,12 @@ def apply_to_property(
         # reference is what every later check keys on, and a row whose column
         # and block name different parcels is worse than either alone.
         prop.cadastral_reference = normalized
+        # A plot read from the parcel this row used to name is not this
+        # parcel's: retired in the same transaction as the reference it was
+        # measured for (#634), never left for a later press to notice.
+        from services import plot_cadastre
+
+        plot_cadastre.retire_stale(prop)
     return merged
 
 

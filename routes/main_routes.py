@@ -4578,7 +4578,8 @@ def set_cadastral_reference(property_id):
     Clearing is a separate action and makes no request: a reference typed
     wrongly has to be removable without a fetch.
     """
-    from services import cadastre_service
+    from services import cadastre_service, plot_cadastre
+    from services.enrichment_write import check_writable, locked_write
 
     prop = db.get_or_404(Property, property_id)
     raw = (request.form.get("cadastral_reference") or "").strip()
@@ -4587,11 +4588,15 @@ def set_cadastral_reference(property_id):
         # Clearing the field clears the column AND the block: leaving a
         # measurement of a parcel this listing no longer claims would be a
         # description of somewhere else.
-        prop.cadastral_reference = None
-        enrichment = dict(prop.enrichment or {})
-        enrichment.pop(cadastre_service.ENRICHMENT_KEY, None)
-        prop.enrichment = enrichment
-        db.session.commit()
+        # Under the row lock, read inside it (#339): the column, the block and
+        # a plot that was measured for the parcel being cleared go together.
+        locked = check_writable(prop, True)
+        with locked_write(prop, locked=locked, commit=True):
+            prop.cadastral_reference = None
+            enrichment = dict(prop.enrichment or {})
+            enrichment.pop(cadastre_service.ENRICHMENT_KEY, None)
+            prop.enrichment = enrichment
+            plot_cadastre.retire_stale(prop)
         flash("Cleared: no cadastral reference for this listing.", "success")
         return redirect(url_for("main.property_detail", property_id=property_id))
 
@@ -4610,8 +4615,10 @@ def set_cadastral_reference(property_id):
         # A refusal is not a crash and not a silent success: the reference is
         # still worth storing, because the parcel it names is a fact about the
         # listing whether or not Catastro answered this minute.
-        prop.cadastral_reference = normalized
-        db.session.commit()
+        locked = check_writable(prop, True)
+        with locked_write(prop, locked=locked, commit=True):
+            prop.cadastral_reference = normalized
+            plot_cadastre.retire_stale(prop)
         flash(
             f"Recorded the reference; Catastro did not answer ({exc.state}).", "error"
         )
