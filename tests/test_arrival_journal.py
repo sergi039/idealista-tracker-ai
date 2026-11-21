@@ -557,7 +557,10 @@ class TestAnEntryIsEveryFieldTyped:
         assert not arrival_journal._is_entry(item)
         assert arrival_journal.read(Property(enrichment=block))["readable"] is False
 
-    @pytest.mark.parametrize("field", arrival_journal.ENTRY_FIELDS)
+    # The keys of the test's own whole entry, not the module's tuple: read at
+    # collection, the module's name would make this file uncollectable on the
+    # code before the fix, and the mutation check could then test nothing.
+    @pytest.mark.parametrize("field", list(WHOLE_ENTRY))
     @pytest.mark.parametrize(
         "entry", [WHOLE_ENTRY, {**WHOLE_ENTRY, "received_at": None}]
     )
@@ -575,6 +578,7 @@ class TestAnEntryIsEveryFieldTyped:
         _record(prop, other)
 
         (written,) = _items(prop.id)
+        assert set(written) == set(WHOLE_ENTRY)
         assert set(written) == set(arrival_journal.ENTRY_FIELDS)
 
     @pytest.mark.parametrize("item", REVIEWERS_ENTRIES)
