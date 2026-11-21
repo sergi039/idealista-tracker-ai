@@ -173,9 +173,10 @@ things about it are load bearing:
   (`enrichment["neighbours"]`: `ok`, the subject still the row's, a reference)
   and writes the polygon area -- already compared with Catastro's declared
   `areaValue` -- to `plot_area`, with `enrichment["plot_from_cadastre"]`
-  (value, reference, source, extractor version, subject, UTC time). No lookup of
-  its own (the metric outline is cached under the neighbour step's key), no
-  command line, no sweep: one row per press, and the route is 5 a minute. Only a
+  (value, reference, source, extractor version, subject, UTC time). It starts no
+  Catastro request (the metric outline is read from the cache the neighbour step
+  just filled, under `lookup_budget(0)`; a miss leaves the plot `unknown` until
+  the next press), no command line, no sweep: one row per press, and the route is 5 a minute. Only a
   house (not a flat, not a row of unknown kind); a plot somebody stated is never
   overwritten, asked again under the row lock; a refusal or an unplaced parcel
   writes nothing and stays `unknown`. **What it cannot know**: a parcel is not
