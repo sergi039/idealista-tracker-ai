@@ -377,4 +377,25 @@ printf '#!/bin/bash\necho 0\nexit 0\n' >"${WORK}/failing-grep/grep"
 resolve "$REPO" "PATH=${WORK}/failing-grep:${PATH}"
 expect_refusal "a status and a count that disagree are refused" "could not be searched"
 
+# 18. No refusal quotes what a command read out of `.env`. stderr here is the
+# deploy watcher's log, and `.env` holds every credential of the deployment.
+# A grep that misbehaves - prints the lines it matched, to both streams, and
+# then fails - must not have its output repeated; and what Compose rendered is
+# not quoted either: with `${X}` in `.env` it can be another variable's value.
+printf '#!/bin/bash\necho "DB_PASSWORD=hunter2"\necho "DB_PASSWORD=hunter2" >&2\nexit 2\n' >"${WORK}/failing-grep/grep"
+resolve "$REPO" "PATH=${WORK}/failing-grep:${PATH}"
+expect_refusal "a grep that printed a line of .env and failed is refused" "could not be searched"
+case "${OUT}${ERR}" in *hunter2*) fail "the refusal repeats what grep printed out of .env" ;; esac
+pass "what grep printed is in neither stream"
+SECRET_PATH="${WORK}/hunter2-not-a-path"
+for answer in "$SECRET_PATH" "relative/hunter2" "${OTHER}" "${WORK}/a\$hunter2"; do
+    new_repo
+    printf 'IDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
+    compose_says "[$(bind "$answer")]"
+    resolve "$REPO"
+    [ "$RC" = "1" ] || fail "an answer that is not the text of .env was taken"
+    case "${OUT}${ERR}" in *"$answer"*) fail "a refusal quotes what Compose rendered: ${ERR}" ;; esac
+done
+pass "no refusal quotes what Compose rendered"
+
 printf '\nALL %d PASSED (%s %s)\n' "$passed" "$SHELL_UNDER_TEST" "$("$SHELL_UNDER_TEST" -c 'echo $BASH_VERSION')"

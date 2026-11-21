@@ -391,9 +391,10 @@ run_status
 [ "$RC" = "2" ] || fail "scenario 18: a reader that answers nothing did not answer unknown (rc=$RC)"
 grep -q "not an absolute path" "${WORK}/out" || fail "scenario 18 did not say the answer was no path"
 grep -q "VERDICT: idle" "${WORK}/out" && fail "scenario 18 called an empty answer idle"
-printf '#!/bin/bash\necho data\n' >"$READER"
+printf '#!/bin/bash\necho DB_PASSWORD=hunter2\n' >"$READER"
 run_status
 [ "$RC" = "2" ] || fail "scenario 18: a relative answer did not answer unknown (rc=$RC)"
+grep -q "hunter2" "${WORK}/out" && fail "scenario 18: what a broken reader printed was repeated in the verdict"
 grep -q "VERDICT: idle" "${WORK}/out" && fail "scenario 18 called a relative answer idle"
 mv "${READER}.real" "$READER"
 printf 'OK: a reader that is missing or answers no absolute path is unknown, never idle\n'

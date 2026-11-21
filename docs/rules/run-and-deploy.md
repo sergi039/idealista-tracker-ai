@@ -384,13 +384,3 @@ still inside the checkout, and moving it is a separate, owner-commanded step.**
   committed reference files (`docs/rules/reference-data.md`),
   `data/.orchestrator` (an agreement between sessions, not state) and the
   launchd stdout logs, whose paths are fixed in the installed plists.
-
-**A test run cannot write that directory** (`tests/data_dir_guard.py`). #627
-moved the two paths that had already done damage, the cursor and the ledger;
-on 2026-11-12 a full run still left `data/.inflight/` behind. So the session
-moves `Config.DATA_DIR` and `ATTACHMENTS_DIR` to a temporary directory, and an
-audit hook refuses any write whose real path is inside `<checkout>/data` (or
-inside `IDEALISTA_DATA_DIR` / the original `DATA_DIR` when the environment
-names one); a refusal is recorded as well as raised. Reads are allowed. Not
-covered, and said in the module: a subprocess, a file named inside SQL, and a
-hard link made before the run.

@@ -121,7 +121,7 @@ _data_dir_where_named() {
     # Bytes, not text (`-a`, LC_ALL=C): a NUL or a byte that is not valid in
     # the locale would otherwise make grep call the file binary and report
     # nothing of what is in it.
-    hits="$(LC_ALL=C grep -a -c -F "$IDEALISTA_DATA_DIR_KEY" "$env_file")"
+    hits="$(LC_ALL=C grep -a -c -F "$IDEALISTA_DATA_DIR_KEY" "$env_file" 2>/dev/null)"
     scan=$?
     # A search that ran ends 0 with a count (found) or 1 with `0` (not found).
     # Anything else did not run - 2 for a file that stopped being readable
@@ -131,7 +131,9 @@ _data_dir_where_named() {
     case "${scan}:${hits}" in
         1:0 | 0:[1-9] | 0:[1-9]*[0-9]) ;;
         *)
-            _data_dir_refuse "${env_file} could not be searched for ${IDEALISTA_DATA_DIR_KEY} (grep ended ${scan} with '${hits}'), so it cannot be ruled out that it names it"
+            # Its status, never its output: a grep that misbehaves may have
+            # printed lines of `.env`, and this message reaches the watcher's log.
+            _data_dir_refuse "${env_file} could not be searched for ${IDEALISTA_DATA_DIR_KEY} (grep ended ${scan}), so it cannot be ruled out that it names it"
             return 1
             ;;
     esac
@@ -192,7 +194,7 @@ idealista_compose_source() {
         _data_dir_refuse "'${docker} compose -f ${compose_file} config' failed in ${repo}, so what Compose would mount at /app/data is unknown; run it there to see why"
         return 1
     fi
-    if ! source="$(printf '%s' "$rendered" | _data_dir_bind_from_config)"; then
+    if ! source="$(printf '%s' "$rendered" | _data_dir_bind_from_config 2>/dev/null)"; then
         _data_dir_refuse "${compose_file} in ${repo} does not bind exactly one host directory at /app/data for the app service"
         return 1
     fi
@@ -248,22 +250,24 @@ idealista_data_dir() {
     value="$(idealista_compose_source "$repo")" || return 1
     case "$value" in
         /) _data_dir_refuse "Compose would mount / at /app/data; refusing"; return 1 ;;
-        *'$'*) _data_dir_refuse "Compose reports a state directory with a '\$' in it ('${value}'); refusing"; return 1 ;;
+        *'$'*) _data_dir_refuse "Compose reports a state directory with a '\$' in it; refusing"; return 1 ;;
         /*) ;;
         *)
-            _data_dir_refuse "Compose reports a state directory that is not an absolute path ('${value}')"
+            _data_dir_refuse "Compose reports a state directory that is not an absolute path"
             return 1
             ;;
     esac
     if [ ! -d "$value" ]; then
-        _data_dir_refuse "Compose would mount '${value}' at /app/data (${IDEALISTA_DATA_DIR_KEY} is named in ${DATA_DIR_NAMED_IN}), and that is not an existing directory; refusing to guess or to create it"
+        _data_dir_refuse "what Compose would mount at /app/data (${IDEALISTA_DATA_DIR_KEY} is named in ${DATA_DIR_NAMED_IN}) is not an existing directory; refusing to guess or to create it"
         return 1
     fi
     # Verified, not parsed: Compose decided, and this only checks that what it
     # decided is the text written - on the one line that names the variable.
+    # No refusal here quotes what Compose rendered: with `${X}` in `.env` that
+    # can be another variable's value, and stderr is the watcher's log.
     if [ "$DATA_DIR_NAMED_TIMES" != "1" ] ||
-        ! LC_ALL=C grep -a -q -x -F -- "${IDEALISTA_DATA_DIR_KEY}=${value}" "$DATA_DIR_NAMED_IN"; then
-        _data_dir_refuse "Compose would mount '${value}' at /app/data from here, and ${DATA_DIR_NAMED_IN} does not say exactly that on one line naming ${IDEALISTA_DATA_DIR_KEY} (it names it on ${DATA_DIR_NAMED_TIMES}). Another process may be given another directory: write one line, ${IDEALISTA_DATA_DIR_KEY}=/absolute/path, nothing else on it"
+        ! LC_ALL=C grep -a -q -x -F -- "${IDEALISTA_DATA_DIR_KEY}=${value}" "$DATA_DIR_NAMED_IN" >/dev/null 2>&1; then
+        _data_dir_refuse "what Compose would mount at /app/data from here is not what ${DATA_DIR_NAMED_IN} says: it does not say exactly that on one line naming ${IDEALISTA_DATA_DIR_KEY} (it names it on ${DATA_DIR_NAMED_TIMES}). Another process may be given another directory: write one line, ${IDEALISTA_DATA_DIR_KEY}=/absolute/path, nothing else on it"
         return 1
     fi
     printf '%s\n' "$value"

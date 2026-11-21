@@ -534,29 +534,43 @@ else
 fi
 rm -rf "$dir"
 
-# 19b. The lock lives there too: a live supervisor's lock in the configured
-# directory refuses a second one, and a lock left in <repo>/data - where it
-# used to be - is not the one consulted.
+# 19b. The lock lives there too - asserted as state, not as log lines. A live
+# decoy lock sits in <repo>/data, where the lock used to be. A supervisor is
+# started and left running: while it runs its lock FILE exists in the
+# configured directory and holds the pid of a live process; a second supervisor
+# started meanwhile exits 2 and the lock is still the first one's; when the
+# first exits its lock is gone and the decoy is as it was. A supervisor that
+# consulted the configured directory without taking its lock there would write
+# every log line the old version of this check read - and let a second one
+# start on the same paid job.
 dir="$(mktemp -d)"
 mkdir -p "$dir/state" "$dir/data"
 printf 'IDEALISTA_DATA_DIR=%s\n' "$dir/state" > "$dir/.env"
 printf '{"services":{"app":{"volumes":[{"type":"bind","source":"%s","target":"/app/data"}]}}}\n' "$dir/state" > "$dir/compose.json"
 make_stub "$dir" "python -m utils.backfill_pool --snapshot data/x.json" "idealista-app"
-printf '%s\n' "$$" > "$dir/state/.supervisor.idealista-app.utils.backfill_pool.lock"
+lock="$dir/state/.supervisor.idealista-app.utils.backfill_pool.lock"
+decoy="$dir/data/.supervisor.idealista-app.utils.backfill_pool.lock"
+printf '%s\n' "$$" > "$decoy"
+( unset IDEALISTA_DATA_DIR; run_supervisor "$dir" ) >/dev/null 2>&1 &
+first=$!
+held=""
+for _ in $(seq 1 100); do
+    held="$(cat "$lock" 2>/dev/null)"
+    [ -n "$held" ] && break
+    sleep 0.1
+done
+holder_alive=no
+[ -n "$held" ] && [ "$held" != "$$" ] && kill -0 "$held" 2>/dev/null && holder_alive=yes
 ( unset IDEALISTA_DATA_DIR; run_supervisor "$dir" ) >/dev/null 2>&1
-refused_locked="$(grep -c "refusing to start" "$dir/supervisor.log" 2>/dev/null || true)"
-rm -f "$dir/state/.supervisor.idealista-app.utils.backfill_pool.lock"
-printf '%s\n' "$$" > "$dir/data/.supervisor.idealista-app.utils.backfill_pool.lock"
-( unset IDEALISTA_DATA_DIR; run_supervisor "$dir" ) >/dev/null 2>&1
-refused_after_decoy="$(grep -c "refusing to start" "$dir/supervisor.log" 2>/dev/null || true)"
-# One refusal in all: the first run met the live lock, the second did not
-# mistake the decoy for one and went on to watch the job.
-if [ "$refused_locked" = "1" ] && [ "$refused_after_decoy" = "1" ] \
-    && grep -q "supervisor: watching" "$dir/supervisor.log" 2>/dev/null; then
+second_rc=$?
+during="$(cat "$lock" 2>/dev/null)"
+wait "$first"
+if [ "$holder_alive" = yes ] && [ "$second_rc" -eq 2 ] && [ "$during" = "$held" ] \
+    && [ ! -e "$lock" ] && [ "$(cat "$decoy" 2>/dev/null)" = "$$" ] && [ "$(starts_in "$dir")" -eq 0 ]; then
     pass "the supervisor lock is taken in the configured state directory"
 else
     fail "the supervisor lock is taken in the configured state directory" \
-        "refusals after the live lock=$refused_locked, after the decoy=$refused_after_decoy; $(cat "$dir/supervisor.log" 2>/dev/null)"
+        "holder=${held:-none} alive=$holder_alive second_rc=$second_rc during=${during:-none} lock_left=$([ -e "$lock" ] && echo yes || echo no) decoy=$(cat "$decoy" 2>/dev/null)"
 fi
 rm -rf "$dir"
 
