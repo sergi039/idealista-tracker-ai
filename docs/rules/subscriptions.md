@@ -167,6 +167,25 @@ things about it are load bearing:
   (review of #661). Yaencontre
   cards carry no text and its pages may not be fetched, so those rows stay
   unknown; only the per-press cadastre can state their plot.
+* **A house the text cannot place gets its plot from the parcel an Enrich
+  press placed** (#634, `services/plot_cadastre.py`): it runs right after
+  `NeighboursService` in `_advisory_pass`, reads the parcel that step recorded
+  (`enrichment["neighbours"]`: `ok`, the subject still the row's, a reference)
+  and writes the polygon area -- already compared with Catastro's declared
+  `areaValue` -- to `plot_area`, with `enrichment["plot_from_cadastre"]`
+  (value, reference, source, extractor version, subject, UTC time). No lookup of
+  its own (the metric outline is cached under the neighbour step's key), no
+  command line, no sweep: one row per press, and the route is 5 a minute. Only a
+  house (not a flat, not a row of unknown kind); a plot somebody stated is never
+  overwritten, asked again under the row lock; a refusal or an unplaced parcel
+  writes nothing and stays `unknown`. **What it cannot know**: a parcel is not
+  always the plot a listing sells (a property of two parcels reads small, a
+  house sold with part of a finca reads large) -- the block names the reference
+  so the figure can be checked. **Its reach is small and measured**: on
+  production 2026-11-21, of the 1,831 plot-`unknown` rows of subscription 24
+  that pass price and house size, 22 carry a `precise` coordinate and 1 a
+  cadastral reference; the other 1,809 are locality centres or privacy circles,
+  which this app never turns into a parcel.
 * **A row the owner has judged is never hidden.** Favorited or reviewed
   beats the filter: a listing somebody already decided about must not
   vanish because a bound says so.
