@@ -8,10 +8,18 @@
 # What is pinned:
 #   * a ready deployment is called ready, and --check is the default;
 #   * every refusal names its reason, exits 1, and leaves everything exactly
-#     as it was - no container stopped or started, no file written.
+#     as it was - no container stopped or started, no file written;
+#   * every run, ready or not: docker is asked only to read (any other verb
+#     fails the run), and nothing under the checkout changes - not a file, not
+#     a timestamp, not the git index;
+#   * every mount of every container is compared with the state directory by
+#     real path, and two filesystems are told apart by mount point too.
 
 set -euo pipefail
 unset IDEALISTA_DATA_DIR
+# The harness's own `git status` must not write the index either; the script
+# under test runs without this (run_move) and has to say it itself.
+export GIT_OPTIONAL_LOCKS=0
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REAL_SCRIPT="${MOVE_SCRIPT_UNDER_TEST:-${SCRIPT_DIR}/move_data_dir.sh}"
@@ -19,7 +27,7 @@ REAL_LIB_DIR="${MOVE_LIB_UNDER_TEST:-${SCRIPT_DIR}/autopilot/lib}"
 
 ROOT="$(mktemp -d)"
 ROOT="$(cd "$ROOT" && pwd -P)"
-cleanup() { local rc=$?; rm -rf "$ROOT"; exit "$rc"; }
+cleanup() { local rc=$?; chmod -R u+rwx "$ROOT" 2>/dev/null; rm -rf "$ROOT"; exit "$rc"; }
 trap cleanup EXIT
 
 passed=0
@@ -42,13 +50,36 @@ write_stubs() {
     mkdir -p "${W}/bin"
     cat >"${W}/bin/docker" <<'STUB'
 #!/bin/bash
-# State: $STUB/running (true|false), $STUB/mount (host directory at /app/data).
+# State: $STUB/running (true|false), $STUB/mount (host directory at /app/data),
+# $STUB/containers (docker ps -a), $STUB/mounts.<name> (Type|Name|Destination|
+# Source lines; for the app, its mounts besides /app/data), $STUB/volume.<name>
+# (the local driver's device option).
+#
+# The check may only ask. Anything outside the verbs below is recorded in
+# forbidden and refused - and a stop is still obeyed, so a check that stopped
+# the app also leaves it stopped.
 printf '%s | %s=%s\n' "$*" "IDEALISTA_DATA_DIR" "${IDEALISTA_DATA_DIR-<unset>}" >>"$STUB/../docker.log"
+# An `inspect` that reads its stdin, as a CLI may: it must not eat the list
+# the check is looping over.
+[ "$1" != "inspect" ] || [ ! -e "$STUB/eat-stdin" ] || cat >/dev/null
 hook() { [ -e "$STUB/fail.$1" ] || return 1; [ -e "$STUB/keep.$1" ] || rm -f "$STUB/fail.$1"; return 0; }
+forbidden() {
+    printf '%s\n' "$*" >>"$STUB/../forbidden"
+    case " $* " in *" stop "* | *" kill "* | *" down "*) printf 'false\n' >"$STUB/running" ;; esac
+    exit 97
+}
 case "$1" in
     compose)
+        all="$*"
         shift
-        while [ $# -gt 0 ] && [ "$1" != "stop" ] && [ "$1" != "up" ] && [ "$1" != "config" ]; do shift; done
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -f | -p | --file | --project-name | --project-directory | --env-file) shift 2 ;;
+                -*) shift ;;
+                *) break ;;
+            esac
+        done
+        [ "${1:-}" = "config" ] || forbidden "$all"
         case "${1:-}" in
             config)
                 # What Compose would bind at /app/data, the question the
@@ -66,6 +97,7 @@ case "$1" in
         esac
         ;;
     inspect)
+        [ "$2" = "-f" ] && [ $# -eq 4 ] || forbidden "$*"
         format="$3"
         name="$4"
         case "$format" in
@@ -74,27 +106,55 @@ case "$1" in
                 [ ! -e "$STUB/gone" ] || { echo "Error: No such object: $name" >&2; exit 1; }
                 cat "$STUB/running"
                 ;;
-            *Destination*)
+            *'{{.Type}}|{{.Name}}|{{.Destination}}|{{.Source}}'*)
+                hook "inspect-mounts.$name" && exit 1
+                if [ "$name" = "$STUB_APP" ]; then printf 'bind||/app/data|%s\n' "$(cat "$STUB/mount")"; fi
+                cat "$STUB/mounts.$name" 2>/dev/null || true
+                ;;
+            *'eq .Destination "/app/data"'*)
                 cat "$STUB/mount"
                 ;;
-            *)
-                [ "$name" = "$STUB_APP" ] || { hook inspect-mounts && exit 1; }
-                if [ "$name" = "$STUB_APP" ]; then cat "$STUB/mount"; else cat "$STUB/mounts.$name" 2>/dev/null || true; fi
-                ;;
+            *) forbidden "$*" ;;
         esac
+        ;;
+    volume)
+        [ "$2" = "inspect" ] && [ "$3" = "-f" ] && [ $# -eq 5 ] || forbidden "$*"
+        hook "volume.$5" && exit 1
+        cat "$STUB/volume.$5" 2>/dev/null || printf '\n'
         ;;
     exec)
-        [ "$(cat "$STUB/running")" = "true" ] || exit 1
-        shift 2
-        case "$1" in
-            cat) cat "$(cat "$STUB/mount")/${2#/app/data/}" ;;
-            sh) [ ! -e "$STUB/no-reference" ] ;;
+        # The one exec the check may run: `test -r` of a reference file.
+        case "$*" in
+            "exec $STUB_APP sh -c test -r \"\${REFERENCE_DATA_DIR:?}/\$1\" sh "*) ;;
+            *) forbidden "$*" ;;
         esac
+        [ "$(cat "$STUB/running")" = "true" ] || exit 1
+        [ ! -e "$STUB/no-reference" ]
         ;;
-    ps) hook ps && exit 1; cat "$STUB/containers" ;;
+    ps)
+        [ "$*" = "ps -a --format {{.Names}}" ] || forbidden "$*"
+        hook ps && exit 1
+        cat "$STUB/containers"
+        ;;
+    *) forbidden "$*" ;;
 esac
 STUB
     chmod +x "${W}/bin/docker"
+
+    # df answers through the real one, except that a path named in
+    # $STUB/df-elsewhere is reported on another mount point, and
+    # $STUB/df-fails makes it answer nothing.
+    cat >"${W}/bin/df" <<STUB
+#!/bin/bash
+[ ! -e "\$STUB/df-fails" ] || exit 1
+out="\$("$(command -v df)" "\$@")" || exit \$?
+if [ -e "\$STUB/df-elsewhere" ] && [ "\${!#}" = "\$(cat "\$STUB/df-elsewhere")" ]; then
+    printf '%s\n' "\$out" | awk 'NR == 1 { print; next } { \$NF = "/Volumes/Elsewhere"; print }'
+else
+    printf '%s\n' "\$out"
+fi
+STUB
+    chmod +x "${W}/bin/df"
 }
 
 # A fresh world per scenario: repository, state, backups, stub state.
@@ -132,9 +192,19 @@ new_world() {
     printf 'DB_PASSWORD=hunter2\nAPP_HOST_PORT=5001\n' >"$REPO/.env"
     chmod 600 "$REPO/.env"
 
+    # A tracked file whose timestamp no longer matches the index: `git status`
+    # would refresh the index and write it back, unless told not to.
+    touch -t 202001010000 "$REPO/docker-compose.yml"
+
     printf 'true\n' >"$STUB/running"
     printf '%s\n' "$REPO/data" >"$STUB/mount"
-    printf 'idealista-app\n' >"$STUB/containers"
+    # Mounts that have nothing to do with the state, and must not stop the
+    # move: the app's other ones, a database on a named volume, a sibling
+    # whose source merely starts with the same characters.
+    printf 'idealista-app\nidealista-db\nidealista-backup\n' >"$STUB/containers"
+    printf 'bind||/app/code|%s\ntmpfs||/run|\n' "$REPO/tools" >"$STUB/mounts.idealista-app"
+    printf 'volume|pgdata|/var/lib/postgresql/data|/var/lib/docker/volumes/pgdata/_data\n' >"$STUB/mounts.idealista-db"
+    printf 'bind||/backup|%s\n' "$REPO/data-old" >"$STUB/mounts.idealista-backup"
     printf '200' >"$STUB/page"
     printf '0\n' >"$STUB/status-rc"
     : >"${W}/docker.log"
@@ -149,19 +219,51 @@ snapshot_original() {
     shasum -a 256 "$REPO/.env" | cut -d' ' -f1 >"${W}/original.env"
 }
 
+# Every entry under the checkout - .git, data and the working tree - with its
+# type, size and modification time, and the index by content.
+checkout_snapshot() {
+    python3 - "$REPO" <<'PY'
+import hashlib, os, sys
+root = sys.argv[1]
+def line(path):
+    try:
+        s = os.lstat(path)
+    except OSError as error:
+        print(path, "unreadable", error.errno)
+        return
+    print(path, oct(s.st_mode), s.st_size, s.st_mtime_ns)
+line(root)
+for top, dirs, files in os.walk(root):
+    dirs.sort()
+    for name in sorted(dirs + files):
+        line(os.path.join(top, name))
+with open(os.path.join(root, ".git", "index"), "rb") as index:
+    print("index sha256", hashlib.sha256(index.read()).hexdigest())
+PY
+}
+
 run_move() {
     # run_move [VAR=value ...] -- <script arguments>
+    # Fails the scenario outright if the run wrote anything under the checkout
+    # or asked docker for anything but a read.
     local envs=()
     while [ $# -gt 0 ] && [ "$1" != "--" ]; do envs+=("$1"); shift; done
     shift
+    checkout_snapshot >"${W}/before.snapshot"
     set +e
-    env -u IDEALISTA_DATA_DIR \
+    # stdin is /dev/null: a reader outside a loop gets end of file, not this
+    # harness's own stdin, so a check that reads stdin fails instead of hanging.
+    env -u IDEALISTA_DATA_DIR -u GIT_OPTIONAL_LOCKS \
         PATH="${W}/bin:${PATH}" \
         STUB="$STUB" STUB_REPO="$REPO" STUB_APP="idealista-app" \
         ${envs[@]+"${envs[@]}"} \
-        /bin/bash "$REPO/tools/move_data_dir.sh" "$@" >"${W}/out" 2>&1
+        /bin/bash "$REPO/tools/move_data_dir.sh" "$@" </dev/null >"${W}/out" 2>&1
     RC=$?
     set -e
+    [ ! -s "${W}/forbidden" ] || fail "the check asked docker for more than a read: $(head -n 1 "${W}/forbidden")"
+    checkout_snapshot >"${W}/after.snapshot"
+    diff "${W}/before.snapshot" "${W}/after.snapshot" >"${W}/written" \
+        || fail "the check wrote under the checkout: $(grep '^[<>]' "${W}/written" | head -n 2 | tr '\n' ' ')"
 }
 
 expect_original() {
@@ -201,7 +303,7 @@ run_move -- "$DEST"
 expect_untouched "scenario 1 (default mode)"
 pass "--check is read-only, and it is the default"
 
-# --- 4. preflight refusals: each leaves everything untouched ---------------
+# --- 2. preflight refusals: each leaves everything untouched ---------------
 refusal() {
     # refusal <label> <text expected in the output> [VAR=value ...] (after the
     # caller has arranged the world)
@@ -261,18 +363,14 @@ new_world; : >"$STUB/no-reference"
 refusal "image without reference files" "does not carry"
 expect_untouched "preflight: old image"
 
-new_world; printf 'idealista-app\nidealista-app-run-abc\n' >"$STUB/containers"; printf '%s\n' "$REPO/data" >"$STUB/mounts.idealista-app-run-abc"
-refusal "a second container mounts the directory" "also mounts"
-expect_untouched "preflight: sibling container"
-
 # A question docker or git could not answer is a problem, not a "no".
 new_world; : >"$STUB/fail.ps"
 refusal "docker cannot list the containers" "could not list the containers"
 expect_untouched "preflight: docker ps fails"
 
-new_world; printf 'idealista-app\nidealista-app-run-abc\n' >"$STUB/containers"; : >"$STUB/fail.inspect-mounts"
-refusal "a sibling's mounts cannot be read" "could not say what container"
-printf 'idealista-app\n' >"$STUB/containers"; expect_untouched "preflight: docker inspect of a sibling fails"
+new_world; : >"$STUB/fail.inspect-mounts.idealista-db"
+refusal "a sibling's mounts cannot be read" "could not say what container idealista-db mounts"
+expect_untouched "preflight: docker inspect of a sibling fails"
 
 new_world
 printf '#!/bin/bash\nfor arg in "$@"; do [ "$arg" != "status" ] || exit 1; done\nexec "%s" "$@"\n' "$(command -v git)" >"${W}/bin/git"
@@ -309,6 +407,54 @@ fi
 new_world; git -C "$REPO" checkout --quiet -b other
 refusal "wrong branch" "is not on main"
 git -C "$REPO" checkout --quiet main; expect_untouched "preflight: wrong branch"
+
+# Two filesystems are two mount points even on one device; a df that does not
+# answer is not "the same".
+new_world; printf '%s\n' "$W" >"$STUB/df-elsewhere"
+refusal "destination on another mount point" "not on the same mounted filesystem"
+expect_untouched "preflight: another mount point"
+new_world; : >"$STUB/df-fails"
+refusal "df answers nothing" "could not establish which filesystem"
+expect_untouched "preflight: df fails"
 pass "every preflight refusal leaves the deployment untouched"
+
+# --- 3. every mount of every container, by real path ---------------------
+# mounted <label> <container> <mount line>: that one mount, added to the
+# ready world, is refused as overlapping the state directory. The line names
+# @REPO@ and @W@, filled in once the new world exists - a ${REPO} expanded at
+# the call site would still name the previous world.
+mounted() {
+    local label="$1" container="$2" line="$3"
+    new_world
+    line="${line//@REPO@/$REPO}"
+    line="${line//@W@/$W}"
+    grep -Fx -- "$container" "$STUB/containers" >/dev/null || printf '%s\n' "$container" >>"$STUB/containers"
+    printf '%s\n' "$line" >>"$STUB/mounts.${container}"
+    refusal "$label" "${4:-inside it, or holds it}"
+    expect_untouched "mounts: ${label}"
+}
+mounted "a sibling mounts the directory" idealista-app-run-abc "bind||/app/data|@REPO@/data"
+mounted "a sibling mounts a directory inside it" idealista-app-run-abc "bind||/app/data/.inflight|@REPO@/data/.inflight"
+mounted "a sibling mounts a directory that holds it" idealista-tools "bind||/work|@W@"
+new_world; ln -s "$REPO" "${W}/link-to-repo"
+printf 'idealista-tools\n' >>"$STUB/containers"
+printf 'bind||/work|%s\n' "${W}/link-to-repo/data/.inflight" >"$STUB/mounts.idealista-tools"
+refusal "a sibling mounts it through a link" "inside it, or holds it"
+expect_untouched "mounts: through a link"
+mounted "Docker Desktop's spelling of the path" idealista-tools "bind||/state|/host_mnt@REPO@/data/attachments"
+mounted "the app mounts part of it a second time" idealista-app "bind||/app/attachments|@REPO@/data/attachments"
+mounted "a mount of a kind the check does not know" idealista-tools "npipe||/pipe|/var/run/x" "does not know"
+new_world; printf '%s\n' "$REPO/data" >"$STUB/volume.pgdata"
+refusal "a volume created over the directory" "inside it, or holds it"
+expect_untouched "mounts: volume over the directory"
+new_world; : >"$STUB/fail.volume.pgdata"
+refusal "a volume that cannot be described" "could not describe volume pgdata"
+expect_untouched "mounts: volume inspect fails"
+new_world; : >"$STUB/eat-stdin"
+printf 'idealista-zz-last\n' >>"$STUB/containers"
+printf 'bind||/state|%s\n' "$REPO/data" >"$STUB/mounts.idealista-zz-last"
+refusal "the last container, behind a docker that reads stdin" "inside it, or holds it"
+expect_untouched "mounts: docker reads stdin"
+pass "a mount of the directory, inside it or above it, in any container, refuses"
 
 printf '\nALL %d GROUPS PASSED\n' "$passed"

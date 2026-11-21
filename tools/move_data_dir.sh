@@ -20,6 +20,11 @@
 
 set -euo pipefail
 
+# `git status` refreshes the index and writes it back when a tracked file's
+# timestamps changed - an optional lock. A question must not write: off, for
+# every git this script and the tools it runs start.
+export GIT_OPTIONAL_LOCKS=0
+
 SCRIPT_SOURCE="${BASH_SOURCE[0]}"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd -P)"
 REPO="${MOVE_REPO_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd -P)}"
@@ -54,7 +59,9 @@ EOF
 
 # --- small readers ----------------------------------------------------------
 
-dk() { docker "$@"; }
+# Never from stdin: the readers below run inside `while read` loops fed by a
+# here-string, and a command that read stdin would eat the rest of the list.
+dk() { docker "$@" </dev/null; }
 
 # 0 running, 1 stopped, 2 could not tell. "Could not tell" is its own answer:
 # a probe that failed must never read as "stopped".
@@ -87,6 +94,31 @@ phys() { ( cd "$1" 2>/dev/null && pwd -P ); }
 
 device_of() {
     python3 -c 'import os, sys; print(os.stat(sys.argv[1]).st_dev)' "$1" 2>/dev/null
+}
+
+# Where the filesystem a path is on is mounted (`df -P`, the last column). Two
+# directories of one device can still be two mounts - a bind mount of a
+# subdirectory on Linux - and a rename across them fails with EXDEV.
+mount_point_of() {
+    df -P "$1" 2>/dev/null | awk 'NR == 2 { for (i = 6; i <= NF; i++) printf "%s%s", $i, (i < NF ? " " : "\n") }'
+}
+
+# Does a container's mount source lie inside the state directory, or hold it?
+# `yes` or `no`, by real paths. Docker Desktop spells a host path
+# /host_mnt/<path> in places: both spellings are asked.
+overlaps_state() {
+    python3 -c 'import os, sys
+state = os.path.realpath(sys.argv[1])
+sources = {sys.argv[2]}
+if sys.argv[2].startswith("/host_mnt/"):
+    sources.add(sys.argv[2][len("/host_mnt"):])
+hit = False
+for source in sources:
+    source = os.path.realpath(source)
+    inside = source.startswith(state.rstrip("/") + "/")
+    holds = state.startswith(source.rstrip("/") + "/")
+    hit = hit or source == state or inside or holds
+print("yes" if hit else "no")' "$SRC" "$1" </dev/null 2>/dev/null
 }
 
 env_line_count() {
@@ -147,6 +179,7 @@ preflight_common() {
 
 preflight_apply() {
     local head deployed parent source count name other others mounts dirty running_rc=0 link would_mount
+    local here there here_at there_at kind volume target
     say "preflight (read-only):"
     preflight_common
 
@@ -169,10 +202,22 @@ preflight_apply() {
         case "$(phys "$parent")/" in
             "$(phys "$REPO")"/*) problem "${DEST} is inside the repository; the point is to leave it" ;;
         esac
-        if [ -d "$SRC" ] && [ "$(device_of "$parent")" != "$(device_of "$SRC")" ]; then
-            problem "${parent} and ${SRC} are on different volumes; the move must be one rename"
-        else
-            fine "${DEST} is free, outside the repository, on the same volume"
+        if [ -d "$SRC" ]; then
+            # A reader that failed answers nothing - and under set -e a
+            # failed assignment would end the script without a verdict.
+            here="$(device_of "$SRC")" || here=""
+            there="$(device_of "$parent")" || there=""
+            here_at="$(mount_point_of "$SRC")" || here_at=""
+            there_at="$(mount_point_of "$parent")" || there_at=""
+            if [ -z "$here" ] || [ -z "$there" ] || [ -z "$here_at" ] || [ -z "$there_at" ]; then
+                problem "could not establish which filesystem ${SRC} and ${parent} are on"
+            elif [ "$here" != "$there" ] || [ "$here_at" != "$there_at" ]; then
+                problem "${parent} and ${SRC} are not on the same mounted filesystem; the move must be one rename"
+            else
+                # As far as can be asked without writing: the rename itself
+                # is the proof, and a failed one is undone.
+                fine "${DEST} is free, outside the repository, on the same device and mount point"
+            fi
         fi
     fi
 
@@ -237,7 +282,8 @@ preflight_apply() {
             fine "${APP} mounts ${SRC}"
         fi
         # The image has to carry its own reference files, or the app loses
-        # them the moment /app/data stops being the checkout's directory.
+        # them the moment /app/data stops being the checkout's directory. The
+        # one `exec` of this check: `test -r` in the container, which reads.
         for name in $REFERENCE_FILES; do
             # shellcheck disable=SC2016
             if ! dk exec "$APP" sh -c 'test -r "${REFERENCE_DATA_DIR:?}/$1"' sh "$name" >/dev/null 2>&1; then
@@ -245,19 +291,49 @@ preflight_apply() {
             fi
         done
     fi
-    # A list or a mount that could not be read is not "nobody else mounts it".
+    # Every mount of every container, running or not, against the state
+    # directory: a source inside it (a container on data/.inflight can write
+    # into the tree that is about to move), the directory itself, or a source
+    # that holds it. The one exception is the app's own mount, checked above.
+    # A list, a mount or a volume that could not be read is not "nobody".
     if ! others="$(dk ps -a --format '{{.Names}}' 2>/dev/null)"; then
         problem "docker could not list the containers; whether another one mounts ${SRC} is not known"
         others=""
     fi
     while IFS= read -r other; do
         [ -n "$other" ] || continue
-        [ "$other" != "$APP" ] || continue
-        if ! mounts="$(dk inspect -f '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}' "$other" 2>/dev/null)"; then
+        if ! mounts="$(dk inspect -f '{{range .Mounts}}{{.Type}}|{{.Name}}|{{.Destination}}|{{.Source}}{{"\n"}}{{end}}' "$other" 2>/dev/null)"; then
             problem "docker could not say what container ${other} mounts"
-        elif printf '%s\n' "$mounts" | grep -Fx -- "$SRC" >/dev/null; then
-            problem "container ${other} also mounts ${SRC}; remove it first (docker rm ${other})"
+            continue
         fi
+        while IFS='|' read -r kind volume target source; do
+            [ -n "$kind" ] || continue
+            if [ "$other" = "$APP" ] && [ "$target" = "$CONTAINER_STATE" ]; then
+                continue
+            fi
+            case "$kind" in
+                bind) ;;
+                volume)
+                    # Docker's own storage, unless the volume was created
+                    # over a host path (the local driver's `device`).
+                    if ! source="$(dk volume inspect -f '{{index .Options "device"}}' "$volume" 2>/dev/null)"; then
+                        problem "docker could not describe volume ${volume} of container ${other}"
+                        continue
+                    fi
+                    [ -n "$source" ] || continue
+                    ;;
+                tmpfs) continue ;;
+                *)
+                    problem "container ${other} has a mount of a kind this check does not know (${kind})"
+                    continue
+                    ;;
+            esac
+            case "$(overlaps_state "$source")" in
+                no) ;;
+                yes) problem "container ${other} mounts ${source} at ${target}: it is ${SRC}, inside it, or holds it. Remove the container first (docker rm ${other})" ;;
+                *) problem "could not compare what container ${other} mounts with ${SRC}" ;;
+            esac
+        done <<<"$mounts"
     done <<<"$others"
 }
 
@@ -277,3 +353,4 @@ if [ "$PROBLEMS" != "0" ]; then
     exit 1
 fi
 say "READY: nothing above stops the move. Nothing was touched."
+say "  not asked, because asking would write: whether the rename itself succeeds. The move finds out, and undoes a failed one."

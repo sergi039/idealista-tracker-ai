@@ -149,7 +149,7 @@ def test_the_check_before_the_move_changes_nothing():
         "or changes something\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
-    assert "ALL 2 GROUPS PASSED" in result.stdout, result.stdout
+    assert "ALL 3 GROUPS PASSED" in result.stdout, result.stdout
 
 
 def _resolve(repo: Path, **extra: str) -> subprocess.CompletedProcess:
