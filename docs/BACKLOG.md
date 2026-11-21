@@ -302,3 +302,21 @@ must be an ancestor of `main`.
   against Compose itself, and a refusal of any control character before grep.
   Not covered: a path with a line break at its very end is refused by the
   parser alone (`$(...)` drops it before the reader's own check can see it).
+
+### The shell cannot tell a missing tombstone from a lookup that failed (#700, third review)
+
+- **Anchor:** `idealista_tombstone_state` in `tools/autopilot/lib/data_dir.sh`; `_state_directory_problem` in `app.py`.
+- **Found 2026-11-21** by the review of #700: with `data/.moved-to` inside a
+  directory of mode 0600 the shell's `-e` and `-L` both said "no" and
+  `os.path.lexists` said False, so the app started and the reader named the
+  directory the state had left.
+- **Closed by** the change that adds this entry: Python reads the errno
+  (`ENOENT` and `ENOTDIR` are the only "absent"); the shell says "absent" only
+  when the directory searched, or the one above a directory that does not
+  exist, is one it may search, and refuses otherwise; a link is settled by
+  `-L` before `-e` is asked.
+- **Not covered:** a shell test has no errno, so an I/O error on the lookup
+  inside a directory the process may search still reads as "absent" on the
+  host (the app in the container refuses it). And "`-L` first" has no test
+  that can fail: a link to a mount that does not answer cannot be arranged in
+  a harness, and every other link reads the same in either order.

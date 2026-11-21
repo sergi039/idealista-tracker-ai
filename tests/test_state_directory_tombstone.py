@@ -15,6 +15,7 @@ container never answers healthz.
 
 from __future__ import annotations
 
+import errno
 import os
 import threading
 
@@ -158,6 +159,86 @@ def test_only_the_head_of_a_large_tombstone_is_read(tmp_path):
     (tmp_path / ".moved-to").write_bytes(b"a" * 8192 + b"\nmoved_to=/late\n")
     problem = _state_directory_problem(str(tmp_path))
     assert "/late" not in problem and "another directory" in problem
+
+
+# Whether the tombstone is there is established, or the start is refused
+# (third review of #700). `os.path.lexists` answers False for every OSError,
+# so a tombstone in a directory this process may not search read as none.
+
+
+@pytest.mark.parametrize(
+    "code",
+    [errno.EACCES, errno.EIO, errno.ELOOP, errno.EPERM],
+    ids=["EACCES", "EIO", "ELOOP", "EPERM"],
+)
+def test_a_lookup_that_fails_is_not_a_directory_without_a_tombstone(
+    tmp_path, monkeypatch, code
+):
+    real_lstat = os.lstat
+
+    def refusing_lstat(path, *args, **kwargs):
+        if os.fspath(path).endswith(Config.STATE_TOMBSTONE_NAME):
+            raise OSError(code, os.strerror(code))
+        return real_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "lstat", refusing_lstat)
+    problem = _state_directory_problem(str(tmp_path))
+    assert problem is not None and "cannot establish whether" in problem
+    monkeypatch.setattr(Config, "DATA_DIR", str(tmp_path))
+    with pytest.raises(ValueError, match="cannot establish whether"):
+        _validate_config(dict(VALID))
+
+
+def test_a_directory_that_may_not_be_searched_stops_the_start(tmp_path):
+    """The real thing: mode 0600 on the directory, the tombstone inside."""
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / ".moved-to").write_text("moved_to=/elsewhere\n")
+    state.chmod(0o600)
+    try:
+        problem = _state_directory_problem(str(state))
+    finally:
+        state.chmod(0o700)
+    # Root may search it anyway and is then told about the tombstone itself.
+    assert problem is not None and ".moved-to" in problem
+
+
+def test_only_a_missing_entry_means_no_tombstone(tmp_path):
+    """ENOENT and ENOTDIR: nothing of that name, or DATA_DIR is not a
+    directory at all (which is somebody else's refusal to make)."""
+    assert _state_directory_problem(str(tmp_path)) is None
+    not_a_directory = tmp_path / "a-file"
+    not_a_directory.write_text("")
+    assert _state_directory_problem(str(not_a_directory)) is None
+
+
+# The check is only worth what calls it. These go through the application
+# factory the way gunicorn does - no `testing=True`, a valid database URL -
+# so a factory that stopped validating would be a red test here and not a
+# container serving requests from the directory the state left.
+
+
+def test_the_application_factory_refuses_a_tombstoned_state_directory(
+    tmp_path, monkeypatch
+):
+    from app import create_app
+
+    monkeypatch.setenv("DATABASE_URL", "sqlite://")
+    monkeypatch.setenv("SESSION_SECRET", "a-session-secret-for-this-test-only")
+    monkeypatch.setenv("AUTO_START_SCHEDULER", "false")
+    monkeypatch.delenv("DEV_MODE", raising=False)
+    monkeypatch.setattr(Config, "DATA_DIR", str(tmp_path))
+
+    # The same environment with no tombstone starts: what follows is refused
+    # for the tombstone and for nothing else.
+    started = create_app()
+    assert started.config.get("TESTING") is not True
+
+    (tmp_path / ".moved-to").write_text("moved_to=/Users/ss/IdealistaRank-data\n")
+    with pytest.raises(ValueError) as raised:
+        create_app()
+    assert ".moved-to" in str(raised.value)
+    assert "/Users/ss/IdealistaRank-data" in str(raised.value)
 
 
 def test_the_suite_itself_is_not_checked(tmp_path, monkeypatch):

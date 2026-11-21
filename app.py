@@ -109,15 +109,29 @@ def _tombstone_hint(tombstone):
 def _state_directory_problem(data_dir):
     """Why `data_dir` may not be used as the state directory, or None.
 
-    One reason today: it carries the tombstone tools/move_data_dir.sh leaves
-    behind, so it is where the state used to be rather than where it is.
+    It carries the tombstone tools/move_data_dir.sh leaves behind, so it is
+    where the state used to be rather than where it is - or whether it carries
+    one cannot be established, which is not the same as carrying none.
     """
     tombstone = os.path.join(data_dir, Config.STATE_TOMBSTONE_NAME)
-    # lexists - an lstat, which neither follows a link nor opens anything: a
-    # dangling link of that name, a FIFO, a directory are all the name the
-    # mover left. The decision is made here and never depends on reading it.
-    if not os.path.lexists(tombstone):
+    # An lstat, which neither follows a link nor opens anything: a dangling
+    # link of that name, a link to a mount that does not answer, a FIFO, a
+    # directory are all the name the mover left. The decision is made here
+    # and never depends on reading it.
+    try:
+        os.lstat(tombstone)
+    except (FileNotFoundError, NotADirectoryError):
+        # The only two answers that mean "no such entry". `os.path.lexists`
+        # says False for every OSError, and so read a tombstone in a directory
+        # this process may not search as a directory without one.
         return None
+    except (OSError, ValueError) as exc:
+        return (
+            f"cannot establish whether DATA_DIR {data_dir} carries "
+            f"{Config.STATE_TOMBSTONE_NAME} ({type(exc).__name__}): it may be "
+            "the directory the deployment's state was moved out of, and this "
+            "process will not start on it without knowing"
+        )
     moved_to = _tombstone_hint(tombstone)
     return (
         f"DATA_DIR {data_dir} carries {Config.STATE_TOMBSTONE_NAME}: the "

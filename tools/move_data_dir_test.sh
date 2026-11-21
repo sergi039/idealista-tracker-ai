@@ -454,6 +454,16 @@ new_world; ln -s /etc "$REPO/data/link"
 refusal "a symbolic link in the directory" "symbolic link"
 rm "$REPO/data/link"; expect_untouched "preflight: symlink"
 
+if [ "$(id -u)" != "0" ]; then
+    # A directory that may not be searched hides its tombstone from the shell.
+    new_world; chmod 600 "$REPO/data"
+    run_move -- --apply "$DEST"
+    chmod 700 "$REPO/data"
+    [ "$RC" = "1" ] && grep -q "NOT MOVED" "${W}/out" && grep -q "cannot establish whether" "${W}/out" \
+        || fail "preflight 'unsearchable directory': exit ${RC}"
+    expect_untouched "preflight: unsearchable directory"
+fi
+
 new_world; git -C "$REPO" checkout --quiet -b other
 refusal "wrong branch" "is not on main"
 git -C "$REPO" checkout --quiet main; expect_untouched "preflight: wrong branch"
