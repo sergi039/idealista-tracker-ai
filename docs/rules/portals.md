@@ -258,7 +258,24 @@ second row, never overwrites a price or area the card stated, and never moves a
 coordinate a measurement was made at. The paste-links import still shows such a
 row as a duplicate. **Emails already on the retry list when this shipped stay on
 the old rule** until the owner sets `FOTOCASA_EMAIL_CARD_FOR_HELD=true` (default
-false): what happens to them is the owner's call.
+false): what happens to them is the owner's call. They are told apart by a
+stamp, not by membership: every entry created from now on carries
+`card_fallback_aware` (`HeldUids.hold(stamp=...)`, written once and kept across
+retries), so an email first held later -- a database hiccup, say -- may use its
+card on the retry, and an old entry never gets the stamp.
+
+**The card guesses nothing it does not state.** A surface is `built` only
+beside rooms or baths, `plot` only where the URL or the heading says land, and
+otherwise `unknown` -- `reconcile_area_type` would call "a surface and no type"
+built, so `build_property` puts it back for an `email_only` row -- and the page
+names it later. A link that says neither sale nor rent leaves no card to store
+(the builder would call it a sale): the email waits. The heading's first
+segment is the type and its last the municipality. The email is untrusted
+HTML: anchors are read in one linear pass, tags stripped with `str.find`
+(never a `<[^>]+>` rescan), a line over `MAX_CARD_LINE_CHARS`, a link over
+`MAX_URL_CHARS`, a body over `MAX_ALERT_BODY_CHARS` and cards past
+`MAX_CARDS_PER_EMAIL` are not read, so a spoofed mail can neither stall a run
+nor mint rows by the thousand.
 `tests/test_fotocasa_email_card_fallback.py` pins all of it.
 
 **The portal's own photographs, captured on the way past and put on the page**
