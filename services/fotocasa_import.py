@@ -47,6 +47,7 @@ from sqlalchemy.exc import IntegrityError
 
 from services import portal_photos
 from services.coordinate_quality import record_portal_coordinate
+from utils import municipality_codes
 
 from services import advertiser
 from services.fotocasa_source import (
@@ -66,17 +67,16 @@ STATUS_REFUSED = "refused"
 STATUS_REJECTED = "rejected"
 
 
+# `enrichment["import"]["method"]` of a row made from the alert email's own
+# card because the portal would not give the page (#636, owner decision
+# 2026-11-21); such a row also carries `import["email_only"] = True`.
+EMAIL_ONLY_METHOD = "alert_email_card"
+
 # Every portal-sourced row goes through the writers below, so the per-portal
 # knowledge they need lives in one table: how a listing id appears in that
 # portal's stored URL. Ids are only unique *within* a portal -- fotocasa and
 # milanuncios can both have a listing 190280914 -- which is why the pattern
 # is per source and the dash/`.htm`/`/d` anchors are part of it.
-# `enrichment["import"]["method"]` of a row made from the alert email's own
-# card because the portal would not give the page (#636, owner decision
-# 2026-11-21). The row also carries `import["email_only"] = True` until a page
-# read completes it (`complete_from_page`).
-EMAIL_ONLY_METHOD = "alert_email_card"
-
 PORTAL_URL_PATTERNS = {
     "fotocasa": "%/{listing_id}/d%",
     "milanuncios": "%-{listing_id}.htm",
@@ -181,6 +181,18 @@ def preview_row(listing) -> Dict[str, Any]:
     return row
 
 
+def _recognised_municipality(name: Optional[str]) -> Optional[str]:
+    """The card's municipality as written, only when INE knows the name.
+
+    The heading's last segment may be a district: on a fotocasa page the two
+    disagree (`services/fotocasa_source.py`), and `/municipalities` joins this
+    string to INE. A name the join cannot resolve is unknown, never stored.
+    """
+    if name and municipality_codes.match(name, municipality_codes.load_name_index()):
+        return name
+    return None
+
+
 def card_row(card) -> Dict[str, Any]:
     """The `build_property` input for one alert-email card, no page read.
 
@@ -199,85 +211,10 @@ def card_row(card) -> Dict[str, Any]:
         "area": card.area,
         "area_type": card.area_type,
         "deal_type": card.deal_type,
-        "municipality": card.municipality,
+        "municipality": _recognised_municipality(card.municipality),
         "building_type": card.building_type,
         "attributes": dict(card.attributes or {}),
     }
-
-
-def is_email_only(prop) -> bool:
-    """True for a row made from an email card that no page read has completed."""
-    enrichment = getattr(prop, "enrichment", None)
-    block = enrichment.get("import") if isinstance(enrichment, dict) else None
-    return isinstance(block, dict) and block.get("email_only") is True
-
-
-def complete_from_page(prop, row: Dict[str, Any]) -> bool:
-    """Fill what an email-only row does not know from a page that was read.
-
-    Only unknown values are filled; the card's stub heading is the one thing
-    replaced. The coordinate is set only where the row has none (a measurement
-    made at one is not moved) but the portal's pin is recorded either way.
-    Returns True when the row changed. Done under the row lock: the free
-    enrichers write the same `enrichment` column (`services/enrichment_write`).
-    """
-    from copy import deepcopy
-
-    from services import plot_text
-    from services.enrichment_write import check_writable, locked_write
-
-    writable = check_writable(prop, True)
-    with locked_write(prop, locked=writable, commit=True):
-        if not is_email_only(prop):
-            return False
-        source = (prop.enrichment.get("import") or {}).get("source") or SOURCE_NAME
-        fresh = build_property(
-            row,
-            profile_id=prop.search_profile_id,
-            classification=(prop.property_category, prop.property_subtype),
-            method="alert_email",
-            source=source,
-        )
-
-        if fresh.title:
-            prop.title = fresh.title
-        for name in ("description", "price", "area", "plot_area", "municipality"):
-            if getattr(prop, name) is None and getattr(fresh, name) is not None:
-                setattr(prop, name, getattr(fresh, name))
-        if (prop.area_type or "unknown") == "unknown" and fresh.area_type:
-            prop.area_type = fresh.area_type
-        if fresh.attributes:
-            prop.attributes = {**fresh.attributes, **(prop.attributes or {})}
-        if (
-            prop.location_lat is None
-            and prop.location_lon is None
-            and fresh.location_lat is not None
-        ):
-            prop.location_lat = fresh.location_lat
-            prop.location_lon = fresh.location_lon
-            prop.location_accuracy = fresh.location_accuracy
-
-        enrichment = deepcopy(prop.enrichment or {})
-        imported = dict(enrichment.get("import") or {})
-        for key, value in (fresh.enrichment.get("import") or {}).items():
-            if key in ("source", "method", "listing_id", "imported_at"):
-                continue
-            if imported.get(key) in (None, "", {}, []):
-                imported[key] = value
-        imported.pop("email_only", None)
-        imported["completed_from_page_at"] = datetime.utcnow().isoformat()
-        enrichment["import"] = imported
-        if advertiser.ENRICHMENT_KEY not in enrichment:
-            verdict = fresh.enrichment.get(advertiser.ENRICHMENT_KEY)
-            if verdict is not None:
-                enrichment[advertiser.ENRICHMENT_KEY] = verdict
-        prop.enrichment = enrichment
-        plot_text.apply_to_property(
-            prop,
-            [("description", prop.description), ("title", prop.title)],
-            portal=source,
-        )
-        return True
 
 
 def read_urls(urls: List[str], *, session=None) -> List[Dict[str, Any]]:

@@ -418,8 +418,7 @@ def cards_in_email(body: Optional[str]) -> List[FotocasaCard]:
                 # Rooms beside the surface: it belongs to a building.
                 card.area_type = "built"
             # Else the card does not say what the surface is -- "900 m²" on
-            # a /vivienda/ link may be the plot -- and it stays "unknown"
-            # for the page to say (`complete_from_page`).
+            # a /vivienda/ link may be the plot -- and it stays "unknown".
         card.deal_type = _deal_type_from_url(url)
         cards.append(card)
     return cards

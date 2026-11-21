@@ -1171,8 +1171,8 @@ class PropertyIMAPService:
         email** (#636, owner decision 2026-11-21): a block that is a 200, a
         timeout, an HTTP error, an unreadable payload, or a run that stopped
         asking after `PORTAL_MAX_CONSECUTIVE_REFUSALS` -- the listing is stored
-        from the card (marked `email_only`), and a later page read completes
-        that row. A refusal is never "gone". No usable card: the old hold.
+        from the card (marked `email_only`). A refusal is never "gone". No
+        usable card: the old hold.
         Emails already held before this shipped keep the old rule until
         `FOTOCASA_EMAIL_CARD_FOR_HELD`. `not_the_listing_page` (the server
         redirected: the advert is down) is a consumed skip: asking again gets
@@ -1196,10 +1196,7 @@ class PropertyIMAPService:
             # Before the fetch, so a listing already here through either door
             # (this ingester or the paste-links import) costs no request and
             # no gate wait. The key both doors write is `fotocasa:<id>`.
-            known = fotocasa_import.existing_by_listing_id(listing_id)
-            if known is not None:
-                if fotocasa_import.is_email_only(known):
-                    self._complete_email_only_row(known, url, email_data, http)
+            if fotocasa_import.existing_by_listing_id(listing_id) is not None:
                 continue
 
             if not self._portal_fetching_stopped("fotocasa", email_data):
@@ -1261,39 +1258,6 @@ class PropertyIMAPService:
         return not waiting_before or bool(
             getattr(Config, "FOTOCASA_EMAIL_CARD_FOR_HELD", False)
         )
-
-    def _complete_email_only_row(
-        self, prop: Property, url: str, email_data: Dict[str, Any], http: Any
-    ) -> None:
-        """Give an email-only row the page, if the portal answers now: one
-        attempt per repeat mention, under the run's refusal allowance. A refusal
-        or "no longer served" changes nothing -- the row exists, and listing
-        status is not established by a failed read."""
-        from services import fotocasa_import
-
-        if self._portal_fetching_stopped("fotocasa", email_data):
-            return
-        listing = fotocasa_source.fetch_listing(url, session=http)
-        if not listing.ok:
-            if listing.refusal != fotocasa_source.REFUSAL_NOT_A_LISTING:
-                self._count_portal_refusal(
-                    "fotocasa", listing.listing_id, listing.refusal, email_data
-                )
-            return
-        self._portal_refusals["fotocasa"] = 0
-        had_coordinate = prop.location_lat is not None
-        try:
-            changed = fotocasa_import.complete_from_page(
-                prop, fotocasa_import.preview_row(listing)
-            )
-        except Exception as error:
-            db.session.rollback()
-            logger.warning(
-                "Completing fotocasa row %s from its page failed: %s", prop.id, error
-            )
-            return
-        if changed and not had_coordinate and prop.location_lat is not None:
-            self._enrich_new_property(prop)
 
     def _portal_fetching_stopped(self, portal: str, email_data: Dict[str, Any]) -> bool:
         """True when this run has already given up on the portal's host."""
@@ -1376,6 +1340,15 @@ class PropertyIMAPService:
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
+            # A duplicate leaves the listing stored. An IntegrityError that
+            # leaves none is another constraint (a profile that vanished, say):
+            # consuming the email then would lose the listing, so it propagates
+            # and the email is held.
+            if (
+                fotocasa_import.existing_by_listing_id(int(row["listing_id"]), source)
+                is None
+            ):
+                raise
             return False
 
         self._enrich_new_property(prop)

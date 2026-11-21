@@ -1,9 +1,7 @@
 """A fotocasa listing whose page is refused is stored from the email (#636).
 
 The real alert (`tests/data/fotocasa_alert_arteixo.html`) runs through the real
-ingest loop; only the IMAP server and the page fetch are replaced. Where a test
-needs a page for the same listing the alert's id is swapped for the committed
-page fixture's (190280914): the page says Avilés, the card Arteixo.
+ingest loop; only the IMAP server and the page fetch are replaced.
 """
 
 import pathlib
@@ -11,6 +9,7 @@ import time
 from email.message import EmailMessage
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app import create_app, db
 from config import Config
@@ -21,7 +20,6 @@ from services.fotocasa_source import (
     REFUSAL_NOT_A_LISTING,
     FotocasaListing,
     cards_in_email,
-    parse_listing,
 )
 from services.property_imap_service import (
     PORTAL_MAX_CONSECUTIVE_REFUSALS,
@@ -33,7 +31,6 @@ from utils.uid_cursor import HeldUids, write_uid_file
 
 DATA = pathlib.Path(__file__).parent / "data"
 ALERT = (DATA / "fotocasa_alert_arteixo.html").read_text(encoding="utf-8")
-PAGE = (DATA / "fotocasa_listing_190280914.html").read_text(encoding="utf-8")
 ALERT_ID = 190485369
 PAGE_ID = 190280914
 
@@ -117,8 +114,8 @@ def imap(monkeypatch):
 
 @pytest.fixture
 def portal(monkeypatch):
-    """The page fetch, with a switch: `blocked` refuses, `open` serves the
-    committed page. Records every URL asked for."""
+    """The page fetch, with a switch: `blocked` refuses, `gone` answers "no
+    longer served". Records every URL asked for."""
     state = {"mode": "blocked", "calls": []}
 
     def fake_fetch(url, session=None):
@@ -127,7 +124,7 @@ def portal(monkeypatch):
             return FotocasaListing(url=url, refusal=REFUSAL_BLOCKED)
         if state["mode"] == "gone":
             return FotocasaListing(url=url, refusal=REFUSAL_NOT_A_LISTING)
-        return parse_listing(PAGE, url)
+        raise AssertionError(f"unexpected mode {state['mode']}")
 
     monkeypatch.setattr(fotocasa_source, "fetch_listing", fake_fetch)
     return state
@@ -366,17 +363,6 @@ class TestTheCardDoesNotGuess:
         assert Property.query.count() == 0
         assert _held(uid_file) == [1]
 
-    def test_the_page_names_the_surface_later(self, app, uid_file, imap, portal):
-        body = _card_html(PAGE_ID, facts="900 m²")
-        imap.payloads = {1: _email(body)}
-        _service().run_ingestion(sync_type="test")
-        assert Property.query.one().area_type == "unknown"
-        portal["mode"] = "open"
-        imap.payloads[2] = _email(body)
-        _service().run_ingestion(sync_type="test")
-        prop = Property.query.one()
-        assert prop.area_type != "unknown" and float(prop.area) == 900.0
-
 
 class TestEmailsAlreadyWaitingStayWithTheOwner:
     def test_an_email_held_after_the_fallback_shipped_may_use_its_card(
@@ -442,100 +428,61 @@ class TestEmailsAlreadyWaitingStayWithTheOwner:
         assert _held(uid_file) == []
 
 
-class TestALaterPageCompletesTheSameRow:
-    @staticmethod
-    def _alert_for_page_listing() -> str:
-        return ALERT.replace(str(ALERT_ID), str(PAGE_ID))
-
-    def test_a_page_that_answers_later_fills_what_the_row_lacked(
+class TestMunicipalityOnlyWhenIneKnowsIt:
+    def test_a_district_is_unknown_not_a_municipality(
         self, app, uid_file, imap, portal
     ):
-        imap.payloads = {1: _email(self._alert_for_page_listing())}
-        _service().run_ingestion(sync_type="test")
-        (prop,) = Property.query.all()
-        assert fotocasa_import.is_email_only(prop)
-        assert prop.description is None and prop.location_lat is None
-        card_price, card_area = float(prop.price), float(prop.area)
-        row_id = prop.id
-
-        portal["mode"] = "open"
-        imap.payloads[2] = _email(self._alert_for_page_listing())
-        service = _service()
-        assert service.run_ingestion(sync_type="test") == 0
-
-        assert Property.query.count() == 1, "completed, not duplicated"
-        prop = db.session.get(Property, row_id)
-        assert not fotocasa_import.is_email_only(prop)
-        assert prop.description, "the page's text arrived"
-        assert prop.location_lat is not None
-        assert prop.location_accuracy == "approximate"
-        # What the card stated stays; the page does not overwrite it.
-        assert float(prop.price) == card_price and float(prop.area) == card_area
-        assert prop.municipality == "Arteixo"
-        assert prop.title != "casa-chalet, Arteixo", "the stub heading is replaced"
-        imported = prop.enrichment["import"]
-        assert imported["coordinate"]["source"] == "fotocasa"
-        assert "completed_from_page_at" in imported
-        assert imported["method"] == fotocasa_import.EMAIL_ONLY_METHOD
-        assert "advertiser" in prop.enrichment
-        assert _held(uid_file) == []
-
-    def test_a_refusal_at_completion_changes_nothing_and_holds_nothing(
-        self, app, uid_file, imap, portal
-    ):
-        imap.payloads = {1: _email(self._alert_for_page_listing())}
-        _service().run_ingestion(sync_type="test")
-        before = Property.query.one().enrichment
-
-        imap.payloads[2] = _email(self._alert_for_page_listing())
-        service = _service()
-        service.run_ingestion(sync_type="test")
-
-        (prop,) = Property.query.all()
-        assert fotocasa_import.is_email_only(prop)
-        assert prop.enrichment == before
-        assert _held(uid_file) == [] and service.last_seen_uid == 2
-
-    def test_gone_at_completion_does_not_mark_the_row_removed(
-        self, app, uid_file, imap, portal
-    ):
-        imap.payloads = {1: _email(self._alert_for_page_listing())}
-        _service().run_ingestion(sync_type="test")
-        portal["mode"] = "gone"
-        imap.payloads[2] = _email(self._alert_for_page_listing())
-        _service().run_ingestion(sync_type="test")
-        (prop,) = Property.query.all()
-        assert prop.listing_status == "active" and fotocasa_import.is_email_only(prop)
-
-    def test_a_row_the_page_built_is_never_touched_by_a_later_read(
-        self, app, uid_file, imap, portal
-    ):
-        portal["mode"] = "open"
-        imap.payloads = {1: _email(self._alert_for_page_listing())}
-        _service().run_ingestion(sync_type="test")
-        (prop,) = Property.query.all()
-        assert not fotocasa_import.is_email_only(prop)
-        before = (prop.title, prop.description, dict(prop.enrichment))
-
-        row = fotocasa_import.preview_row(
-            parse_listing(PAGE, f"https://www.fotocasa.es/es/x/y/z/{PAGE_ID}/d")
-        )
-        assert fotocasa_import.complete_from_page(prop, row) is False
-        assert (prop.title, prop.description, dict(prop.enrichment)) == before
-
-    def test_a_coordinate_the_row_already_has_is_not_moved(
-        self, app, uid_file, imap, portal
-    ):
-        imap.payloads = {1: _email(self._alert_for_page_listing())}
+        body = _card_html(190280950, heading="<strong>casa-chalet</strong>, Llaranes")
+        imap.payloads = {1: _email(body)}
         _service().run_ingestion(sync_type="test")
         prop = Property.query.one()
-        prop.location_lat, prop.location_lon = 43.0, -8.0
-        prop.location_accuracy = "approximate"
-        db.session.commit()
+        assert prop.municipality is None
+        assert prop.title == "casa-chalet, Llaranes", "the heading is kept"
 
-        row = fotocasa_import.preview_row(
-            parse_listing(PAGE, f"https://www.fotocasa.es/es/x/y/z/{PAGE_ID}/d")
-        )
-        assert fotocasa_import.complete_from_page(prop, row) is True
-        assert (float(prop.location_lat), float(prop.location_lon)) == (43.0, -8.0)
-        assert prop.enrichment["import"]["coordinate"] is not None
+    def test_a_name_ine_knows_is_stored_as_written(self, app, uid_file, imap, portal):
+        imap.payloads = {1: _email(ALERT)}
+        _service().run_ingestion(sync_type="test")
+        assert Property.query.one().municipality == "Arteixo"
+
+
+class TestAnIntegrityErrorIsNotAlwaysADuplicate:
+    @staticmethod
+    def _fail_property_commits(monkeypatch, *, store_duplicate: bool):
+        real_commit = db.session.commit
+
+        def commit():
+            fresh = [o for o in db.session.new if isinstance(o, Property)]
+            if not fresh:
+                return real_commit()
+            key = fresh[0].source_email_id
+            db.session.rollback()
+            if store_duplicate:  # a concurrent writer got there first
+                db.session.add(Property(source_email_id=key, title="the other writer"))
+                real_commit()
+            raise IntegrityError("INSERT", {}, Exception("constraint"))
+
+        monkeypatch.setattr(db.session, "commit", commit)
+
+    def test_another_constraint_holds_the_email_instead_of_losing_it(
+        self, app, uid_file, imap, portal, monkeypatch
+    ):
+        imap.payloads = {1: _email(ALERT)}
+        with monkeypatch.context() as patched:
+            self._fail_property_commits(patched, store_duplicate=False)
+            _service().run_ingestion(sync_type="test")
+        assert Property.query.count() == 0
+        assert _held(uid_file) == [1]
+
+        assert _service().run_ingestion(sync_type="test") == 1
+        assert Property.query.count() == 1 and _held(uid_file) == []
+
+    def test_a_real_duplicate_is_still_consumed(
+        self, app, uid_file, imap, portal, monkeypatch
+    ):
+        imap.payloads = {1: _email(ALERT)}
+        with monkeypatch.context() as patched:
+            self._fail_property_commits(patched, store_duplicate=True)
+            service = _service()
+            assert service.run_ingestion(sync_type="test") == 0
+        assert Property.query.count() == 1
+        assert _held(uid_file) == [] and service.last_seen_uid == 1

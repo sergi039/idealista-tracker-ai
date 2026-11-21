@@ -243,12 +243,12 @@ cannot be read (the old hold). **A refusal is not "gone"**: only an answered
 `not_the_listing_page` consumes without a row, and a failed read never marks a
 row removed.
 
-A later alert naming the listing reads the page once; if it answers,
-`complete_from_page` fills only what the row did not know, under the row lock
-(description, plot, a coordinate only where none exists with the portal pin
-recorded either way, provenance, the advertiser verdict), replaces the stub
-heading and drops the marker: never a second row, never an overwritten price or
-area, never a moved coordinate. The paste-links import still shows such a row as a duplicate. **Emails on the retry list before this shipped stay on the old rule**
+**The row stays poor until something completes it.** Nothing does yet: a repeat
+alert does not touch it. Rows are found by `enrichment.import.email_only = true`
+and `enrichment.import.method = 'alert_email_card'` (a later change, with its own
+review, fills them from a page that answers). The municipality is kept only when
+INE knows the name (`municipality_codes.match`); a district is unknown, never
+stored. **Emails on the retry list before this shipped stay on the old rule**
 until the owner sets `FOTOCASA_EMAIL_CARD_FOR_HELD=true` (default false); they
 are told apart by a stamp, not membership: entries created since carry
 `card_fallback_aware` (`HeldUids.hold(stamp=...)`, written once), so an email
