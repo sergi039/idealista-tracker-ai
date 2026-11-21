@@ -512,17 +512,19 @@ class TestTheRealPath:
 @pytest.mark.parametrize(
     "width, stored, verdict",
     [
-        (699.96, "699.96", False),  # the review's case: round(.., 1) made it 700
+        (699.96, "699.96", False),  # round(.., 1) made it 700
         (699.996, "699.99", False),  # the column cannot hold it; never up to 700
-        (700.004, "700.00", True),
+        (699.9999996, "699.99", False),  # round(.., 6) made it 700.0 (bot, round 3)
+        (699.9999999999999, "699.99", False),  # one double under the bound
         (700.0, "700.00", True),
-        (699.9999999999999, "700.00", True),  # float noise must not floor to 699.99
+        (700.0000004, "700.00", True),  # just over: floored, still not under
+        (700.004, "700.00", True),
     ],
 )
 def test_rounding_never_moves_a_figure_across_the_criterion(
     app, monkeypatch, width, stored, verdict
 ):
-    _stub_outline(monkeypatch, box(0, 0, width, 1))
+    _stub_outline(monkeypatch, SimpleNamespace(area=width))
     area = pc.parcel_area_m2(REF)
     assert str(area) == stored
     p = _row(plot_area=area)
@@ -532,6 +534,29 @@ def test_rounding_never_moves_a_figure_across_the_criterion(
     failing = Property.query.filter(sc.failing_expression(Property, CRITERIA)).count()
     passing = Property.query.filter(sc.passing_expression(Property, CRITERIA)).count()
     assert (passing, failing) == ((1, 0) if verdict else (0, 1))
+
+
+def _a_figure_whose_text_is_above_its_double():
+    """A two-decimal figure v whose nearest double is BELOW v (so `str()` of the
+    double says v and the double itself is under it), found, not hard-coded."""
+    for hundredths in range(70000, 70100):
+        text = f"{hundredths / 100:.2f}"
+        if Decimal(float(text)) < Decimal(text):
+            return float(text), Decimal(text) - Decimal("0.01")
+    raise AssertionError("no such figure in range")
+
+
+def test_the_figure_is_floored_from_the_exact_double_not_from_its_text(
+    app, monkeypatch
+):
+    measured, expected = _a_figure_whose_text_is_above_its_double()
+    _stub_outline(monkeypatch, SimpleNamespace(area=measured))
+    assert pc.parcel_area_m2(REF) == expected  # never above the measurement
+
+
+def test_a_stored_figure_that_comes_back_as_a_float_is_still_that_figure():
+    for value in (699.97, 1234.57, "699.97", Decimal("699.97")):
+        assert pc._stored(value) == Decimal(str(value)).quantize(Decimal("0.01"))
 
 
 # -- a value lives only as long as its subject ---------------------------------

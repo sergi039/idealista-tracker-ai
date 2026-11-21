@@ -59,7 +59,6 @@ reference, so a person can check it against the Catastro viewer.
 from __future__ import annotations
 
 import logging
-import math
 from datetime import datetime, timezone
 from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from typing import Any, Dict, Optional
@@ -97,8 +96,12 @@ def needs_plot(prop: Any) -> bool:
     return getattr(prop, "plot_area", None) is None or _blank(prop.plot_area)
 
 
-def _decimal(value: Any) -> Optional[Decimal]:
-    """A stored plot as the exact number the column holds, or None."""
+def _stored(value: Any) -> Optional[Decimal]:
+    """A plot as the column holds it (already two decimals), or None.
+
+    Read through its text: a stored 699.97 that came back as the float
+    699.969999... is still 699.97.
+    """
     if value is None or isinstance(value, bool):
         return None
     try:
@@ -108,13 +111,28 @@ def _decimal(value: Any) -> Optional[Decimal]:
     return number if number.is_finite() else None
 
 
+def _floored(area: float) -> Optional[Decimal]:
+    """A measured area floored to the column's 0.01, from its exact value.
+
+    `Decimal(float)` is the number the double really is -- no `str()`, no
+    `round()` in between, either of which can lift a figure just under a
+    threshold onto it (699.9999996 -> 700.0). Floored, never rounded: the stored
+    figure is never above the measurement.
+    """
+    try:
+        number = Decimal(area).quantize(PLOT_STEP, rounding=ROUND_DOWN)
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    return number if number.is_finite() else None
+
+
 def _written_block(prop: Any) -> Optional[Dict[str, Any]]:
     """Our block, when the column still holds exactly the value it recorded."""
     block = (getattr(prop, "enrichment", None) or {}).get(ENRICHMENT_KEY)
     if not isinstance(block, dict):
         return None
-    recorded = _decimal(block.get("value"))
-    if recorded is None or recorded != _decimal(getattr(prop, "plot_area", None)):
+    recorded = _stored(block.get("value"))
+    if recorded is None or recorded != _stored(getattr(prop, "plot_area", None)):
         return None
     return block
 
@@ -178,11 +196,7 @@ def parcel_area_m2(reference: str) -> Decimal:
     """
     with lookup_budget(0):
         parcel, _ = neighbours._metric_parcel(reference)
-    # Rounded to a micrometre-square first: the shoelace sum carries float noise
-    # (a true 700 m2 can come out as 699.9999999999999), and flooring that noise
-    # would read as 699.99 and flip the verdict the other way.
-    exact = round(float(parcel.area), 6) if math.isfinite(parcel.area) else None
-    area = _decimal(exact)
+    area = _floored(parcel.area)
     if area is None or not (
         0 < area < Decimal(str(MAX_CREDIBLE_M2))
         and area < Decimal(str(PLOT_AREA_STORAGE_MAX))
