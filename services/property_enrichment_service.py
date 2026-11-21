@@ -10,6 +10,7 @@ from services.enrich_budget import lookup_budget_seconds
 from services.enrichment_service import EnrichmentService
 from services.enrichment_write import merge_json_object_changes_under_lock
 from services.hazard_service import HazardService
+from services import plot_cadastre
 from services.neighbours_service import NeighboursService
 from services.property_location_service import PropertyLocationService
 from services.property_scoring_service import PropertyScoringService
@@ -427,6 +428,17 @@ class PropertyEnrichmentService:
             db.session.rollback()
             logger.warning(
                 "Neighbour measurement failed for %s: %s", getattr(prop, "id", None), e
+            )
+
+        # The plot of a house that states none, from the parcel the step above
+        # just placed (#634): no lookup of its own, own locked write, and only
+        # on this explicit press.
+        try:
+            plot_cadastre.enrich(prop, commit=True)
+        except Exception as e:
+            db.session.rollback()
+            logger.warning(
+                "Plot from cadastre failed for %s: %s", getattr(prop, "id", None), e
             )
 
         # Pool discovery + drive times (proposal D17): OSM via the shared
