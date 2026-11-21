@@ -45,6 +45,7 @@ make_stub() {
 #!/bin/bash
 echo "\$@" >> "$dir/docker-calls.log"
 case "\$1" in
+  compose) [ -f "$dir/compose.json" ] || exit 1; cat "$dir/compose.json"; exit 0 ;;
   ps) printf '%s\n' '$ps_output' ;;
   exec)
     if [ "\$2" = "-d" ]; then exit 0; fi
@@ -496,20 +497,18 @@ rm -rf "$dir"
 
 # 19. Where `data/` is on the host comes from the one reader (#639), and what
 # the reader refuses stops the supervisor before it inspects or restarts
-# anything. docker-compose.yml does not read IDEALISTA_DATA_DIR yet, so a .env
-# that names it is refused; a supervisor that followed the variable would
-# watch a directory the job does not write and restart a paid run that is
-# still going.
+# anything. .env names IDEALISTA_DATA_DIR and the stub's Compose gives no
+# answer: neither that directory nor <repo>/data is taken on a guess.
 dir="$(mktemp -d)"
 mkdir -p "$dir/state" "$dir/data"
 printf 'IDEALISTA_DATA_DIR=%s\n' "$dir/state" > "$dir/.env"
 make_stub "$dir" "sh -c sleep 1" "idealista-app"
 ( unset IDEALISTA_DATA_DIR; run_supervisor "$dir" ) >/dev/null 2>&1
 rc=$?
-if [ "$rc" -eq 2 ] && [ ! -f "$dir/docker-calls.log" ] && [ -z "$(ls -A "$dir/state")" ]; then
-    pass "a state directory the reader refuses stops the supervisor before docker"
+if [ "$rc" -eq 2 ] && ! grep -qv '^compose ' "$dir/docker-calls.log" 2>/dev/null && [ -z "$(ls -A "$dir/state")" ]; then
+    pass "a Compose that cannot be asked stops the supervisor before it touches the job"
 else
-    fail "a state directory the reader refuses stops the supervisor before docker" "rc=$rc"
+    fail "a Compose that cannot be asked stops the supervisor before it touches the job" "rc=$rc $(cat "$dir/docker-calls.log" 2>/dev/null)"
 fi
 rm -rf "$dir"
 
