@@ -117,22 +117,17 @@ _data_dir_refuse() {
 # Refuses a directory that carries the tombstone, whichever way it was reached:
 # by default, or because Compose would mount it.
 _data_dir_refuse_tombstone() {
-    local dir="$1" moved_to="" tombstone="${1}/${IDEALISTA_DATA_DIR_TOMBSTONE}"
+    local dir="$1" tombstone="${1}/${IDEALISTA_DATA_DIR_TOMBSTONE}"
     # The tombstone is the FACT that an entry of that name exists - a file, a
     # directory, a FIFO, a link whose target is gone (-L: -e follows links).
-    # The refusal is decided here and never depends on reading it.
+    # That is all this reader asks of it. It never opens the entry: what the
+    # file records is a convenience, and every way of reading it from a shell
+    # is a way to hang or to be handed something else - a FIFO put there
+    # after the test that it is a file blocks `head` for ever, and the deploy
+    # watcher with it. The message says where to look; tools/move_data_dir.sh
+    # --rollback reads it, with a descriptor it has checked.
     [ -e "$tombstone" ] || [ -L "$tombstone" ] || return 0
-    # What it holds is a hint for the message, read only from a regular file
-    # that is not a link (a FIFO of that name would block this reader, and the
-    # watcher with it, for ever), a bounded number of bytes, and reduced to
-    # printable characters on one line before it reaches a log. Any failure
-    # here is "not recorded", not an error.
-    if [ -f "$tombstone" ] && [ ! -L "$tombstone" ]; then
-        moved_to="$(LC_ALL=C head -c 4096 "$tombstone" 2>/dev/null |
-            LC_ALL=C sed -n 's/^moved_to=//p' 2>/dev/null | head -n 1 |
-            LC_ALL=C tr -cd '[:print:]' | cut -c 1-512)"
-    fi
-    _data_dir_refuse "${dir} carries ${IDEALISTA_DATA_DIR_TOMBSTONE}: the deployment's state was moved to '${moved_to:-an unrecorded directory}' and Compose would no longer mount it. Put ${IDEALISTA_DATA_DIR_KEY}=${moved_to:-/the/moved/directory} back in .env, or run tools/move_data_dir.sh --rollback"
+    _data_dir_refuse "${dir} carries ${IDEALISTA_DATA_DIR_TOMBSTONE}: the deployment's state was moved out of it and Compose would no longer mount it. Where it went is recorded in ${tombstone} (not read here): put ${IDEALISTA_DATA_DIR_KEY}=<that directory> back in .env, or run tools/move_data_dir.sh --rollback"
     return 1
 }
 
