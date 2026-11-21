@@ -106,15 +106,26 @@
                        that does not ingest on a cron tick does not ingest on one
                        click either (services/ingest_policy.py). The refusal on
                        the endpoint is the rule; this only avoids offering a
-                       control that always answers 409. #}
+                       control that always answers 409.
+
+                       On a phone the button is its icon: the words are in
+                       `.utility-label`, which the stylesheet hides under
+                       768px. Measured on production (2026-11-16): the Spanish
+                       label made the bar 359px wide, so on any narrower screen
+                       the page scrolled sideways and at 320px the language
+                       button was off screen; in both languages the label
+                       wrapped to two lines on every phone. `aria-label` keeps
+                       the button's name where the words are not drawn. #}
                     {% if machine_is_ingester() %}
                     <li class="nav-item me-2">
                         <button class="btn btn-outline-primary btn-sm"
                                 hx-post="{{ url_for('api.manual_ingestion') }}"
                                 hx-trigger="click"
-                                hx-indicator="#ingestion-spinner">
-                            <i class="fas fa-sync-alt me-1"></i>
-                            {{ t('manual_sync') }}
+                                hx-indicator="#ingestion-spinner"
+                                aria-label="{{ t('manual_sync') }}"
+                                title="{{ t('manual_sync') }}">
+                            <i class="fas fa-sync-alt me-1" aria-hidden="true"></i>
+                            <span class="utility-label">{{ t('manual_sync') }}</span>
                         </button>
                     </li>
                     {% endif %}

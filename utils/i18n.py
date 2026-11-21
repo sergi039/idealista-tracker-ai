@@ -194,7 +194,7 @@ TRANSLATIONS = {
         # The filter bar narrowed the result, and the count line says so --
         # first %s is the filtered total, second the same subscriptions
         # without the filter bar.
-        "filter_bar_narrowing": "Filters: %s of %s shown",
+        "filter_bar_out_of": "out of %s",
         "clear_filters_link": "clear filters",
         # Importing listings by link (fotocasa).
         "import_listings": "Import listings by link",
@@ -238,8 +238,8 @@ TRANSLATIONS = {
         # (services/owner_review.py). `undecided` is the state of a listing
         # nobody has judged; it is never rendered as a rejection.
         "owner_verdict": "Verdict",
-        "owner_verdict_all": "Verdict: all",
-        "owner_verdict_default": "Verdict: not rejected",
+        "owner_verdict_all": "Decision: all",
+        "owner_verdict_default": "Decision: not rejected",
         "owner_verdict_interested": "Interested",
         "owner_verdict_waiting": "Waiting",
         "owner_verdict_rejected": "Rejected",
@@ -495,7 +495,7 @@ TRANSLATIONS = {
         "taste_sort_dormant": "Taste ranking is being rebuilt — not ordering yet",
         "taste_sort_dormant_tooltip": "The taste profile was rebuilt and the listings have not all been re-scored against it. A score made against an older profile is never ranked beside a current one, so this order falls back to the date until the re-scoring finishes.",
         "rejected_hidden_line": "Rejected: %s hidden",
-        "rejected_hidden_tooltip": "Listings you turned down are not offered back to you. A favorited one, or one with something still outstanding, is never hidden. Pick 'Verdict: all' to see them.",
+        "rejected_hidden_tooltip": "Listings you turned down are not offered back to you. A favorited one, or one with something still outstanding, is never hidden. Pick 'Decision: all' to see them.",
         "criteria_hidden_line": "Criteria: %s failing hidden",
         "criteria_hidden_tooltip": "Listings with a stated house or plot below the minimum, or a EUR price above the budget, are hidden by default. A favorited or reviewed listing is never hidden. Pick 'show everything' to see them.",
         # The same verdict on the row's OWN page, where the reader arrives
@@ -543,13 +543,28 @@ TRANSLATIONS = {
         "taste_confidence_label": "Confidence",
         "taste_profile_version_label": "profile",
         "taste_closest_reference": "closest to",
-        "recommendation_profile_current": "Recommendations use %s positive references and %s recorded preferences.",
-        "recommendation_profile_unapplied": "%s preference(s) are not used yet.",
-        "recommendation_model_dirty": "Model taste profile needs rebuilding for updated review evidence; recommendations use prepared facts.",
-        "recommendation_hard_exclusions": "%s properties are hidden from recommendations by your answers or confirmed requirements; they remain available in All properties.",
-        "recommendation_profile_dirty": "Recommendations need a refresh after your latest feedback.",
-        "recommendation_profile_pending": "Recommendations are being prepared from your feedback.",
-        "recommendation_profile_failed": "Recommendations could not be refreshed; the previous evidence may be outdated.",
+        "recommendation_profile_current": "Recommendations are based on %s and %s.",
+        "recommendation_liked_one": "%s listing you liked",
+        "recommendation_liked_other": "%s listings you liked",
+        "recommendation_preferences_one": "%s preference",
+        "recommendation_preferences_other": "%s preferences",
+        "recommendation_profile_unapplied_one": "%s of your preferences is not applied yet",
+        "recommendation_profile_unapplied_other": "%s of your preferences are not applied yet",
+        "recommendation_model_dirty": "The Taste score is behind your latest reviews.",
+        "hidden_rows_summary_one": "%s hidden",
+        "hidden_rows_summary_other": "%s hidden",
+        "hidden_rows_criteria_one": "%s outside your criteria",
+        "hidden_rows_criteria_other": "%s outside your criteria",
+        "hidden_rows_rejected_one": "%s rejected",
+        "hidden_rows_rejected_other": "%s rejected",
+        "hidden_rows_recommendation_one": "%s ruled out by your answers or requirements \u2014 still in",
+        "hidden_rows_recommendation_other": "%s ruled out by your answers or requirements \u2014 still in",
+        "recommendation_profile_dirty": "Latest feedback not applied yet.",
+        "recommendation_profile_dirty_first": "Your feedback is saved \u2014 recommendations are not built yet.",
+        "recommendation_profile_pending": "Updating recommendations \u2014 showing the previous ones meanwhile.",
+        "recommendation_profile_pending_first": "Preparing your first recommendations.",
+        "recommendation_profile_failed": "The last update failed \u2014 showing the previous recommendations.",
+        "recommendation_profile_failed_first": "The update failed \u2014 there are no recommendations yet.",
         "recommendation_profile_none": "Star a listing or add a verdict to begin recommendations.",
         "recommendation_refresh_button": "Refresh recommendations",
         "recommendation_refresh_title": "Rebuild recommendation evidence, then rerank prepared listings without per-listing model calls",
@@ -572,7 +587,7 @@ TRANSLATIONS = {
         "recommendation_mode_title": "Recommendations based on your references and feedback",
         "recommendation_sort_label": "Recommendations",
         "recommendation_entry_help": "Find properties using your favorites and feedback. Use the subscriptions and filters above to narrow recommendations.",
-        "properties_coverage_details": "Data coverage and checks",
+        "properties_coverage_details": "About these results",
         "recommendation_column_label": "Match",
         "recommendation_similar_to": "Similar to",
         "recommendation_details": "Details",
@@ -1138,7 +1153,7 @@ TRANSLATIONS = {
         # La barra de filtros ha acotado el resultado y la línea del total lo
         # dice -- el primer %s es el total filtrado, el segundo las mismas
         # suscripciones sin la barra de filtros.
-        "filter_bar_narrowing": "Filtros: se muestran %s de %s",
+        "filter_bar_out_of": "de %s",
         "clear_filters_link": "quitar filtros",
         # Importación de anuncios por enlace (fotocasa).
         "import_listings": "Importar anuncios por enlace",
@@ -1459,13 +1474,28 @@ TRANSLATIONS = {
         "taste_confidence_label": "Confianza",
         "taste_profile_version_label": "perfil",
         "taste_closest_reference": "más parecido a",
-        "recommendation_profile_current": "Las recomendaciones usan %s referencias positivas y %s preferencias registradas.",
-        "recommendation_profile_unapplied": "%s preferencia(s) aún no se usa(n).",
-        "recommendation_model_dirty": "El perfil de gusto del modelo necesita actualizarse; las recomendaciones usan hechos preparados.",
-        "recommendation_hard_exclusions": "%s inmuebles se ocultan de las recomendaciones por tus respuestas o requisitos confirmados; siguen disponibles en Todos los inmuebles.",
-        "recommendation_profile_dirty": "Las recomendaciones necesitan actualizarse tras sus últimos comentarios.",
-        "recommendation_profile_pending": "Las recomendaciones se están preparando a partir de sus comentarios.",
-        "recommendation_profile_failed": "No se pudieron actualizar las recomendaciones; la evidencia anterior puede estar desactualizada.",
+        "recommendation_profile_current": "Las recomendaciones se basan en %s y %s.",
+        "recommendation_liked_one": "%s anuncio que le gustó",
+        "recommendation_liked_other": "%s anuncios que le gustaron",
+        "recommendation_preferences_one": "%s preferencia",
+        "recommendation_preferences_other": "%s preferencias",
+        "recommendation_profile_unapplied_one": "%s de sus preferencias aún no se aplica",
+        "recommendation_profile_unapplied_other": "%s de sus preferencias aún no se aplican",
+        "recommendation_model_dirty": "La puntuación de gusto aún no refleja sus últimas valoraciones.",
+        "hidden_rows_summary_one": "%s oculto",
+        "hidden_rows_summary_other": "%s ocultos",
+        "hidden_rows_criteria_one": "%s fuera de sus criterios",
+        "hidden_rows_criteria_other": "%s fuera de sus criterios",
+        "hidden_rows_rejected_one": "%s rechazado",
+        "hidden_rows_rejected_other": "%s rechazados",
+        "hidden_rows_recommendation_one": "%s descartado por sus respuestas o requisitos; sigue en",
+        "hidden_rows_recommendation_other": "%s descartados por sus respuestas o requisitos; siguen en",
+        "recommendation_profile_dirty": "Valoraciones sin aplicar.",
+        "recommendation_profile_dirty_first": "Sus valoraciones están guardadas; las recomendaciones aún no se han creado.",
+        "recommendation_profile_pending": "Actualizando las recomendaciones; mientras tanto se muestran las anteriores.",
+        "recommendation_profile_pending_first": "Preparando sus primeras recomendaciones.",
+        "recommendation_profile_failed": "La última actualización falló; se muestran las recomendaciones anteriores.",
+        "recommendation_profile_failed_first": "La actualización falló; todavía no hay recomendaciones.",
         "recommendation_profile_none": "Marque una vivienda o añada un veredicto para empezar a recibir recomendaciones.",
         "recommendation_refresh_button": "Actualizar recomendaciones",
         "recommendation_refresh_title": "Reconstruir la evidencia y reordenar los anuncios preparados sin llamadas de modelo por anuncio",
@@ -1488,7 +1518,7 @@ TRANSLATIONS = {
         "recommendation_mode_title": "Recomendaciones basadas en sus referencias y comentarios",
         "recommendation_sort_label": "Recomendaciones",
         "recommendation_entry_help": "Encuentre viviendas según sus favoritos y comentarios. Use las suscripciones y los filtros de arriba para acotar las recomendaciones.",
-        "properties_coverage_details": "Cobertura de datos y comprobaciones",
+        "properties_coverage_details": "Sobre estos resultados",
         "recommendation_column_label": "Afinidad",
         "recommendation_similar_to": "Similar a",
         "recommendation_details": "Detalles",
@@ -1939,8 +1969,7 @@ TRANSLATIONS["en"].update(
         "owner_decision_cleared": "Decision cleared",
         "owner_decision_error": "Could not save the decision. Nothing was changed.",
         "owner_decision_unconfirmed": "Not confirmed — reload the page to check this decision.",
-        "workspace_favorites_clear_hint": "Recommendations include other properties; this opens the selection without the Favorites filter.",
-        "workspace_previous": "Previous recommendations remain available.",
+        "workspace_favorites_clear_hint": "Opening Recommended turns the Favorites filter off.",
         "workspace_rank_explanation": "Recommended requires verified matches. Needs verification lists properties with incomplete evidence. Other filters still apply.",
         "workspace_no_reading": "No recommendation evidence yet",
         "workspace_data": "Data and checks",
@@ -2017,7 +2046,7 @@ TRANSLATIONS["es"].update(
         "workspace_sort_desc": "descendente",
         "workspace_decision": "Tu decisión",
         "workspace_open": "Abrir",
-        "workspace_facts": "Detalles y comprobaciones",
+        "workspace_facts": "Detalles y revisión",
         "workspace_source": "Anuncio original",
         "workspace_table": "Tabla",
         "workspace_cards": "Tarjetas",
@@ -2035,8 +2064,7 @@ TRANSLATIONS["es"].update(
         "owner_decision_cleared": "Decisión borrada",
         "owner_decision_error": "No se pudo guardar la decisión. No se cambió nada.",
         "owner_decision_unconfirmed": "Sin confirmar — recarga la página para comprobar esta decisión.",
-        "workspace_favorites_clear_hint": "Las recomendaciones incluyen otros inmuebles; se abrirá la selección sin el filtro Favoritos.",
-        "workspace_previous": "Las recomendaciones anteriores siguen disponibles.",
+        "workspace_favorites_clear_hint": "Al abrir Recomendados se quita el filtro Favoritos.",
         "workspace_rank_explanation": "Recomendados exige coincidencias verificadas. Requieren verificación muestra anuncios con datos incompletos. Los demás filtros se mantienen.",
         "workspace_no_reading": "Aún no hay datos de recomendación",
         "workspace_data": "Datos y comprobaciones",
@@ -2154,6 +2182,37 @@ TRANSLATIONS["es"].update(
 
 TRANSLATIONS["en"]["search_action_technical"] = "Move to Technical subscriptions"
 TRANSLATIONS["es"]["search_action_technical"] = "Mover a Suscripciones técnicas"
+
+# The date filter on /properties and the per-period counts on /profiles
+# (services/listing_attribute_filters.py, services/subscription_inflow.py).
+TRANSLATIONS["en"].update(
+    {
+        "workspace_added_from": "Added from",
+        "workspace_added_to": "Added until",
+        "inflow_title": "Listings added by period",
+        "inflow_help": "How many listings each search brought in, and how many of them you made a favorite or marked Interested. Every stored listing counts, withdrawn and rejected ones included. Days are UTC, as in the Added column.",
+        "inflow_last_days_one": "Last %s day",
+        "inflow_last_days_other": "Last %s days",
+        "inflow_since": "since",
+        "inflow_all_time": "All time",
+        "inflow_interest": "of interest",
+        "inflow_empty": "No listings are stored yet.",
+    }
+)
+TRANSLATIONS["es"].update(
+    {
+        "workspace_added_from": "Añadido desde",
+        "workspace_added_to": "Añadido hasta",
+        "inflow_title": "Anuncios añadidos por periodo",
+        "inflow_help": "Cuántos anuncios trajo cada búsqueda y cuántos de ellos marcaste como favorito o Interesa. Cuentan todos los anuncios guardados, incluidos los retirados y los descartados. Los días son UTC, como en la columna Añadido.",
+        "inflow_last_days_one": "Último %s día",
+        "inflow_last_days_other": "Últimos %s días",
+        "inflow_since": "desde",
+        "inflow_all_time": "Todo el tiempo",
+        "inflow_interest": "de interés",
+        "inflow_empty": "Aún no hay anuncios guardados.",
+    }
+)
 
 
 def get_current_language():

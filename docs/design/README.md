@@ -78,9 +78,22 @@ Each control has one home:
 
 | Zone | Responsibility |
 |---|---|
-| Subscription toolbar | Scope multiselect, archived/unassigned access, Favorites, Hide removed; rare subscription tools disclose on demand |
-| Filter form | Search/type/municipality, additional filters, explicit Apply and Clear |
+| Subscription toolbar | Scope multiselect with archived/unassigned access, and one Subscription tools menu drawn only while it holds something; it shares the title's line from 768px up |
+| Filter form | Search, Decision, Favorites, Hide removed, the one Filters trigger (the other fields and Clear open in place under it), then the one Apply that closes the group; applied conditions follow as chips |
 | Result controls | All properties/Recommended/Needs verification, named assessment modes, sort/order, table/cards/map and collection actions |
+
+From 768px up the filter form is one wrapping line, every control the same
+height, chips continuing that line while they fit (owner, 2026-11-14: "the
+filters are a mess again"). Search never narrows past its whole placeholder
+(19rem, sized for the Spanish one) and takes the space left; the chips wrap
+to the next line before it would shrink. Where the bar is narrower than 64rem,
+search, Apply and the chips take the second line together, so Apply never
+wraps alone. With
+the Filters panel open, at every width, Apply moves below the panel's fields so
+the group still ends in it. Each
+field has one name: a select that names itself in its options (`Decision: all`)
+keeps its caption for assistive technology only. Favorites and Hide removed
+narrow which rows are shown, so they belong to this group, not the scope.
 
 All GET filter edits are drafts until **Apply** or Enter submits the form.
 Subscription menu checkboxes use the same form through `form=filter-form`;
@@ -120,6 +133,25 @@ the decision group has one set of decision buttons.
 Use compact rows by default: align price, assessment and actions to the top,
 give the object the largest column, and place the closed facts disclosure under
 its photo on desktop/tablet. Opening the disclosure uses the full object column.
+Related controls share a line (owner, 2026-11-14): the three decision buttons,
+favourite and Open; the recommendation rating and the Assessment disclosure;
+a row's area, type badges and Live badge under its price; a card's price, area
+and place, and its travel times. The thumbnail column is 6.25rem (4.5rem on a
+tablet) and the disclosure's label wraps inside it, in either language, two
+lines of 12px text inside the 40px target; the height of a row is set by the
+object, not by a stack of controls. A table cell carries 6px above and below
+and 8px beside, and the object's municipality, warning and badges sit tight
+under the title.
+
+Density budget (owner, 2026-11-15), measured on a 25-row list shaped like
+production (Recommended, housing; long titles, three badges, the approximate
+warning, "Details · Photo similarities", Live, folded publications), closed
+disclosures: at 1440px and above the three decision buttons, favourite and Open stand on one line (a 246px cell; below 1440px they wrap to two, as on main), the median row is at most 112px, the longest at most
+130px and five rows fit under a 284px page header in 900px; at 834px the
+median is at most 190px and the longest at most 240px. The 390px phone is
+unchanged by these rules. A reason with a "Details" line is three lines (the
+reference, the disclosure, the rating buttons) and cannot get below 105px of
+content: that is the floor of those rows, not slack.
 Missing-photo rows keep their details in normal flow. Do not reserve a blank
 full-width row for a closed disclosure, truncate important warnings or reduce
 the established control targets to meet a density budget.
@@ -156,14 +188,13 @@ Apply/Clear replace the reference's saved-view Save/Cancel; the three decision
 buttons stay on the row instead of rolling into an overflow menu.
 
 Below 768px the regions are, in order: title with last sync; applied
-subscription with its rare tools; Favorites and Hide removed; Decision, Apply
-and the **one Filters trigger** (search and the other fields open in place
-under it); view tabs on one line that scrolls sideways; sort with **one display
+subscription with its rare tools; Favorites and Hide removed; Decision, the
+**one Filters trigger** and Apply (search and the other fields open in place
+under it, Apply then following them); view tabs on one line that scrolls sideways; sort with **one display
 trigger** naming the selected representation and assessment (assessment mode,
 Table/Cards/Map and Actions open under it); the count, every hide and the
-profile state as one paragraph with **one Result details trigger** (refresh,
-unused preferences, previous-evidence note and coverage open under it); the
-list. Nothing is sticky: `#listing-<id>` anchors keep their offset.
+profile state as one line with **one Result details trigger** (the refresh
+button and "About these results" open under it); the list. Nothing is sticky: `#listing-<id>` anchors keep their offset.
 
 Rules that keep it that way:
 
@@ -171,11 +202,18 @@ Rules that keep it that way:
   re-placing the element that exists (`collapse` wrappers that are
   `display: contents` from 768px up, where their triggers are not drawn). Never
   render a second copy for the narrow screen.
-- **A hide is never behind a phone disclosure.** Failing criteria, rejected
-  listings, folded publications, hard exclusions, a narrowing filter bar, the
-  overdue link and the profile state stay in the visible paragraph.
+- **A hide is never behind a phone disclosure.** The "N hidden" summary (it
+  opens onto failing criteria, rejected listings, folded publications, hard
+  exclusions and listings with no subscription, each with its count and the
+  link that brings them back), the clear-filters link, the overdue link and a
+  recommendation state that needs the owner stay in the visible line.
 - **The Decision select and Apply are never folded.** Search is; an applied
   search is still a visible chip.
+- **The Decision select says what is selected.** Where its label does not fit
+  beside the Filters trigger and Apply it takes a line of its own and the two
+  follow it: under 360px in every language, under 420px in Spanish (owner,
+  2026-11-16; "Decisión: sin rechazados" needs 189px and had 133-163px at
+  360-390px). The first listing starts 52px lower on those screens.
 - A row is one stacked summary: photo (72px) beside title, municipality and
   the location warning; facts; price and area; the three decision buttons
   **with their words** beside favourite and Open; the decision state; the
@@ -194,6 +232,48 @@ Acceptance for later changes: first listing by 480px and at least 2.5 rows per
 extra line. `docs/screenshots/properties-phone-before.png` and
 `properties-phone-after.png` are the same fixture rows drawn by the template
 before and after the change (placeholder pictures, no owner data).
+
+## The status line under the tabs
+
+Owner report 2026-11-14: "small text nobody can read". The line says three
+things, in body-size text (14px, never the 10.5px that `.small` inside a
+12px row compounded to): the count, what the page keeps back, and whether the
+recommendations need the owner. A line is added only if it answers "what does
+the owner lose without it"; a count about data quality belongs in
+**About these results**, a sentence a filter chip already says does not belong
+anywhere.
+
+- **Kept back is one control**: `<details id="hidden-rows">` titled "N hidden".
+  Its rows are disjoint, each carries its own count and the link that undoes
+  it (`criteria=all`, `verdict=all`, `duplicates=show`, All properties,
+  `profile_id=unassigned`); the tooltips that held the explanation are not a
+  way back and are not the only home of the rule. Absent when nothing is kept
+  back.
+- **A narrowing filter bar** says "out of N" and one clear-filters link; the
+  applied filters are chips, so the sentence "Filters: ..." is gone. In the
+  Recommendations collection the number is dropped (the baseline counts the
+  whole selection, the count beside it only recommended rows) and the link
+  stays.
+- **Recommendations are one state and, when the owner can act, one button.**
+  A profile that is current and not on the Recommended tab says nothing in the
+  line (its basis is the first item of About these results). A dirty, pending
+  or failed profile says whether previous recommendations are still shown in
+  the same sentence; there is no separate "previous remain available" line.
+  Unapplied preferences are a disclosure inside About these results, in plain
+  words ("3 of your preferences are not applied yet"), not "preference(s)".
+- **Coverage ("About these results") counts the rows the page draws.** On the
+  Recommended tab the four "K of N" counts are taken after the collection has
+  been selected.
+- **On a phone the state sentence and "Result details" share one line**
+  (2026-11-15). In the `dirty` state the line was three lines (count and
+  hidden, the sentence, the toggle) and the first listing began at 501px on
+  production against the 480px acceptance above. The sentence moves whole
+  (`inline-block`, never split) and is short enough to sit beside the toggle
+  (EN 208px beside 115px, ES 155px beside 168px, in the 350px the line has);
+  the toggle carries no trailing margin. Font size stays 14px and nothing is
+  hidden behind the toggle that was not before. Pinned by
+  `tests/test_status_line.py::TestOnAPhoneTheStateSentenceSharesALineWithTheToggle`;
+  the pixels are measured, not asserted.
 
 ## Recommendation states
 

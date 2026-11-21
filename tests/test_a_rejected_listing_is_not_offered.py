@@ -200,7 +200,7 @@ class TestEverySurface:
         assert world["ids"]["rejected_actioned"] in shown
         assert _count(body) == 4
         assert 'id="rejected-hidden-coverage"' in body
-        assert "Rejected: 1 hidden" in body
+        assert "1 rejected" in body
 
     def test_the_map_hides_it(self, client, world):
         body = client.get(f"/map?profile_id={world['pid']}").get_data(as_text=True)
@@ -241,7 +241,7 @@ class TestTheWayBack:
         ).get_data(as_text=True)
 
         assert world["ids"]["rejected"] in _shown(body)
-        assert "Rejected: 1 hidden" not in body
+        assert 'id="rejected-hidden-coverage"' not in body
 
     def test_the_dropdown_keeps_the_option_that_is_the_way_back(self, client, world):
         """The crux. Counted with the hide in force, `rejected` reads 0,
@@ -393,7 +393,7 @@ def test_the_way_back_survives_a_page_whose_every_row_is_hidden(app, client):
     body = client.get(f"/properties?profile_id={profile.id}").get_data(as_text=True)
 
     assert _count(body) == 0
-    assert "Rejected: 2 hidden" in body
+    assert "2 rejected" in body
     select = body[body.index('id="verdict"') :]
     select = select[: select.index("</select>")]
     assert 'value="rejected"' in select, "the page kept no way to undo its own hide"
@@ -423,7 +423,7 @@ class TestNewAndReviewed:
         assert ids["undecided"] not in _shown(body)
         assert _count(body) == 4
         assert 'id="rejected-hidden-coverage"' not in body
-        assert "Rejected: 1 hidden" not in body
+        assert "1 rejected" not in body
 
     def test_new_is_the_undecided_rows(self, client, world):
         body = client.get(
