@@ -151,6 +151,19 @@ def _host_of(url: Optional[str]) -> str:
 _PLOT_URL_TYPES = ("terreno", "terreny", "land", "solar", "parcela")
 
 
+def url_municipality_slug(url: Optional[str]) -> Optional[str]:
+    """The municipality segment of a canonical path, or None.
+
+    `/es/comprar/vivienda/arteixo/calefaccion-terraza/190485369/d`: language,
+    transaction, type, then the municipality, then a district or a feature
+    word. `-capital` (fotocasa's `madrid-capital`) is not part of the name.
+    """
+    slug = _path_segment(url or "", 3)
+    if slug is None:
+        return None
+    return slug[: -len("-capital")] if slug.endswith("-capital") else slug
+
+
 def url_says_plot(url: Optional[str]) -> bool:
     """True when fotocasa's own canonical path says this listing is land.
 
@@ -234,7 +247,13 @@ _ANCHOR_OPEN = re.compile(
     r"<a\b(?P<attrs>[^>]*)>(?P<inner>.*)", re.IGNORECASE | re.DOTALL
 )
 _ANCHOR_START = re.compile(r"<a\b", re.IGNORECASE)
-_HREF = re.compile(r'\bhref="(?P<href>[^"]+)"', re.IGNORECASE)
+_HREF = re.compile(
+    r"""\bhref\s*=\s*(?:"(?P<dq>[^"]+)"|'(?P<sq>[^']+)')""", re.IGNORECASE
+)
+_ANCHOR_END = re.compile(r"</a\s*>", re.IGNORECASE)
+# A strike element opening or closing; `[^<>]` keeps the match from running on
+# past the next tag, so a body full of `<s` stays linear.
+_STRIKE_TAG = re.compile(r"<(?P<close>/?)(?:s|del|strike)\b[^<>]*>", re.IGNORECASE)
 # Beyond this an alert body is not read for cards: a real one is ~70 KB.
 MAX_ALERT_BODY_CHARS = 2_000_000
 # A card line is a price, a heading or a facts line; text longer than this is
@@ -337,17 +356,25 @@ def _split_heading(heading: str) -> tuple[Optional[str], Optional[str]]:
 
 
 def _anchors(body: str):
-    """`(href, whole anchor markup, inner markup)` of every closed anchor, in one
-    linear pass (split at `</a>`, last `<a` of each chunk). The whole markup is
-    returned because a strike-through can sit on the anchor's own style."""
+    """`(href, anchor markup, inner markup, struck outside)` of every closed
+    anchor, in one linear pass (split at `</a>` in any case, last `<a` of each
+    chunk). The markup is returned whole because a strike-through can sit on the
+    anchor's own style; `struck outside` says an enclosing `<del>`, `<s>` or
+    `<strike>` is open where the anchor starts."""
     if len(body) > MAX_ALERT_BODY_CHARS:
         logger.warning("Alert body of %d characters is not read for cards", len(body))
         return
-    for chunk in body.split("</a>")[:-1]:
+    depth = 0
+    for chunk in _ANCHOR_END.split(body)[:-1]:
         starts = [m.start() for m in _ANCHOR_START.finditer(chunk)]
+        start = starts[-1] if starts else len(chunk)
+        for tag in _STRIKE_TAG.finditer(chunk, 0, start):
+            depth = max(0, depth + (-1 if tag.group("close") else 1))
+        struck_outside = depth > 0
+        for tag in _STRIKE_TAG.finditer(chunk, start):
+            depth = max(0, depth + (-1 if tag.group("close") else 1))
         if not starts:
             continue
-        start = starts[-1]
         opened = _ANCHOR_OPEN.match(chunk, start)
         if opened is None:
             continue
@@ -355,9 +382,10 @@ def _anchors(body: str):
         if found is None:
             continue
         yield (
-            html_entities.unescape(found.group("href")),
+            html_entities.unescape(found.group("dq") or found.group("sq")),
             chunk[start:],
             opened.group("inner"),
+            struck_outside,
         )
 
 
@@ -369,9 +397,9 @@ def cards_in_email(body: Optional[str]) -> List[FotocasaCard]:
     facts, the button is skipped, the first other line with a comma is the
     heading. A card stating none of price, area or heading is not returned.
     """
-    lines: Dict[int, List[tuple[str, str]]] = {}
+    lines: Dict[int, List[tuple[str, bool]]] = {}
     hrefs: Dict[int, str] = {}
-    for href, markup, inner in _anchors(body or ""):
+    for href, markup, inner, struck_outside in _anchors(body or ""):
         listing_id = listing_id_from_url(href)
         if listing_id is None:
             continue
@@ -381,19 +409,21 @@ def cards_in_email(body: Optional[str]) -> List[FotocasaCard]:
         text = _text_of(inner)
         lines.setdefault(listing_id, [])
         if text and len(text) <= MAX_CARD_LINE_CHARS:
-            lines[listing_id].append((text, markup))
+            struck = struck_outside or bool(_STRUCK.search(markup))
+            lines[listing_id].append((text, struck))
 
     cards: List[FotocasaCard] = []
     for listing_id, href in hrefs.items():
         url = normalize_url(href) or href
         card = FotocasaCard(url=url, listing_id=listing_id)
         heading: Optional[str] = None
-        for text, markup in lines[listing_id]:
+        asking: set = set()
+        for text, struck in lines[listing_id]:
             if text.lower() in _CALL_TO_ACTION:
                 continue
             if _PRICE_TEXT.fullmatch(text):
-                if card.price is None and not _STRUCK.search(markup):
-                    card.price = extract_price(text)
+                if not struck:
+                    asking.add(extract_price(text))
             elif _FACTS_TEXT.search(text):
                 if card.area is None:
                     card.area = extract_area_m2(text)
@@ -405,6 +435,12 @@ def cards_in_email(body: Optional[str]) -> List[FotocasaCard]:
                     card.attributes["bathrooms"] = int(bathrooms.group(1))
             elif heading is None and "," in text:
                 heading = text
+        # One unstruck amount is the asking price. Two different ones, or
+        # none, leave it unknown: which of them is current is not for us to
+        # pick (a strike we cannot see, such as an enclosing `<span>`).
+        asking.discard(None)
+        if len(asking) == 1:
+            card.price = next(iter(asking))
         if heading is not None:
             card.building_type, card.municipality = _split_heading(heading)
             card.title = re.sub(r"\s+,", ",", heading)

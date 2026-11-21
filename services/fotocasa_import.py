@@ -55,6 +55,7 @@ from services.fotocasa_source import (
     fetch_listing,
     listing_id_from_url,
     normalize_url,
+    url_municipality_slug,
     url_says_plot,
 )
 
@@ -181,14 +182,23 @@ def preview_row(listing) -> Dict[str, Any]:
     return row
 
 
-def _recognised_municipality(name: Optional[str]) -> Optional[str]:
-    """The card's municipality as written, only when INE knows the name.
+def _recognised_municipality(name: Optional[str], url: Optional[str]) -> Optional[str]:
+    """The card's municipality as written, only when the link confirms it and
+    INE knows the name.
 
-    The heading's last segment may be a district: on a fotocasa page the two
-    disagree (`services/fotocasa_source.py`), and `/municipalities` joins this
-    string to INE. A name the join cannot resolve is unknown, never stored.
+    The heading's last segment may be a district, and a district can share its
+    name with another place's municipality ("piso, Salamanca" under
+    `/madrid-capital/salamanca/` is a district of Madrid): INE alone cannot
+    tell. The link's own municipality segment can, so without a match there
+    the municipality is unknown, never stored.
     """
-    if name and municipality_codes.match(name, municipality_codes.load_name_index()):
+    slug = url_municipality_slug(url)
+    if not name or not slug:
+        return None
+    key = municipality_codes.normalize(name)
+    if key != municipality_codes.normalize(slug):
+        return None
+    if municipality_codes.match(name, municipality_codes.load_name_index()):
         return name
     return None
 
@@ -211,7 +221,7 @@ def card_row(card) -> Dict[str, Any]:
         "area": card.area,
         "area_type": card.area_type,
         "deal_type": card.deal_type,
-        "municipality": _recognised_municipality(card.municipality),
+        "municipality": _recognised_municipality(card.municipality, card.url),
         "building_type": card.building_type,
         "attributes": dict(card.attributes or {}),
     }
