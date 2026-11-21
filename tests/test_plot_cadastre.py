@@ -7,6 +7,7 @@ real cache and the real plot step to the stored `plot_area`.
 """
 
 import json
+from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -39,6 +40,7 @@ CRITERIA = {"min_house_m2": 150, "min_plot_m2": 700, "max_price_eur": 300000}
 def app():
     app = create_app()
     app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
     with app.app_context():
         db.create_all()
         yield app
@@ -85,7 +87,7 @@ def _placed(p, **block):
 
 @pytest.fixture
 def area(monkeypatch):
-    stub = Mock(return_value=1234.5)
+    stub = Mock(return_value=Decimal("1234.50"))
     monkeypatch.setattr(pc, "parcel_area_m2", stub)
     return stub
 
@@ -94,7 +96,7 @@ def test_the_parcel_area_becomes_the_plot_with_its_source(app, area):
     p = _row(enrichment={"pool": {"status": "ok"}})
     placed = _placed(p)
     block = pc.enrich(p, placed)
-    assert block["value"] == 1234.5 and block["reference"] == REF
+    assert block["value"] == "1234.50" and block["reference"] == REF
     assert block["source"] == pc.SOURCE
     assert block["extractor_version"] == pc.EXTRACTOR_VERSION
     db.session.refresh(p)
@@ -165,7 +167,7 @@ def test_a_plot_stated_while_catastro_answers_wins_under_the_lock(app, monkeypat
         db.session.execute(
             text("UPDATE properties SET plot_area=950 WHERE id=:i"), {"i": p.id}
         )
-        return 1234.5
+        return Decimal("1234.50")
 
     monkeypatch.setattr(pc, "parcel_area_m2", slow)
     assert pc.enrich(p, placed) is None
@@ -182,7 +184,7 @@ def test_a_row_that_moved_while_catastro_answered_is_not_written(app, monkeypatc
         db.session.execute(
             text("UPDATE properties SET location_lat=43.6 WHERE id=:i"), {"i": p.id}
         )
-        return 1234.5
+        return Decimal("1234.50")
 
     monkeypatch.setattr(pc, "parcel_area_m2", moved)
     assert pc.enrich(p, placed) is None
@@ -274,7 +276,7 @@ def test_the_area_is_the_checked_polygon_of_the_real_parcel(monkeypatch):
     )
     _stub_outline(monkeypatch, shape)
     value = pc.parcel_area_m2(REF)
-    assert value == round(shape.area, 1) and value > 0
+    assert value == Decimal(str(shape.area)).quantize(Decimal("0.01"), ROUND_DOWN) > 0
 
 
 @pytest.mark.parametrize(
@@ -419,9 +421,10 @@ class _Catastro:
 
 
 def _bayas_area():
-    """The parcel's area read straight from the committed file, not from the code."""
+    """The parcel's area read straight from the committed file, not from the code,
+    floored to the column's 0.01."""
     shape = n._shape(c._parse_gml(_gml(25829), 25829)["polygons"])
-    return round(shape.area, 1)
+    return Decimal(str(shape.area)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
 
 
 class TestTheRealPath:
@@ -446,9 +449,9 @@ class TestTheRealPath:
         press.run()
         p = press.row
         assert p.enrichment["neighbours"]["status"] == "ok"
-        assert float(p.plot_area) == _bayas_area() > 0
+        assert Decimal(str(p.plot_area)) == _bayas_area() > 0
         block = p.enrichment[pc.ENRICHMENT_KEY]
-        assert block["value"] == _bayas_area()
+        assert block["value"] == str(_bayas_area())
         assert block["reference"] == c.parcel_reference(BAYAS)
         assert block["source"] == pc.SOURCE
         # The neighbour step's three requests are all there are: the plot step
@@ -501,3 +504,239 @@ class TestTheRealPath:
         assert pc.enrich(press.row, placed) is None
         assert len(press.catastro.calls) == before
         assert press.row.plot_area is None
+
+
+# -- the figure is never rounded across a threshold ----------------------------
+
+
+@pytest.mark.parametrize(
+    "width, stored, verdict",
+    [
+        (699.96, "699.96", False),  # the review's case: round(.., 1) made it 700
+        (699.996, "699.99", False),  # the column cannot hold it; never up to 700
+        (700.004, "700.00", True),
+        (700.0, "700.00", True),
+        (699.9999999999999, "700.00", True),  # float noise must not floor to 699.99
+    ],
+)
+def test_rounding_never_moves_a_figure_across_the_criterion(
+    app, monkeypatch, width, stored, verdict
+):
+    _stub_outline(monkeypatch, box(0, 0, width, 1))
+    area = pc.parcel_area_m2(REF)
+    assert str(area) == stored
+    p = _row(plot_area=area)
+    db.session.refresh(p)
+    # Python, and the SQL twin the list filter uses, read the same stored number.
+    assert sc.read_verdict(p, CRITERIA)["checks"]["plot"] is verdict
+    failing = Property.query.filter(sc.failing_expression(Property, CRITERIA)).count()
+    passing = Property.query.filter(sc.passing_expression(Property, CRITERIA)).count()
+    assert (passing, failing) == ((1, 0) if verdict else (0, 1))
+
+
+# -- a value lives only as long as its subject ---------------------------------
+
+OTHER_REF = "15044A01901483"
+
+
+def _written(p, area, value="1234.50"):
+    area.return_value = Decimal(value)
+    block = pc.enrich(p, _placed(p))
+    assert block is not None and block["value"] == value
+    db.session.refresh(p)
+    return block
+
+
+CHANGES = {
+    "reference_corrected": lambda p: setattr(p, "cadastral_reference", OTHER_REF),
+    "coordinate_moved": lambda p: setattr(p, "location_lat", 43.6),
+    "accuracy_changed": lambda p: setattr(p, "location_accuracy", "approximate"),
+    "no_longer_a_house": lambda p: setattr(p, "property_subtype", "apartment"),
+}
+
+
+@pytest.mark.parametrize("change", CHANGES)
+def test_a_plot_of_ours_is_retired_when_its_subject_changes_even_if_catastro_is_silent(
+    app, area, change
+):
+    p = _row()
+    _written(p, area)
+    assert not pc.is_stale(p)
+    CHANGES[change](p)
+    db.session.commit()
+    assert pc.is_stale(p)
+    assert pc.enrich(p, None) is None  # this press established no parcel
+    db.session.refresh(p)
+    assert p.plot_area is None
+    assert pc.ENRICHMENT_KEY not in p.enrichment
+    assert sc.read_verdict(p, CRITERIA)["checks"]["plot"] is None  # unknown, not fail
+
+
+def test_a_corrected_parcel_replaces_the_old_figure_in_one_commit(app, area):
+    p = _row()
+    _written(p, area, "1234.50")
+    assert sc.read_verdict(p, CRITERIA)["checks"]["plot"] is True
+    p.cadastral_reference = OTHER_REF
+    db.session.commit()
+    area.return_value = Decimal("500.00")
+    block = pc.enrich(p, _placed(p, reference=OTHER_REF))
+    db.session.refresh(p)
+    assert Decimal(str(p.plot_area)) == Decimal("500.00")
+    assert block["value"] == "500.00" and block["reference"] == OTHER_REF
+    assert block["subject"] == n.subject(p)
+    # Honest about what a smaller parcel does: a measured plot under the bound.
+    assert sc.read_verdict(p, CRITERIA)["checks"]["plot"] is False
+
+
+def test_silence_with_an_unchanged_subject_keeps_the_figure(app, area):
+    p = _row()
+    _written(p, area)
+    assert pc.enrich(p, None) is None
+    db.session.refresh(p)
+    assert Decimal(str(p.plot_area)) == Decimal("1234.50")
+    assert pc.ENRICHMENT_KEY in p.enrichment
+
+
+def test_a_plot_that_is_not_ours_is_never_retired(app, area):
+    stated = _row(plot_area=900, source_email_id="stated")
+    stated.cadastral_reference = OTHER_REF
+    typed_over = _row(source_email_id="typed-over")
+    _written(typed_over, area)
+    typed_over.plot_area = Decimal("950.00")  # the owner typed a figure over ours
+    typed_over.cadastral_reference = OTHER_REF
+    db.session.commit()
+    for p in (stated, typed_over):
+        assert not pc.is_stale(p)
+        assert pc.enrich(p, None) is None
+    db.session.refresh(stated)
+    db.session.refresh(typed_over)
+    assert float(stated.plot_area) == 900
+    assert float(typed_over.plot_area) == 950
+    assert pc.ENRICHMENT_KEY in typed_over.enrichment  # left as it was
+
+
+@pytest.mark.parametrize("recorded", [1234.5, "1234.5", "1234.50", 1234.50])
+def test_the_recorded_value_is_compared_as_the_exact_number_the_column_holds(
+    app, recorded
+):
+    p = _row(plot_area=Decimal("1234.50"))
+    p.enrichment = {pc.ENRICHMENT_KEY: {"value": recorded, "subject": "an old one"}}
+    db.session.commit()
+    db.session.refresh(p)
+    assert Decimal(str(p.plot_area)) == Decimal("1234.50")
+    assert pc.is_stale(p)  # same number whatever its type: still ours, subject moved
+    p.plot_area = Decimal("1234.51")
+    db.session.commit()
+    assert not pc.is_stale(p)  # one hundredth off is somebody else's figure
+
+
+def test_retiring_under_the_lock_keeps_a_block_written_while_catastro_answered(
+    app, area
+):
+    p = _row()
+    _written(p, area)
+    p.cadastral_reference = OTHER_REF
+    db.session.commit()
+    placed = _placed(p, reference=OTHER_REF)
+
+    def concurrent_writer(_reference):
+        current = json.loads(
+            db.session.execute(
+                text("SELECT enrichment FROM properties WHERE id=:i"), {"i": p.id}
+            ).scalar_one()
+        )
+        current["pool"] = {"status": "ok"}
+        db.session.execute(
+            text("UPDATE properties SET enrichment=:e WHERE id=:i"),
+            {"e": json.dumps(current), "i": p.id},
+        )
+        return Decimal("500.00")
+
+    area.side_effect = concurrent_writer
+    assert pc.enrich(p, placed) is not None
+    db.session.refresh(p)
+    assert p.enrichment["pool"] == {"status": "ok"}
+    assert p.enrichment[pc.ENRICHMENT_KEY]["value"] == "500.00"
+    assert p.enrichment["neighbours"]["status"] == "ok"
+
+
+# -- the routes that change the reference retire it in their own transaction --
+
+
+def _post(app, p, reference):
+    return app.test_client().post(
+        f"/properties/{p.id}/cadastre", data={"cadastral_reference": reference}
+    )
+
+
+@pytest.fixture
+def lock_spy(monkeypatch):
+    import services.enrichment_write as ew
+
+    calls = []
+    real = ew.locked_write
+
+    def spy(prop, *, locked, commit):
+        calls.append(locked)
+        return real(prop, locked=locked, commit=commit)
+
+    monkeypatch.setattr(ew, "locked_write", spy)
+    return calls
+
+
+def _row_with_our_plot(area):
+    p = _row(enrichment={"pool": {"status": "ok"}})
+    _written(p, area)
+    return p
+
+
+def test_clearing_the_reference_retires_the_plot_under_the_row_lock(
+    app, area, lock_spy
+):
+    p = _row_with_our_plot(area)
+    assert _post(app, p, "").status_code == 302
+    db.session.expire_all()
+    stored = db.session.get(Property, p.id)
+    assert stored.cadastral_reference is None
+    assert stored.plot_area is None and pc.ENRICHMENT_KEY not in stored.enrichment
+    assert stored.enrichment["pool"] == {"status": "ok"}  # a sibling block survives
+    assert lock_spy == [True]  # the branch's read-modify-write holds the row
+
+
+def test_a_corrected_reference_retires_the_plot_in_the_writer_of_the_column(
+    app, area, monkeypatch
+):
+    p = _row_with_our_plot(area)
+    monkeypatch.setattr(
+        c,
+        "fetch_parcel",
+        lambda ref: {"reference": ref, "sources": {}, "run_state": c.RUN_OK},
+    )
+    assert _post(app, p, OTHER_REF).status_code == 302
+    db.session.expire_all()
+    stored = db.session.get(Property, p.id)
+    assert stored.cadastral_reference == OTHER_REF
+    assert stored.plot_area is None and pc.ENRICHMENT_KEY not in stored.enrichment
+
+
+def test_a_reference_recorded_while_catastro_is_silent_retires_the_plot_too(
+    app, area, monkeypatch, lock_spy
+):
+    p = _row_with_our_plot(area)
+    lock_spy.clear()
+    monkeypatch.setattr(
+        c, "fetch_parcel", Mock(side_effect=c.CadastreError(c.REFUSED, "HTTP 503"))
+    )
+    assert _post(app, p, OTHER_REF).status_code == 302
+    db.session.expire_all()
+    stored = db.session.get(Property, p.id)
+    assert stored.cadastral_reference == OTHER_REF
+    assert stored.plot_area is None and pc.ENRICHMENT_KEY not in stored.enrichment
+    assert lock_spy == [True]
+
+
+def test_a_stated_plot_survives_the_route_clearing_the_reference(app, lock_spy):
+    p = _row(plot_area=900)
+    assert _post(app, p, "").status_code == 302
+    db.session.expire_all()
+    assert float(db.session.get(Property, p.id).plot_area) == 900

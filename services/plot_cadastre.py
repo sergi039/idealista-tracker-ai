@@ -34,13 +34,26 @@ and nothing is written.
 * only a house: a flat's parcel is the whole building's lot, not its plot, and a
   row of no known kind says nothing;
 * the figure is the parcel's own polygon area, which `cadastre_service` has
-  already compared with Catastro's declared `areaValue`; it must be credible
-  (`MAX_CREDIBLE_M2`) and fit the `NUMERIC(10,2)` column.
+  already compared with Catastro's declared `areaValue`, **rounded down** to the
+  0.01 the `NUMERIC(10,2)` column stores (never up: 699.96 must not read 700),
+  and credible (`MAX_CREDIBLE_M2`);
+* **a value lives only as long as its subject.** The block records the subject
+  (`neighbours.subject`: the cadastral reference of the column and of the block,
+  the coordinate, its accuracy, the asked address, the municipality) the area
+  was measured for. A plot that still equals the block's value while the row's
+  subject has changed -- the reference was corrected or cleared, the coordinate
+  moved, the row stopped being a house -- is retired: `plot_area` back to NULL
+  and the block removed, under the row lock, whether or not Catastro answers
+  now. A press that also establishes the new parcel writes its area in the same
+  transaction. A plot that is not the block's value (stated, hand-set, read from
+  the text, or typed over this one) is never touched.
 
-**What it does not know** and says so: a parcel is not always the plot a
-listing sells. A property made of two parcels reads smaller than it is, and a
-house sold with part of a larger finca reads larger. The provenance block
-records the reference, so a person can check it against the Catastro viewer.
+**What it does not know**, in both directions: one parcel is not always the
+plot a listing sells. Where several units stand on the parcel its area is
+bigger than any one unit's plot; where the property lies on several parcels
+(usual in rural Galicia) it is smaller than the plot, and such a row can go from
+`unknown` to `fail` on the plot criterion. The provenance block records the
+reference, so a person can check it against the Catastro viewer.
 """
 
 from __future__ import annotations
@@ -48,6 +61,7 @@ from __future__ import annotations
 import logging
 import math
 from datetime import datetime, timezone
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from typing import Any, Dict, Optional
 
 from services import cadastre_service as cadastre, neighbours_service as neighbours
@@ -64,16 +78,68 @@ SOURCE = "catastro_inspire_parcel"
 EXTRACTOR_VERSION = "plot_cadastre/1"
 
 
-def needs_plot(prop: Any) -> bool:
-    """A house whose plot nobody has stated (the one gate, asked twice)."""
-    if listing_kind(
+PLOT_STEP = Decimal("0.01")  # what NUMERIC(10, 2) stores
+
+
+def _is_house(prop: Any) -> bool:
+    return listing_kind(
         getattr(prop, "property_category", None),
         getattr(prop, "property_subtype", None),
-    ) != (KIND_HOUSE):
+    ) == (KIND_HOUSE)
+
+
+def needs_plot(prop: Any) -> bool:
+    """A house whose plot nobody has stated (the one gate, asked twice)."""
+    if not _is_house(prop):
         return False
     if effective_figures(prop)["plot_m2"] is not None:
         return False
     return getattr(prop, "plot_area", None) is None or _blank(prop.plot_area)
+
+
+def _decimal(value: Any) -> Optional[Decimal]:
+    """A stored plot as the exact number the column holds, or None."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = Decimal(str(value)).quantize(PLOT_STEP, rounding=ROUND_DOWN)
+    except (InvalidOperation, ValueError):
+        return None
+    return number if number.is_finite() else None
+
+
+def _written_block(prop: Any) -> Optional[Dict[str, Any]]:
+    """Our block, when the column still holds exactly the value it recorded."""
+    block = (getattr(prop, "enrichment", None) or {}).get(ENRICHMENT_KEY)
+    if not isinstance(block, dict):
+        return None
+    recorded = _decimal(block.get("value"))
+    if recorded is None or recorded != _decimal(getattr(prop, "plot_area", None)):
+        return None
+    return block
+
+
+def is_stale(prop: Any) -> bool:
+    """A plot this module wrote whose subject has since changed."""
+    block = _written_block(prop)
+    if block is None:
+        return False
+    return block.get("subject") != neighbours.subject(prop) or not _is_house(prop)
+
+
+def retire_stale(prop: Any) -> bool:
+    """Take back a stale plot of ours: `plot_area` NULL, the block removed.
+
+    A change to the session only: the caller holds the row lock and commits. It
+    asks no question of Catastro and never touches a plot that is not ours.
+    """
+    if not is_stale(prop):
+        return False
+    enrichment = dict(prop.enrichment or {})
+    enrichment.pop(ENRICHMENT_KEY, None)
+    prop.enrichment = enrichment
+    prop.plot_area = None
+    return True
 
 
 def _established_parcel(
@@ -102,19 +168,24 @@ def _established_parcel(
     }
 
 
-def parcel_area_m2(reference: str) -> float:
+def parcel_area_m2(reference: str) -> Decimal:
     """The parcel's polygon area in m2, checked against Catastro's declaration.
 
     Cache only: the budget is spent before the call, so `_metric_parcel` can
-    answer from what the neighbour step cached and can start no request.
+    answer from what the neighbour step cached and can start no request. Rounded
+    DOWN to the column's 0.01: the value never exceeds the polygon's, so no
+    threshold of two decimals or fewer is crossed by rounding.
     """
     with lookup_budget(0):
         parcel, _ = neighbours._metric_parcel(reference)
-    area = round(float(parcel.area), 1)
-    if not (
-        math.isfinite(area)
-        and 0 < area < MAX_CREDIBLE_M2
-        and area < PLOT_AREA_STORAGE_MAX
+    # Rounded to a micrometre-square first: the shoelace sum carries float noise
+    # (a true 700 m2 can come out as 699.9999999999999), and flooring that noise
+    # would read as 699.99 and flip the verdict the other way.
+    exact = round(float(parcel.area), 6) if math.isfinite(parcel.area) else None
+    area = _decimal(exact)
+    if area is None or not (
+        0 < area < Decimal(str(MAX_CREDIBLE_M2))
+        and area < Decimal(str(PLOT_AREA_STORAGE_MAX))
     ):
         raise cadastre.CadastreError(cadastre.MALFORMED, "parcel area not credible")
     return area
@@ -123,34 +194,39 @@ def parcel_area_m2(reference: str) -> float:
 def enrich(
     prop: Any, established: Optional[Dict[str, Any]], *, commit: bool = True
 ) -> Optional[Dict[str, Any]]:
-    """Write the parcel's area as the plot of this row; None when nothing was.
+    """Keep the plot of this house in step with its parcel; the block when written.
 
     `established` is what `NeighboursService.enrich` returned in this same press
-    (None when it raised). Every refusal is a return of None, so the row stays
-    `unknown` and nothing is recorded.
+    (None when it raised). A plot of ours whose subject changed is retired first,
+    under the lock and with no question to Catastro; then, when this press
+    established the parcel and its outline is cached, the new area is written in
+    the same transaction. Every refusal leaves the row `unknown`, never the old
+    figure and never a `fail`.
     """
-    if not needs_plot(prop):
+    if not (is_stale(prop) or needs_plot(prop)):
         return None
-    parcel = _established_parcel(prop, established)
-    if parcel is None:
-        return None
+    parcel = _established_parcel(prop, established) if _is_house(prop) else None
 
     locked = check_writable(prop, commit)
-    try:
-        area = parcel_area_m2(parcel["reference"])
-    except Exception as exc:
-        logger.info("plot from cadastre skipped for %s: %s", prop.id, exc)
-        return None
+    area = None
+    if parcel is not None:
+        try:
+            area = parcel_area_m2(parcel["reference"])
+        except Exception as exc:
+            logger.info("plot from cadastre skipped for %s: %s", prop.id, exc)
 
     with locked_write(prop, locked=locked, commit=commit):
-        # Re-asked under the lock: a plot stated, hand-set or read from the text
-        # while Catastro answered wins, and so does a row that has since moved.
-        if not needs_plot(prop):
+        # Everything is asked again on the row as the lock found it: a plot
+        # stated or hand-set while Catastro answered wins, a row that moved or
+        # changed kind is not written, and a stale figure of ours goes whatever
+        # the answer was.
+        retire_stale(prop)
+        if area is None or not needs_plot(prop):
             return None
         if _established_parcel(prop, established) != parcel:
             return None
         block = {
-            "value": area,
+            "value": str(area),
             "reference": parcel["reference"],
             "source": SOURCE,
             "extractor_version": EXTRACTOR_VERSION,
