@@ -139,7 +139,7 @@ new_repo
 printf 'DB_PASSWORD=hunter2\nIDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
 resolve "$REPO"
 expect_dir "the variable in .env -> what Compose binds" "$STATE"
-grep -q "^compose -f docker-compose.yml config --format json | cwd=${REPO} | IDEALISTA_DATA_DIR=<unset>$" "${WORK}/docker.log" \
+grep -q "^compose --project-directory ${REPO} -f docker-compose.yml config --format json | cwd=${REPO} | IDEALISTA_DATA_DIR=<unset>$" "${WORK}/docker.log" \
     || fail "Compose was not asked from the checkout with the one compose file: $(cat "${WORK}/docker.log")"
 [ "$(wc -l <"${WORK}/docker.log" | tr -d ' ')" = "1" ] || fail "Compose was asked more than once"
 pass "Compose is asked once, from the checkout, with -f docker-compose.yml"
@@ -312,6 +312,154 @@ expect_refusal "no Docker to ask is refused" "is not on PATH"
 [ -z "$(ls -A "${REPO}/data")" ] || fail "something was written into <repo>/data after a refusal"
 pass "a refusal leaves <repo>/data alone"
 
+# 12. --compose-source prints what Compose would bind, unchecked, for the
+#     compose file it is given.
+compose_says "[$(bind "$MISSING")]"
+new_repo
+: >"${WORK}/docker.log"
+RC=0
+OUT="$(env -u IDEALISTA_DATA_DIR DOCKER_BIN="$STUB" "$SHELL_UNDER_TEST" "$LIB" --compose-source "$REPO" other.yml 2>"${WORK}/err")" || RC=$?
+ERR="$(cat "${WORK}/err")"
+expect_dir "--compose-source prints the bind although the directory does not exist" "$MISSING"
+grep -q "^compose --project-directory ${REPO} -f other.yml config --format json | cwd=${REPO} " "${WORK}/docker.log" \
+    || fail "--compose-source did not ask about the compose file it was given"
+pass "--compose-source asks about the compose file it is given"
+RC=0
+OUT="$(DOCKER_BIN="$STUB" "$SHELL_UNDER_TEST" "$LIB" --compose-source 2>"${WORK}/err")" || RC=$?
+ERR="$(cat "${WORK}/err")"
+expect_refusal "--compose-source without a repository root is refused" "usage"
+compose_says "[$(bind "$STATE")]"
+
+# 12b. The tombstone. tools/move_data_dir.sh leaves `.moved-to` in <repo>/data
+#      once the state lives elsewhere. Resolving to that directory means the
+#      .env line was lost, and the directory holds no mail cursor: refused,
+#      with the place the state went and both ways out.
+new_repo
+printf 'moved_to=%s\nmoved_at=20261112T000000Z\n' "$STATE" >"${REPO}/data/.moved-to"
+resolve "$REPO"
+expect_refusal "the default directory is refused once it carries the tombstone" "carries .moved-to"
+case "$ERR" in
+    *"${STATE}"*"--rollback"*) pass "the refusal names where the state went and how to undo it" ;;
+    *) fail "the tombstone refusal does not name the moved directory and --rollback" ;;
+esac
+
+# 12c. With the line in place Compose mounts the moved directory, and the
+#      tombstone is exactly what is expected in <repo>/data.
+printf 'IDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
+resolve "$REPO"
+expect_dir "the moved directory resolves while <repo>/data carries the tombstone" "$STATE"
+
+# 12d. A .env line that points back at the directory the state left is the
+#      same mistake arrived at through Compose. (A compose file that binds
+#      ./data again while .env names the moved directory is refused earlier:
+#      Compose's answer is then not the text of .env.)
+printf 'IDEALISTA_DATA_DIR=%s\n' "${REPO}/data" >"${REPO}/.env"
+compose_says "[$(bind "${REPO}/data")]"
+resolve "$REPO"
+expect_refusal "Compose mounting the tombstoned directory is refused" "carries .moved-to"
+printf 'IDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
+resolve "$REPO"
+expect_refusal "a compose file that binds the directory the state left is refused" "does not say exactly that"
+compose_says "[$(bind "$STATE")]"
+
+# 12e. A tombstone that records nothing is still a tombstone.
+new_repo
+: >"${REPO}/data/.moved-to"
+resolve "$REPO"
+expect_refusal "an empty tombstone still refuses" "an unrecorded directory"
+# A symbolic link whose target is gone: -e says there is nothing there.
+rm -f "${REPO}/data/.moved-to"
+ln -s "${WORK}/gone" "${REPO}/data/.moved-to"
+resolve "$REPO"
+expect_refusal "a dangling symbolic link named as the tombstone still refuses" "carries .moved-to"
+
+# 12e2. The tombstone is the fact that the entry exists; what it holds is a
+#       hint, and no kind of entry may turn the refusal into a wait, a crash
+#       or a line of junk in the watcher's log (review of #700). A reader
+#       still running after ten seconds is a failure here, not a hung harness.
+resolve_bounded() {
+    local repo="$1" pid waited=0
+    : >"${WORK}/docker.log"
+    RC=0
+    env -u IDEALISTA_DATA_DIR -u COMPOSE_ENV_FILES -u COMPOSE_DISABLE_ENV_FILE DOCKER_BIN="$STUB" \
+        "$SHELL_UNDER_TEST" "$LIB" "$repo" >"${WORK}/out" 2>"${WORK}/err" &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 100 ]; do
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null
+        RC=124
+        # Whatever it started is still waiting on the FIFO, and would outlive
+        # this harness: a writer lets it read end-of-file and go. The writer
+        # itself gets a second, in case nothing was reading.
+        ( : >"${repo}/data/.moved-to" ) 2>/dev/null &
+        local writer=$!
+        sleep 1
+        # Usually gone already; a failed kill must not end the harness here,
+        # before it has said what failed.
+        kill "$writer" 2>/dev/null || :
+        wait "$writer" 2>/dev/null || :
+    fi
+    wait "$pid" 2>/dev/null || [ "$RC" = "124" ] || RC=$?
+    OUT="$(cat "${WORK}/out")"
+    ERR="$(cat "${WORK}/err")"
+}
+expect_tombstone_refusal() {
+    # expect_tombstone_refusal <label> [text the stderr must also carry]
+    [ "$RC" != "124" ] || fail "$1: the reader was still waiting on the tombstone after ten seconds"
+    expect_refusal "$1" "carries .moved-to"
+    case "$ERR" in *"${2:-}"*) ;; *) fail "$1: stderr does not mention '${2:-}'" ;; esac
+    [ "$(printf '%s\n' "$ERR" | wc -l | tr -d ' ')" = "1" ] || fail "$1: the refusal is not one line"
+}
+new_repo
+mkfifo "${REPO}/data/.moved-to"
+resolve_bounded "$REPO"
+expect_tombstone_refusal "a FIFO named as the tombstone refuses, and is not read" "an unrecorded directory"
+rm -f "${REPO}/data/.moved-to"
+mkfifo "${WORK}/a-fifo"
+ln -s "${WORK}/a-fifo" "${REPO}/data/.moved-to"
+resolve_bounded "$REPO"
+expect_tombstone_refusal "a link to a FIFO named as the tombstone refuses" "an unrecorded directory"
+rm -f "${REPO}/data/.moved-to"
+printf '\377' >"${REPO}/data/.moved-to"
+resolve_bounded "$REPO"
+expect_tombstone_refusal "a tombstone that is not text refuses" "an unrecorded directory"
+printf 'moved_to=%s\n' "$STATE" >"${REPO}/data/.moved-to"
+chmod 000 "${REPO}/data/.moved-to"
+resolve_bounded "$REPO"
+if [ "$(id -u)" = "0" ]; then
+    expect_tombstone_refusal "a tombstone that may not be read refuses"
+else
+    expect_tombstone_refusal "a tombstone that may not be read refuses" "an unrecorded directory"
+fi
+chmod 600 "${REPO}/data/.moved-to"
+printf 'moved_to=/x\033[31m\ty\r\nmoved_at=1\n' >"${REPO}/data/.moved-to"
+resolve_bounded "$REPO"
+expect_tombstone_refusal "a tombstone with control characters refuses" "'/x[31my'"
+case "$ERR" in *"$(printf '\033')"* | *"$(printf '\t')"* | *"$(printf '\r')"*) fail "a control character from the tombstone reached stderr" ;; esac
+{ head -c 8192 /dev/zero | tr '\0' 'a'; printf '\nmoved_to=/late\n'; } >"${REPO}/data/.moved-to"
+resolve_bounded "$REPO"
+expect_tombstone_refusal "only the head of a large tombstone is read" "an unrecorded directory"
+rm -f "${REPO}/data/.moved-to" "${WORK}/a-fifo"
+
+# 12f. `--default` names the directory inside the checkout and reads nothing:
+#      not .env, not the environment, not the tombstone, and not Compose.
+new_repo
+printf 'IDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
+: >"${REPO}/data/.moved-to"
+: >"${WORK}/docker.log"
+RC=0
+OUT="$(IDEALISTA_DATA_DIR="$OTHER" DOCKER_BIN="$STUB" "$SHELL_UNDER_TEST" "$LIB" --default "${REPO}/" 2>"${WORK}/err")" || RC=$?
+ERR="$(cat "${WORK}/err")"
+expect_dir "--default is <repo>/data whatever is configured" "${REPO}/data"
+asked && fail "--default asked Compose"
+RC=0
+OUT="$("$SHELL_UNDER_TEST" "$LIB" --default 2>"${WORK}/err")" || RC=$?
+ERR="$(cat "${WORK}/err")"
+expect_refusal "--default without a repository root is refused" "usage"
+
 # 13. The root has to be the checkout Compose runs from: absolute, existing.
 new_repo
 RC=0
@@ -397,5 +545,23 @@ for answer in "$SECRET_PATH" "relative/hunter2" "${OTHER}" "${WORK}/a\$hunter2";
     case "${OUT}${ERR}" in *"$answer"*) fail "a refusal quotes what Compose rendered: ${ERR}" ;; esac
 done
 pass "no refusal quotes what Compose rendered"
+
+# 19. A control character in what Compose rendered (review of #694). The
+# review's input is a line break inside the path, held against Compose itself
+# in tests/test_data_dir_single_home.py. Here the two guards one at a time:
+# a line break at the END of the source, which `$(...)` would silently drop,
+# is the parser's to refuse; a tab inside the path is the reader's - and .env
+# says exactly that path, so nothing else would stop it.
+new_repo
+printf 'IDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
+printf '{"services":{"app":{"volumes":[{"type":"bind","source":"%s\\n","target":"/app/data"}]}}}\n' "$STATE" >"${WORK}/compose.json"
+resolve "$REPO"
+expect_refusal "a source that ends in a line break is refused" "exactly one host directory"
+TABBED="${WORK}/with$(printf '\t')tab"
+mkdir -p "$TABBED"
+printf 'IDEALISTA_DATA_DIR=%s\n' "$TABBED" >"${REPO}/.env"
+printf '{"services":{"app":{"volumes":[{"type":"bind","source":"%s/with\\ttab","target":"/app/data"}]}}}\n' "$WORK" >"${WORK}/compose.json"
+resolve "$REPO"
+expect_refusal "a source with a control character in it is refused" "control character"
 
 printf '\nALL %d PASSED (%s %s)\n' "$passed" "$SHELL_UNDER_TEST" "$("$SHELL_UNDER_TEST" -c 'echo $BASH_VERSION')"
