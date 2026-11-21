@@ -85,7 +85,7 @@ def area(monkeypatch):
 
 
 def test_the_parcel_area_becomes_the_plot_with_its_source(app, area):
-    p = _row()
+    p = _row(enrichment={"pool": {"status": "ok"}})
     _placed(p)
     block = pc.enrich(p)
     assert block["value"] == 1234.5 and block["reference"] == REF
@@ -95,7 +95,41 @@ def test_the_parcel_area_becomes_the_plot_with_its_source(app, area):
     assert float(p.plot_area) == 1234.5
     assert p.enrichment[pc.ENRICHMENT_KEY] == block
     assert p.enrichment["neighbours"]["status"] == "ok"
+    assert p.enrichment["pool"] == {"status": "ok"}  # a sibling block survives
     area.assert_called_once_with(REF)
+
+
+def test_the_plot_and_its_source_are_written_together_or_not_at_all(
+    app, area, monkeypatch
+):
+    p = _row()
+    _placed(p)
+    monkeypatch.setattr(
+        db.session, "commit", Mock(side_effect=RuntimeError("commit refused"))
+    )
+    with pytest.raises(RuntimeError):
+        pc.enrich(p)
+    monkeypatch.undo()
+    db.session.refresh(p)
+    assert p.plot_area is None
+    assert pc.ENRICHMENT_KEY not in p.enrichment
+
+
+def test_no_commit_ever_carries_one_of_the_two_writes_without_the_other(
+    app, area, monkeypatch
+):
+    p = _row()
+    _placed(p)
+    seen = []
+    real_commit = db.session.commit
+
+    def spy():
+        seen.append((p.plot_area is not None, pc.ENRICHMENT_KEY in p.enrichment))
+        return real_commit()
+
+    monkeypatch.setattr(db.session, "commit", spy)
+    assert pc.enrich(p) is not None
+    assert seen and all(plot == source for plot, source in seen)
 
 
 def test_the_written_plot_decides_the_subscription_criteria(app, area):
