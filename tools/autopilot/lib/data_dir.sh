@@ -64,6 +64,20 @@
 # `<repo>` is the checkout Compose is run from, as an absolute path. Prints the
 # directory on stdout. On any refusal prints nothing there, says why on stderr
 # and exits 1.
+#
+#   data_dir.sh --default <repo>
+#
+# prints the directory inside the checkout - what the answer is when nothing
+# is configured - without reading .env or the environment or asking Compose.
+#
+#   data_dir.sh --compose-source <repo> [compose-file]
+#
+# prints what Compose would bind at /app/data, unchecked: the directory need
+# not exist. Both are for the two callers that have to tell "the state is in
+# the checkout" from "it was moved", and to ask about a mount that is not in
+# force yet: tools/move_data_dir.sh before it moves anything, and the
+# watcher's deploy gate about the commit it is about to deploy. They ask here
+# rather than spell `<repo>/data` themselves, so that name stays in one file.
 
 set -u
 
@@ -86,8 +100,34 @@ _data_dir_set_in_environment() {
     return 1
 }
 
+# Left in `<repo>/data` by tools/move_data_dir.sh once the state has been moved
+# out of the checkout. A directory that carries it is where the state USED to
+# be: four reference files and some logs, no mail cursor, no ledger. Resolving
+# to it means the `.env` line was lost, or a docker-compose.yml that binds
+# ./data came back, and the honest answer is a refusal - a watcher that
+# deployed against it would start an app with no cursor, which re-reads the
+# mailbox from the beginning (the incident of 2026-11-09).
+IDEALISTA_DATA_DIR_TOMBSTONE=".moved-to"
+
 _data_dir_refuse() {
     printf 'data_dir: %s\n' "$*" >&2
+    return 1
+}
+
+# Refuses a directory that carries the tombstone, whichever way it was reached:
+# by default, or because Compose would mount it.
+_data_dir_refuse_tombstone() {
+    local dir="$1" tombstone="${1}/${IDEALISTA_DATA_DIR_TOMBSTONE}"
+    # The tombstone is the FACT that an entry of that name exists - a file, a
+    # directory, a FIFO, a link whose target is gone (-L: -e follows links).
+    # That is all this reader asks of it. It never opens the entry: what the
+    # file records is a convenience, and every way of reading it from a shell
+    # is a way to hang or to be handed something else - a FIFO put there
+    # after the test that it is a file blocks `head` for ever, and the deploy
+    # watcher with it. The message says where to look; tools/move_data_dir.sh
+    # --rollback reads it, with a descriptor it has checked.
+    [ -e "$tombstone" ] || [ -L "$tombstone" ] || return 0
+    _data_dir_refuse "${dir} carries ${IDEALISTA_DATA_DIR_TOMBSTONE}: the deployment's state was moved out of it and Compose would no longer mount it. Where it went is recorded in ${tombstone} (not read here): put ${IDEALISTA_DATA_DIR_KEY}=<that directory> back in .env, or run tools/move_data_dir.sh --rollback"
     return 1
 }
 
@@ -98,6 +138,17 @@ _data_dir_trim() {
         path="${path%/}"
     done
     printf '%s' "$path"
+}
+
+# The directory inside the checkout: the default, and the place the state is
+# moved out of. No configuration is read.
+idealista_default_data_dir() {
+    local repo="${1:-}"
+    if [ -z "$repo" ]; then
+        _data_dir_refuse "usage: data_dir.sh --default <repository root>"
+        return 1
+    fi
+    printf '%s/data\n' "$(_data_dir_trim "$repo")"
 }
 
 # Where the variable is named, if anywhere. Sets DATA_DIR_NAMED_IN to that
@@ -186,11 +237,18 @@ idealista_compose_source() {
     local repo="${1:-}" compose_file="${2:-docker-compose.yml}"
     local docker="${DOCKER_BIN:-docker}" rendered source
 
+    if [ -z "$repo" ] || [ ! -d "$repo" ]; then
+        _data_dir_refuse "usage: data_dir.sh --compose-source <repository root> [compose file]"
+        return 1
+    fi
     if ! command -v "$docker" >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
         _data_dir_refuse "cannot ask Compose what it mounts at /app/data: '${docker}' or python3 is not on PATH"
         return 1
     fi
-    if ! rendered="$(cd "$repo" && "$docker" compose -f "$compose_file" config --format json 2>/dev/null)"; then
+    # --project-directory pins what the watcher gets by running Compose from
+    # the checkout: `./data` and `.env` are the checkout's, also when the
+    # compose file asked about is a copy that lies somewhere else.
+    if ! rendered="$(cd "$repo" && "$docker" compose --project-directory "$repo" -f "$compose_file" config --format json 2>/dev/null)"; then
         _data_dir_refuse "'${docker} compose -f ${compose_file} config' failed in ${repo}, so what Compose would mount at /app/data is unknown; run it there to see why"
         return 1
     fi
@@ -243,7 +301,9 @@ idealista_data_dir() {
         # What `${IDEALISTA_DATA_DIR:-./data}` renders with nothing set. Not
         # checked for existence: callers created `<repo>/data` on demand
         # before this file existed and still do.
-        printf '%s/data\n' "$repo"
+        value="$(idealista_default_data_dir "$repo")"
+        _data_dir_refuse_tombstone "$value" || return 1
+        printf '%s\n' "$value"
         return 0
     fi
 
@@ -251,6 +311,12 @@ idealista_data_dir() {
     case "$value" in
         /) _data_dir_refuse "Compose would mount / at /app/data; refusing"; return 1 ;;
         *'$'*) _data_dir_refuse "Compose reports a state directory with a '\$' in it; refusing"; return 1 ;;
+        # A control character - a line break above all - would make the one
+        # exact line asked of grep below several patterns, or a path that is
+        # not the one it looks like. Refused before grep sees it. (A line
+        # break at the very end never reaches here: `$(...)` drops it, which
+        # is why the parser of Compose's answer refuses line breaks itself.)
+        *[[:cntrl:]]*) _data_dir_refuse "Compose reports a state directory with a control character in it; refusing"; return 1 ;;
         /*) ;;
         *)
             _data_dir_refuse "Compose reports a state directory that is not an absolute path"
@@ -270,11 +336,22 @@ idealista_data_dir() {
         _data_dir_refuse "what Compose would mount at /app/data from here is not what ${DATA_DIR_NAMED_IN} says: it does not say exactly that on one line naming ${IDEALISTA_DATA_DIR_KEY} (it names it on ${DATA_DIR_NAMED_TIMES}). Another process may be given another directory: write one line, ${IDEALISTA_DATA_DIR_KEY}=/absolute/path, nothing else on it"
         return 1
     fi
+    _data_dir_refuse_tombstone "$value" || return 1
     printf '%s\n' "$value"
     return 0
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    if [ "${1:-}" = "--default" ]; then
+        shift
+        idealista_default_data_dir "$@"
+        exit $?
+    fi
+    if [ "${1:-}" = "--compose-source" ]; then
+        shift
+        idealista_compose_source "$@"
+        exit $?
+    fi
     idealista_data_dir "$@"
     exit $?
 fi
