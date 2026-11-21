@@ -83,16 +83,40 @@ def _is_id(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
+def _is_time(value: Any) -> bool:
+    """Text in the form `_utc_text` writes: ISO 8601, with or without offset."""
+    if not _is_id(value):
+        return False
+    try:
+        datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
 def _is_entry(item: Any) -> bool:
-    """The one definition of an entry: who, which portal, which delivery."""
+    """The one definition of an entry: every field `record()` writes, typed.
+
+    Who (`profile_id`, an integer), which portal and which delivery (`source`
+    and `ref`, text), through which door (`method`, text), and the two times:
+    `recorded_at` is always written, `received_at` may be null, and both are
+    ISO 8601 text when present. An item with any of them missing, of another
+    type or not a time is not an entry, however plausible the rest looks
+    (reviews of #698 and #704: `"method": []` with a null `recorded_at` was
+    counted as a delivery). Keys beyond these six do not disqualify an item.
+    """
     if not isinstance(item, dict):
         return False
     profile_id = item.get("profile_id")
+    received_at = item.get("received_at")
     return (
         isinstance(profile_id, int)
         and not isinstance(profile_id, bool)
         and _is_id(item.get("source"))
         and _is_id(item.get("ref"))
+        and _is_id(item.get("method"))
+        and _is_time(item.get("recorded_at"))
+        and (received_at is None or _is_time(received_at))
     )
 
 

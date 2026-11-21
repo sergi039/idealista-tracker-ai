@@ -408,7 +408,123 @@ NOT_THE_BLOCK = [
     {"items": [{"profile_id": True, "source": "f", "ref": "r"}], "truncated": False},
     {"items": [{"profile_id": 3, "source": "f", "ref": " "}], "truncated": False},
     {"items": [{"profile_id": 3, "source": "", "ref": "r"}], "truncated": False},
+    # Review of #704: every field `record()` writes is part of the shape. The
+    # first three name this very delivery and would have passed as "already
+    # recorded": a method that is not text, no time of recording, a time of
+    # receipt that is not text.
+    *(
+        {
+            "items": [
+                {
+                    "profile_id": 3,
+                    "source": "fotocasa",
+                    "method": "alert_email",
+                    "ref": "imap_7",
+                    "received_at": None,
+                    "recorded_at": "2026-11-21T18:00:00+00:00",
+                    **wrong,
+                }
+            ],
+            "truncated": False,
+        }
+        for wrong in (
+            {"method": []},
+            {"recorded_at": None},
+            {"received_at": 7},
+            {"method": " "},
+        )
+    ),
 ]
+
+
+WHOLE_ENTRY = {
+    "profile_id": 3,
+    "source": "fotocasa",
+    "method": "alert_email",
+    "ref": "imap_7",
+    "received_at": "2026-11-21T17:59:00+00:00",
+    "recorded_at": "2026-11-21T18:00:00+00:00",
+}
+
+# One wrong value at a time, per field `record()` writes.
+WRONG_FIELDS = [
+    ("profile_id", None),
+    ("profile_id", "3"),
+    ("profile_id", 3.0),
+    ("profile_id", True),
+    ("source", None),
+    ("source", 7),
+    ("source", ""),
+    ("ref", None),
+    ("ref", 7),
+    ("ref", " "),
+    ("method", None),
+    ("method", []),
+    ("method", ""),
+    ("recorded_at", None),
+    ("recorded_at", 1763748000),
+    ("recorded_at", "yesterday"),
+    ("received_at", 7),
+    ("received_at", ""),
+    ("received_at", "not a time"),
+]
+
+# What two reviews handed in, verbatim (#698 round four, then #704).
+REVIEWERS_ENTRIES = [
+    {
+        "profile_id": 2,
+        "source": "fotocasa",
+        "method": [],
+        "ref": "imap_7",
+        "received_at": None,
+        "recorded_at": None,
+    },
+    {
+        "profile_id": 7,
+        "ref": "imap_1",
+        "source": "yaencontre",
+        "method": [],
+        "recorded_at": None,
+    },
+]
+
+
+class TestAnEntryIsEveryFieldTyped:
+    def test_what_record_writes_is_an_entry(self, app, home, other):
+        prop = _prop(home)
+        _record(prop, other)
+        _record(prop, other, ref="imap_8", received_at=None)
+
+        written = _items(prop.id)
+        assert len(written) == 2 and all(map(arrival_journal._is_entry, written))
+        assert arrival_journal._is_entry(WHOLE_ENTRY)
+        assert arrival_journal._is_entry({**WHOLE_ENTRY, "received_at": None})
+        assert arrival_journal._is_entry({**WHOLE_ENTRY, "extra": {"kept": 1}})
+
+    @pytest.mark.parametrize("field, wrong", WRONG_FIELDS)
+    def test_one_wrong_field_is_not_an_entry(self, field, wrong):
+        item = {**WHOLE_ENTRY, field: wrong}
+        block = {"arrivals": {"items": [item], "truncated": False}}
+
+        assert not arrival_journal._is_entry(item)
+        assert arrival_journal.read(Property(enrichment=block))["readable"] is False
+
+    @pytest.mark.parametrize("field", sorted(set(WHOLE_ENTRY) - {"received_at"}))
+    def test_a_missing_field_is_not_an_entry(self, field):
+        item = {key: value for key, value in WHOLE_ENTRY.items() if key != field}
+
+        assert not arrival_journal._is_entry(item)
+
+    @pytest.mark.parametrize("item", REVIEWERS_ENTRIES)
+    def test_the_entries_two_reviews_handed_in_are_not_entries(self, item):
+        block = {"arrivals": {"items": [item], "truncated": False}}
+
+        assert not arrival_journal._is_entry(item)
+        assert arrival_journal.read(Property(enrichment=block)) == {
+            "items": [],
+            "truncated": False,
+            "readable": False,
+        }
 
 
 class TestReadingIsTotalAndWritingFailsClosed:
@@ -434,7 +550,14 @@ class TestReadingIsTotalAndWritingFailsClosed:
     def test_what_read_returns_is_what_the_duplicate_check_sees(self, app, home, other):
         """One reading of the shape (review of #698): only an entry `read()`
         returns can make a delivery "already recorded"."""
-        entry = {"profile_id": other.id, "source": "fotocasa", "ref": "imap_7"}
+        entry = {
+            "profile_id": other.id,
+            "source": "fotocasa",
+            "method": "alert_email",
+            "ref": "imap_7",
+            "received_at": None,
+            "recorded_at": "2026-11-21T18:00:00+00:00",
+        }
         prop = _prop(
             home, enrichment={"arrivals": {"items": [entry], "truncated": False}}
         )

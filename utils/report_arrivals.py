@@ -144,7 +144,25 @@ def _print_text(report: Dict[str, Any], names: Mapping[int, str]) -> None:
 
 
 def load():
-    """Rows and routes, in one read transaction."""
+    """Rows and routes, read from ONE snapshot.
+
+    The routes are read eagerly and the listings lazily, so under
+    PostgreSQL's default READ COMMITTED the two could see different
+    databases: a route committed between them made the report count a
+    second-search listing no committed state ever held (review of #704).
+    REPEATABLE READ takes its snapshot at the first statement and keeps it;
+    READ ONLY makes "writes nothing" the database's rule too. Both must be
+    asked for before the session's transaction begins, which is why the
+    dialect is read off the bind and not off a connection. SQLite has one
+    connection and no such gap.
+    """
+    if db.session.get_bind().dialect.name == "postgresql":
+        db.session.connection(
+            execution_options={
+                "isolation_level": "REPEATABLE READ",
+                "postgresql_readonly": True,
+            }
+        )
     rows = (
         db.session.query(Property.id, Property.search_profile_id, Property.enrichment)
         .order_by(Property.id)

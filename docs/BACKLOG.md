@@ -42,36 +42,30 @@ must be an ancestor of `main`.
   `<span style="text-decoration: line-through"><a href=".../<id>/d">320.000 €</a></span>`
   gives `cards_in_email(...)[0].price == 320000.0` instead of `None`.
 
-### The arrival journal accepts an entry with odd side fields, and its two-session test can pass without the lock
+### The arrival journal's two-session test can pass without the row lock
 
-- **Anchor:** `services/arrival_journal.py` (`_is_entry`, `_delivered`);
-  `tests/test_postgres_migrations.py`
-  (`test_two_sessions_appending_to_one_arrival_journal_keep_both_entries`).
-  Fourth review of #698, 2026-11-21; merged as it was on the owner's command.
-- **Finding 1:** `_is_entry` checks the subscription, the portal and the
-  delivery id and nothing else, so a stored entry whose other fields are not
-  what `record()` writes (`"method": []`, a null `recorded_at`) is readable.
-  A real delivery with the same portal and id then answers `already_recorded`
-  and is consumed, instead of `unwritable`.
-- **Finding 2:** the test starts the second session, waits two seconds and
+- **Anchor:** `tests/test_postgres_migrations.py`
+  (`test_two_sessions_appending_to_one_arrival_journal_keep_both_entries`);
+  `services/enrichment_write.py` (`locked_write`). Fourth review of #698,
+  2026-11-21; merged as it was on the owner's command. That review's other
+  finding -- `_is_entry` accepting an entry with odd side fields -- is fixed
+  in `services/arrival_journal.py`, which now checks every field `record()`
+  writes.
+- **Finding:** the test starts the second session, waits two seconds and
   asserts it is still running. A second worker that had not issued its first
   query yet when the first one committed passes every assertion with the
   `FOR UPDATE` removed: the test measures that the worker is alive, not that
   it is waiting on the row.
-- **Measured:** neither was reproduced on production. No code writes an entry
-  of that shape -- `record()` is the only writer and builds every field -- so
-  finding 1 needs hand SQL on the block; on 2026-11-21 the journal held no
-  entry at all. For finding 2, removing `with_for_update=True` in
-  `services/enrichment_write.locked_write` did redden that test in a
-  throwaway worktree on PostgreSQL 15.18, so the lock is exercised; what is
-  unproved is that it cannot pass by timing.
-- **What breaks, for whom:** after a hand edit of one row's block, one second
-  arrival for that row goes uncounted in `utils/report_arrivals.py`; and a
-  future change that drops the row lock could pass CI on a slow runner.
-- **Check:** a fix validates every field `record()` writes in `_is_entry`,
-  and makes the test observe `pg_stat_activity.wait_event_type = 'Lock'` for
-  the second session, as `test_029_set_link_waits_for_the_row_lock_it_takes`
-  does.
+- **Measured:** not reproduced. Removing `with_for_update=True` in
+  `locked_write` did redden that test in a throwaway worktree on PostgreSQL
+  15.18, so the lock is exercised; what is unproved is that the test cannot
+  pass by timing on a slow runner.
+- **What breaks, for whom:** a future change that drops the row lock could
+  pass CI, and two ingestion processes appending to one listing's journal
+  would then lose an entry `utils/report_arrivals.py` should have counted.
+- **Check:** a fix makes the test observe
+  `pg_stat_activity.wait_event_type = 'Lock'` for the second session, as
+  `test_029_set_link_waits_for_the_row_lock_it_takes` does.
 
 ### `tools/backup_attachments.sh` has no schedule
 

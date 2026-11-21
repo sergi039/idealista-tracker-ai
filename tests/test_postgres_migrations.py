@@ -4138,3 +4138,93 @@ def test_two_sessions_appending_to_one_arrival_journal_keep_both_entries(
     finally:
         release.set()
         engine.dispose()
+
+
+def test_the_arrivals_report_reads_routes_and_listings_from_one_snapshot(
+    postgres_url, monkeypatch
+):
+    """#632, review of #704: `utils/report_arrivals.load` reads the routes
+    eagerly and the listings lazily. Under READ COMMITTED a route committed
+    between the two made the report count a second-search listing that no
+    committed state ever held. Here another session routes a subscription
+    onto the home and records an arrival for a second listing after the
+    routes were read; the report must describe the database as it was."""
+    from utils import report_arrivals
+
+    _migrated(postgres_url)
+    (application,) = _duplicate_link_apps(postgres_url, monkeypatch)
+    from models import Property as _Property, SearchProfile as _SearchProfile
+
+    def entry(profile_id, ref):
+        return {
+            "profile_id": profile_id,
+            "source": "yaencontre",
+            "method": "alert_email",
+            "ref": ref,
+            "received_at": None,
+            "recorded_at": "2026-11-21T18:00:00+00:00",
+        }
+
+    def journal(*items):
+        return {"arrivals": {"items": list(items), "truncated": False}}
+
+    with application.app_context():
+        home = _SearchProfile(name="report home", is_active=True)
+        later = _SearchProfile(name="report routed later", is_active=True)
+        third = _SearchProfile(name="report third", is_active=True)
+        db.session.add_all([home, later, third])
+        db.session.commit()
+        first = _Property(
+            source_email_id="report:a",
+            title="a",
+            search_profile_id=home.id,
+            enrichment=journal(entry(later.id, "imap_1")),
+        )
+        second = _Property(
+            source_email_id="report:b", title="b", search_profile_id=home.id
+        )
+        db.session.add_all([first, second])
+        db.session.commit()
+        home_id, later_id, third_id, second_id = home.id, later.id, third.id, second.id
+        db.session.remove()
+
+    engine = create_engine(postgres_url)
+    try:
+        with application.app_context():
+            rows, routed_to, _names = report_arrivals.load()
+            settings = {
+                name: db.session.execute(text(f"SHOW {name}")).scalar()  # noqa: S608
+                for name in ("transaction_isolation", "transaction_read_only")
+            }
+            with engine.begin() as elsewhere:
+                elsewhere.execute(
+                    text("UPDATE search_profiles SET routed_to = :h WHERE id = :l"),
+                    {"h": home_id, "l": later_id},
+                )
+                elsewhere.execute(
+                    text("UPDATE properties SET enrichment = :e WHERE id = :i"),
+                    {
+                        "e": json.dumps(journal(entry(third_id, "imap_2"))),
+                        "i": second_id,
+                    },
+                )
+            report = report_arrivals.collect(rows, routed_to)
+            db.session.rollback()
+            db.session.remove()
+
+        assert settings == {
+            "transaction_isolation": "repeatable read",
+            "transaction_read_only": "on",
+        }
+        assert report["listings_delivered_by_a_second_search"] == 1
+        assert report["entries"] == 1
+        assert report["pairs"] == [
+            {
+                "home_profile_id": home_id,
+                "arrival_profile_id": later_id,
+                "listings": 1,
+                "entries": 1,
+            }
+        ]
+    finally:
+        engine.dispose()

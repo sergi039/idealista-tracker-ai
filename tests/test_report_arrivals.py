@@ -31,8 +31,17 @@ class _Row:
             self.enrichment = {"arrivals": {"items": items, "truncated": truncated}}
 
 
-def _item(profile_id, ref="imap_1", source="yaencontre"):
-    return {"profile_id": profile_id, "ref": ref, "source": source}
+def _item(profile_id, ref="imap_1", source="yaencontre", **fields):
+    """An entry as `arrival_journal.record()` writes one."""
+    return {
+        "profile_id": profile_id,
+        "source": source,
+        "method": "alert_email",
+        "ref": ref,
+        "received_at": None,
+        "recorded_at": "2026-11-21T18:00:00+00:00",
+        **fields,
+    }
 
 
 class TestTheCount:
@@ -100,6 +109,22 @@ class TestTheCount:
             ["legacy"],
             {"arrivals": None},
             {"arrivals": {"items": [{"ref": "imap_1"}], "truncated": False}},
+            # Review of #704, verbatim: who, portal and delivery are fine and
+            # the rest is not what `record()` writes. Not a delivery to count.
+            {
+                "arrivals": {
+                    "items": [
+                        {
+                            "profile_id": 7,
+                            "ref": "imap_1",
+                            "source": "yaencontre",
+                            "method": [],
+                            "recorded_at": None,
+                        }
+                    ],
+                    "truncated": False,
+                }
+            },
         ],
     )
     def test_a_journal_it_cannot_read_is_counted_apart_and_never_raises(
