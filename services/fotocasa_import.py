@@ -446,6 +446,15 @@ def build_property(
     # Without this a row classified `land` keeps whatever `area_type` the
     # payload implied, and a parcel is counted as floor space.
     PropertyClassificationService.reconcile_area_type(prop)
+    # `reconcile_area_type` reads "a surface and no type" as built. A card
+    # that did not say what its surface is (`cards_in_email`) keeps it
+    # unknown; land stays plot, which is the classifier's evidence.
+    if (
+        method == EMAIL_ONLY_METHOD
+        and (row.get("area_type") or "unknown") == "unknown"
+        and (prop.property_category or "").strip().lower() != "land"
+    ):
+        prop.area_type = "unknown"
     prop.attributes = row.get("attributes") or {}
     prop.email_date = email_date or _parse_published(row.get("published_at"))
     prop.email_subject = email_subject

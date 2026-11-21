@@ -238,6 +238,60 @@ class TestCardParser:
         assert time.monotonic() - started < 5
         assert [c.listing_id for c in cards] == [190280905]
 
+    def test_markup_inside_the_chosen_anchor_is_read_in_linear_time(self):
+        """The reviewer's input: a valid listing anchor with a hundred thousand
+        `<` before its `</a>`. The tag stripper must not rescan the rest of the
+        text from each of them."""
+        hostile = _card_html(190280907).replace(
+            "Ver anuncio", "Ver anuncio" + "<" * 100_000
+        )
+        started = time.monotonic()
+        (card,) = cards_in_email(hostile)
+        assert time.monotonic() - started < 2
+        assert card.listing_id == 190280907 and card.price == 295000.0
+
+    def test_a_huge_line_and_a_huge_link_are_bounded(self):
+        """A run of digits is rescanned from every position by the number
+        grammars and by the id pattern; lines and links have a length cap."""
+        long_line = _card_html(190280908, facts="1" * 100_000 + " m²")
+        started = time.monotonic()
+        (card,) = cards_in_email(long_line)
+        assert card.area is None, "a line that long is not the facts line"
+        long_link = (
+            '<a href="https://www.fotocasa.es/es/comprar/vivienda/x/'
+            + "1" * 200_000
+            + '/d">1 €</a>'
+        )
+        assert cards_in_email(long_link) == []
+        assert (
+            fotocasa_source.listing_id_from_url(
+                "https://www.fotocasa.es/es/x/" + "1" * 100_000 + "/d"
+            )
+            is None
+        )
+        assert time.monotonic() - started < 2
+
+    def test_a_surface_the_card_does_not_name_stays_unknown(self):
+        """ "900 m²" on a /vivienda/ link may be the plot: no rooms, no claim."""
+        (card,) = cards_in_email(_card_html(190280909, facts="900 m²"))
+        assert card.area == 900.0 and card.area_type == "unknown"
+        (card,) = cards_in_email(_card_html(190280910, facts="3 habs · 900 m²"))
+        assert card.area_type == "built"
+
+    def test_the_type_is_the_first_segment_the_municipality_the_last(self):
+        (card,) = cards_in_email(
+            _card_html(190280915, heading="<strong>terreno</strong>, Llaranes, Avilés")
+        )
+        assert card.building_type == "terreno"
+        assert card.municipality == "Avilés"
+
+    def test_one_email_cannot_mint_more_than_the_cap_of_cards(self):
+        body = "".join(
+            _card_html(190290000 + i)
+            for i in range(fotocasa_source.MAX_CARDS_PER_EMAIL + 5)
+        )
+        assert len(cards_in_email(body)) == fotocasa_source.MAX_CARDS_PER_EMAIL
+
     def test_an_oversized_body_is_not_read_for_cards(self):
         body = _card_html(190280906) + " " * fotocasa_source.MAX_ALERT_BODY_CHARS
         assert cards_in_email(body) == []
@@ -354,7 +408,76 @@ class TestRefusedPageStoresFromTheEmail:
         assert _held(uid_file) == [] and service.last_seen_uid == 1
 
 
+class TestTheCardDoesNotGuess:
+    def test_an_unnamed_surface_is_stored_unknown_not_built(
+        self, app, uid_file, imap, portal
+    ):
+        body = _card_html(190280916, facts="900 m²")
+        imap.payloads = {1: _email(body)}
+        _service().run_ingestion(sync_type="test")
+        (prop,) = Property.query.all()
+        assert float(prop.area) == 900.0 and prop.area_type == "unknown"
+
+    def test_a_link_that_names_neither_sale_nor_rent_waits(
+        self, app, uid_file, imap, portal
+    ):
+        body = _card_html(190280917).replace("/comprar/", "/otra-cosa/")
+        imap.payloads = {1: _email(body)}
+        assert _service().run_ingestion(sync_type="test") == 0
+        assert Property.query.count() == 0
+        assert _held(uid_file) == [1]
+
+    def test_the_page_names_the_surface_later(self, app, uid_file, imap, portal):
+        body = _card_html(PAGE_ID, facts="900 m²")
+        imap.payloads = {1: _email(body)}
+        _service().run_ingestion(sync_type="test")
+        assert Property.query.one().area_type == "unknown"
+        portal["mode"] = "open"
+        imap.payloads[2] = _email(body)
+        _service().run_ingestion(sync_type="test")
+        prop = Property.query.one()
+        assert prop.area_type != "unknown" and float(prop.area) == 900.0
+
+
 class TestEmailsAlreadyWaitingStayWithTheOwner:
+    def test_an_email_held_after_the_fallback_shipped_may_use_its_card(
+        self, app, uid_file, imap, portal, monkeypatch
+    ):
+        """First held for an unrelated failure, retried with the flag off: it is
+        not one of the emails waiting when the fallback shipped."""
+        real = PropertyIMAPService._create_portal_row
+        failures = []
+
+        def fail_once(self, *args, **kwargs):
+            if not failures:
+                failures.append(1)
+                raise RuntimeError("database hiccup")
+            return real(self, *args, **kwargs)
+
+        monkeypatch.setattr(PropertyIMAPService, "_create_portal_row", fail_once)
+        imap.payloads = {1: _email(ALERT)}
+        _service().run_ingestion(sync_type="test")
+        assert _held(uid_file) == [1] and Property.query.count() == 0
+        entry = HeldUids(str(uid_file) + ".held.json").entry(1)
+        assert entry["card_fallback_aware"] is True
+
+        assert _service().run_ingestion(sync_type="test") == 1
+        assert Property.query.count() == 1 and _held(uid_file) == []
+
+    def test_the_stamp_survives_further_tries_and_an_old_entry_never_gets_one(
+        self, tmp_path
+    ):
+        held = HeldUids(str(tmp_path / "held.json"))
+        held.hold(1, "old rule")
+        held.hold(2, "new rule", stamp={"card_fallback_aware": True})
+        held.hold(1, "old rule again", stamp={"card_fallback_aware": True})
+        held.hold(2, "new rule again")
+        reread = HeldUids(str(tmp_path / "held.json"))
+        assert "card_fallback_aware" not in reread.entry(1)
+        assert reread.entry(2)["card_fallback_aware"] is True
+        assert reread.entry(2)["attempts"] == 2
+        assert reread.entry(3) is None
+
     def _wait(self, uid_file, imap):
         write_uid_file(str(uid_file), 5)
         HeldUids(str(uid_file) + ".held.json").hold(

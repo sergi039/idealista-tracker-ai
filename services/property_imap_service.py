@@ -58,6 +58,11 @@ logger = logging.getLogger(__name__)
 # purpose: a portal that is refusing answers three times and the run stops
 # asking it, so a long list must not crowd new mail out of the batch.
 HELD_RETRY_MAX_PER_RUN = 20
+# Written on every entry created from now on (`HeldUids.hold(stamp=...)`): the
+# email was first held by a run that already stores a fotocasa listing from its
+# card (#636). An entry without it was waiting before that shipped, and what
+# becomes of those is the owner's call (`FOTOCASA_EMAIL_CARD_FOR_HELD`).
+HELD_STAMP = {"card_fallback_aware": True}
 # How many held UIDs the run's history line names before it says "...".
 HELD_UIDS_SHOWN = 10
 
@@ -361,7 +366,7 @@ class PropertyIMAPService:
         # released this run, whether or not recording the failure worked.
         self._held_now.add(uid)
         try:
-            self._held.hold(int(uid), reason)
+            self._held.hold(int(uid), reason, stamp=HELD_STAMP)
         except Exception as e:
             logger.error(
                 "Failed to record held UID %s; the cursor stays behind it: %s",
@@ -1239,7 +1244,11 @@ class PropertyIMAPService:
                 )
 
             card = cards.get(listing_id)
-            if card is None or not card_allowed:
+            # No card, a held email the owner has not released, or a card
+            # whose link does not say sale or rent (`deal_type` unknown: the
+            # builder would store it as a sale, and a rental must not slip in
+            # that way): the old rule, the email waits.
+            if card is None or not card_allowed or card.get("deal_type") is None:
                 all_done = False
                 continue
             logger.info(
@@ -1264,16 +1273,15 @@ class PropertyIMAPService:
     def _card_fallback_allowed(self, email_data: Dict[str, Any]) -> bool:
         """May this email's listings be stored from its cards?
 
-        Not for an email that was already waiting on the retry list when the
-        fallback shipped, unless the owner switched it on: the list is theirs
-        to decide about. `_held_now` is this run's own failures, which are
-        not "already waiting".
+        Yes, except for an email that was already waiting on the retry list
+        when the fallback shipped -- its entry has no `card_fallback_aware`
+        stamp -- unless the owner switched the flag on: the old list is
+        theirs to decide about. An email first held after that, for whatever
+        reason, is not one of them, and a retry of it may use its card.
         """
-        uid = email_data.get("uid")
-        was_waiting = (
-            self._held is not None and uid in self._held and uid not in self._held_now
-        )
-        return not was_waiting or bool(
+        entry = self._held.entry(email_data.get("uid")) if self._held else None
+        waiting_before = entry is not None and not entry.get("card_fallback_aware")
+        return not waiting_before or bool(
             getattr(Config, "FOTOCASA_EMAIL_CARD_FOR_HELD", False)
         )
 

@@ -93,6 +93,8 @@ FETCH_TIMEOUT_S = 20
 # The listing detail page, in any of fotocasa's five language spellings:
 # `/en/buy/land/aviles/llaranes/190280914/d`, `/es/comprar/terreno/...`.
 # The id and the trailing `/d` are the invariant; the words in front are not.
+# Longer than any real fotocasa link (~150 characters) by a wide margin.
+MAX_URL_CHARS = 2048
 _LISTING_PATH = re.compile(r"/(\d{4,})/d/?$")
 
 _INITIAL_PROPS = re.compile(
@@ -180,6 +182,11 @@ def listing_id_from_url(url: Optional[str]) -> Optional[int]:
     """
     if not is_fotocasa_url(url):
         return None
+    # No listing link is this long, and `_LISTING_PATH` rescans a long run of
+    # digits from every position of it: the bound is what keeps a hostile
+    # alert from making the id read quadratic.
+    if len(url or "") > MAX_URL_CHARS:
+        return None
     try:
         path = urlsplit((url or "").strip()).path
     except ValueError:
@@ -230,6 +237,13 @@ _ANCHOR_START = re.compile(r"<a\b", re.IGNORECASE)
 _HREF = re.compile(r'\bhref="(?P<href>[^"]+)"', re.IGNORECASE)
 # Beyond this an alert body is not read for cards: a real one is ~70 KB.
 MAX_ALERT_BODY_CHARS = 2_000_000
+# A card line is a price, a heading or a facts line; text longer than this is
+# not one, and the number grammars run on lines only.
+MAX_CARD_LINE_CHARS = 500
+# A real alert holds a few dozen listings. Beyond this a listing has no card
+# (so it is held, never stored): a spoofed mail cannot mint rows by the
+# thousand.
+MAX_CARDS_PER_EMAIL = 100
 _PRICE_TEXT = re.compile(r"[0-9][0-9.,]*\s*€")
 _STRUCK = re.compile(r"\bline-through\b|<(?:s|del|strike)\b", re.IGNORECASE)
 _FACTS_TEXT = re.compile(r"\d\s*(?:m²|m2|habs?\b|baños?\b)", re.IGNORECASE)
@@ -269,8 +283,34 @@ class FotocasaCard:
     attributes: Dict[str, Any] = field(default_factory=dict)
 
 
+def _strip_tags(fragment: str) -> str:
+    """The text of a markup fragment, one pass, tags replaced by a space.
+
+    Not `re.sub(r"<[^>]+>", ...)`: on a fragment with many `<` and no `>`
+    that pattern rescans the rest of the text from every `<`. Here each `<`
+    is paired with the next `>` by `str.find`, and an unterminated `<` ends
+    the scan with the rest kept as text, so the cost is linear whatever the
+    input holds.
+    """
+    out: List[str] = []
+    i = 0
+    while True:
+        lt = fragment.find("<", i)
+        if lt < 0:
+            out.append(fragment[i:])
+            break
+        out.append(fragment[i:lt])
+        gt = fragment.find(">", lt + 1)
+        if gt < 0:
+            out.append(fragment[lt:])
+            break
+        out.append(" ")
+        i = gt + 1
+    return "".join(out)
+
+
 def _text_of(fragment: str) -> str:
-    text = re.sub(r"<[^>]+>", " ", fragment)
+    text = _strip_tags(fragment)
     return re.sub(r"\s+", " ", html_entities.unescape(text)).strip()
 
 
@@ -294,14 +334,15 @@ def _deal_type_from_url(url: str) -> Optional[str]:
 def _split_heading(heading: str) -> tuple[Optional[str], Optional[str]]:
     """`(type, municipality)` of a heading like "casa-chalet , Arteixo".
 
-    Both None unless the heading has the comma: a bare word could be either
-    half and nothing here says which.
+    The first segment is the type and the last the municipality ("terreno,
+    Llaranes, Avilés" has a district between them). Both None unless the
+    heading has the comma: a bare word could be either half and nothing here
+    says which.
     """
-    cleaned = re.sub(r"\s+,", ",", heading)
-    head, comma, tail = cleaned.rpartition(",")
-    if not comma:
+    segments = [part.strip() for part in re.sub(r"\s+,", ",", heading).split(",")]
+    if len(segments) < 2:
         return None, None
-    return (head.strip() or None), (tail.strip() or None)
+    return (segments[0] or None), (segments[-1] or None)
 
 
 def _anchors(body: str):
@@ -351,10 +392,12 @@ def cards_in_email(body: Optional[str]) -> List[FotocasaCard]:
         listing_id = listing_id_from_url(href)
         if listing_id is None:
             continue
+        if listing_id not in lines and len(lines) >= MAX_CARDS_PER_EMAIL:
+            continue
         hrefs.setdefault(listing_id, href)
         text = _text_of(inner)
         lines.setdefault(listing_id, [])
-        if text:
+        if text and len(text) <= MAX_CARD_LINE_CHARS:
             lines[listing_id].append((text, markup))
 
     cards: List[FotocasaCard] = []
@@ -386,7 +429,14 @@ def cards_in_email(body: Optional[str]) -> List[FotocasaCard]:
             continue
         if card.area is not None:
             plot_word = (card.building_type or "").lower() in _PLOT_URL_TYPES
-            card.area_type = "plot" if plot_word or url_says_plot(url) else "built"
+            if plot_word or url_says_plot(url):
+                card.area_type = "plot"
+            elif card.attributes:
+                # Rooms beside the surface: it belongs to a building.
+                card.area_type = "built"
+            # Else the card does not say what the surface is -- "900 m²" on
+            # a /vivienda/ link may be the plot -- and it stays "unknown"
+            # for the page to say (`complete_from_page`).
         card.deal_type = _deal_type_from_url(url)
         cards.append(card)
     return cards
