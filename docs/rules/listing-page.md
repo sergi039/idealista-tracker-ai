@@ -36,6 +36,32 @@ every media query, which is what made the table 1344px wide at any viewport.
 `tests/test_tablet_list_layout.py` fails if those widths move back into the
 markup or if the cap comes back.
 
+**On a phone the same page is a resource index** (owner report, 2026-11-12:
+a screen of controls before the first listing, one listing per screen). Below
+768px the secondary display controls and the secondary status items sit behind
+one trigger each, search opens with the Filters, and a table row is one
+stacked summary; the order, the reference it was taken from and the rules that
+keep it are in `docs/design/README.md`, "Phone layout". The folding re-places
+the elements that exist -- the rule below holds at every width -- and a hide is
+never folded. `tests/test_phone_resource_index.py` pins the markup those rules
+need; the positions are a browser measurement.
+
+**The line under the tabs says three things and stays body-size** (owner
+report, 2026-11-14: "small text nobody can read"): the count, what the page
+keeps back, whether the recommendations need the owner. Everything a standing
+rule hides (failing criteria, rejected, folded publications, hard exclusions,
+listings with no subscription) is ONE "N hidden" disclosure, `#hidden-rows`,
+whose rows each carry their own count and the link that brings those rows back;
+it is never behind the phone trigger and the rule "a hide must be disclosed"
+is unchanged -- only its form is. The recommendation profile is one sentence
+(whether the previous recommendations are still shown is part of it) and one
+button; "Filters: N of M shown" is gone because the chips say it, and the
+Recommended tab keeps the clear link without the number (its baseline counts a
+different collection). The coverage counts of "About these results" are taken
+after the Recommended selection, over the rows drawn. Layout contract:
+`docs/design/README.md`, "The status line under the tabs".
+`tests/test_status_line.py` pins it.
+
 **Every one of those controls exists exactly once** (owner decision,
 2026-08-09, superseding "the page is a copy of the /lands layout"). The page
 had grown a duplicate of nearly everything: a subscription dropdown in the
@@ -44,18 +70,21 @@ archive section inside that dropdown, Export CSV in the navbar *and* over the
 list, Manual Sync in the header *and* in the navbar slot the page had taken.
 What the page has now, top to bottom:
 
-1. **Toolbar** (`#subscription-switcher`) — the subscription chips, one
-   `More` menu holding what a chip cannot say (several at once, the archive,
-   `unassigned`, an empty selection), and the Favorites / Hide removed
-   switches. Those two are links, not form fields: they apply on click, and
-   the filter form re-posts their state as hidden inputs so Apply cannot
-   switch them off. The menu's checkboxes belong to the filter form through
-   `form="filter-form"`, so a no-JavaScript Apply still carries them; with
-   JavaScript they apply when the menu closes.
-2. **Filter bar** (`#filters-card`) — one wrapping row, no captions above the
-   controls. Each names itself in its first option (`All Types`, `All
-   Municipalities`, `Inv. metr: all`); search leads it. Anything that changes
-   *which* rows are shown lives here, and nothing else does.
+1. **Toolbar** (`#subscription-switcher`, on the title's line from 768px
+   up) — the one subscription multiselect (several at once, the archive,
+   `unassigned`, an empty selection) and, only while it holds something, one
+   Subscription tools menu. The menu's checkboxes belong to the filter form
+   through `form="filter-form"`, so they are drafts like every filter field:
+   the menu's own Apply, the bar's Apply or Enter submits them with the rest.
+2. **Filter bar** (`#filters-card`) — one wrapping line: search, Decision,
+   the Favorites / Hide removed switches, the one Filters trigger, then the one
+   Apply; the applied conditions continue it as chips. The two switches are
+   links, not form fields: they apply on click, and the filter form re-posts
+   their state as hidden inputs so Apply cannot switch them off. They moved
+   here from the toolbar on 2026-11-14 because they change *which* rows are
+   shown. Each field has one name (`Decision: all` needs no caption above
+   it). Anything that changes which rows are shown lives here, and nothing
+   else does.
 3. **Result row** — the count, the modes, the cards/list toggle and Export
    CSV: the controls that change how the same rows are drawn.
 

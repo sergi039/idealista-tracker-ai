@@ -27,10 +27,23 @@ REPO_DIR="${AUTOPILOT_REPO_DIR:-/Users/ss/IdealistaRank}"
 REPO_SLUG="${AUTOPILOT_REPO_SLUG:-sergi039/idealista-tracker-ai}"
 BASE_BRANCH="${AUTOPILOT_BRANCH:-main}"
 LOCK_DIR="${AUTOPILOT_MERGE_LOCK_DIR:-/tmp/idealista-autopilot-merge.lock.d}"
-LOG_FILE="${AUTOPILOT_MERGE_LOG:-${REPO_DIR}/data/autopilot-merge.log}"
+# Where the deployment keeps its state on the host (#639): one answer, from
+# lib/data_dir.sh, which reads the same IDEALISTA_DATA_DIR that
+# docker-compose.yml takes its bind mount from. Unset, it is ${REPO_DIR}/data.
+# No answer, no run: there is deliberately no fallback to ${REPO_DIR}/data,
+# and exit 0 without an absolute path is not an answer either.
+STATE_DIR="$(/bin/bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/data_dir.sh" "$REPO_DIR")" || {
+    echo "cannot tell where the deployment's state lives (see the line above) - refusing to run" >&2
+    exit 1
+}
+case "$STATE_DIR" in
+    /*) ;;
+    *) echo "the reader of the state directory answered '${STATE_DIR}', which is not an absolute path - refusing to run" >&2; exit 1 ;;
+esac
+LOG_FILE="${AUTOPILOT_MERGE_LOG:-${STATE_DIR}/autopilot-merge.log}"
 # One line per reviewed head SHA. Keyed by SHA so a re-push gets a fresh review
 # and a re-run does not burn another rx attempt on an unchanged diff.
-JOURNAL="${AUTOPILOT_REVIEW_JOURNAL:-${REPO_DIR}/data/autopilot-reviews.tsv}"
+JOURNAL="${AUTOPILOT_REVIEW_JOURNAL:-${STATE_DIR}/autopilot-reviews.tsv}"
 # Branch protection is the authority on what must be green. Reading its list
 # rather than keeping a copy here means the two can never drift: add a check to
 # protection and the bot honours it on the next tick, with no edit.

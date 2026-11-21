@@ -143,7 +143,7 @@ def test_page_lists_the_real_preference_and_no_fragments(app):
     assert 'id="recommendation-unapplied-preferences"' in body
     assert "Фантазийное пожелание" in body
     assert "agent@example.com 08.11.2026" in body
-    assert "2 preference(s) are not used yet" in body
+    assert "2 of your preferences are not applied yet" in body
     assert body.count("<li>") >= 2
     summary = body.split('id="recommendation-unapplied-preferences"')[1]
     items = summary.split("</ol>")[0].count("<li>")

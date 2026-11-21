@@ -43,6 +43,25 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+# Where the deployment keeps its state on the host (#639): the supervisor
+# locks, the in-flight markers and the watcher's stall alarm all live in the
+# directory bound at /app/data. One reader of that path, the same variable
+# docker-compose.yml mounts from; unset, it is ${REPO_ROOT}/data. A refusal
+# is exit 2 - "a source could not be read", which blocks exactly like busy.
+DATA_DIR_HOST="$(/bin/bash "${REPO_ROOT}/tools/autopilot/lib/data_dir.sh" "$REPO_ROOT")" || {
+    echo "VERDICT: unknown - cannot tell where the deployment's state lives (see the line above); treat as busy" >&2
+    exit 2
+}
+# An answer that is not an absolute path is no answer: an empty one would turn
+# every path below into a path under `/`, where no lock exists, and the verdict
+# into "idle" from a directory nobody keeps state in.
+case "$DATA_DIR_HOST" in
+    /*) ;;
+    *)
+        echo "VERDICT: unknown - the reader of the state directory answered '${DATA_DIR_HOST}', which is not an absolute path; treat as busy" >&2
+        exit 2
+        ;;
+esac
 CONTAINER="${BACKFILL_STATUS_CONTAINER:-${COMPOSE_CONTAINER_PREFIX:-idealista}-app}"
 # One-off `docker compose run` siblings of the app service. Matched by shape
 # rather than by prefix - see the note at section 1b.
@@ -225,7 +244,7 @@ fi
 # one over cannot be made atomic and losing that race starts a second paid
 # backfill (#319). A stale lock therefore blocks here too - if it did not,
 # this tool would call a state "safe" that the supervisor calls "stop".
-lock_glob="${REPO_ROOT}/data/.supervisor.${CONTAINER}.${MODULE:-*}.lock"
+lock_glob="${DATA_DIR_HOST}/.supervisor.${CONTAINER}.${MODULE:-*}.lock"
 lock_seen=0
 for lock in $lock_glob; do
     [ -e "$lock" ] || continue
@@ -247,7 +266,7 @@ done
 # Informational only. A marker outlives its process by design, so its presence
 # means "a run started and did not clean up" - equally true of a live job and
 # a corpse. It must never be read as mutual exclusion.
-for marker in "${REPO_ROOT}"/data/.inflight/*.json; do
+for marker in "${DATA_DIR_HOST}"/.inflight/*.json; do
     [ -e "$marker" ] || continue
     say "marker: $(basename "$marker") - a run started and did not clean up (a report, not a lock)"
 done
@@ -262,7 +281,7 @@ done
 # successful deploy. On 2026-09-01 that state lasted eight hours and was found
 # by accident in a log. Deleting the file is not the cure; making the checkout
 # deployable is. The verdict below does not read it.
-stalled_marker="${REPO_ROOT}/data/.deploy_stalled"
+stalled_marker="${DATA_DIR_HOST}/.deploy_stalled"
 if [ -e "$stalled_marker" ]; then
     stalled_line="$(head -n 1 "$stalled_marker" 2>/dev/null || true)"
     say "deploy chain: ${stalled_line:-STALLED (marker present but unreadable)} - ${stalled_marker}, the watcher's own alarm (#532), cleared by the next successful deploy"

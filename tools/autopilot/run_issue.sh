@@ -18,7 +18,20 @@ set -euo pipefail
 REPO_DIR="${AUTOPILOT_REPO_DIR:-/Users/ss/IdealistaRank}"
 REPO_SLUG="${AUTOPILOT_REPO_SLUG:-sergi039/idealista-tracker-ai}"
 BASE_BRANCH="${AUTOPILOT_BRANCH:-main}"
-LOG_FILE="${AUTOPILOT_ISSUE_LOG:-${REPO_DIR}/data/autopilot-issues.log}"
+# Where the deployment keeps its state on the host (#639): one answer, from
+# lib/data_dir.sh, which reads the same IDEALISTA_DATA_DIR that
+# docker-compose.yml takes its bind mount from. Unset, it is ${REPO_DIR}/data.
+# No answer, no run: there is deliberately no fallback to ${REPO_DIR}/data,
+# and exit 0 without an absolute path is not an answer either.
+STATE_DIR="$(/bin/bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/data_dir.sh" "$REPO_DIR")" || {
+    echo "cannot tell where the deployment's state lives (see the line above) - refusing to run" >&2
+    exit 1
+}
+case "$STATE_DIR" in
+    /*) ;;
+    *) echo "the reader of the state directory answered '${STATE_DIR}', which is not an absolute path - refusing to run" >&2; exit 1 ;;
+esac
+LOG_FILE="${AUTOPILOT_ISSUE_LOG:-${STATE_DIR}/autopilot-issues.log}"
 WORKTREE_ROOT="${AUTOPILOT_WORKTREE_ROOT:-${REPO_DIR}/.claude/worktrees}"
 # An agent that has not produced a commit by now is stuck, not thinking.
 AGENT_TIMEOUT_SECONDS="${AUTOPILOT_AGENT_TIMEOUT:-3600}"

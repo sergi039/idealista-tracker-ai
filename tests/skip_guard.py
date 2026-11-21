@@ -46,6 +46,16 @@ ALLOWED: Dict[str, Tuple[str, ...]] = {
         "set TEST_DATABASE_URL_POSTGRES to a throwaway PostgreSQL server",
     ),
     "tests/test_inflight_marker.py": ("no /proc here",),
+    # Asks `docker compose config` what docker-compose.yml mounts at /app/data,
+    # to compare with the host reader's answer (#639). CI has the compose
+    # plugin and the tests FAIL there without it; a laptop with no Docker skips.
+    "tests/test_data_dir_single_home.py": ("docker compose is not installed",),
+    # Asks a real `docker build` what `.dockerignore` lets out of `data/`
+    # (#639). CI has BuildKit and a daemon and the tests FAIL there without
+    # them; the MacBook keeps its daemon off on purpose and skips.
+    "tests/test_reference_data_location.py": (
+        "docker daemon is not running or buildx is missing",
+    ),
     # The row-decision script's pure logic runs under node, which CI does not
     # provision (tests/js_harness.py); skipped only when node is missing.
     "tests/test_owner_decision_logic.py": ("node executable not found",),

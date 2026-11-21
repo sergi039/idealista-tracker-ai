@@ -10,6 +10,7 @@ from services.enrich_budget import lookup_budget_seconds
 from services.enrichment_service import EnrichmentService
 from services.enrichment_write import merge_json_object_changes_under_lock
 from services.hazard_service import HazardService
+from services.neighbours_service import NeighboursService
 from services.property_location_service import PropertyLocationService
 from services.property_scoring_service import PropertyScoringService
 from services.pool_service import PoolService
@@ -50,8 +51,10 @@ class PropertyEnrichmentService:
         hazard_service: Optional["HazardService"] = None,
         pool_service: Optional["PoolService"] = None,
         sea_view_calculator=None,
+        neighbours_service=None,
     ):
         self.location_service = location_service or PropertyLocationService()
+        self.neighbours_service = neighbours_service or NeighboursService()
         self.travel_service = travel_service or PropertyTravelService()
         self.scoring_service = scoring_service or PropertyScoringService()
         self.sea_distance_service = sea_distance_service or SeaDistanceService()
@@ -415,6 +418,16 @@ class PropertyEnrichmentService:
         # is recorded as a refusal and never fails the run. A hand-set sea-view
         # verdict is left alone by the sea-view writer itself.
         self.enrich_free_sources(prop, commit=True, use_ai=use_ai)
+
+        # Shortlist only: an explicit Enrich press, never ingestion's free
+        # pass or an unattended sweep. Own locked write after decisive commit.
+        try:
+            self.neighbours_service.enrich(prop, commit=True)
+        except Exception as e:
+            db.session.rollback()
+            logger.warning(
+                "Neighbour measurement failed for %s: %s", getattr(prop, "id", None), e
+            )
 
         # Pool discovery + drive times (proposal D17): OSM via the shared
         # gate plus <=3 Distance Matrix elements (and, only on the empty

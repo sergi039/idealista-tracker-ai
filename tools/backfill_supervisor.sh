@@ -96,7 +96,8 @@ Usage: backfill_supervisor.sh --module utils.backfill_pool --snapshot-prefix dat
                            ./data is bind mounted into the container, so any
                            other path names one file on the host and a
                            different one inside, and is refused.
-  --log PATH               supervisor log (default data/backfill_supervisor.log)
+  --log PATH               supervisor log (default backfill_supervisor.log in
+                           the state directory, data/ on the host)
   --max-restarts N         default 12
   --interval S             seconds between checks, default 90
   --max-ticks N            give up watching after N checks, default 400
@@ -155,7 +156,6 @@ require_int BACKFILL_MAX_TICKS "$MAX_TICKS"
 
 MODULE_TAIL="${MODULE##*.}"
 RUN_LOG="${RUN_LOG:-data/${MODULE_TAIL}_supervised.log}"
-LOG_FILE="${LOG_FILE:-data/backfill_supervisor.log}"
 
 # Where this checkout lives, so that neither the run log nor the lock depends
 # on the caller's working directory. BACKFILL_ROOT is the test seam.
@@ -198,14 +198,26 @@ case "$RUN_LOG" in
     data/?*) : ;;
     *) echo "--run-log must be a path under data/ (only ./data is bind mounted into the container), got: $RUN_LOG" >&2; exit 2 ;;
 esac
-RUN_LOG_HOST="$REPO_ROOT/$RUN_LOG"
+# `data/` is the container's name for the directory; on the host it is wherever
+# docker-compose.yml binds /app/data from (#639). One reader of that path, the
+# same variable Compose mounts from; unset, it is $REPO_ROOT/data, so
+# `data/run.log` is the file it always was.
+DATA_DIR_HOST="$(/bin/bash "$SCRIPT_DIR/autopilot/lib/data_dir.sh" "$REPO_ROOT")" || {
+    echo "cannot tell where the deployment's state lives on this host (see the line above)" >&2
+    exit 2
+}
+case "$DATA_DIR_HOST" in
+    /*) ;;
+    *) echo "the reader of the state directory answered '$DATA_DIR_HOST', which is not an absolute path" >&2; exit 2 ;;
+esac
+RUN_LOG_HOST="$DATA_DIR_HOST/${RUN_LOG#data/}"
 
 # A textual check is not containment: `data/up` where `up` is a symlink to `..`
 # passes every string test above and still lands outside the bind mount. Only
 # the resolved physical path answers "is this the file the container writes".
 RUN_LOG_DIR="$(dirname "$RUN_LOG_HOST")"
 mkdir -p "$RUN_LOG_DIR" 2>/dev/null || true
-DATA_PHYS="$(cd "$REPO_ROOT/data" 2>/dev/null && pwd -P)" || DATA_PHYS=""
+DATA_PHYS="$(cd "$DATA_DIR_HOST" 2>/dev/null && pwd -P)" || DATA_PHYS=""
 RUN_LOG_PHYS="$(cd "$RUN_LOG_DIR" 2>/dev/null && pwd -P)" || RUN_LOG_PHYS=""
 if [ -z "$DATA_PHYS" ] || [ -z "$RUN_LOG_PHYS" ]; then
     echo "--run-log directory does not exist under data/: $RUN_LOG_DIR" >&2
@@ -223,6 +235,11 @@ if [ -z "$DONE_PATTERN" ]; then
     exit 2
 fi
 
+# The default log is a file in the state directory, like the run log and the
+# lock. Spelled `data/backfill_supervisor.log` it was read against the caller's
+# working directory: from anywhere but the repository root it landed in a
+# `data/` of its own. An explicit --log is the caller's path, as given.
+LOG_FILE="${LOG_FILE:-$DATA_DIR_HOST/backfill_supervisor.log}"
 mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
 
 log() {
@@ -288,7 +305,7 @@ finished() {
 # two supervisors could both find one stale lock, both decide it was dead, and
 # both fall through before either wrote its pid; and a pid write that failed
 # was ignored, leaving a supervisor running with a lock it did not hold.
-LOCK_ROOT="$REPO_ROOT/data"
+LOCK_ROOT="$DATA_DIR_HOST"
 LOCK_FILE="$LOCK_ROOT/.supervisor.${CONTAINER}.${MODULE}.lock"
 
 if ! mkdir -p "$LOCK_ROOT" 2>/dev/null; then

@@ -13,6 +13,101 @@ must be an ancestor of `main`.
 
 ## Open
 
+### Yaencontre rows have no plot source except the per-press cadastre
+
+- **Anchor:** `services/plot_text.py` (`apply_to_property`); `docs/rules/portal-network-safety.md`.
+- **Measured 2026-11-12** on subscription 24: 1622 of the 1764 rows passing
+  price and house with an unknown plot are yaencontre, whose alert card has no
+  description and whose pages may not be fetched.
+- **What breaks, for whom:** the plot criterion stays `unknown` for them, so
+  #634's text reading cannot move most of the gap.
+- **Check:** `python -m utils.backfill_plot_from_text` prints the per-portal split.
+
+### `utils/backfill_plot_area.py` skips rows filled from text
+
+- **Anchor:** `utils/backfill_plot_area.py` (`Property.plot_area.is_(None)`).
+- **What breaks, for whom:** a fotocasa row whose plot was read from its text
+  (#634) is out of that backfill's scope, so a later page-stated plot (stronger
+  evidence) never replaces the text reading. Matters only if the two differ.
+
+### An explicit negation before the plot noun that introduces the figure is not read
+
+- **Anchor:** `services/plot_text.py` (`_scan`, `_PLOT_MENTION`).
+- **What breaks, for whom:** "No tiene parcela de 300 m²" and "Sin parcela de
+  300 m²" write 300, so a row may move from `unknown` to `pass`/`fail` on a
+  plot the text denies. Found by merge_bot on #661
+  (https://github.com/sergi039/idealista-tracker-ai/pull/661#issuecomment-6828734743),
+  merged as is on the owner's command 2026-11-12; not measured on production.
+
+### A second m² figure without its own plot noun is not counted as a competing reading
+
+- **Anchor:** `services/plot_text.py` (`_scan`, the FORWARD match).
+- **What breaks, for whom:** "Parcela de 500 m² o de 900 m²" writes 500
+  although the text states two values, so the criteria verdict may rest on the
+  wrong figure. Found by merge_bot on #661
+  (https://github.com/sergi039/idealista-tracker-ai/pull/661#issuecomment-6828734743),
+  merged as is on the owner's command 2026-11-12; not measured on production.
+
+### A plot figure introduced by a plot noun is trusted to be this home's
+
+- **Anchor:** `services/plot_text.py` (`_PLOT_MENTION`, `_scan`).
+- **What breaks, for whom:** the reading requires every plot noun to carry the
+  figure read, so negations and a second plot named without a figure refuse.
+  What it cannot see is a figure whose noun describes ANOTHER plot ("finca
+  colindante de 5.000 m² en venta" in an otherwise silent text): that figure
+  is written, and a row could move from `unknown` to `pass`/`fail` on it.
+  `jardín` / `huerta` are deliberately not plot nouns (part of a plot, not a
+  statement of one), and a plot equal to the house figure ("casa de 300 m² en
+  parcela de 300 m²") is written as stated. Every write carries its snippet in
+  `enrichment["plot_from_text"]`, so a wrong one is findable. Not measured on
+  production (third review of #661, 2026-11-12).
+
+### A dimension declared above the `posList` is not read
+
+- **Anchor:** `services/cadastre_service.py` `_ring_points` (reads
+  `srsDimension` from the `posList` alone, never from an enclosing
+  `LinearRing` / `Polygon` / `Surface` / `MultiSurface`).
+- **Found 2026-11-12** by merge_bot on PR #662
+  (https://github.com/sergi039/idealista-tracker-ai/pull/662#issuecomment-6829017199),
+  the third review round; merged as is at the owner's command the same day.
+  Input: `<LinearRing srsDimension="3"><posList>0 0 0 2 2 2 2 0 2 0 0 0</posList>`
+  — the triples are read as 2D pairs and close into a valid ring of area 4.
+- **What breaks, for whom:** a Catastro answer that declares three
+  dimensions above the `posList` is measured as a shape nobody sent. A parcel
+  outline is almost always caught by `area_agrees` against `areaValue` (no
+  guarantee: only a coincidental area passes); a neighbouring building's
+  outline has no such check, so the owner would get an `ok` measurement in
+  `enrichment["neighbours"]`, cached 30 days (`neighbours_buildings_v1`) and
+  fed to the taste prompt through `taste_descriptors`. It never reaches
+  `score_total`. **Not reproduced on live answers:** in all four fixtures
+  (`tests/data/neighbours/969_*`, `1282_*`) `srsDimension="2"` sits only on
+  `posList`. Before #662 the card did not read `srsDimension` at all.
+- **Check:** `rg -n 'srsDimension' services/cadastre_service.py` — a fix
+  takes the nearest declared dimension on the ring's ancestors and refuses
+  anything but 2 as `MALFORMED`.
+
+### A WFS count longer than Python's integer limit raises instead of refusing
+
+- **Anchor:** `services/neighbours_service.py` `parse_buildings`
+  (`numberMatched` / `numberReturned`: `re.fullmatch(r"[0-9]+", value)` then `int(value)`).
+- **Found 2026-11-12** by merge_bot on PR #663
+  (https://github.com/sergi039/idealista-tracker-ai/pull/663#issuecomment-6834607473),
+  the third review round; merged as is on the owner's command 2026-11-12.
+  Input: an empty `wfs:FeatureCollection` with `numberMatched` of 4301 ASCII
+  nines and `numberReturned="0"` passes the pattern, and `int()` raises
+  `ValueError` (the 4300-digit limit of `sys.get_int_max_str_digits()`),
+  not `CadastreError(MALFORMED)`; at 4300 digits it is refused correctly.
+- **What breaks, for whom:** the Enrich press does not fail:
+  `PropertyEnrichmentService` catches it around the neighbour step, rolls
+  back and logs "Neighbour measurement failed", the previous measurement is
+  left untouched and nothing is cached. But the refusal is never recorded as
+  `unavailable` with a reason, and `utils/backfill_neighbours.py` stops on
+  that row. Needs a hostile or corrupt WFS answer. **Not reproduced on live
+  answers** (969, 1282).
+- **Check:** `rg -n 'int\(value\)' services/neighbours_service.py` — a fix
+  bounds the length before `int()` (e.g. `[0-9]{1,6}`, `MAX_FEATURES` is far
+  below) or catches `ValueError` beside `CadastreError` in `measure()`.
+
 ### Four input shapes take the Jev route out instead of to the bridge
 
 - **Anchor:** `services/typesafe_transport.py` (`_KEY_SHAPE`, `_origin`,
@@ -82,3 +177,30 @@ must be an ancestor of `main`.
   stopped feeding that ratio to the taste model as "the shape" for exactly
   this reason (see `docs/rules/taste.md`), but the page still colours it as a
   verdict.
+
+### A `mode=ro` SQLite URI inside the protected directory can still create WAL sidecars
+
+- **Anchor:** `tests/data_dir_guard.py` (`_sqlite_places`, the
+  `query == "mode=ro"` branch of the `file:` URI reading).
+- **Found 2026-11-12** by merge_bot on PR #666
+  (https://github.com/sergi039/idealista-tracker-ai/pull/666#issuecomment-6831831977),
+  the third review round; merged as is on the owner's command 2026-11-12.
+  Input: a WAL-mode database in the protected directory with no sidecar
+  files, then `sqlite3.connect("file:<dir>/db.sqlite?mode=ro", uri=True)` and
+  a `SELECT`. Reproduced on a temporary directory (Python 3.11.17, SQLite
+  3.53.1): `db.sqlite-shm` (32768 bytes) and `db.sqlite-wal` (0 bytes) appear
+  and stay after the connection closes, the database file is unchanged, and
+  the guard records no refusal.
+- **What breaks, for whom:** the guard reads that open as a read, and SQLite
+  creates the two files from C, past the audit hook. A test doing this against
+  the deployment's state directory would leave two files there that the run
+  was supposed to be unable to write. **Not reachable today, not reproduced
+  against the repository's own tests:** the production `data/` holds no SQLite
+  file (817 files checked by header and by name on the mini, 2026-11-12), no
+  tracked file is one, and nothing outside the guard and its tests opens
+  SQLite by `file:` URI.
+- **Check:** `git grep -nE 'uri=True|mode=ro|sqlite3\.connect\(' -- '*.py' ':!tests/data_dir_guard.py' ':!tests/test_data_dir_guard.py'`
+  prints nothing, and
+  `find "$(tools/autopilot/lib/data_dir.sh "$PWD")" -type f -exec sh -c 'head -c 15 "$1" | grep -q "^SQLite format 3" && echo "$1"' _ {} \;`
+  prints nothing in the main checkout on the mini. A fix treats every `file:`
+  URI naming a path inside a protected directory as a write, `mode=ro` included.

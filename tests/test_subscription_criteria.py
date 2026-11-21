@@ -292,12 +292,12 @@ class TestTheSurfaces:
         assert "Passing house" in html
         assert "Unknown plot" in html
         assert "Failing tiny" not in html
-        assert "Criteria: 1 failing hidden" in html
+        assert "1 outside your criteria" in html
 
     def test_criteria_all_shows_everything_and_no_disclosure(self, client, rows):
         html = client.get("/properties?criteria=all").data.decode()
         assert "Failing tiny" in html
-        assert "failing hidden" not in html
+        assert "outside your criteria" not in html
 
     @pytest.mark.parametrize(
         "mode, visible, hidden",
@@ -383,9 +383,10 @@ class TestTheSurfaces:
             # of `me-1` first and compares 1 <= 3 — an assertion that passes
             # on the very inversion it is written for. Measured: the first
             # version of this test stayed green under the mutation.
-            found = re.search(r"(\d+)\s+of\s+(\d+)", note.group(0))
-            assert found is not None, f"unreadable note: {note.group(0)!r}"
-            return int(found.group(1)), int(found.group(2))
+            baseline = re.search(r"out of (\d+)", note.group(0))
+            shown = re.search(r"<strong>(\d+) properties found</strong>", html)
+            assert baseline and shown, f"unreadable note: {note.group(0)!r}"
+            return int(shown.group(1)), int(baseline.group(1))
 
         # Positive control first: in a genuine narrowing the note must render,
         # or the assertion below is satisfied by a line that never appears.

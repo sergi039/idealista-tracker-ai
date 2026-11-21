@@ -135,6 +135,17 @@ text had in `CLAUDE.md`; `docs/rules/README.md` lists the files in that order.
   anything anyway" — you cannot know when it resumes, and the session running
   it is very likely not in your conversation.
 
+  Run it, and the supervisor, **from the checkout the stack was started in,
+  never from a linked git worktree** (#639). Both take their checkout from
+  their own location and read the lock and the markers in that checkout's
+  state directory; a linked worktree has a `data/` of its own that no
+  container mounts, so from there the status tool could not see a supervisor's
+  lock and a second supervisor would take a second one. The reader of the
+  state directory (`tools/autopilot/lib/data_dir.sh`) refuses a root whose
+  `.git` is a file, which makes the status tool answer `unknown` and stops the
+  supervisor and `tools/backup_attachments.sh` before they touch anything. A
+  second clone or a plain copy of the checkout is not recognised.
+
   That sentence exists because the door was walked through the day it was
   written. A session shipped this feature's two backfills over a running
   `backfill_quality_of_life`, twice, each time having first checked the thing

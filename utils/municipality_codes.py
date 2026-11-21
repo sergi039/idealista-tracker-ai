@@ -30,6 +30,8 @@ import re
 import unicodedata
 from typing import Dict, Mapping, Optional, Tuple
 
+from utils.reference_data import reference_path
+
 logger = logging.getLogger(__name__)
 
 # The provinces the tracker watches. Codes are the first two digits of the
@@ -162,9 +164,7 @@ def match(
 # change under a running process. A missing or unreadable file yields an empty
 # index, and `match()` against an empty index returns None for everything —
 # which the caller must read as "cannot tell", never as a contradiction.
-_INE_DATA_PATH = (
-    pathlib.Path(__file__).resolve().parent.parent / "data" / "ine_municipal.json"
-)
+_INE_DATA_PATH = pathlib.Path(reference_path("ine_municipal.json"))
 
 _name_index_cache: Optional[Dict[str, str]] = None
 

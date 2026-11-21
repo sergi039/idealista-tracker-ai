@@ -410,7 +410,9 @@ class LookupBudgetExceeded(requests.RequestException):
 #
 # **Only the free lookups read it.** `services/enrichment_service.py`'s
 # Overpass transport, the coastline and elevation queries in
-# `services/sea_view_service.py`. Google's paid transports deliberately do not,
+# `services/sea_view_service.py`, and Catastro's two clients
+# (`services/cadastre_service._get`, `services/cadastre_locate._get`, #570).
+# Google's paid transports deliberately do not,
 # and the reason is #178's: a Distance Matrix request abandoned because a free
 # source spent the clock is a paid measurement nobody made, and the owner's
 # next press pays for it again. The budget exists to stop an advisory step
@@ -443,6 +445,12 @@ def lookup_budget(seconds: float):
 def lookup_deadline() -> Optional[float]:
     """The ambient deadline, or None when no budget is open."""
     return _LOOKUP_DEADLINE.get()
+
+
+def lookup_budget_spent() -> bool:
+    """Whether an open budget's deadline has passed; False with none open."""
+    deadline = _LOOKUP_DEADLINE.get()
+    return deadline is not None and time.monotonic() >= deadline
 
 
 def earliest_deadline(*deadlines: Optional[float]) -> Optional[float]:

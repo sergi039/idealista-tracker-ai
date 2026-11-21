@@ -182,6 +182,11 @@ def test_backfill_marker_matches_actual_arguments(app, monkeypatch, tmp_path, fo
     if force:
         argv.append("--force")
     monkeypatch.chdir(tmp_path)
+    # The session keeps in-flight markers out of the checkout (#639,
+    # tests/conftest.py). This test has moved to a directory of its own, so it
+    # puts the production name back and reads the marker where a real run in
+    # /app would leave it.
+    monkeypatch.setattr("utils.inflight.INFLIGHT_DIRNAME", "data/.inflight")
     monkeypatch.setattr("sys.argv", ["backfill_taste", *argv])
     monkeypatch.setattr(backfill_taste, "create_app", lambda: app)
 
@@ -202,6 +207,11 @@ def test_profile_build_marker_is_nonresumable_and_cleans_up(app, monkeypatch, tm
     from utils import build_taste_profile
 
     monkeypatch.chdir(tmp_path)
+    # The session keeps in-flight markers out of the checkout (#639,
+    # tests/conftest.py). This test has moved to a directory of its own, so it
+    # puts the production name back and reads the marker where a real run in
+    # /app would leave it.
+    monkeypatch.setattr("utils.inflight.INFLIGHT_DIRNAME", "data/.inflight")
     monkeypatch.setattr("sys.argv", ["build_taste_profile", "--apply"])
     monkeypatch.setattr(build_taste_profile, "create_app", lambda: app)
 

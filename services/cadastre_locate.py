@@ -65,8 +65,9 @@ from services.cadastre_service import (
     REQUEST_TIMEOUT_S,
     UNAVAILABLE,
     CadastreError,
+    normalize_reference,
 )
-from utils.http import HTTP_USER_AGENT, request_with_retries
+from utils.http import HTTP_USER_AGENT, lookup_deadline, request_with_retries
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,12 @@ NO_PARCEL = "no_parcel"
 
 
 def _get(url: str, params: Dict[str, str]) -> requests.Response:
-    """One request. One attempt. The retry is a person asking again."""
+    """One request. One attempt. The retry is a person asking again.
+
+    Catastro is a free lookup, so it reads the ambient `lookup_budget` like
+    the others: a spent budget starts no request, and one on its last seconds
+    gets only those as its timeout. Outside a budget nothing changes.
+    """
     return request_with_retries(
         requests.get,
         url,
@@ -128,6 +134,7 @@ def _get(url: str, params: Dict[str, str]) -> requests.Response:
         timeout=REQUEST_TIMEOUT_S,
         max_attempts=1,
         gate=CATASTRO_GATE,
+        deadline=lookup_deadline(),
         logger=logger,
     )
 
@@ -707,7 +714,13 @@ def _exact_names(wanted: Any) -> List[Tuple[str, ...]]:
 
 
 def parcel_for_address(
-    province: str, municipality: str, sigla: str, street: str, number: Any
+    province: str,
+    municipality: str,
+    sigla: str,
+    street: str,
+    number: Any,
+    *,
+    require_unique_parcel: bool = False,
 ) -> Dict[str, Any]:
     """The cadastral reference at one street number, from `Consulta_DNPLOC`.
 
@@ -737,6 +750,11 @@ def parcel_for_address(
     if error:
         return error
 
+    if require_unique_parcel:
+        refusal = _not_one_parcel(result)
+        if refusal:
+            return refusal
+
     holder = result.get("bico") if isinstance(result.get("bico"), dict) else result
     item = holder.get("bi") if isinstance(holder, dict) else None
     if isinstance(item, list):
@@ -763,6 +781,31 @@ def parcel_for_address(
             else None
         ),
     }
+
+
+def _not_one_parcel(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A refusal unless every entry is a readable reference to ONE parcel.
+
+    Exactly one of `bico` / `lrcdnp` must be present; any entry that is not an
+    object with a full reference (null, string, number, half an `rc`) refuses
+    the answer before uniqueness is asked, so an unreadable alternative is
+    never read as no alternative.
+    """
+    bico, listed = result.get("bico"), result.get("lrcdnp")
+    if (bico is None) == (listed is None):
+        return {"status": MALFORMED, "detail": "address answer of unknown shape"}
+    container, key = (bico, "bi") if bico is not None else (listed, "rcdnp")
+    entries = container.get(key) if isinstance(container, dict) else None
+    entries = entries if isinstance(entries, list) else [entries]
+    references = [
+        normalize_reference(_reference_from_rc(e)) if isinstance(e, dict) else None
+        for e in entries
+    ]
+    if None in references:
+        return {"status": MALFORMED, "detail": "unreadable address parcel"}
+    if len({r[:14] for r in references}) != 1:
+        return {"status": MALFORMED, "detail": "address has no unique parcel"}
+    return None
 
 
 def _first_listed(listed: Any) -> Optional[Dict[str, Any]]:

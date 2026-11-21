@@ -20,7 +20,6 @@ reads as `no_reference_data`, never as an empty landscape.
 
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -33,15 +32,18 @@ from services.enrichment_service import EnrichmentService
 from services.sea_view_service import haversine_m
 from utils.municipality_codes import build_index as build_municipality_index
 from utils.municipality_codes import match as match_municipality
+from utils.reference_data import reference_path
 
 logger = logging.getLogger(__name__)
 
-_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-INE_DATA_PATH = os.path.join(_DATA_DIR, "ine_municipal.json")
-CNH_DATA_PATH = os.path.join(_DATA_DIR, "hospitals_cnh.json")
+# Where the committed reference files are: the repository's `data/` in a
+# checkout, the image's own copy inside the container (#639). One home,
+# `utils/reference_data.py`; never the state directory.
+INE_DATA_PATH = reference_path("ine_municipal.json")
+CNH_DATA_PATH = reference_path("hospitals_cnh.json")
 # SEPE registered-unemployment counts per municipality (monthly). Optional:
 # the file may be absent, which reads as "no figure", never as zero.
-SEPE_DATA_PATH = os.path.join(_DATA_DIR, "sepe_unemployment.json")
+SEPE_DATA_PATH = reference_path("sepe_unemployment.json")
 
 # The hospital groupings are *descriptive local display groupings* derived
 # from CNH fields (beds, teaching accreditation, high-tech equipment) — not

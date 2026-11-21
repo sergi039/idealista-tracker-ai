@@ -582,6 +582,11 @@ def test_manual_enrichment_measures_before_it_scores(app, monkeypatch):
     """The Enrich flow must feed the sea distance into the same rescore."""
     from services.property_enrichment_service import PropertyEnrichmentService
 
+    monkeypatch.setattr(
+        "services.cadastre_locate.parcels_at",
+        lambda *_: {"status": "not_found"},
+    )
+
     order = []
 
     class StubLocation:

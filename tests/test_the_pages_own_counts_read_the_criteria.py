@@ -470,9 +470,9 @@ class TestTheDisclosureIsAbsentAtZero:
     def test_absent_at_zero_present_above(self, client, world):
         asturias = _page(client, f"/properties?profile_id={world['asturias']}")
         assert 'id="criteria-hidden-coverage"' not in asturias
-        assert "failing hidden" not in asturias
+        assert "outside your criteria" not in asturias
         galicia = _page(client, f"/properties?profile_id={world['galicia']}")
-        assert re.search(r"Criteria:\s*5\s+failing hidden", galicia)
+        assert re.search(r"\b5 outside your criteria", galicia)
         favorites = _page(
             client, f"/properties?profile_id={world['galicia']}&favorites=on"
         )
@@ -514,6 +514,6 @@ class TestTheCriteriaParameterIsCanonicalised:
         )
         # The disclosure agrees with the mode that ran: the default reading
         # hid Galicia's five unjudged fails, and the line says so.
-        assert re.search(r"Criteria:\s*5\s+failing hidden", body), (
+        assert re.search(r"\b5 outside your criteria", body), (
             "the default hide ran for banana, so the disclosure must name it"
         )

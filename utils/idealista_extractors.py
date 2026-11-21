@@ -369,6 +369,17 @@ def _card_scope(text: str, idealista_property_id: Optional[int]) -> str:
     return text[tag if tag >= 0 else start : end]
 
 
+def extract_card_text(text: str, idealista_property_id: Optional[int]) -> str:
+    """The plain text of one listing's own card (`_card_scope`), or "".
+
+    For readers of free text (a plot in the prose, #634) that must not borrow
+    a neighbouring card's sentence or the saved-search summary.
+    """
+    if not text:
+        return ""
+    return _strip_html(_card_scope(text, idealista_property_id))
+
+
 def extract_card_price_blocks_m2(
     text: str, idealista_property_id: Optional[int] = None
 ) -> List[Tuple[Optional[float], Optional[float]]]:

@@ -2673,6 +2673,11 @@ class TestOneHomePerRule:
         """
         from services import property_enrichment_service as pes
 
+        monkeypatch.setattr(
+            "services.cadastre_locate.parcels_at",
+            lambda *_: {"status": "not_found"},
+        )
+
         locked = []
         real_refresh = db.session.refresh
         monkeypatch.setattr(

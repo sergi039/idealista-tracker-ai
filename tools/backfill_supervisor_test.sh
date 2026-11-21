@@ -25,6 +25,10 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUPERVISOR="${SCRIPT_DIR}/backfill_supervisor.sh"
+# The directory under test is each scenario's own; an export inherited from
+# whoever runs this must not decide where the supervisor looks (#639).
+unset IDEALISTA_DATA_DIR
+
 failures=0
 
 pass() { printf '  ok   %s\n' "$1"; }
@@ -41,6 +45,7 @@ make_stub() {
 #!/bin/bash
 echo "\$@" >> "$dir/docker-calls.log"
 case "\$1" in
+  compose) [ -f "$dir/compose.json" ] || exit 1; cat "$dir/compose.json"; exit 0 ;;
   ps) printf '%s\n' '$ps_output' ;;
   exec)
     if [ "\$2" = "-d" ]; then exit 0; fi
@@ -452,17 +457,21 @@ rm -rf "$dir"
 # same supervisor took two different locks and both restarted the paid job.
 dir="$(mktemp -d)"
 make_stub "$dir" "sh -c sleep 1" "idealista-app"
-mkdir -p "$dir/tools" "$dir/launch/nested" "$dir/data"
+mkdir -p "$dir/tools/autopilot/lib" "$dir/launch/nested" "$dir/data"
 cp "$SUPERVISOR" "$dir/tools/backfill_supervisor.sh"
+# The copy asks its own checkout's reader where the state is (#639). Without
+# it the run would stop there with the same exit status, and this scenario
+# would pass without ever reaching the lock - hence the message below.
+cp "$(dirname "$SUPERVISOR")/autopilot/lib/data_dir.sh" "$dir/tools/autopilot/lib/data_dir.sh"
 ln -s "$dir/tools/backfill_supervisor.sh" "$dir/launch/nested/sup"
 # A lock held by a live pid, at the root the DIRECT path resolves to.
 printf '%s\n' "$$" > "$dir/data/.supervisor.idealista-app.utils.backfill_pool.lock"
 # No BACKFILL_ROOT here: the point is what the script derives from its own $0.
 ( cd "$dir" && PATH="$dir/bin:$PATH" timeout 20 "$dir/launch/nested/sup" \
     --module utils.backfill_pool --snapshot-prefix data/p --interval 1 --max-ticks 2 \
-    --log "$dir/supervisor.log" --run-log data/run.log ) >/dev/null 2>&1
+    --log "$dir/supervisor.log" --run-log data/run.log ) >/dev/null 2>"$dir/err"
 rc=$?
-if [ "$rc" -eq 2 ] && [ "$(starts_in "$dir")" -eq 0 ]; then
+if [ "$rc" -eq 2 ] && [ "$(starts_in "$dir")" -eq 0 ] && grep -q "already watches" "$dir/err"; then
     pass "a symlinked invocation resolves to the same lock"
 else
     fail "a symlinked invocation resolves to the same lock" "rc=$rc starts=$(starts_in "$dir")"
@@ -483,6 +492,89 @@ if [ "$rc" -eq 2 ] && [ ! -f "$dir/docker-calls.log" ]; then
     pass "a run log escaping data/ through a symlink is refused"
 else
     fail "a run log escaping data/ through a symlink is refused" "rc=$rc"
+fi
+rm -rf "$dir"
+
+# 19. Where `data/` is on the host comes from the one reader (#639), and what
+# the reader refuses stops the supervisor before it inspects or restarts
+# anything. .env names IDEALISTA_DATA_DIR and the stub's Compose gives no
+# answer: neither that directory nor <repo>/data is taken on a guess.
+dir="$(mktemp -d)"
+mkdir -p "$dir/state" "$dir/data"
+printf 'IDEALISTA_DATA_DIR=%s\n' "$dir/state" > "$dir/.env"
+make_stub "$dir" "sh -c sleep 1" "idealista-app"
+( unset IDEALISTA_DATA_DIR; run_supervisor "$dir" ) >/dev/null 2>&1
+rc=$?
+if [ "$rc" -eq 2 ] && ! grep -qv '^compose ' "$dir/docker-calls.log" 2>/dev/null && [ -z "$(ls -A "$dir/state")" ]; then
+    pass "a Compose that cannot be asked stops the supervisor before it touches the job"
+else
+    fail "a Compose that cannot be asked stops the supervisor before it touches the job" "rc=$rc $(cat "$dir/docker-calls.log" 2>/dev/null)"
+fi
+rm -rf "$dir"
+
+# 19b. A reader that answers nothing has not said where the state is. The
+# script asks its own checkout's copy, so the stub root carries the supervisor
+# and an emptied reader: exit 0, no output. Taken as an answer, the lock and
+# the run log would be looked for under `/`.
+dir="$(mktemp -d)"
+make_stub "$dir" "sh -c sleep 1" "idealista-app"
+mkdir -p "$dir/tools/autopilot/lib" "$dir/data"
+cp "$SUPERVISOR" "$dir/tools/backfill_supervisor.sh"
+: > "$dir/tools/autopilot/lib/data_dir.sh"
+( cd "$dir" && PATH="$dir/bin:$PATH" timeout 20 "$dir/tools/backfill_supervisor.sh" \
+    --module utils.backfill_pool --snapshot-prefix data/p --interval 1 --max-ticks 2 \
+    --log "$dir/supervisor.log" --run-log data/run.log ) >/dev/null 2>"$dir/err"
+rc=$?
+if [ "$rc" -eq 2 ] && [ ! -f "$dir/docker-calls.log" ] && grep -q "not an absolute path" "$dir/err"; then
+    pass "a reader that answers nothing stops the supervisor before docker"
+else
+    fail "a reader that answers nothing stops the supervisor before docker" "rc=$rc"
+fi
+# ... and so does a reader that is not there at all.
+rm -f "$dir/tools/autopilot/lib/data_dir.sh"
+( cd "$dir" && PATH="$dir/bin:$PATH" timeout 20 "$dir/tools/backfill_supervisor.sh" \
+    --module utils.backfill_pool --snapshot-prefix data/p --interval 1 --max-ticks 2 \
+    --log "$dir/supervisor.log" --run-log data/run.log ) >/dev/null 2>&1
+rc=$?
+if [ "$rc" -eq 2 ] && [ ! -f "$dir/docker-calls.log" ]; then
+    pass "a missing reader stops the supervisor before docker"
+else
+    fail "a missing reader stops the supervisor before docker" "rc=$rc"
+fi
+rm -rf "$dir"
+
+# 19c. A linked git worktree (its `.git` is a file) is not where the stack
+# runs from: a supervisor started in one would take a lock in a data/ no
+# container mounts, beside the real supervisor's, and both would restart the
+# paid job.
+dir="$(mktemp -d)"
+make_stub "$dir" "sh -c sleep 1" "idealista-app"
+mkdir -p "$dir/data"
+printf 'gitdir: /somewhere/.git/worktrees/issue-1\n' > "$dir/.git"
+run_supervisor "$dir" >/dev/null 2>"$dir/err"
+rc=$?
+if [ "$rc" -eq 2 ] && [ ! -f "$dir/docker-calls.log" ] && grep -q "linked git worktree" "$dir/err"; then
+    pass "a linked git worktree stops the supervisor before docker"
+else
+    fail "a linked git worktree stops the supervisor before docker" "rc=$rc"
+fi
+rm -rf "$dir"
+
+# 19d. The supervisor's own log defaults to a file in the state directory, like
+# the run log and the lock - not to `data/...` read against the caller's
+# working directory, which from anywhere but the repository root is a data/ of
+# its own.
+dir="$(mktemp -d)"
+make_stub "$dir" "sh -c sleep 1" "idealista-app"
+mkdir -p "$dir/data" "$dir/elsewhere"
+( cd "$dir/elsewhere" && PATH="$dir/bin:$PATH" BACKFILL_ROOT="$dir" timeout 20 "$SUPERVISOR" \
+    --module utils.backfill_pool --snapshot-prefix data/p --interval 1 --max-ticks 2 \
+    --run-log data/run.log ) >/dev/null 2>&1
+if [ -s "$dir/data/backfill_supervisor.log" ] && [ ! -e "$dir/elsewhere/data" ]; then
+    pass "the default supervisor log is in the state directory, whatever the working directory"
+else
+    fail "the default supervisor log is in the state directory, whatever the working directory" \
+        "state: $(ls "$dir/data" 2>/dev/null | tr '\n' ' ') elsewhere: $(ls -A "$dir/elsewhere" | tr '\n' ' ')"
 fi
 rm -rf "$dir"
 

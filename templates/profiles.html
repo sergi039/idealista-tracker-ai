@@ -1,5 +1,10 @@
 {% extends "base.html" %}
 {% block title %}{{ t('search_profiles') }}{% endblock %}
+{# Every stored row of a subscription: each thing a bare /properties hides is
+   stated in the link, so a count printed here is the number of rows its link
+   opens. Withdrawn listings, measured criteria fails, rejected listings and
+   folded publications are four separate hides. #}
+{% set every_row = {'hide_removed': 'off', 'criteria': 'all', 'verdict': 'all', 'duplicates': 'show'} %}
 {% macro profile_table(items, unassigned=false) %}
 <table class="table table-hover align-middle search-management-table">
     <thead class="lands-table-head"><tr>{% for key in ['column_id', 'column_name', 'column_properties', 'column_active', 'column_visible', 'column_updated', 'search_actions'] %}<th>{{ t(key) }}</th>{% endfor %}</tr></thead>
@@ -19,8 +24,7 @@
             {% endif %}
         </td>
         <td data-label="{{ t('column_properties') }}">
-            {# All stored rows, with both filtering axes stated in the link. #}
-            <a class="small text-decoration-none" href="{{ url_for('main.properties', profile_id=p.id, hide_removed='off', criteria='all') }}">{{ property_counts.get(p.id, 0) }}</a>
+            <a class="small text-decoration-none" href="{{ url_for('main.properties', profile_id=p.id, **every_row) }}">{{ property_counts.get(p.id, 0) }}</a>
         </td>
         <td class="text-nowrap" data-label="{{ t('column_active') }}">{{ t('yes') if p.is_active else t('archive') }}</td>
         <td class="text-nowrap" data-label="{{ t('column_visible') }}"><span data-role="visibility-state">{{ t('hidden_badge') if p.is_hidden else t('yes') }}</span></td>
@@ -45,9 +49,49 @@
         </div></td>
     </tr>
     {% endfor %}
-    {% if unassigned %}<tr id="profiles-unassigned-row" class="table-row-muted"><td>—</td><td>{{ t('no_subscription') }}</td><td><a class="small text-decoration-none" href="{{ url_for('main.properties', profile_id='unassigned', hide_removed='off', criteria='all') }}">{{ unassigned_count }}</a></td><td colspan="4">{{ t('unassigned_row_help') }}</td></tr>{% endif %}
+    {% if unassigned %}<tr id="profiles-unassigned-row" class="table-row-muted"><td>—</td><td>{{ t('no_subscription') }}</td><td><a class="small text-decoration-none" href="{{ url_for('main.properties', profile_id='unassigned', **every_row) }}">{{ unassigned_count }}</a></td><td colspan="4">{{ t('unassigned_row_help') }}</td></tr>{% endif %}
     </tbody>
 </table>
+{% endmacro %}
+{# One cell of the inflow table: how many arrived, linked to exactly those
+   rows, and how many of them the owner made a favorite or marked Interested.
+   The second number is not a link: no single filter selects that union, and a
+   link that opens a different count than it prints is worse than none. #}
+{% macro inflow_cell(profile_ref, counts, label, start=none) %}
+<td data-label="{{ label }}">
+    {% if counts and counts.added %}
+        <a class="text-decoration-none" data-role="inflow-added" href="{{ url_for('main.properties', profile_id=profile_ref, added_from=start.isoformat() if start else none, **every_row) }}">{{ counts.added }}</a>
+        <span class="text-body-secondary text-nowrap">· <span data-role="inflow-interest">{{ counts.interest }}</span> {{ t('inflow_interest') }}</span>
+    {% else %}<span class="text-body-secondary">0</span>{% endif %}
+</td>
+{% endmacro %}
+{% macro inflow_row(profile_ref, name, entry) %}
+<tr data-inflow-profile="{{ profile_ref }}">
+    <td data-label="{{ t('column_name') }}"><strong>{{ name }}</strong></td>
+    {% for period in inflow_periods %}{{ inflow_cell(profile_ref, entry.get(period.days), tn('inflow_last_days', period.days), period.start) }}{% endfor %}
+    {{ inflow_cell(profile_ref, entry.get('total'), t('inflow_all_time')) }}
+</tr>
+{% endmacro %}
+{% macro inflow_table(items) %}
+<section class="mt-4" id="subscription-inflow" aria-labelledby="subscription-inflow-title">
+    <h3 class="h5" id="subscription-inflow-title">{{ t('inflow_title') }}</h3>
+    <p class="text-body-secondary small">{{ t('inflow_help') }}</p>
+    {% set shown = namespace(count=0) %}
+    {% for p in items if inflow.get(p.id) %}{% set shown.count = shown.count + 1 %}{% endfor %}
+    {% if shown.count or inflow.get(none) %}
+    <table class="table table-sm table-hover align-middle search-management-table inflow-table">
+        <thead class="lands-table-head"><tr>
+            <th>{{ t('column_name') }}</th>
+            {% for period in inflow_periods %}<th>{{ tn('inflow_last_days', period.days) }}<div class="fw-normal text-body-secondary text-nowrap">{{ t('inflow_since') }} {{ period.start.strftime('%d %b %y') }}</div></th>{% endfor %}
+            <th>{{ t('inflow_all_time') }}</th>
+        </tr></thead>
+        <tbody>
+        {% for p in items if inflow.get(p.id) %}{{ inflow_row(p.id, p.name, inflow.get(p.id)) }}{% endfor %}
+        {% if inflow.get(none) %}{{ inflow_row('unassigned', t('no_subscription'), inflow.get(none)) }}{% endif %}
+        </tbody>
+    </table>
+    {% else %}<p class="text-body-secondary">{{ t('inflow_empty') }}</p>{% endif %}
+</section>
 {% endmacro %}
 {% block content %}
 <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
@@ -72,10 +116,12 @@
     <p class="small text-body-secondary mt-2 mb-0">{{ t('search_selection_help') }}</p>
 </form>
 {% if technical %}{{ profile_table(profiles, true) }}
+{{ inflow_table(profiles) }}
 {% else %}
 {% set active = namespace(items=[], archive=[]) %}{% for p in profiles %}{% if management.owner_search(p) %}{% if p.is_active %}{% set active.items = active.items + [p] %}{% else %}{% set active.archive = active.archive + [p] %}{% endif %}{% endif %}{% endfor %}
 {{ profile_table(active.items, true) }}
 {% if active.archive %}<details class="mb-3"><summary>{{ t('archive') }} · {{ active.archive|length }}</summary>{{ profile_table(active.archive) }}</details>{% endif %}
+{{ inflow_table(active.items + active.archive) }}
 {% endif %}
 <details class="alert alert-info mt-3"><summary>{{ t('hidden_panel_title') }}</summary><p>{{ t('hidden_panel_body') }}</p><p>{{ t('search_retention_note') }}</p><p>{{ t('profiles_routing_note') }}</p></details>
 {% endblock %}
