@@ -281,3 +281,20 @@ launchctl bootout gui/$UID/com.idealista.db-backup     # to remove
 Verify a dump (lists it, never restores): `bash tools/backup_db.sh --verify FILE`.
 Restore is the manual command in `MIGRATION_RUNBOOK.md` /
 `tools/backup_attachments.sh`: `docker exec -i idealista-db pg_restore -U idealista -d idealista_universal --clean < FILE`.
+
+## External access (#640, checked 2026-11-21)
+
+- The container publishes `127.0.0.1:5001` only; no `tailscale serve`/`funnel`,
+  reverse proxy or second tunnel leads to it. One Cloudflare tunnel does, with
+  Cloudflare Access required on its ingress.
+- Established: a request from the owner's home IP passes without a sign-in, and
+  a request from one outside IP (a phone on a mobile network, 2026-11-21) got
+  the sign-in screen. The policy itself was not read, so a rule by country or
+  range is not excluded by that probe. A request from the home network
+  therefore gets the page and a `CF_Authorization` cookie with no login: that is
+  how the home network is let in, and a probe from the mini or the MacBook proves
+  nothing about outside access.
+- The proof is a request from an outside IP (a phone off Wi-Fi) that ends at
+  the sign-in screen. Repeat it after any change to the Access policy, the
+  tunnel or its ingress; nothing else is acceptance.
+- Another tunnel or proxy to this app without the same protection is forbidden.
