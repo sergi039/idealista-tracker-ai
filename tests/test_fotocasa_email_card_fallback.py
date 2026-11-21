@@ -496,6 +496,9 @@ class TestMunicipalityNeedsTheLinkToConfirmIt:
         """ "piso, Salamanca" under /madrid-capital/salamanca/ is a district of
         Madrid; INE alone would accept the name."""
         assert self._municipality("piso, Salamanca", "madrid-capital") is None
+        # And one INE does know (inside the watched provinces): the district of
+        # another city that shares its name with a municipality.
+        assert self._municipality("piso, Vigo", "madrid-capital") is None
 
     def test_the_link_naming_the_same_place_confirms_it(self):
         assert self._municipality("casa, Arteixo", "arteixo") == "Arteixo"
