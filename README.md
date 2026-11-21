@@ -155,8 +155,9 @@ What that means in practice:
   `127.0.0.1:5001:5001` — dropping that prefix exposes the whole database,
   the settings UI and the paid AI/enrichment endpoints to your network.
 - The one tunnel that reaches the app from outside is closed by Cloudflare
-  Access (the owner's home IP passes without a sign-in, any other IP gets the
-  sign-in screen; verified 2026-11-21). No other tunnel or proxy without the
+  Access (the owner's home IP passes without a sign-in; one outside IP, a mobile
+  network, got the sign-in screen on 2026-11-21; the policy itself was not
+  read, so a rule by country or range is not excluded). No other tunnel or proxy without the
   same protection.
 - Browser API writes require the session-bound CSRF token rendered by the
   app. Fetch and HTMX callers send it automatically; programmatic writes need

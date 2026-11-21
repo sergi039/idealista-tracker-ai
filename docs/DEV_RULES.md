@@ -58,8 +58,9 @@ named differently.
 - The app is published on **`127.0.0.1` only** — there is no authentication
   in the app. Change the port through `APP_HOST_PORT`; never widen the bind
   address. One tunnel reaches it from outside, closed by Cloudflare Access (the
-  owner's home IP passes without a sign-in, any other IP gets the sign-in
-  screen; verified 2026-11-21 from an outside IP). Any other tunnel or proxy
+  owner's home IP passes without a sign-in; one outside IP, a mobile network,
+  got the sign-in screen on 2026-11-21; the policy itself was not read, so a
+  rule by country or range is not excluded). Any other tunnel or proxy
   without the same protection is forbidden, and a change to the Access policy
   is re-checked from an outside IP.
 - Do not reintroduce a hard-coded `container_name`, network `name` or volume

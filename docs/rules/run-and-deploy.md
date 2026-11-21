@@ -287,8 +287,10 @@ Restore is the manual command in `MIGRATION_RUNBOOK.md` /
 - The container publishes `127.0.0.1:5001` only; no `tailscale serve`/`funnel`,
   reverse proxy or second tunnel leads to it. One Cloudflare tunnel does, with
   Cloudflare Access required on its ingress.
-- The Access policy lets the owner's home IP through without a sign-in and sends
-  every other IP to the sign-in screen. A request from the home network
+- Established: a request from the owner's home IP passes without a sign-in, and
+  a request from one outside IP (a phone on a mobile network, 2026-11-21) got
+  the sign-in screen. The policy itself was not read, so a rule by country or
+  range is not excluded by that probe. A request from the home network
   therefore gets the page and a `CF_Authorization` cookie with no login: that is
   the policy, not a leak, and a probe from the mini or the MacBook proves
   nothing about outside access.
