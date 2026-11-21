@@ -7,8 +7,6 @@ cannot read is counted on its own line rather than as "no arrivals", and
 that the command writes nothing.
 """
 
-import json
-
 import pytest
 from sqlalchemy import text
 
@@ -125,6 +123,27 @@ class TestTheCount:
                     "truncated": False,
                 }
             },
+            # Second review of #704, verbatim: no `received_at` key at all.
+            {
+                "arrivals": {
+                    "items": [
+                        {
+                            "profile_id": 3,
+                            "source": "fotocasa",
+                            "method": "alert_email",
+                            "ref": "imap_7",
+                            "recorded_at": "2026-11-21T18:00:00+00:00",
+                        }
+                    ],
+                    "truncated": False,
+                }
+            },
+            {
+                "arrivals": {
+                    "items": [_item(3, recorded_at="2026-11-21")],
+                    "truncated": False,
+                }
+            },
         ],
     )
     def test_a_journal_it_cannot_read_is_counted_apart_and_never_raises(
@@ -185,34 +204,39 @@ def _column(prop_id):
 
 
 class TestTheCommand:
-    def test_it_reads_the_table_and_writes_nothing(self, app, journaled, capsys):
-        prop_id, home_id, other_id = journaled
+    """The command end to end on PostgreSQL is in
+    `tests/test_postgres_migrations.py`; here, the database it refuses."""
+
+    @pytest.mark.parametrize("argv", [[], ["--format", "json"]])
+    def test_without_one_snapshot_it_refuses_and_prints_no_number(
+        self, app, journaled, capsys, argv
+    ):
+        """Second review of #704: under SQLite the routes and the listings
+        can be two states, so no count is offered at all."""
+        prop_id, _, _ = journaled
         before = _column(prop_id)
 
-        assert report_arrivals.main(["--format", "json"], app=app) == 0
+        assert report_arrivals.main(argv, app=app) == report_arrivals.EXIT_NO_SNAPSHOT
 
-        report = json.loads(capsys.readouterr().out)
-        assert report["rows_scanned"] == 1
-        assert report["listings_delivered_by_a_second_search"] == 1
-        assert report["pairs"] == [
-            {
-                "home_profile_id": home_id,
-                "arrival_profile_id": other_id,
-                "listings": 1,
-                "entries": 1,
-            }
-        ]
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "PostgreSQL snapshot" in captured.err
+        assert "sqlite" in captured.err
         assert _column(prop_id) == before
 
-    def test_the_text_names_the_subscriptions_and_its_blind_spots(
-        self, app, journaled, capsys
-    ):
-        _, home_id, other_id = journaled
+    def test_load_refuses_before_reading_a_row(self, app, journaled):
+        with pytest.raises(report_arrivals.NoSnapshot):
+            report_arrivals.load()
 
-        assert report_arrivals.main([], app=app) == 0
+
+class TestTheText:
+    def test_it_names_the_subscriptions_and_its_blind_spots(self, capsys):
+        report = report_arrivals.collect([_Row(1, 24, [_item(7)])], {7: None, 24: None})
+
+        report_arrivals._print_text(report, {7: "Asturias", 24: "Galicia costa"})
 
         out = capsys.readouterr().out
         assert "Listings a second search delivered:    1" in out
         assert "Rows whose journal cannot be read:     0" in out
-        assert f"{home_id} Galicia costa <- {other_id} Asturias: 1, 1" in out
+        assert "24 Galicia costa <- 7 Asturias: 1, 1" in out
         assert "Not counted" in out

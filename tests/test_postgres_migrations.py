@@ -4228,3 +4228,68 @@ def test_the_arrivals_report_reads_routes_and_listings_from_one_snapshot(
         ]
     finally:
         engine.dispose()
+
+
+def test_the_arrivals_command_counts_on_postgresql_and_writes_nothing(
+    postgres_url, monkeypatch, capsys
+):
+    """#632: `python -m utils.report_arrivals` end to end, on the one database
+    it reads (second review of #704: any other is refused). It counts the
+    journal `record()` wrote, names the pair, and leaves every column as it
+    found it."""
+    from services import arrival_journal
+    from utils import report_arrivals
+
+    _migrated(postgres_url)
+    (application,) = _duplicate_link_apps(postgres_url, monkeypatch)
+    from models import Property as _Property, SearchProfile as _SearchProfile
+
+    with application.app_context():
+        home = _SearchProfile(name="command home", is_active=True)
+        other = _SearchProfile(name="command other", is_active=True)
+        db.session.add_all([home, other])
+        db.session.commit()
+        prop = _Property(
+            source_email_id="command:a", title="a", search_profile_id=home.id
+        )
+        db.session.add(prop)
+        db.session.commit()
+        assert (
+            arrival_journal.record(
+                prop,
+                profile_id=other.id,
+                source="fotocasa",
+                method=arrival_journal.METHOD_ALERT_EMAIL,
+                ref="imap_7",
+            )
+            == arrival_journal.RECORDED
+        )
+        home_id, other_id = home.id, other.id
+        db.session.remove()
+
+    def snapshot():
+        with application.app_context():
+            value = db.session.execute(
+                text(
+                    "SELECT string_agg(CAST(p AS TEXT), '|' ORDER BY id) "
+                    "FROM properties p"
+                )
+            ).scalar_one()
+            db.session.remove()
+            return value
+
+    before = snapshot()
+    capsys.readouterr()
+
+    assert report_arrivals.main(["--format", "json"], app=application) == 0
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["rows_unreadable"] == 0
+    assert report["listings_delivered_by_a_second_search"] == 1
+    assert {
+        "home_profile_id": home_id,
+        "arrival_profile_id": other_id,
+        "listings": 1,
+        "entries": 1,
+    } in report["pairs"]
+    assert snapshot() == before

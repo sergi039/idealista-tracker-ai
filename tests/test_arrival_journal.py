@@ -464,10 +464,36 @@ WRONG_FIELDS = [
     ("recorded_at", None),
     ("recorded_at", 1763748000),
     ("recorded_at", "yesterday"),
+    # Second review of #704: `fromisoformat` reads a bare date as midnight.
+    ("recorded_at", "2026-11-21"),
+    ("recorded_at", "20261121"),
+    # `record()` writes the recording time as UTC, always with its offset.
+    ("recorded_at", "2026-11-21T18:00:00"),
+    ("recorded_at", "2026-11-21T19:00:00+01:00"),
+    ("recorded_at", "2026-11-21T18:00:00Z"),
+    ("recorded_at", "2026-11-21T18:00:00.5+00:00"),
+    ("recorded_at", "2026-11-21 18:00:00+00:00"),
+    ("recorded_at", "2026-13-21T18:00:00+00:00"),
     ("received_at", 7),
     ("received_at", ""),
     ("received_at", "not a time"),
+    ("received_at", "2026-11-21"),
+    ("received_at", "2026-11-21T09:29"),
+    ("received_at", "2026-11-21T10:29:59+01:00"),
+    ("received_at", "2026-11-21T25:29:59"),
 ]
+
+# The one entry production held when #704 was written (row 4061, read with
+# SELECT 2026-11-21): `received_at` without an offset, as `_utc_text` writes
+# a time whose zone the mail layer did not know.
+PRODUCTION_ENTRY = {
+    "profile_id": 1,
+    "source": "yaencontre",
+    "method": "alert_email",
+    "ref": "imap_496167",
+    "received_at": "2026-11-21T09:29:59",
+    "recorded_at": "2026-11-21T18:00:05+00:00",
+}
 
 # What two reviews handed in, verbatim (#698 round four, then #704).
 REVIEWERS_ENTRIES = [
@@ -486,6 +512,16 @@ REVIEWERS_ENTRIES = [
         "method": [],
         "recorded_at": None,
     },
+    # Second review of #704, verbatim: no `received_at` key at all.
+    {
+        "profile_id": 3,
+        "source": "fotocasa",
+        "method": "alert_email",
+        "ref": "imap_7",
+        "recorded_at": "2026-11-21T18:00:00+00:00",
+    },
+    # Second review of #704: a bare date where the recording time goes.
+    {**WHOLE_ENTRY, "recorded_at": "2026-11-21"},
 ]
 
 
@@ -494,12 +530,24 @@ class TestAnEntryIsEveryFieldTyped:
         prop = _prop(home)
         _record(prop, other)
         _record(prop, other, ref="imap_8", received_at=None)
+        _record(prop, other, ref="imap_9", received_at=datetime(2026, 11, 21, 9, 29))
 
         written = _items(prop.id)
-        assert len(written) == 2 and all(map(arrival_journal._is_entry, written))
+        assert len(written) == 3 and all(map(arrival_journal._is_entry, written))
+        assert written[2]["received_at"] == "2026-11-21T09:29:00"
         assert arrival_journal._is_entry(WHOLE_ENTRY)
         assert arrival_journal._is_entry({**WHOLE_ENTRY, "received_at": None})
         assert arrival_journal._is_entry({**WHOLE_ENTRY, "extra": {"kept": 1}})
+
+    def test_the_entry_production_holds_is_read(self):
+        block = {"arrivals": {"items": [PRODUCTION_ENTRY], "truncated": False}}
+
+        assert arrival_journal._is_entry(PRODUCTION_ENTRY)
+        assert arrival_journal.read(Property(enrichment=block)) == {
+            "items": [PRODUCTION_ENTRY],
+            "truncated": False,
+            "readable": True,
+        }
 
     @pytest.mark.parametrize("field, wrong", WRONG_FIELDS)
     def test_one_wrong_field_is_not_an_entry(self, field, wrong):
@@ -509,11 +557,25 @@ class TestAnEntryIsEveryFieldTyped:
         assert not arrival_journal._is_entry(item)
         assert arrival_journal.read(Property(enrichment=block))["readable"] is False
 
-    @pytest.mark.parametrize("field", sorted(set(WHOLE_ENTRY) - {"received_at"}))
-    def test_a_missing_field_is_not_an_entry(self, field):
-        item = {key: value for key, value in WHOLE_ENTRY.items() if key != field}
+    @pytest.mark.parametrize("field", arrival_journal.ENTRY_FIELDS)
+    @pytest.mark.parametrize(
+        "entry", [WHOLE_ENTRY, {**WHOLE_ENTRY, "received_at": None}]
+    )
+    def test_a_missing_field_is_not_an_entry(self, field, entry):
+        """Every key, `received_at` included: an absent key is not the null
+        `record()` writes (second review of #704)."""
+        item = {key: value for key, value in entry.items() if key != field}
+        block = {"arrivals": {"items": [item], "truncated": False}}
 
         assert not arrival_journal._is_entry(item)
+        assert arrival_journal.read(Property(enrichment=block))["readable"] is False
+
+    def test_the_fields_are_the_keys_record_writes(self, app, home, other):
+        prop = _prop(home)
+        _record(prop, other)
+
+        (written,) = _items(prop.id)
+        assert set(written) == set(arrival_journal.ENTRY_FIELDS)
 
     @pytest.mark.parametrize("item", REVIEWERS_ENTRIES)
     def test_the_entries_two_reviews_handed_in_are_not_entries(self, item):

@@ -21,6 +21,9 @@ counted as `absorbed` rather than dropped silently. A row whose journal the
 module cannot read (`arrival_journal.read()` answers `readable: False`) is
 counted on its own line, never as "no arrivals".
 
+It reads PostgreSQL only, in one REPEATABLE READ, READ ONLY transaction; on
+any other database it prints why to stderr and exits 2 without a number.
+
 Not wrapped in `utils/inflight.inflight(...)`: the rule (#283) is for long
 jobs whose interruption loses work. This is one pass over the table in
 Python, and killing it loses nothing.
@@ -35,6 +38,9 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 from app import create_app, db
 from models import Property, SearchProfile
 from services import arrival_journal
+
+# The exit status when the database cannot give one snapshot (`NoSnapshot`).
+EXIT_NO_SNAPSHOT = 2
 
 
 def collect(
@@ -143,8 +149,12 @@ def _print_text(report: Dict[str, Any], names: Mapping[int, str]) -> None:
     )
 
 
+class NoSnapshot(RuntimeError):
+    """The database cannot give the report one read-only snapshot."""
+
+
 def load():
-    """Rows and routes, read from ONE snapshot.
+    """Rows and routes, read from ONE snapshot, or `NoSnapshot`.
 
     The routes are read eagerly and the listings lazily, so under
     PostgreSQL's default READ COMMITTED the two could see different
@@ -153,16 +163,25 @@ def load():
     REPEATABLE READ takes its snapshot at the first statement and keeps it;
     READ ONLY makes "writes nothing" the database's rule too. Both must be
     asked for before the session's transaction begins, which is why the
-    dialect is read off the bind and not off a connection. SQLite has one
-    connection and no such gap.
+    dialect is read off the bind and not off a connection.
+
+    Any other database is refused, not read: under pysqlite's default
+    transaction handling each SELECT can see its own state, the same gap
+    (second review of #704). Production is PostgreSQL; a number from a
+    database this function cannot pin to one state is not offered.
     """
-    if db.session.get_bind().dialect.name == "postgresql":
-        db.session.connection(
-            execution_options={
-                "isolation_level": "REPEATABLE READ",
-                "postgresql_readonly": True,
-            }
+    dialect = db.session.get_bind().dialect.name
+    if dialect != "postgresql":
+        raise NoSnapshot(
+            f"the arrivals report reads one PostgreSQL snapshot; "
+            f"this database is {dialect}"
         )
+    db.session.connection(
+        execution_options={
+            "isolation_level": "REPEATABLE READ",
+            "postgresql_readonly": True,
+        }
+    )
     rows = (
         db.session.query(Property.id, Property.search_profile_id, Property.enrichment)
         .order_by(Property.id)
@@ -186,6 +205,9 @@ def main(argv: Optional[Sequence[str]] = None, app: Any = None) -> int:
         try:
             rows, routed_to, names = load()
             report = collect(rows, routed_to)
+        except NoSnapshot as refusal:
+            print(f"Not counted: {refusal}.", file=sys.stderr)
+            return EXIT_NO_SNAPSHOT
         finally:
             # Nothing was written; this only ends the read transaction.
             db.session.rollback()
