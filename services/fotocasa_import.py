@@ -45,7 +45,7 @@ import requests
 from sqlalchemy import null
 from sqlalchemy.exc import IntegrityError
 
-from services import arrival_journal, portal_photos
+from services import portal_photos
 from services.coordinate_quality import record_portal_coordinate
 
 from services import advertiser
@@ -421,10 +421,7 @@ def build_property(
 
 
 def insert_rows(
-    rows: List[Dict[str, Any]],
-    *,
-    profile_id: Optional[int],
-    arrival_ref: Optional[str] = None,
+    rows: List[Dict[str, Any]], *, profile_id: Optional[int]
 ) -> Dict[str, Any]:
     """Create a Property for every previewed row that is still new.
 
@@ -432,24 +429,13 @@ def insert_rows(
     minutes may have passed, and the alternative is an IntegrityError from the
     unique constraint that would abort the whole batch over one link somebody
     imported in another tab.
-
-    A link whose listing is already stored creates nothing, and since #632
-    it leaves a journal entry on that row when `profile_id` is another
-    subscription than the row's own (`services/arrival_journal.py`).
-    `arrival_ref` names this confirm, so pressing it twice records once.
     """
     from app import db
 
     created: List[Dict[str, Any]] = []
     skipped: List[Dict[str, Any]] = []
-    already_stored: List[int] = []
 
     for row in rows:
-        if row.get("status") == STATUS_DUPLICATE and row.get("existing_id"):
-            # The preview found it stored. Nothing to create; the journal
-            # entry is written after the batch commits, below.
-            already_stored.append(int(row["existing_id"]))
-            continue
         if row.get("status") != STATUS_NEW:
             continue
         listing_id = row.get("listing_id")
@@ -459,7 +445,6 @@ def insert_rows(
         existing = existing_by_listing_id(int(listing_id))
         if existing is not None:
             skipped.append({"url": row.get("url"), "existing_id": existing.id})
-            already_stored.append(existing.id)
             continue
 
         prop = build_property(row, profile_id=profile_id)
@@ -492,8 +477,6 @@ def insert_rows(
                     "existing_id": existing.id if existing is not None else None,
                 }
             )
-            if existing is not None:
-                already_stored.append(existing.id)
             continue
 
         created.append({"id": prop.id, "url": prop.url, "title": prop.title})
@@ -502,37 +485,7 @@ def insert_rows(
 
     scored = _score(created)
 
-    # Last, after the batch's commit and after scoring (every scored row
-    # commits or rolls back on its own): the journal owns its transaction,
-    # and a failure in it must not cost a new row its score.
-    _record_arrivals(already_stored, profile_id=profile_id, ref=arrival_ref)
-
     return {"created": created, "skipped": skipped, "scored": scored}
-
-
-def _record_arrivals(
-    property_ids: List[int], *, profile_id: Optional[int], ref: Optional[str]
-) -> None:
-    """Journal the links whose listing was already stored (#632).
-
-    The journal owns its transaction and refuses a session with anything
-    pending, so the caller runs this after its own commits. Each id once: the
-    same link pasted twice in one batch is one arrival.
-    """
-    from app import db
-    from models import Property
-
-    for property_id in dict.fromkeys(property_ids):
-        prop = db.session.get(Property, property_id)
-        if prop is None:
-            continue
-        arrival_journal.record(
-            prop,
-            profile_id=profile_id,
-            source=SOURCE_NAME,
-            method=arrival_journal.METHOD_PASTE_IMPORT,
-            ref=ref,
-        )
 
 
 def _score(created: List[Dict[str, Any]]) -> int:

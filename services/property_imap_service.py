@@ -128,6 +128,9 @@ class PropertyIMAPService:
         # run; None outside run_ingestion(), where a new row is enriched in
         # full on the spot. See `_run_deferred_enrichment`.
         self._deferred_enrichment: Optional[List[int]] = None
+        # Set by `_record_arrival` when the journal could not be written;
+        # each portal handler resets it and reads it into its `all_done`.
+        self._arrival_failed = False
         # What MAX_EMAILS_PER_RUN left behind, or None when it did not bite.
         # Set by get_idealista_emails(), read by run_ingestion() so a capped
         # run says so instead of looking like a complete one.
@@ -1183,6 +1186,7 @@ class PropertyIMAPService:
         http = requests.Session()
         created = 0
         all_done = True
+        self._arrival_failed = False
 
         for url in email_data.get("urls") or []:
             listing_id = fotocasa_source.listing_id_from_url(url)
@@ -1228,7 +1232,7 @@ class PropertyIMAPService:
             ):
                 created += 1
 
-        return created, all_done
+        return created, all_done and not self._arrival_failed
 
     def _portal_fetching_stopped(self, portal: str, email_data: Dict[str, Any]) -> bool:
         """True when this run has already given up on the portal's host."""
@@ -1327,22 +1331,38 @@ class PropertyIMAPService:
     ) -> None:
         """Note that this email's saved search delivered a listing already stored.
 
-        The row is not touched beyond its journal (#632,
-        `services/arrival_journal.py`): no fetch, no `search_profile_id`
-        change. A failure is not swallowed -- it reaches `run_ingestion`'s
-        own branch, which holds the UID, and the re-read is a no-op for every
-        entry that did land.
+        Only the row's journal is touched (#632, `services/arrival_journal.py`).
+        The journal is its own transaction and every call site sits AFTER the
+        commit of whatever the email created or changed, so the rollback
+        below can only undo the journal's own attempt.
+
+        A journal that FAILED must not cost the email its other listings: it
+        is logged, the loop goes on, and the handler answers "not all done",
+        which holds the UID (a repeat is a no-op for entries that landed). An
+        answer on the facts (an unreadable block, no delivery id) is the same
+        tomorrow: the journal logs it and the email is consumed.
         """
-        arrival_journal.record(
-            prop,
-            profile_id=email_data.get("search_profile_id"),
-            source=source,
-            method=arrival_journal.METHOD_ALERT_EMAIL,
-            ref=email_data.get("source_email_id"),
-            received_at=self._parse_email_received_at(
-                email_data.get("email_received_at")
-            ),
-        )
+        try:
+            arrival_journal.record(
+                prop,
+                profile_id=email_data.get("search_profile_id"),
+                source=source,
+                method=arrival_journal.METHOD_ALERT_EMAIL,
+                ref=email_data.get("source_email_id"),
+                received_at=self._parse_email_received_at(
+                    email_data.get("email_received_at")
+                ),
+            )
+        except Exception:
+            db.session.rollback()
+            self._arrival_failed = True
+            logger.exception(
+                "The arrival journal failed for a stored %s listing in email "
+                "%s; holding UID %s for the next run",
+                source,
+                email_data.get("source_email_id"),
+                email_data.get("uid"),
+            )
 
     @staticmethod
     def _apply_price_update(
@@ -1426,13 +1446,15 @@ class PropertyIMAPService:
         `services/yaencontre_source.py`), so the card fields ARE the row --
         no coordinates, no seller verdict (`record_advertiser=False`), and
         the geocoder fills the location from the title at ingest. With no
-        fetches there are no refusals, so `all_done` is always True; an
+        fetches there are no refusals, so `all_done` is False only when the
+        arrival journal failed for a stored card (#632); any other
         exception is #24's territory and holds the cursor through the
         caller's own except branch.
         """
         from services import fotocasa_import
 
         created = 0
+        self._arrival_failed = False
         for card in email_data.get("cards") or []:
             listing_id = card.get("listing_id")
             if not listing_id:
@@ -1466,7 +1488,10 @@ class PropertyIMAPService:
                 record_advertiser=False,
             ):
                 created += 1
-        return created, True
+        # False only when the arrival journal failed for a stored card: the
+        # email is re-read, which is a no-op for every card (a price equal to
+        # the stored one changes nothing) except the entry that did not land.
+        return created, not self._arrival_failed
 
     def _ingest_milanuncios_email(
         self,
@@ -1493,6 +1518,7 @@ class PropertyIMAPService:
         http = requests.Session()
         created = 0
         all_done = True
+        self._arrival_failed = False
         seen_ids: set = set()
 
         for tracker in email_data.get("tracker_urls") or []:
@@ -1550,7 +1576,7 @@ class PropertyIMAPService:
             ):
                 created += 1
 
-        return created, all_done
+        return created, all_done and not self._arrival_failed
 
     def run_ingestion(self, sync_type: str = "incremental") -> int:
         start_time = datetime.now(timezone.utc)

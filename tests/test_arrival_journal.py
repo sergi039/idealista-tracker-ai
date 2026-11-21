@@ -1,28 +1,21 @@
 """A listing a second saved search delivers leaves a record, and nothing else.
 
-Issue #632. A portal listing is one row, with one `search_profile_id`; a
-second saved search that delivers it used to find the row and move on without
-a trace. `services/arrival_journal.py` now appends one entry to
-`enrichment["arrivals"]` and touches nothing else. What these tests pin:
-
-* the entry: the subscription after `canonical_profile()`, the portal, the
-  door, the email's id, two UTC times;
-* what must not move: `search_profile_id`, the row count, every other
-  `enrichment` block, and no listing page is fetched for a stored listing;
-* the refusals: the row's own search, an email no profile claimed, the same
-  email twice, a full journal;
-* the write discipline: the journal is re-read from the stored row, not from
-  the copy in memory (the #339 shape), and a pending session is refused;
-* all four doors: fotocasa, milanuncios and yaencontre mail, the late
-  duplicate, and the paste-links confirm.
+Issue #632, `services/arrival_journal.py`. Pinned here: the entry and what
+must not move (`search_profile_id`, the row count, the other `enrichment`
+blocks, no fetch for a stored listing); the refusals (the row's own search,
+no profile, the same delivery twice, no delivery id, a full journal, a block
+it cannot read); the write discipline (the guard before any query, every
+decision on the locked row); and the mail doors, including a journal that
+fails mid-email.
 
 Not proved here: two processes racing for one row. The suite is one SQLite
 connection and SQLite ignores `FOR UPDATE`; what is proved is the half that
-can fail silently -- the stored row changes underneath the session and the
+fails silently -- the stored row changes underneath the session and the
 writer has to see it.
 """
 
 import json
+import logging
 import pathlib
 from datetime import datetime, timedelta, timezone
 
@@ -165,14 +158,6 @@ class TestTheEntry:
         assert recorded.utcoffset() == timedelta(0)
         assert _stored(prop.id)["arrivals"]["truncated"] is False
 
-    def test_the_rows_own_subscription_is_not_changed(self, app, home, other):
-        prop = _prop(home)
-
-        _record(prop, other)
-
-        db.session.expire_all()
-        assert db.session.get(Property, prop.id).search_profile_id == home.id
-
     def test_the_other_blocks_of_the_column_survive(self, app, home, other):
         prop = _prop(home, enrichment={"import": {"source": "fotocasa"}, "sea": 1})
 
@@ -196,13 +181,6 @@ class TestTheEntry:
         _record(prop, other, received_at=datetime(2026, 11, 20, 10, 15))
 
         assert _items(prop.id)[0]["received_at"] == "2026-11-20T10:15:00"
-
-    def test_a_missing_time_stays_missing(self, app, home, other):
-        prop = _prop(home)
-
-        _record(prop, other, received_at=None)
-
-        assert _items(prop.id)[0]["received_at"] is None
 
 
 class TestOnlyAnotherSearch:
@@ -366,22 +344,6 @@ class TestTheWriteReadsTheStoredRow:
         assert _record(prop, other) == arrival_journal.SAME_SEARCH
         assert "arrivals" not in _stored(prop.id)
 
-    def test_a_session_with_work_pending_is_refused_not_committed(
-        self, app, home, other
-    ):
-        prop = _prop(home)
-        # Loaded first, so nothing below autoflushes the edit away before the
-        # guard looks: a commit expires every attribute, and re-reading one
-        # would flush the pending change and leave the session looking clean.
-        assert (prop.search_profile_id, other.routed_to) == (home.id, None)
-        prop.title = "an unrelated edit somebody has not committed"
-
-        with pytest.raises(EnrichmentWriteContractError):
-            _record(prop, other)
-
-        db.session.rollback()
-        assert "arrivals" not in _stored(prop.id)
-
     def test_a_home_the_listing_has_left_is_another_search_again(
         self, app, home, other
     ):
@@ -445,19 +407,39 @@ class TestTheWriteReadsTheStoredRow:
         assert db.session.get(Property, unrelated_id).title == "Arrival fixture"
 
 
+# Everything that may sit under the key and is NOT the shape `record()` writes.
+# An explicit JSON null is one of them (review of #698): somebody stored it.
+NOT_THE_BLOCK = [
+    None,
+    "",
+    0,
+    [],
+    ["legacy"],
+    {},
+    {"items": []},
+    {"truncated": False},
+    {"items": "x", "truncated": False},
+    {"items": [], "truncated": "yes"},
+    {"items": [], "truncated": None},
+]
+
+
 class TestReadingIsTotalAndWritingFailsClosed:
     def test_any_stored_value_reads_without_raising(self, app):
         empty = {"items": [], "truncated": False}
-        for value in (["legacy"], "text", 7, {"arrivals": []}, {"arrivals": "x"}):
-            assert arrival_journal.read(Property(enrichment=value)) == {
+        for column in (["legacy"], "text", "", 7, 0):
+            assert arrival_journal.read(Property(enrichment=column)) == {
                 **empty,
                 "readable": False,
             }
-        assert arrival_journal.read(
-            Property(enrichment={"arrivals": {"items": "x"}})
-        ) == {**empty, "readable": False}
-        for value in (None, {}, {"sea": 1}):
-            assert arrival_journal.read(Property(enrichment=value)) == {
+        for block in NOT_THE_BLOCK:
+            assert arrival_journal.read(Property(enrichment={"arrivals": block})) == {
+                **empty,
+                "readable": False,
+            }, block
+        # Only an absent key, or a row with no enrichment at all, is empty.
+        for column in (None, {}, {"sea": 1}):
+            assert arrival_journal.read(Property(enrichment=column)) == {
                 **empty,
                 "readable": True,
             }
@@ -473,10 +455,10 @@ class TestReadingIsTotalAndWritingFailsClosed:
         }
 
     @pytest.mark.parametrize(
-        "stored", [["legacy"], {"arrivals": ["legacy"]}, {"arrivals": {"items": 1}}]
+        "stored", [["legacy"], "", 0, *({"arrivals": b} for b in NOT_THE_BLOCK)]
     )
     def test_a_value_it_cannot_read_is_never_written_over(
-        self, app, home, other, stored
+        self, app, home, other, stored, caplog
     ):
         prop = _prop(home)
         db.session.execute(
@@ -485,17 +467,40 @@ class TestReadingIsTotalAndWritingFailsClosed:
         )
         db.session.commit()
 
-        assert _record(prop, other) == arrival_journal.UNWRITABLE
-        assert _stored_raw(prop.id) == stored
+        with caplog.at_level(logging.ERROR, logger="services.arrival_journal"):
+            assert _record(prop, other) == arrival_journal.UNWRITABLE
 
-    def test_odd_stored_entries_are_kept_when_one_is_added(self, app, home, other):
-        prop = _prop(home, enrichment={"arrivals": {"items": [1, {"note": "x"}]}})
+        assert _stored_raw(prop.id) == stored
+        assert "was not recorded" in caplog.text
+
+    def test_everything_else_in_the_block_is_kept_when_an_entry_is_added(
+        self, app, home, other
+    ):
+        block = {"items": [1, {"note": "x"}], "truncated": False, "kept": {"a": 1}}
+        prop = _prop(home, enrichment={"arrivals": block})
 
         assert _record(prop, other) == arrival_journal.RECORDED
 
-        items = _stored(prop.id)["arrivals"]["items"]
-        assert items[:2] == [1, {"note": "x"}]
-        assert items[2]["profile_id"] == other.id
+        stored = _stored(prop.id)["arrivals"]
+        assert stored["items"][:2] == [1, {"note": "x"}]
+        assert stored["items"][2]["profile_id"] == other.id
+        assert stored["kept"] == {"a": 1}
+
+    @pytest.mark.parametrize("ref", [None, "", "   ", 7])
+    def test_a_delivery_without_an_id_is_not_recorded(
+        self, app, home, other, ref, caplog
+    ):
+        """Review of #698: "no id" may not be a key. Two id-less deliveries
+        through two searches were one delivery, and the second was dropped."""
+        third = _profile("Cantabria")
+        prop = _prop(home)
+
+        with caplog.at_level(logging.ERROR, logger="services.arrival_journal"):
+            assert _record(prop, other, ref=ref) == arrival_journal.NO_DELIVERY_ID
+            assert _record(prop, third, ref=ref) == arrival_journal.NO_DELIVERY_ID
+
+        assert "arrivals" not in _stored(prop.id)
+        assert "no delivery id" in caplog.text
 
 
 def _service() -> PropertyIMAPService:
@@ -617,21 +622,139 @@ class TestThePortalMailDoors:
             "imap_41",
         )
 
-    def test_yaencontre_records_it_beside_a_price_change(self, app, home, other):
-        prop_id = self._stored_yaencontre(home)
+    def _other_card(self, listing_id: int) -> dict:
+        return {
+            **self._yaencontre_card(),
+            "listing_id": listing_id,
+            "url": f"https://www.yaencontre.com/venta/casa/inmueble-75866-{listing_id}",
+        }
 
-        _service()._ingest_yaencontre_email(
-            {**_email(other), "cards": [self._yaencontre_card(price=170000.0)]},
+    def _failing_journal(self, monkeypatch) -> None:
+        """A journal that dies half-way, with an edit of its own pending."""
+
+        def fail(prop, **kwargs):
+            prop.title = "half-written by the journal"
+            raise RuntimeError("the journal could not be written")
+
+        monkeypatch.setattr(arrival_journal, "record", fail)
+
+    def test_a_failed_journal_costs_the_email_nothing_it_created(
+        self, app, home, other, monkeypatch
+    ):
+        """One email: a new card, a stored card whose journal write fails,
+        another new card. Both new rows land, the loop reaches the last card,
+        and the email answers "not all done" so its UID is held."""
+        stored_id = self._stored_yaencontre(home)
+        self._failing_journal(monkeypatch)
+
+        created, all_done = _service()._ingest_yaencontre_email(
+            {
+                **_email(other),
+                "cards": [
+                    self._other_card(501),
+                    self._yaencontre_card(),
+                    self._other_card(502),
+                ],
+            },
             sale_only=False,
             excluded_categories=set(),
         )
 
+        assert (created, all_done) == (2, False)
+        assert {p.source_email_id for p in Property.query.all()} == {
+            "yaencontre:112395195",
+            "yaencontre:501",
+            "yaencontre:502",
+        }
+        assert "arrivals" not in _stored(stored_id)
+        # Its half-written edit went with it, past the commits of the cards
+        # that followed.
+        db.session.expire_all()
+        assert db.session.get(Property, stored_id).title.startswith("Casa adosada")
+
+    def test_a_failed_journal_does_not_undo_the_price_it_follows(
+        self, app, home, other, monkeypatch
+    ):
+        """The journal's rollback may only undo the journal: the price change
+        was committed before it. Then the held email is read again -- the
+        price is not applied twice and the entry lands once."""
+        prop_id = self._stored_yaencontre(home)
+        email = {**_email(other), "cards": [self._yaencontre_card(price=170000.0)]}
+
+        with monkeypatch.context() as patch:
+            self._failing_journal(patch)
+            first = _service()
+            assert first._ingest_yaencontre_email(
+                email, sale_only=False, excluded_categories=set()
+            ) == (0, False)
         db.session.expire_all()
         prop = db.session.get(Property, prop_id)
-        assert float(prop.price) == 170000.0
-        assert float(prop.previous_price) == 180000.0
-        assert len(_items(prop_id)) == 1
-        assert prop.search_profile_id == home.id
+        assert (float(prop.price), float(prop.previous_price)) == (170000.0, 180000.0)
+        assert first.portal_price_updated_count == 1
+
+        # The same service, as one run reads its next email: the failure of
+        # the email before does not follow it.
+        assert first._ingest_yaencontre_email(
+            email, sale_only=False, excluded_categories=set()
+        ) == (0, True)
+        db.session.expire_all()
+        prop = db.session.get(Property, prop_id)
+        assert (float(prop.price), float(prop.previous_price)) == (170000.0, 180000.0)
+        assert first.portal_price_updated_count == 1
+        assert [i["ref"] for i in _items(prop_id)] == ["imap_41"]
+
+    def test_an_answer_on_the_facts_does_not_hold_the_email(self, app, home, other):
+        """An unreadable block and a missing delivery id are the same answer
+        tomorrow: logged by the journal, and the email is consumed."""
+        prop_id = self._stored_yaencontre(home)
+        db.session.execute(
+            text("UPDATE properties SET enrichment = :e WHERE id = :i"),
+            {"e": json.dumps({"arrivals": None}), "i": prop_id},
+        )
+        db.session.commit()
+        cards = {"cards": [self._yaencontre_card()]}
+
+        assert _service()._ingest_yaencontre_email(
+            {**_email(other), **cards}, sale_only=False, excluded_categories=set()
+        ) == (0, True)
+        assert _service()._ingest_yaencontre_email(
+            {**_email(other), **cards, "source_email_id": None},
+            sale_only=False,
+            excluded_categories=set(),
+        ) == (0, True)
+        assert _stored_raw(prop_id) == {"arrivals": None}
+
+    def test_a_failed_journal_holds_fotocasa_and_milanuncios_mail_too(
+        self, app, home, other, monkeypatch
+    ):
+        listing = parse_listing(FOTOCASA_PAGE.read_text(encoding="utf-8"), FOTOCASA_URL)
+        fotocasa_import.insert_rows(
+            [fotocasa_import.preview_row(listing)], profile_id=home.id
+        )
+        row = milanuncios_source.parse_listing(MA_PAGE.read_text(), MA_URL)
+        db.session.add(
+            fotocasa_import.build_property(
+                row, profile_id=home.id, source=milanuncios_source.SOURCE_NAME
+            )
+        )
+        db.session.commit()
+        monkeypatch.setattr(fotocasa_source, "fetch_listing", _no_fetch)
+        monkeypatch.setattr(milanuncios_source, "fetch_listing", _no_fetch)
+        monkeypatch.setattr(
+            milanuncios_source, "resolve_tracker", lambda url, session=None: MA_URL
+        )
+        self._failing_journal(monkeypatch)
+
+        assert _service()._ingest_fotocasa_email(
+            {**_email(other), "urls": [FOTOCASA_URL]},
+            sale_only=False,
+            excluded_categories=set(),
+        ) == (0, False)
+        assert _service()._ingest_milanuncios_email(
+            {**_email(other), "tracker_urls": ["https://click.example/t/1"]},
+            sale_only=False,
+            excluded_categories=set(),
+        ) == (0, False)
 
     def test_a_listing_a_concurrent_writer_stored_first_is_recorded_too(
         self, app, home, other, monkeypatch
@@ -652,89 +775,3 @@ class TestThePortalMailDoors:
         assert Property.query.count() == 1
         (entry,) = _items(prop_id)
         assert (entry["profile_id"], entry["ref"]) == (other.id, "imap_41")
-
-
-class TestThePasteLinksDoor:
-    def _stored(self, home) -> Property:
-        listing = parse_listing(FOTOCASA_PAGE.read_text(encoding="utf-8"), FOTOCASA_URL)
-        fotocasa_import.insert_rows(
-            [fotocasa_import.preview_row(listing)], profile_id=home.id
-        )
-        return Property.query.one()
-
-    def _duplicate_row(self, prop) -> dict:
-        return {
-            "url": FOTOCASA_URL,
-            "listing_id": 190280914,
-            "status": fotocasa_import.STATUS_DUPLICATE,
-            "reason": None,
-            "existing_id": prop.id,
-            "title": prop.title,
-        }
-
-    def test_a_link_already_stored_is_journaled_for_the_other_subscription(
-        self, app, home, other
-    ):
-        prop = self._stored(home)
-        prop_id = prop.id
-
-        outcome = fotocasa_import.insert_rows(
-            [self._duplicate_row(prop)], profile_id=other.id, arrival_ref="import:j1"
-        )
-
-        assert outcome["created"] == []
-        assert Property.query.count() == 1
-        (entry,) = _items(prop_id)
-        assert entry["profile_id"] == other.id
-        assert entry["source"] == "fotocasa"
-        assert entry["method"] == "portal_payload"
-        assert entry["ref"] == "import:j1"
-        assert entry["received_at"] is None
-        assert db.session.get(Property, prop_id).search_profile_id == home.id
-
-    def test_a_row_that_became_stored_after_the_preview_is_journaled_too(
-        self, app, home, other
-    ):
-        prop_id = self._stored(home).id
-        listing = parse_listing(FOTOCASA_PAGE.read_text(encoding="utf-8"), FOTOCASA_URL)
-
-        outcome = fotocasa_import.insert_rows(
-            [fotocasa_import.preview_row(listing)],
-            profile_id=other.id,
-            arrival_ref="import:j2",
-        )
-
-        assert len(outcome["skipped"]) == 1
-        assert [i["ref"] for i in _items(prop_id)] == ["import:j2"]
-
-    def test_importing_into_the_rows_own_subscription_records_nothing(self, app, home):
-        prop = self._stored(home)
-
-        fotocasa_import.insert_rows(
-            [self._duplicate_row(prop)], profile_id=home.id, arrival_ref="import:j1"
-        )
-
-        assert "arrivals" not in _stored(prop.id)
-
-    def test_the_confirm_route_names_its_preview_so_two_presses_are_one_entry(
-        self, app, home, other
-    ):
-        from services.background_jobs import run_job_sync
-
-        prop = self._stored(home)
-        prop_id, other_id = prop.id, other.id
-        row = self._duplicate_row(prop)
-        job_id = run_job_sync(lambda: {"rows": [row]}, job_type="fotocasa_import_read")
-
-        with app.test_client() as client:
-            for _ in range(2):
-                response = client.post(
-                    "/properties/import/confirm",
-                    data={"job_id": job_id, "profile_id": other_id},
-                    follow_redirects=False,
-                )
-                assert response.status_code == 302
-
-        (entry,) = _items(prop_id)
-        assert entry["ref"] == f"import:{job_id}"
-        assert entry["profile_id"] == other_id

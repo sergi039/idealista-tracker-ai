@@ -126,38 +126,27 @@ putting a chip back, and it is why the pattern may not sit on a routed stub
 **A listing a second saved search delivers is journaled, and that is all**
 (#632, owner decision 2026-11-21). A portal listing is one row with one
 `search_profile_id`; when another saved search delivered it again, ingestion
-found the row and moved on without a trace (measured that day: 2501 portal
-rows, no recorded second arrival, nothing to backfill from).
-`services/arrival_journal.py` now appends one entry to
-`enrichment["arrivals"]` wherever a stored listing is met again: the three
-portal mail handlers, the late duplicate in `_create_portal_row`, and the
-paste-links confirm. An entry holds the subscription after
-`canonical_profile()`, the portal, the door, the email's id (`imap_<uid>`, or
-`import:<job>` for a confirm) and two UTC times.
+found the row and moved on without a trace (that day: 2501 portal rows, no
+recorded second arrival, nothing to backfill from).
+`services/arrival_journal.py` appends one entry to `enrichment["arrivals"]`
+where portal MAIL meets a stored listing again: the fotocasa, milanuncios and
+yaencontre handlers and the late duplicate in `_create_portal_row`.
+**Known gap:** a link pasted on the import page for a listing already stored
+under another subscription is not journaled yet.
 
-It is deliberately not a membership: `search_profile_id` is untouched, so
-every filter, count, score, criteria verdict and the `routed_to` rule are what
-they were, and nothing reads the journal except `arrival_journal.read()` (a
-read-only count over it is a separate change). Production carries one live
-visible subscription, so a membership would change nothing on screen today;
-the membership table is its own change (migration 030).
-
-Five refusals are load bearing. Only ANOTHER search is recorded: the row's own
-home (two stubs routed onto one target included) is not a second
-subscription, and an email no profile claimed names none. One entry per
-DELIVERY -- (portal, email id), not the subscription -- so a held UID, a full
-sync, a second press of a confirm, or a replay after the email's subscription
-was routed elsewhere adds nothing. A journal stops at `MAX_ITEMS` and says
-`truncated`. `record()` is the ONE writer, through
-`services/enrichment_write.py`: the pending-work guard runs before any query
-(a lookup can autoflush somebody's edit past it), and the home, the route and
-the journal are all read from the LOCKED row, because the copy in memory may
-hold a home the listing has left; every call site sits after its own commit,
-and a journal failure is not swallowed: it holds the UID. And `read()` is
-total: a column or block that is not this module's shape reads as "not
-readable" and `record()` will not write over it. Idealista is unchanged: a
-second saved search still gets its own row
-(`tests/test_property_profile_dedup.py`).
+It is not a membership: `search_profile_id` is untouched, so every filter,
+count, score, criteria verdict and the `routed_to` rule are what they were,
+and nothing reads the journal yet (the membership table is migration 030).
+The refusals are in the module's docstring and are load bearing: only
+ANOTHER search; one entry per delivery (portal + required email id, never the
+subscription); a bound with `truncated`; one writer whose guard runs before
+any query and whose every decision is made on the LOCKED row; and a block
+that is never written over unless it has the exact shape written, an explicit
+JSON `null` included. In ingestion every call site sits after its own commit,
+so a journal that FAILS costs the email nothing it created: it is logged, the
+loop goes on and the UID is held, while an answer on the facts (unreadable
+block, no delivery id) is logged and the email is consumed. Idealista is
+unchanged: a second saved search still gets its own row.
 
 **The owner's criteria are enforced here because no portal can express
 them.** He asks for a house of at least 150 m² on a plot of at least 700,

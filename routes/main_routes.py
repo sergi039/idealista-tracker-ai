@@ -7091,11 +7091,7 @@ def import_listings_confirm():
     rows = result.get("rows") or []
 
     try:
-        # The preview's job id names this confirm in the arrival journal
-        # (#632), so a second press of the same preview records nothing new.
-        outcome = insert_rows(
-            rows, profile_id=profile_id, arrival_ref=f"import:{job_id}"
-        )
+        outcome = insert_rows(rows, profile_id=profile_id)
     except Exception:
         db.session.rollback()
         logger.error("Importing fotocasa listings failed", exc_info=True)
