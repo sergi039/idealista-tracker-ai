@@ -13,6 +13,21 @@ must be an ancestor of `main`.
 
 ## Open
 
+### `tools/backup_attachments.sh` has no schedule
+
+- **Anchor:** `tools/backup_attachments.sh`; LaunchAgent
+  `com.idealista.db-backup` (the database only); `docs/rules/owner-review.md`
+  (attachments).
+- **Measured 2026-11-21** (#640): no LaunchAgent or crontab runs the script,
+  and no copy of the attachments exists under `~/IdealistaRank-backups`.
+  `property_attachment` has 0 rows and `data/attachments/` does not exist, so
+  nothing has been lost yet.
+- **What breaks, for whom:** the first document or photo the owner attaches
+  exists in one copy; the nightly dump carries its row but not its bytes, so a
+  restore gives a row whose file is in no archive.
+- **Check:** `launchctl list | grep idealista` shows `com.idealista.db-backup`
+  and no attachments agent.
+
 ### The neighbour measurement is never shown to the owner
 
 - **Anchor:** `templates/property_detail.html` (no `enrichment["neighbours"]`
