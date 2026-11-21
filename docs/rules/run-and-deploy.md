@@ -282,6 +282,23 @@ Verify a dump (lists it, never restores): `bash tools/backup_db.sh --verify FILE
 Restore is the manual command in `MIGRATION_RUNBOOK.md` /
 `tools/backup_attachments.sh`: `docker exec -i idealista-db pg_restore -U idealista -d idealista_universal --clean < FILE`.
 
+## External access (#640, checked 2026-11-21)
+
+- The container publishes `127.0.0.1:5001` only; no `tailscale serve`/`funnel`,
+  reverse proxy or second tunnel leads to it. One Cloudflare tunnel does, with
+  Cloudflare Access required on its ingress.
+- Established: a request from the owner's home IP passes without a sign-in, and
+  a request from one outside IP (a phone on a mobile network, 2026-11-21) got
+  the sign-in screen. The policy itself was not read, so a rule by country or
+  range is not excluded by that probe. A request from the home network
+  therefore gets the page and a `CF_Authorization` cookie with no login: that is
+  how the home network is let in, and a probe from the mini or the MacBook proves
+  nothing about outside access.
+- The proof is a request from an outside IP (a phone off Wi-Fi) that ends at
+  the sign-in screen. Repeat it after any change to the Access policy, the
+  tunnel or its ingress; nothing else is acceptance.
+- Another tunnel or proxy to this app without the same protection is forbidden.
+
 ## Where the deployment's state lives (#639)
 
 The app container persists one directory, mounted at `/app/data`: the mail
@@ -310,8 +327,8 @@ still inside the checkout, and moving it is a separate, owner-commanded step.**
   after the real bind, `KEY: value`, a byte-order mark, a value inside another
   key's quotes), and every such disagreement is a host tool looking at a
   directory the app is not using. With the variable named nowhere the answer
-  is `<repo>/data`, and Docker is not asked. With its name on any line of `.env` that is not a comment
-  the answer is what `docker compose -f docker-compose.yml config` binds at
+  is `<repo>/data`, and Docker is not asked. With its name anywhere in `.env`,
+  a comment included, the answer is what `docker compose -f docker-compose.yml config` binds at
   `/app/data` for the `app` service, asked from the checkout the way the
   watcher runs Compose.
   An answer that is not exactly one existing host directory, or no Docker or
