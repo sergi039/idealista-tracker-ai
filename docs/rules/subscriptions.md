@@ -173,8 +173,9 @@ things about it are load bearing:
   *returned in this press* (`ok`, the subject still the row's, a reference;
   never a stored block from an earlier press: a lookup that raised or was
   refused answers `kept_previous` or nothing, and nothing is written) and writes the polygon area -- already compared with Catastro's declared
-  `areaValue` and **rounded down** to the column's 0.01, so a 699.96 m2 parcel
-  never reads 700 -- to `plot_area`, with `enrichment["plot_from_cadastre"]`
+  `areaValue` and **floored** to the column's 0.01 from the exact double
+  (no `round()` or `str()` first: 699.9999996 is 699.99, not 700), so a 699.96 m2
+  parcel never reads 700 -- to `plot_area`, with `enrichment["plot_from_cadastre"]`
   (value as text, parcel reference, source, extractor version, subject, UTC
   time). It starts no Catastro request (the metric outline is read from the
   cache the neighbour step just filled, under `lookup_budget(0)`; a miss leaves

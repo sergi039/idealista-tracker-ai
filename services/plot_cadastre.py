@@ -34,8 +34,8 @@ and nothing is written.
 * only a house: a flat's parcel is the whole building's lot, not its plot, and a
   row of no known kind says nothing;
 * the figure is the parcel's own polygon area, which `cadastre_service` has
-  already compared with Catastro's declared `areaValue`, **rounded down** to the
-  0.01 the `NUMERIC(10,2)` column stores (never up: 699.96 must not read 700),
+  already compared with Catastro's declared `areaValue`, **floored** from the
+  exact double (no `round()` or `str()` first) to the 0.01 the `NUMERIC(10,2)` column stores (never up: 699.96 must not read 700),
   and credible (`MAX_CREDIBLE_M2`);
 * **a value lives only as long as its subject.** The block records the subject
   (`neighbours.subject`: the cadastral reference of the column and of the block,
