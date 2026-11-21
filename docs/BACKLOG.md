@@ -13,6 +13,35 @@ must be an ancestor of `main`.
 
 ## Open
 
+### A struck price in a fotocasa alert card is found by a hand-written tag scanner
+
+- **Anchor:** `services/fotocasa_source.py` (`_anchors`, `cards_in_email`,
+  `_strip_tags`, `_STRIKE_TAG`, `_STRUCK`); `services/fotocasa_import.py`
+  (`card_row`); rows carry `enrichment.import.email_only` (#636).
+- **Found 2026-11-21** in four review rounds of #697 and #702: each round found
+  one more form of a previous price that the scanner reads as the current one --
+  struck on the anchor, on an element around it, inside a parent with
+  `style="text-decoration: line-through"`, and a `<del>` inside an HTML
+  comment that opens a strike the browser never draws. The first three were
+  patched case by case (`<del>`/`<s>`/`<strike>` depth between anchors, two
+  different amounts leave the price unknown); the span and the comment forms
+  are open. Not reproduced on live mail: none of these forms has been seen in a
+  real fotocasa alert (the one committed alert, `tests/data/fotocasa_alert_arteixo.html`,
+  has none).
+- **What breaks, for whom:** a row made from the email (`import.email_only`)
+  can store the previous price as the current one, or, with a comment forming a
+  false strike, lose the visible price (the card is dropped when it has no other
+  field, and the email then waits on the retry list). The owner sees a wrong or
+  missing asking price in the table, ranked and scored on it.
+- **Root, not another case:** replace the scanner with
+  `html.parser.HTMLParser` and an ancestor stack: a price is struck when any
+  ancestor is `del`, `s` or `strike`, or any element's `style` contains
+  `line-through`; the parser gives comments, case and nesting for free and
+  stays linear. Keep the caps in `fotocasa_source` (body, line, URL, cards).
+- **Check:** a card built as
+  `<span style="text-decoration: line-through"><a href=".../<id>/d">320.000 €</a></span>`
+  gives `cards_in_email(...)[0].price == 320000.0` instead of `None`.
+
 ### `tools/backup_attachments.sh` has no schedule
 
 - **Anchor:** `tools/backup_attachments.sh`; LaunchAgent
