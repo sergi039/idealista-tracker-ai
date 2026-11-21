@@ -174,6 +174,9 @@ expect_refusal "an empty exported variable is refused" "IDEALISTA_DATA_DIR is se
 #    what Compose answers (STATE here), so none is interpreted: all refused.
 BOM="$(printf '\357\273\277')"
 MULTILINE="$(printf 'OTHER="first line\nIDEALISTA_DATA_DIR=%s\n"' "$OTHER")"
+# The review's input to #694: to Compose the second line closes NOTE's value
+# and then SETS the variable; to a reader of lines it starts with `#`.
+QUOTE_TAIL="$(printf "NOTE='first line\n#' IDEALISTA_DATA_DIR=./state")"
 BINARY="$(printf 'SECRET=a\377c\nIDEALISTA_DATA_DIR=%s' "$OTHER")"
 for content in \
     "IDEALISTA_DATA_DIR=" \
@@ -184,6 +187,8 @@ for content in \
     "${BOM}IDEALISTA_DATA_DIR=${OTHER}" \
     "IDEALISTA_DATA_DIR_OLD=${OTHER}" \
     "DB_PASSWORD=x # IDEALISTA_DATA_DIR=${OTHER}" \
+    "# IDEALISTA_DATA_DIR=${OTHER}" \
+    "$QUOTE_TAIL" \
     "$MULTILINE" \
     "$BINARY"; do
     new_repo
@@ -213,17 +218,20 @@ for line in '~/state' '${STATE_ROOT}/state' './state' "$OTHER" "\"${STATE}\"" "$
     resolve "$REPO"
     expect_refusal "Compose's answer is refused when .env says '${line%%"${WORK}"*}'" "does not say exactly that"
 done
-printf 'IDEALISTA_DATA_DIR=%s\nIDEALISTA_DATA_DIR_OLD=%s\n' "$STATE" "$OTHER" >"${REPO}/.env"
+printf 'IDEALISTA_DATA_DIR=%s\n# IDEALISTA_DATA_DIR=%s\n' "$STATE" "$OTHER" >"${REPO}/.env"
 resolve "$REPO"
 expect_refusal "the name on two lines is refused" "names it on 2"
-#     A comment line is not one of them: it cannot set anything.
-printf 'IDEALISTA_DATA_DIR=%s\n  # IDEALISTA_DATA_DIR=%s\n' "$STATE" "$OTHER" >"${REPO}/.env"
-resolve "$REPO"
-expect_dir "a comment line beside the plain line does not count" "$STATE"
+#     A comment is a mention like any other: what looks like one here may be
+#     the tail of a quoted value to Compose, and telling the two apart is the
+#     parsing this reader does not do. So Compose is asked, and when it says
+#     the checkout's own data - as it does for a real comment - that is still
+#     not the text of a line, and the answer is a refusal.
 printf '# IDEALISTA_DATA_DIR=%s\n' "$OTHER" >"${REPO}/.env"
+compose_says "[$(bind "${REPO}/data")]"
 resolve "$REPO"
-expect_dir "a .env that names the variable only in a comment is <repo>/data" "${REPO}/data"
-asked && fail "Compose was asked about a comment"
+expect_refusal "a .env that names the variable only in a comment is refused" "does not say exactly that"
+asked || fail "Compose was not asked about a commented-out line"
+compose_says "[$(bind "$STATE")]"
 mkdir -p "${WORK}/a\$b"
 printf 'IDEALISTA_DATA_DIR=%s\n' "${WORK}/a\$b" >"${REPO}/.env"
 compose_says "[$(bind "${WORK}/a\$b")]"
@@ -351,5 +359,22 @@ expect_refusal "a .env that cannot be searched is refused (variable not named)" 
 rm -f "${REPO}/.env"
 resolve "$REPO" "PATH=${WORK}/no-such-bin"
 expect_dir "no .env needs no grep" "${REPO}/data"
+
+# 17. A search that FAILED is not "not there" either, whatever it printed. The
+# file passes the readable check and then cannot be read (a race, a revoked
+# permission): grep ends 2. Here a grep that ends 2 having printed `0`, the
+# way the second grep of a pipeline would over an empty input - read by its
+# count alone, that is "the variable is not named" and <repo>/data.
+mkdir -p "${WORK}/failing-grep"
+printf '#!/bin/bash\necho 0\nexit 2\n' >"${WORK}/failing-grep/grep"
+chmod +x "${WORK}/failing-grep/grep"
+new_repo
+printf 'DB_PASSWORD=x\nIDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
+resolve "$REPO" "PATH=${WORK}/failing-grep:${PATH}"
+expect_refusal "a search that failed is refused, though it printed a zero" "could not be searched"
+asked && fail "Compose was asked after a failed search"
+printf '#!/bin/bash\necho 0\nexit 0\n' >"${WORK}/failing-grep/grep"
+resolve "$REPO" "PATH=${WORK}/failing-grep:${PATH}"
+expect_refusal "a status and a count that disagree are refused" "could not be searched"
 
 printf '\nALL %d PASSED (%s %s)\n' "$passed" "$SHELL_UNDER_TEST" "$("$SHELL_UNDER_TEST" -c 'echo $BASH_VERSION')"

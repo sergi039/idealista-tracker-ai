@@ -445,6 +445,11 @@ _ENV_SPELLINGS = {
     "twice": "IDEALISTA_DATA_DIR={other}\nIDEALISTA_DATA_DIR={state}",
     "inside another value": 'NOTE="first line\nIDEALISTA_DATA_DIR={state}\n"',
     "empty": "IDEALISTA_DATA_DIR=",
+    # The review's input to #694. The second line starts with `#`, and to
+    # Compose it closes NOTE's value and then sets the variable.
+    "after the quote that closes another value": (
+        "NOTE='first line\n#' IDEALISTA_DATA_DIR=./state"
+    ),
 }
 
 
@@ -573,7 +578,8 @@ def test_only_the_plain_line_is_an_answer(tmp_path, spelling):
     """Compose reads several of these as the variable. The reader takes
     Compose's answer for one: the line that says it in so many characters.
     Every other spelling is refused - never read a second way, and never
-    answered with the checkout's own `data`."""
+    answered with the checkout's own `data`. A commented-out line too: what
+    is a comment and what is the tail of a quoted value is Compose's to say."""
     _docker_compose_or_skip()
     compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     state = tmp_path / "state"
@@ -589,13 +595,25 @@ def test_only_the_plain_line_is_an_answer(tmp_path, spelling):
         assert _same_directory(_what_compose_mounts(checkout), state)
         assert _same_directory(answer.stdout.strip(), state), answer.stdout
         return
-    if spelling == "commented out":
-        # A comment sets nothing, for Compose and for the reader alike.
-        assert answer.returncode == 0, answer.stderr
-        assert _same_directory(_what_compose_mounts(checkout), checkout / "data")
-        assert _same_directory(answer.stdout.strip(), checkout / "data")
-        return
+    if spelling.startswith("after the quote"):
+        # What makes it dangerous: Compose does mount the directory, so a
+        # reader that skipped the line as a comment would name another one.
+        (checkout / "state").mkdir()
+        assert _same_directory(_what_compose_mounts(checkout), checkout / "state")
+        answer = _resolve(checkout)
     assert answer.returncode == 1 and answer.stdout == "", (spelling, answer.stdout)
+
+
+def test_a_copy_of_the_example_env_file_is_answered(tmp_path):
+    """`cp .env.example .env` is how a checkout gets its `.env`. Any mention
+    of the variable there - a commented-out example too - is a mention the
+    reader takes to Compose and then refuses, so the example names it nowhere."""
+    example = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    assert VARIABLE not in example
+    (tmp_path / ".env").write_text(example, encoding="utf-8")
+    answer = _resolve(tmp_path)
+    assert answer.returncode == 0, answer.stderr
+    assert answer.stdout == f"{tmp_path}/data\n"
 
 
 def test_the_container_side_is_not_fed_the_host_path():

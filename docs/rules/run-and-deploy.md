@@ -339,8 +339,14 @@ still inside the checkout, and moving it is a separate, owner-commanded step.**
   text of `.env`, the same for every process. The price: quotes, `export`, a
   comment on the line, a trailing slash, a relative path or the name on two
   lines are refused, and a watcher tick with such a `.env` stops before it
-  deploys. A comment line does not count as naming the variable: it can set
-  nothing, and `cp .env.example .env` leaves one.
+  deploys. **A commented-out line counts as a mention too**: skipping
+  comments is a second parser of `.env`. With `NOTE='first line` /
+  `#' IDEALISTA_DATA_DIR=./state` the second line starts with `#`, and Compose
+  closes NOTE's value on it and sets the variable (review of #694, held
+  against Compose itself). So `.env.example` does not spell the name at all.
+- **A search of `.env` that failed is a refusal, not "not named".** grep ends
+  0 (found) or 1 (not found) when it ran; 2 or 127 is "could not look". Its
+  status and its count are both read.
 - **A linked git worktree is refused as a root** (its `.git` is a file): the
   stack is not started from one, it has no `.env`, and its `data/` is nobody's
   state. Run the host tools from the checkout the stack was started in. A

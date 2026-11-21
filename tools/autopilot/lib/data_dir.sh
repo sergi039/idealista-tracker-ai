@@ -22,7 +22,7 @@
 # the app is not using.
 #
 #   * The variable is named nowhere -> `<repo>/data`, without asking anybody.
-#   * Its name occurs anywhere in `<repo>/.env` outside a comment line -> the
+#   * Its name occurs anywhere in `<repo>/.env`, comments included -> the
 #     answer is whatever `docker compose config` binds at /app/data for the
 #     `app` service, asked the way the deploy watcher runs Compose: from the
 #     checkout, with `-f docker-compose.yml`. No Docker, no python3 to read
@@ -105,10 +105,11 @@ _data_dir_trim() {
 # and cannot be read: then it cannot be ruled out.
 #
 # Nothing is parsed, and the question is deliberately coarse: it only decides
-# whether Compose has to be asked. `.env` counts when the name occurs on any
-# line of it that is not a comment. The file is never sourced, no line printed.
+# whether Compose has to be asked. `.env` counts when the name occurs anywhere
+# in it - a comment too: telling a comment from the tail of a quoted value is
+# parsing, and Compose is the parser. The file is never sourced, no line printed.
 _data_dir_where_named() {
-    local repo="$1" env_file="${1}/.env" hits
+    local repo="$1" env_file="${1}/.env" hits scan
     DATA_DIR_NAMED_IN=""
     DATA_DIR_NAMED_TIMES=0
 
@@ -120,19 +121,23 @@ _data_dir_where_named() {
     # Bytes, not text (`-a`, LC_ALL=C): a NUL or a byte that is not valid in
     # the locale would otherwise make grep call the file binary and report
     # nothing of what is in it.
-    # A comment line cannot set anything, so it does not count:
-    # `cp .env.example .env` leaves one. Counted, not `grep -q`: both greps
-    # read their whole input.
-    hits="$(LC_ALL=C grep -a -v '^[[:space:]]*#' "$env_file" \
-        | LC_ALL=C grep -a -c -F "$IDEALISTA_DATA_DIR_KEY")" || true
-    # `grep -c` always prints a count. Anything else is a search that did not
-    # run - no grep on a stripped PATH - and "could not look" is not "not
-    # there": read as zero, it would answer for a file nobody searched.
-    case "$hits" in
-        '' | *[!0-9]*)
-            _data_dir_refuse "${env_file} could not be searched for ${IDEALISTA_DATA_DIR_KEY} (grep gave no count), so it cannot be ruled out that it names it"
+    hits="$(LC_ALL=C grep -a -c -F "$IDEALISTA_DATA_DIR_KEY" "$env_file")"
+    scan=$?
+    # A search that ran ends 0 with a count (found) or 1 with `0` (not found).
+    # Anything else did not run - 2 for a file that stopped being readable
+    # after the check above, 127 for no grep on a stripped PATH - and "could
+    # not look" is not "not there": read as zero, it would answer for a file
+    # nobody searched. Status and count are both read; either alone can lie.
+    case "${scan}:${hits}" in
+        1:0 | 0:[1-9] | 0:[1-9]*[0-9]) ;;
+        *)
+            _data_dir_refuse "${env_file} could not be searched for ${IDEALISTA_DATA_DIR_KEY} (grep ended ${scan} with '${hits}'), so it cannot be ruled out that it names it"
             return 1
             ;;
+    esac
+    case "$hits" in *[!0-9]*)
+        _data_dir_refuse "${env_file} could not be searched for ${IDEALISTA_DATA_DIR_KEY} (grep gave no count)"
+        return 1 ;;
     esac
     if [ "$hits" != "0" ]; then
         DATA_DIR_NAMED_IN="$env_file"

@@ -218,3 +218,11 @@ must be an ancestor of `main`.
 - **Check:** the push log's `validating pushed commit <sha>` and
   `git ls-remote origin <branch>` differ. A fix compares the branch tip after
   the gate with the commit it validated.
+
+### `tools/backfill_status.sh` reads a grep that could not run as "no match"
+
+- **Anchor:** `tools/backfill_status.sh` (`grep -E -- "$(module_regex "$MODULE")" || true`, four call sites over the rows of `docker top`).
+- **What breaks, for whom:** with a grep that ends 2 or 127 the rows read as
+  holding no backfill, and the verdict can be `idle` over a running job. Not
+  reproduced with the system grep (`module_regex` escapes the module name).
+- **Check:** a `grep` that exits 2 first on PATH, a backfill in `docker top`.
