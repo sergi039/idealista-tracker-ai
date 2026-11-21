@@ -261,17 +261,50 @@ def test_the_press_runs_it_after_the_neighbour_step_and_survives_its_failure(
     assert order == ["n", ("plot", True)]
 
 
-def test_a_failing_plot_step_does_not_fail_the_press(app, monkeypatch):
+def test_a_failing_plot_step_ends_its_transaction_and_does_not_fail_the_press(
+    app, monkeypatch
+):
+    """The step can fail after it took the row `FOR UPDATE`: the press ends that
+    transaction (rollback) rather than carry the lock into the steps after it."""
+    p = _row()
     service = PropertyEnrichmentService(neighbours_service=Mock())
     monkeypatch.setattr(
         "services.property_enrichment_service.advertiser.enrich", lambda *_a, **_k: None
     )
     monkeypatch.setattr(service, "enrich_free_sources", lambda *_a, **_k: None)
+
+    def takes_the_row_then_fails(prop, commit):
+        db.session.refresh(prop, with_for_update=True)
+        raise RuntimeError("boom")
+
     monkeypatch.setattr(
         "services.property_enrichment_service.plot_cadastre.enrich",
-        Mock(side_effect=RuntimeError("boom")),
+        takes_the_row_then_fails,
     )
-    service._advisory_pass(Mock(), use_ai=False, with_pool=False)
+    rollback = Mock(wraps=db.session.rollback)
+    monkeypatch.setattr(db.session, "rollback", rollback)
+    service._advisory_pass(p, use_ai=False, with_pool=False)
+    rollback.assert_called_once()
+
+
+def test_a_cache_miss_starts_no_catastro_request_and_leaves_the_plot_unknown(
+    app, monkeypatch
+):
+    """The step asks Catastro for nothing: an unreachable or expired cache is a
+    miss, the outline is not fetched, and the plot stays unknown."""
+    p = _row()
+    _placed(p, epsg=25829)
+    monkeypatch.setattr(c, "_cache_get", lambda _key: None)
+    monkeypatch.setattr(c, "_cache_set", lambda *_a: None)
+    monkeypatch.setattr(c.CATASTRO_GATE, "wait", lambda: 0)
+    monkeypatch.setattr(c.CATASTRO_GATE, "mark", lambda: None)
+    transport = Mock(side_effect=AssertionError("a request was started"))
+    monkeypatch.setattr(c.requests, "get", transport)
+    assert pc.enrich(p) is None
+    assert transport.call_count == 0
+    db.session.refresh(p)
+    assert p.plot_area is None
+    assert pc.ENRICHMENT_KEY not in p.enrichment
 
 
 def test_the_block_is_plain_json(app, area):

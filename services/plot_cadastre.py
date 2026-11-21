@@ -10,11 +10,13 @@ parcel under the strictest rules the app has -- a saved reference, else one
 zero-distance parcel under a `precise` coordinate, else an exact numbered
 address, never a privacy circle or a nearby guess -- and records it, with the
 subject it was resolved for, in `enrichment["neighbours"]`. This step runs right
-after it inside the same Enrich press and reads that block: it asks Catastro for
-nothing the neighbour step did not already ask (the metric outline is cached
-under the neighbour step's own key; without a cache it is one request more, in
-the same `shortlist_requests` pacing and lookup budget). A row the neighbour
-step could not place stays `unknown`, never `fail`, and nothing is written.
+after it inside the same Enrich press and reads that block. **It starts no
+Catastro request at all**: the metric outline is read from the cache the
+neighbour step just filled, under a spent lookup budget (`lookup_budget(0)`,
+which refuses every request before it starts), so a cache that cannot be reached
+or has already expired is a miss and the plot stays `unknown` until the next
+press. A row the neighbour step could not place stays `unknown`, never `fail`,
+and nothing is written.
 
 **Rules, each one the contract of a neighbour:**
 
@@ -57,9 +59,6 @@ logger = logging.getLogger(__name__)
 ENRICHMENT_KEY = "plot_from_cadastre"
 SOURCE = "catastro_inspire_parcel"
 EXTRACTOR_VERSION = "plot_cadastre/1"
-# Nested inside the Enrich run's own budget, like the neighbour walk's: it can
-# only shorten what the run has left.
-LOOKUP_BUDGET_S = 30
 
 
 def needs_plot(prop: Any) -> bool:
@@ -91,8 +90,13 @@ def _established_parcel(prop: Any) -> Optional[Dict[str, str]]:
 
 
 def parcel_area_m2(reference: str) -> float:
-    """The parcel's polygon area in m2, checked against Catastro's declaration."""
-    parcel, _ = neighbours._metric_parcel(reference)
+    """The parcel's polygon area in m2, checked against Catastro's declaration.
+
+    Cache only: the budget is spent before the call, so `_metric_parcel` can
+    answer from what the neighbour step cached and can start no request.
+    """
+    with lookup_budget(0):
+        parcel, _ = neighbours._metric_parcel(reference)
     area = round(float(parcel.area), 1)
     if not (
         math.isfinite(area)
@@ -117,8 +121,7 @@ def enrich(prop: Any, *, commit: bool = True) -> Optional[Dict[str, Any]]:
 
     locked = check_writable(prop, commit)
     try:
-        with cadastre.shortlist_requests(), lookup_budget(LOOKUP_BUDGET_S):
-            area = parcel_area_m2(parcel["reference"])
+        area = parcel_area_m2(parcel["reference"])
     except Exception as exc:
         logger.info("plot from cadastre skipped for %s: %s", prop.id, exc)
         return None
