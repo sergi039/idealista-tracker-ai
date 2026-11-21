@@ -320,6 +320,54 @@ class TestYaencontreIngestion:
             assert second.run_ingestion(sync_type="test") == 0
             assert Property.query.count() == 10
 
+    def test_a_second_searchs_alert_is_journaled_on_the_stored_rows(
+        self, app, uid_file, imap
+    ):
+        """#632, end to end: another saved search's alert re-delivers ten stored
+        listings. Nothing is created, no row changes subscription, and each
+        row's journal names the second search and the email."""
+        body = (DATA / "yaencontre_alert_boiro.html").read_text()
+        sender = "yaencontre <no-reply@envios.yaencontre.com>"
+        subject = "Tenemos más inmuebles para tu búsqueda en Boiro (personalizada)"
+        imap.payloads = {1: _wrap_email(subject, body, sender)}
+        with app.app_context():
+            assert _service().run_ingestion(sync_type="test") == 10
+            homes = {p.id: p.search_profile_id for p in Property.query.all()}
+            assert set(homes.values()) == {app.config["DEFAULT_PROFILE_ID"]}
+
+            galicia = SearchProfile(
+                name="Galicia costa",
+                is_active=True,
+                is_default=False,
+                travel_targets={"presets": {}, "custom": []},
+                email_matchers=[{"pattern": "yaencontre", "priority": 40}],
+            )
+            db.session.add(galicia)
+            db.session.commit()
+            galicia_id = galicia.id
+
+            # A later email, resolving to the new subscription; read twice.
+            _FakeIMAPClient.payloads = {2: _wrap_email(subject, body, sender)}
+            for _ in range(2):
+                again = _service()
+                again.last_seen_uid = 0
+                assert again.run_ingestion(sync_type="test") == 0
+
+            db.session.expire_all()
+            rows = Property.query.all()
+            assert len(rows) == 10
+            assert {p.id: p.search_profile_id for p in rows} == homes
+            for prop in rows:
+                journal = prop.enrichment["arrivals"]
+                assert journal["truncated"] is False
+                (entry,) = journal["items"]
+                assert entry["profile_id"] == galicia_id
+                assert entry["source"] == "yaencontre"
+                assert entry["method"] == "alert_email"
+                assert entry["ref"] == "imap_2"
+                assert entry["received_at"] == "2026-08-30T11:30:00+00:00"
+            assert _held(uid_file) == []
+
 
 class TestMilanunciosIngestion:
     def _digest_email(self) -> bytes:
