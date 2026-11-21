@@ -136,7 +136,8 @@ under another subscription is not journaled yet.
 
 It is not a membership: `search_profile_id` is untouched, so every filter,
 count, score, criteria verdict and the `routed_to` rule are what they were,
-and nothing reads the journal yet (the membership table is migration 030).
+and nothing reads the journal except the read-only count,
+`python -m utils.report_arrivals` (the membership table is migration 030).
 Its refusals are in the module's docstring and are load bearing: only ANOTHER
 search; one entry per delivery (portal + required email id); a bound; one
 writer whose guard is its first statement and whose decisions are made on

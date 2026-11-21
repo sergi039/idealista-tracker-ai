@@ -13,7 +13,8 @@ read and without an offset where it did not) and the UTC time of recording
 -- and never touches `search_profile_id`, so
 every filter, count, score, criteria verdict and the `routed_to` rule are
 what they were. Showing a listing under a second subscription is a separate
-change (migration 030); nothing reads the journal yet except `read()`.
+change (migration 030); nothing reads the journal except `read()` and the
+read-only count built on it, `utils/report_arrivals.py`.
 
 An entry means: "an email that resolves to this subscription named a listing
 already stored under another one". After a full re-read of the mailbox that
