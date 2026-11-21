@@ -226,6 +226,45 @@ is the existing chain (matchers, then the catch-all). The fixtures under
 2026-08-30 artifacts, token-redacted; `tests/test_portal_alert_ingestion.py`
 and `tests/test_fotocasa_email_ingestion.py` pin all of it.
 
+**A fotocasa page the portal will not give no longer holds the email: the row is
+made from the email's card** (owner decision 2026-11-21, #636). Measured on
+production that day: 41 emails on the retry list, all "its listing page could
+not be read", the oldest since 2026-11-10 -- a list only a lifted block could
+shorten. The card of the real alert says price, a heading "casa-chalet,
+Arteixo", "5 habs · 251 m² · 3 baños" and the link; `fotocasa_source.cards_in_email`
+reads that, and the transaction and land type only from the URL. When the page is refused (a 200 block, a timeout, an HTTP
+error, an unreadable payload) or the run has stopped asking after
+`PORTAL_MAX_CONSECUTIVE_REFUSALS`, the ingest builds the row through the same
+`build_property` (`fotocasa_import.card_row`, `method = alert_email_card`,
+`import["email_only"] = true`): `fotocasa:<id>` key, no coordinate, no
+description, no advertiser block, unstated fields unknown. The email is then
+consumed and leaves the retry list, which grows only by an email whose card
+cannot be read (the old hold). **A refusal is not "gone"**: only an answered
+`not_the_listing_page` consumes without a row, and a failed read never marks a
+row removed.
+
+**The row stays poor until something completes it.** Nothing does yet: a repeat
+alert does not touch it. Rows are found by `enrichment.import.email_only = true`
+and `enrichment.import.method = 'alert_email_card'` (a later change, with its own
+review, fills them from a page that answers). The municipality is kept only when
+INE knows the name (`municipality_codes.match`) **and the link's own municipality
+segment names it** (a district can share a name with another place's
+municipality); otherwise it is unknown, never stored. Two different unstruck
+prices on one card (or a struck one we cannot tell apart) leave the price unknown. **Emails on the retry list before this shipped stay on the old rule**
+until the owner sets `FOTOCASA_EMAIL_CARD_FOR_HELD=true` (default false); they
+are told apart by a stamp, not membership: entries created since carry
+`card_fallback_aware` (`HeldUids.hold(stamp=...)`, written once), so an email
+first held later may use its card on the retry.
+
+**The card guesses nothing it does not state.** A surface is `built` only beside
+rooms or baths, `plot` only where the URL or heading says land, else `unknown`
+(`build_property` undoes `reconcile_area_type`'s "built" for an `email_only`
+row); a link that is neither sale nor rent leaves no card, the email waits. The
+email is untrusted HTML: a linear anchor pass, tags stripped with `str.find`,
+length caps (`MAX_*` in `fotocasa_source`) and at most `MAX_CARDS_PER_EMAIL`
+cards, so a spoofed mail can neither stall a run nor mint rows by the thousand.
+`tests/test_fotocasa_email_card_fallback.py` pins all of it.
+
 **The portal's own photographs, captured on the way past and put on the page**
 (#548, #550; 2026-09-04..06). Measured on production: of 1893 rows exactly one
 row's `enrichment` and four rows' `attributes` mentioned an image, while the

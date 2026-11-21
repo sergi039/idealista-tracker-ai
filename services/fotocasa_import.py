@@ -47,6 +47,7 @@ from sqlalchemy.exc import IntegrityError
 
 from services import portal_photos
 from services.coordinate_quality import record_portal_coordinate
+from utils import municipality_codes
 
 from services import advertiser
 from services.fotocasa_source import (
@@ -54,6 +55,7 @@ from services.fotocasa_source import (
     fetch_listing,
     listing_id_from_url,
     normalize_url,
+    url_municipality_slug,
     url_says_plot,
 )
 
@@ -65,6 +67,11 @@ STATUS_DUPLICATE = "duplicate"
 STATUS_REFUSED = "refused"
 STATUS_REJECTED = "rejected"
 
+
+# `enrichment["import"]["method"]` of a row made from the alert email's own
+# card because the portal would not give the page (#636, owner decision
+# 2026-11-21); such a row also carries `import["email_only"] = True`.
+EMAIL_ONLY_METHOD = "alert_email_card"
 
 # Every portal-sourced row goes through the writers below, so the per-portal
 # knowledge they need lives in one table: how a listing id appears in that
@@ -173,6 +180,51 @@ def preview_row(listing) -> Dict[str, Any]:
         row["status"] = STATUS_REFUSED
         row["reason"] = listing.refusal
     return row
+
+
+def _recognised_municipality(name: Optional[str], url: Optional[str]) -> Optional[str]:
+    """The card's municipality as written, only when the link confirms it and
+    INE knows the name.
+
+    The heading's last segment may be a district, and a district can share its
+    name with another place's municipality ("piso, Salamanca" under
+    `/madrid-capital/salamanca/` is a district of Madrid): INE alone cannot
+    tell. The link's own municipality segment can, so without a match there
+    the municipality is unknown, never stored.
+    """
+    slug = url_municipality_slug(url)
+    if not name or not slug:
+        return None
+    key = municipality_codes.normalize(name)
+    if key != municipality_codes.normalize(slug):
+        return None
+    if municipality_codes.match(name, municipality_codes.load_name_index()):
+        return name
+    return None
+
+
+def card_row(card) -> Dict[str, Any]:
+    """The `build_property` input for one alert-email card, no page read.
+
+    Same keys as `preview_row`, so the one builder serves both. Everything the
+    card does not state stays None -- no coordinate, no description, no seller
+    -- and `build_property` then records "the source did not say" instead of a
+    value (#98).
+    """
+    return {
+        "url": card.url,
+        "listing_id": card.listing_id,
+        "status": STATUS_NEW,
+        "reason": None,
+        "title": card.title,
+        "price": card.price,
+        "area": card.area,
+        "area_type": card.area_type,
+        "deal_type": card.deal_type,
+        "municipality": _recognised_municipality(card.municipality, card.url),
+        "building_type": card.building_type,
+        "attributes": dict(card.attributes or {}),
+    }
 
 
 def read_urls(urls: List[str], *, session=None) -> List[Dict[str, Any]]:
@@ -336,6 +388,14 @@ def build_property(
     # Without this a row classified `land` keeps whatever `area_type` the
     # payload implied, and a parcel is counted as floor space.
     PropertyClassificationService.reconcile_area_type(prop)
+    # `reconcile_area_type` calls "a surface and no type" built; a card that
+    # did not name its surface keeps it unknown (land stays plot).
+    if (
+        method == EMAIL_ONLY_METHOD
+        and (row.get("area_type") or "unknown") == "unknown"
+        and (prop.property_category or "").strip().lower() != "land"
+    ):
+        prop.area_type = "unknown"
     prop.attributes = row.get("attributes") or {}
     prop.email_date = email_date or _parse_published(row.get("published_at"))
     prop.email_subject = email_subject
@@ -381,6 +441,8 @@ def build_property(
             "portal_accuracy": row.get("portal_accuracy") or {},
         },
     }
+    if method == EMAIL_ONLY_METHOD:
+        prop.enrichment["import"]["email_only"] = True
     # The portal's own photographs, beside its own accuracy claim and for the
     # same reason. The key is written ONLY when the row really carries a list,
     # because a missing key means "nobody captured any" and an empty list means

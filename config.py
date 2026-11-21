@@ -175,6 +175,13 @@ class Config:
         "YAENCONTRE_ALERT_SENDERS", "yaencontre.com"
     )
 
+    # A fotocasa alert whose page is refused is stored from its card (#636).
+    # Emails already on the retry list before that shipped keep the old rule
+    # until the owner decides; "true" lets the cards drain them.
+    FOTOCASA_EMAIL_CARD_FOR_HELD = (
+        os.environ.get("FOTOCASA_EMAIL_CARD_FOR_HELD", "false").lower() == "true"
+    )
+
     # Gmail API (legacy, kept for compatibility)
     GMAIL_API_KEY = os.environ.get("GMAIL_API_KEY")
     GMAIL_CLIENT_ID = os.environ.get("GMAIL_CLIENT_ID")

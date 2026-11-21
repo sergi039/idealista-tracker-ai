@@ -72,6 +72,7 @@ import requests
 
 from services import portal_photos
 from utils.http import HTTP_USER_AGENT, RateGate, request_with_retries
+from utils.idealista_extractors import extract_area_m2, extract_price
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,8 @@ FETCH_TIMEOUT_S = 20
 # The listing detail page, in any of fotocasa's five language spellings:
 # `/en/buy/land/aviles/llaranes/190280914/d`, `/es/comprar/terreno/...`.
 # The id and the trailing `/d` are the invariant; the words in front are not.
+# Longer than any real fotocasa link (~150 characters) by a wide margin.
+MAX_URL_CHARS = 2048
 _LISTING_PATH = re.compile(r"/(\d{4,})/d/?$")
 
 _INITIAL_PROPS = re.compile(
@@ -148,6 +151,19 @@ def _host_of(url: Optional[str]) -> str:
 _PLOT_URL_TYPES = ("terreno", "terreny", "land", "solar", "parcela")
 
 
+def url_municipality_slug(url: Optional[str]) -> Optional[str]:
+    """The municipality segment of a canonical path, or None.
+
+    `/es/comprar/vivienda/arteixo/calefaccion-terraza/190485369/d`: language,
+    transaction, type, then the municipality, then a district or a feature
+    word. `-capital` (fotocasa's `madrid-capital`) is not part of the name.
+    """
+    slug = _path_segment(url or "", 3)
+    if slug is None:
+        return None
+    return slug[: -len("-capital")] if slug.endswith("-capital") else slug
+
+
 def url_says_plot(url: Optional[str]) -> bool:
     """True when fotocasa's own canonical path says this listing is land.
 
@@ -178,6 +194,11 @@ def listing_id_from_url(url: Optional[str]) -> Optional[int]:
     page robots.txt puts out of bounds.
     """
     if not is_fotocasa_url(url):
+        return None
+    # No listing link is this long, and `_LISTING_PATH` rescans a long run of
+    # digits from every position of it: the bound is what keeps a hostile
+    # alert from making the id read quadratic.
+    if len(url or "") > MAX_URL_CHARS:
         return None
     try:
         path = urlsplit((url or "").strip()).path
@@ -217,6 +238,226 @@ def listing_urls_in_text(text: Optional[str]) -> List[str]:
         seen.add(listing_id)
         found.append(candidate)
     return found
+
+
+# One anchor, read from its own chunk of the text (see `_anchors`): a pattern
+# that searched the whole body for `<a ... </a>` backtracks quadratically on a
+# body that opens anchors it never closes.
+_ANCHOR_OPEN = re.compile(
+    r"<a\b(?P<attrs>[^>]*)>(?P<inner>.*)", re.IGNORECASE | re.DOTALL
+)
+_ANCHOR_START = re.compile(r"<a\b", re.IGNORECASE)
+_HREF = re.compile(
+    r"""\bhref\s*=\s*(?:"(?P<dq>[^"]+)"|'(?P<sq>[^']+)')""", re.IGNORECASE
+)
+_ANCHOR_END = re.compile(r"</a\s*>", re.IGNORECASE)
+# A strike element opening or closing; `[^<>]` keeps the match from running on
+# past the next tag, so a body full of `<s` stays linear.
+_STRIKE_TAG = re.compile(r"<(?P<close>/?)(?:s|del|strike)\b[^<>]*>", re.IGNORECASE)
+# Beyond this an alert body is not read for cards: a real one is ~70 KB.
+MAX_ALERT_BODY_CHARS = 2_000_000
+# A card line is a price, a heading or a facts line; text longer than this is
+# not one, and the number grammars run on lines only.
+MAX_CARD_LINE_CHARS = 500
+# A real alert holds a few dozen listings. Beyond this a listing has no card
+# (so it is held, never stored): a spoofed mail cannot mint rows by the
+# thousand.
+MAX_CARDS_PER_EMAIL = 100
+_PRICE_TEXT = re.compile(r"[0-9][0-9.,]*\s*€")
+_STRUCK = re.compile(r"\bline-through\b|<(?:s|del|strike)\b", re.IGNORECASE)
+_FACTS_TEXT = re.compile(r"\d\s*(?:m²|m2|habs?\b|baños?\b)", re.IGNORECASE)
+_BEDROOMS = re.compile(r"(\d+)\s*habs?\b", re.IGNORECASE)
+_BATHROOMS = re.compile(r"(\d+)\s*baños?\b", re.IGNORECASE)
+# The button every card ends with; never the card's heading.
+_CALL_TO_ACTION = ("ver anuncio", "ver anuncios", "ver inmueble")
+
+# The transaction word of a canonical path (`/es/comprar/...`,
+# `/en/buy/...`), in the languages fotocasa serves it in. A word not listed
+# says nothing: the deal type then stays unknown rather than defaulting here.
+_SALE_WORDS = ("comprar", "buy")
+_RENT_WORDS = ("alquiler", "alquilar", "rent", "lloguer")
+
+
+@dataclass
+class FotocasaCard:
+    """One alert-email card: price, heading "casa-chalet, Arteixo", facts line
+    "5 habs · 251 m² · 3 baños", link. No coordinate, description or seller. A
+    field it does not state is None, never a guess; the transaction and the
+    land type are read from the URL alone.
+    """
+
+    url: str
+    listing_id: int
+    title: Optional[str] = None
+    price: Optional[float] = None
+    area: Optional[float] = None
+    area_type: str = "unknown"
+    deal_type: Optional[str] = None
+    municipality: Optional[str] = None
+    building_type: Optional[str] = None
+    attributes: Dict[str, Any] = field(default_factory=dict)
+
+
+def _strip_tags(fragment: str) -> str:
+    """The text of a fragment, tags replaced by a space, in one pass. Not
+    `re.sub(r"<[^>]+>", ...)`, which rescans the rest from every `<` that has
+    no `>`; an unterminated `<` here ends the scan, the rest kept as text."""
+    out: List[str] = []
+    i = 0
+    while True:
+        lt = fragment.find("<", i)
+        if lt < 0:
+            out.append(fragment[i:])
+            break
+        out.append(fragment[i:lt])
+        gt = fragment.find(">", lt + 1)
+        if gt < 0:
+            out.append(fragment[lt:])
+            break
+        out.append(" ")
+        i = gt + 1
+    return "".join(out)
+
+
+def _text_of(fragment: str) -> str:
+    text = _strip_tags(fragment)
+    return re.sub(r"\s+", " ", html_entities.unescape(text)).strip()
+
+
+def _path_segment(url: str, index: int) -> Optional[str]:
+    try:
+        parts = [p for p in urlsplit(url).path.split("/") if p]
+    except ValueError:
+        return None
+    return parts[index].lower() if len(parts) > index else None
+
+
+def _deal_type_from_url(url: str) -> Optional[str]:
+    word = _path_segment(url, 1)
+    if word in _SALE_WORDS:
+        return "sale"
+    if word in _RENT_WORDS:
+        return "rent"
+    return None
+
+
+def _split_heading(heading: str) -> tuple[Optional[str], Optional[str]]:
+    """`(type, municipality)` of a heading like "casa-chalet , Arteixo".
+
+    The first segment is the type and the last the municipality ("terreno,
+    Llaranes, Avilés" has a district between them). Both None unless the
+    heading has the comma: a bare word could be either half and nothing here
+    says which.
+    """
+    segments = [part.strip() for part in re.sub(r"\s+,", ",", heading).split(",")]
+    if len(segments) < 2:
+        return None, None
+    return (segments[0] or None), (segments[-1] or None)
+
+
+def _anchors(body: str):
+    """`(href, anchor markup, inner markup, struck outside)` of every closed
+    anchor, in one linear pass (split at `</a>` in any case, last `<a` of each
+    chunk). The markup is returned whole because a strike-through can sit on the
+    anchor's own style; `struck outside` says an enclosing `<del>`, `<s>` or
+    `<strike>` is open where the anchor starts."""
+    if len(body) > MAX_ALERT_BODY_CHARS:
+        logger.warning("Alert body of %d characters is not read for cards", len(body))
+        return
+    depth = 0
+    for chunk in _ANCHOR_END.split(body)[:-1]:
+        starts = [m.start() for m in _ANCHOR_START.finditer(chunk)]
+        start = starts[-1] if starts else len(chunk)
+        for tag in _STRIKE_TAG.finditer(chunk, 0, start):
+            depth = max(0, depth + (-1 if tag.group("close") else 1))
+        struck_outside = depth > 0
+        for tag in _STRIKE_TAG.finditer(chunk, start):
+            depth = max(0, depth + (-1 if tag.group("close") else 1))
+        if not starts:
+            continue
+        opened = _ANCHOR_OPEN.match(chunk, start)
+        if opened is None:
+            continue
+        found = _HREF.search(opened.group("attrs"))
+        if found is None:
+            continue
+        yield (
+            html_entities.unescape(found.group("dq") or found.group("sq")),
+            chunk[start:],
+            opened.group("inner"),
+            struck_outside,
+        )
+
+
+def cards_in_email(body: Optional[str]) -> List[FotocasaCard]:
+    """Every listing card of an alert body, one per listing id. Pure.
+
+    The anchors of one listing share its URL, one line each, told by content:
+    a lone euro amount is the price (a struck one is not), m²/habs/baños the
+    facts, the button is skipped, the first other line with a comma is the
+    heading. A card stating none of price, area or heading is not returned.
+    """
+    lines: Dict[int, List[tuple[str, bool]]] = {}
+    hrefs: Dict[int, str] = {}
+    for href, markup, inner, struck_outside in _anchors(body or ""):
+        listing_id = listing_id_from_url(href)
+        if listing_id is None:
+            continue
+        if listing_id not in lines and len(lines) >= MAX_CARDS_PER_EMAIL:
+            continue
+        hrefs.setdefault(listing_id, href)
+        text = _text_of(inner)
+        lines.setdefault(listing_id, [])
+        if text and len(text) <= MAX_CARD_LINE_CHARS:
+            struck = struck_outside or bool(_STRUCK.search(markup))
+            lines[listing_id].append((text, struck))
+
+    cards: List[FotocasaCard] = []
+    for listing_id, href in hrefs.items():
+        url = normalize_url(href) or href
+        card = FotocasaCard(url=url, listing_id=listing_id)
+        heading: Optional[str] = None
+        asking: set = set()
+        for text, struck in lines[listing_id]:
+            if text.lower() in _CALL_TO_ACTION:
+                continue
+            if _PRICE_TEXT.fullmatch(text):
+                if not struck:
+                    asking.add(extract_price(text))
+            elif _FACTS_TEXT.search(text):
+                if card.area is None:
+                    card.area = extract_area_m2(text)
+                bedrooms = _BEDROOMS.search(text)
+                bathrooms = _BATHROOMS.search(text)
+                if bedrooms:
+                    card.attributes["bedrooms"] = int(bedrooms.group(1))
+                if bathrooms:
+                    card.attributes["bathrooms"] = int(bathrooms.group(1))
+            elif heading is None and "," in text:
+                heading = text
+        # One unstruck amount is the asking price. Two different ones, or
+        # none, leave it unknown: which of them is current is not for us to
+        # pick (a strike we cannot see, such as an enclosing `<span>`).
+        asking.discard(None)
+        if len(asking) == 1:
+            card.price = next(iter(asking))
+        if heading is not None:
+            card.building_type, card.municipality = _split_heading(heading)
+            card.title = re.sub(r"\s+,", ",", heading)
+        if card.price is None and card.area is None and card.title is None:
+            continue
+        if card.area is not None:
+            plot_word = (card.building_type or "").lower() in _PLOT_URL_TYPES
+            if plot_word or url_says_plot(url):
+                card.area_type = "plot"
+            elif card.attributes:
+                # Rooms beside the surface: it belongs to a building.
+                card.area_type = "built"
+            # Else the card does not say what the surface is -- "900 m²" on
+            # a /vivienda/ link may be the plot -- and it stays "unknown".
+        card.deal_type = _deal_type_from_url(url)
+        cards.append(card)
+    return cards
 
 
 def normalize_url(url: Optional[str]) -> Optional[str]:
