@@ -7,11 +7,16 @@
 # now come from lib/data_dir.sh, the one place that says where the directory
 # bound at /app/data is. Two things are pinned:
 #
-#   * every file is exactly where it was, in `<repo>/data` - that is what makes
-#     the change inert;
-#   * what the reader refuses - here a Compose that cannot say what it mounts -
-#     stops the tick before docker is touched. The watcher does not fall back
-#     to `<repo>/data` and does not take .env's word on its own.
+#   * nothing configured -> every file is exactly where it was, in
+#     `<repo>/data`;
+#   * a configured directory moves ALL of them together. One left behind is a
+#     watcher looking for markers in a directory the container no longer
+#     writes, i.e. a deploy that kills a job it reported as absent.
+#
+# And what the reader refuses - a directory that does not exist, a Compose
+# that cannot say what it mounts - stops the tick before the watcher deploys
+# or writes anything. Compose is the stub below: it answers the reader's
+# question with what a scenario staged, and that is not a deploy call.
 #
 # Drives the real deploy_watcher.sh with none of the AUTOPILOT_* path
 # overrides the other harnesses set - those bypass the very defaults under
@@ -75,6 +80,11 @@ esac
 exit 0
 STUB
 chmod +x "${STUB_BIN}/docker"
+
+# compose_mounts <dir>: what the stub's Compose would bind at /app/data.
+compose_mounts() {
+    printf '{"services":{"app":{"volumes":[{"type":"bind","source":"%s","target":"/app/data"}]}}}\n' "$1" >"${WORK}/compose.json"
+}
 
 JOB='python -m utils.backfill_pool --snapshot data/pool_backfill.json'
 set_top() {
@@ -184,6 +194,15 @@ expect_all_in() {
         || fail "${label}: the in-flight marker in ${dir}/.inflight was not the one read"
 }
 
+expect_nothing_in() {
+    # expect_nothing_in <label> <directory>: none of the watcher's files.
+    local label="$1" dir="$2" name
+    for name in autopilot-deploy.log .deployed_sha .deploy_deferrals \
+        .deploy_stall_ticks .deploy_stalled; do
+        [ ! -e "${dir}/${name}" ] || fail "${label}: ${dir}/${name} was written"
+    done
+}
+
 # --- scenario 1: nothing configured -----------------------------------------
 # Every file where it has always been. The marker in <repo>/data/.inflight is
 # what turns the job from "unknown" into "resumable", so reading it is
@@ -197,21 +216,82 @@ built || fail "scenario 1 did not deploy"
 expect_all_in "scenario 1" "${REPO}/data"
 printf 'OK: with nothing configured the watcher keeps everything in <repo>/data\n'
 
-# --- scenario 2: what the reader refuses stops the tick ----------------------
-# .env names the variable and nothing says what Compose would mount. A watcher
-# that took .env's word, or fell back to <repo>/data, would be guessing where
-# the container writes its markers. The tick ends before it deploys.
+# --- scenario 2: .env names a directory outside the repository --------------
+# All of it moves, and nothing is left in <repo>/data. The decoy marker there
+# says NOT resumable: a watcher still reading the old directory would say so.
 new_repo repo2
 STATE="${WORK}/state2"
+mkdir -p "${STATE}/.inflight" "${REPO}/data/.inflight"
+printf '%s\n' "$RESUMABLE" >"${STATE}/.inflight/job.41.json"
+printf '%s\n' "$NOT_RESUMABLE" >"${REPO}/data/.inflight/job.41.json"
+printf 'DB_PASSWORD=x\nIDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
+compose_mounts "$STATE"
+set_top "$JOB"
+run_watcher
+built || fail "scenario 2 did not deploy"
+expect_all_in "scenario 2" "$STATE"
+expect_nothing_in "scenario 2" "${REPO}/data"
+printf 'OK: a configured state directory takes the log, the marker and the in-flight markers\n'
+
+# --- scenario 3: the deferral count and the stall alarm move with it --------
+# A job that does not claim to be resumable, deferral switched on, and an
+# alarm threshold of one tick: this tick defers, counts itself, and raises the
+# alarm - three more files, all of which have to be in the same directory.
+new_repo repo3
+STATE="${WORK}/state3"
+mkdir -p "${STATE}/.inflight"
+printf '%s\n' "$NOT_RESUMABLE" >"${STATE}/.inflight/job.41.json"
+printf 'IDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
+compose_mounts "$STATE"
+# Something older is serving, so main is measurably ahead of it.
+printf '%s\n' "$HEAD_SHA" >"${STATE}/.deployed_sha"
+printf 'second\n' >>"${REPO}/file.txt"
+git -C "$REPO" commit --quiet -am "second"
+git -C "$REPO" push --quiet origin main
+git -C "$REPO" reset --quiet --hard HEAD~1
+set_top "$JOB"
+run_watcher AUTOPILOT_DEFER_ON_INFLIGHT=1 AUTOPILOT_STALL_THRESHOLD=1
+built && fail "scenario 3 deployed over a job that does not claim to be resumable"
+for name in .deploy_deferrals .deploy_stall_ticks .deploy_stalled; do
+    [ -e "${STATE}/${name}" ] || fail "scenario 3: ${name} is not in the configured directory"
+done
+expect_nothing_in "scenario 3" "${REPO}/data"
+printf 'OK: the deferral count and the stall alarm live in the configured directory too\n'
+
+# --- scenario 4: a directory that does not exist stops the tick -------------
+# Before docker, before git, and without creating either the missing
+# directory or a <repo>/data to fall back on.
+new_repo repo4
+MISSING="${WORK}/missing"
+printf 'IDEALISTA_DATA_DIR=%s\n' "$MISSING" >"${REPO}/.env"
+compose_mounts "$MISSING"
+set_top
+run_watcher
+[ "$WATCHER_RC" != "0" ] || fail "scenario 4: the watcher exited 0 on a state directory that does not exist"
+grep -q "not an existing directory" "${WORK}/stderr" \
+    || fail "scenario 4: the refusal does not say what is wrong"
+grep -q "FATAL" "${WORK}/stderr" \
+    || fail "scenario 4: the watcher did not say it is refusing to run"
+[ ! -s "${WORK}/docker.log" ] || fail "scenario 4: docker was called after the refusal"
+[ ! -e "$MISSING" ] || fail "scenario 4: the missing directory was created"
+[ ! -e "${REPO}/data" ] || fail "scenario 4: the watcher fell back to <repo>/data"
+printf 'OK: an unusable state directory stops the tick before anything is touched\n'
+
+# --- scenario 5: a Compose that cannot be asked stops the tick --------------
+# .env names the variable and nothing says what Compose would mount. A watcher
+# that took the directory from .env on its own, or fell back to <repo>/data,
+# would be guessing where the container writes its markers. It does neither.
+new_repo repo5
+STATE="${WORK}/state5"
 mkdir -p "${STATE}" "${REPO}/data/.inflight"
 printf '%s\n' "$NOT_RESUMABLE" >"${REPO}/data/.inflight/job.41.json"
 printf 'DB_PASSWORD=x\nIDEALISTA_DATA_DIR=%s\n' "$STATE" >"${REPO}/.env"
 before="$(ls -A "${REPO}/data")"
 set_top "$JOB"
 run_watcher AUTOPILOT_DEFER_ON_INFLIGHT=1
-[ "$WATCHER_RC" != "0" ] || fail "scenario 2: the watcher ran although nothing says what Compose mounts"
-grep -q "FATAL" "${WORK}/stderr" || fail "scenario 2: the watcher did not say it is refusing to run"
-[ ! -s "${WORK}/docker.log" ] || fail "scenario 2: docker was called after the refusal"
-[ -z "$(ls -A "$STATE")" ] || fail "scenario 2: the watcher wrote into the directory .env names"
-[ "$(ls -A "${REPO}/data")" = "$before" ] || fail "scenario 2: the watcher wrote into <repo>/data after the refusal"
+[ "$WATCHER_RC" != "0" ] || fail "scenario 5: the watcher ran although nothing says what Compose mounts"
+grep -q "FATAL" "${WORK}/stderr" || fail "scenario 5: the watcher did not say it is refusing to run"
+[ ! -s "${WORK}/docker.log" ] || fail "scenario 5: docker was called after the refusal"
+[ -z "$(ls -A "$STATE")" ] || fail "scenario 5: the watcher wrote into the directory .env names"
+[ "$(ls -A "${REPO}/data")" = "$before" ] || fail "scenario 5: the watcher wrote into <repo>/data after the refusal"
 printf 'OK: a Compose that cannot be asked stops the tick before anything is touched\n'
