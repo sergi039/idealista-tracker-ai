@@ -55,8 +55,11 @@ write_stubs() {
 # Source, tab-separated; for the app, its mounts besides /app/data; a
 # $STUB/raw-mounts.<name> is answered verbatim instead),
 # $STUB/volume.<name> (the local driver's device option), $STUB/image (the
-# app's image id), $STUB/ref-env (the app's REFERENCE_DATA_DIR) and
-# $STUB/image-root (that image's file tree, with nothing mounted).
+# app's image id), $STUB/ref-env (the app's REFERENCE_DATA_DIR),
+# $STUB/image-root (that image's file tree, with nothing mounted), $STUB/user
+# (the app's Config.User), $STUB/image-user (the image's own USER),
+# $STUB/image-volumes (its Config.Volumes) and $STUB/unreadable-by (a user who
+# cannot read the image's reference files).
 #
 # The check may only ask. Anything outside the verbs below is recorded in
 # forbidden and refused - and a stop is still obeyed, so a check that stopped
@@ -120,6 +123,9 @@ case "$1" in
             '{{.Image}}')
                 cat "$STUB/image"
                 ;;
+            '{{.Config.User}}')
+                cat "$STUB/user"
+                ;;
             *'"REFERENCE_DATA_DIR="'*)
                 cat "$STUB/ref-env"
                 ;;
@@ -134,14 +140,38 @@ case "$1" in
         hook "volume.$5" && exit 1
         cat "$STUB/volume.$5" 2>/dev/null || printf '\n'
         ;;
+    image)
+        [ "$2 $3 $4" = "inspect -f {{json .Config.Volumes}}" ] && [ "$5" = "$(cat "$STUB/image")" ] && [ $# -eq 5 ] \
+            || forbidden "$*"
+        cat "$STUB/image-volumes"
+        ;;
     run)
-        # A throwaway container of the app's image with nothing mounted: the
-        # probe's own script runs against the image's tree.
-        [ "$2 $3 $4 $5 $6 $7" = "--rm --network none --entrypoint sh -e" ] && [ "$9" = "$(cat "$STUB/image")" ] \
-            && [ "${10}" = "-c" ] && [ "${8%%=*}" = "REFERENCE_DATA_DIR" ] || forbidden "$*"
-        dir="${8#REFERENCE_DATA_DIR=}"
-        shift 10
-        REFERENCE_DATA_DIR="$STUB/image-root${dir}" sh -c "$@"
+        # A throwaway container of the app's image with nothing mounted,
+        # read-only and offline, as --user or the image's own USER: the
+        # probe's own script runs against the image's tree. Docker would give
+        # an image that declares a VOLUME an anonymous one, so that is refused.
+        args="$*"
+        shift
+        [ "$1 $2 $3 $4" = "--rm --read-only --network none" ] || forbidden "$args"
+        shift 4
+        as="$(cat "$STUB/image-user")"
+        [ "$1" != "--user" ] || { as="$2"; shift 2; }
+        [ "$1 $2 $3" = "--entrypoint sh -e" ] && [ "${4%%=*}" = "REFERENCE_DATA_DIR" ] \
+            && [ "$5" = "$(cat "$STUB/image")" ] && [ "$6" = "-c" ] && [ "$8" = "sh" ] || forbidden "$args"
+        case "$(cat "$STUB/image-volumes")" in null | "{}") ;; *) forbidden "an anonymous volume: $args" ;; esac
+        dir="${4#REFERENCE_DATA_DIR=}"
+        script="$7"
+        shift 8
+        state="$1"
+        shift
+        root="$(cd "$STUB/image-root" && pwd -P)"
+        # A user who may not read the files sees a directory without them.
+        if [ "$as" = "$(cat "$STUB/unreadable-by" 2>/dev/null)" ]; then
+            mkdir -p "$STUB/as-denied"
+            REFERENCE_DATA_DIR="$STUB/as-denied" sh -c "$script" sh "$root$state" "$@"
+        else
+            REFERENCE_DATA_DIR="$root$dir" sh -c "$script" sh "$root$state" "$@"
+        fi
         ;;
     ps)
         [ "$*" = "ps -a --format {{.Names}}" ] || forbidden "$*"
@@ -222,6 +252,9 @@ new_world() {
     printf '/opt/idealista/reference_data' >"$STUB/ref-env"
     mkdir -p "$STUB/image-root/opt/idealista/reference_data"
     for name in $REFERENCE; do printf '{}\n' >"$STUB/image-root/opt/idealista/reference_data/$name"; done
+    : >"$STUB/user"
+    printf 'appuser' >"$STUB/image-user"
+    printf 'null' >"$STUB/image-volumes"
     printf '200' >"$STUB/page"
     printf '0\n' >"$STUB/status-rc"
     : >"${W}/docker.log"
@@ -420,6 +453,26 @@ expect_untouched "preflight: reference files under the mount"
 new_world; : >"$STUB/ref-env"
 refusal "no REFERENCE_DATA_DIR" "has no REFERENCE_DATA_DIR"
 expect_untouched "preflight: no REFERENCE_DATA_DIR"
+# Other spellings of a directory under the mount, and a link into it.
+for spelling in /app/./data/reference //app/data/reference /opt/../app/data/reference /app/data/; do
+    new_world; printf '%s' "$spelling" >"$STUB/ref-env"
+    refusal "reference files read from ${spelling}" "not from outside /app/data"
+done
+new_world; mkdir -p "$STUB/image-root/app/data"
+mv "$STUB/image-root/opt/idealista/reference_data" "$STUB/image-root/app/data/reference"
+ln -s ../../app/data/reference "$STUB/image-root/opt/idealista/reference_data"
+refusal "reference directory links into the mount" "in the image, not from outside /app/data"
+expect_untouched "preflight: reference directory links into the mount"
+# The probe reads as the user the app runs as (Compose `user:`), not as the
+# image's default.
+new_world; printf '1001:1001' >"$STUB/user"; printf '1001:1001' >"$STUB/unreadable-by"
+refusal "reference files unreadable by the app's user" "readable by 1001:1001"
+new_world; printf '1001:1001' >"$STUB/user"; printf 'appuser' >"$STUB/unreadable-by"
+run_move -- --check "$DEST"
+[ "$RC" = "0" ] || fail "preflight: files readable by the app's user 1001:1001 refused (rc=${RC})"
+# An image that declares a VOLUME is not run: the run would create one.
+new_world; printf '{"/app/data":{}}' >"$STUB/image-volumes"
+refusal "image declares a volume" "declares volumes"
 
 # A FIFO named .deployed_sha is not read, and nothing waits on it.
 new_world; rm "$REPO/data/.deployed_sha"; mkfifo "$REPO/data/.deployed_sha"

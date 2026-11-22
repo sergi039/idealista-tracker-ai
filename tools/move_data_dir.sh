@@ -107,25 +107,47 @@ sys.stdout.write("end\0")'
 # What is wrong with the reference files the app reads, or nothing. The
 # directory is the container's own REFERENCE_DATA_DIR (that one variable is
 # read, no other); the files are looked for in a throwaway container of the
-# same image with nothing mounted - an exec would look through the state mount.
+# same image with nothing mounted - an exec would look through the state mount
+# - as the user the app runs as, read-only, without a network, and only for an
+# image that declares no VOLUME (a run would create an anonymous volume).
+# The spelling is normalised (`/app/./data`, `//app/data`), and the probe
+# resolves the directory's symbolic links inside the image before it looks.
 reference_gap() {
-    local image dir missing rc=0
+    local image dir norm user volumes found rc=0
+    local -a as=()
     image="$(dk inspect -f '{{.Image}}' "$APP" 2>/dev/null)" && [ -n "$image" ] \
         || { say "docker could not say which image ${APP} runs"; return; }
     dir="$(dk inspect -f '{{range .Config.Env}}{{if ge (len .) 19}}{{if eq (slice . 0 19) "REFERENCE_DATA_DIR="}}{{slice . 19}}{{end}}{{end}}{{end}}' "$APP" 2>/dev/null)" \
         || { say "docker could not say where ${APP} reads its reference files"; return; }
-    case "$dir" in
-        "") say "${APP} has no REFERENCE_DATA_DIR, so it reads its reference files from ${CONTAINER_STATE}"; return ;;
+    [ -n "$dir" ] || { say "${APP} has no REFERENCE_DATA_DIR, so it reads its reference files from ${CONTAINER_STATE}"; return; }
+    norm="$(python3 -c 'import posixpath, sys; p = posixpath.normpath(sys.argv[1]); print("/" + p.lstrip("/") if p[:1] == "/" else p)' "$dir" 2>/dev/null)" \
+        || { say "the REFERENCE_DATA_DIR of ${APP} (${dir}) could not be read as a path"; return; }
+    case "$norm" in
         "$CONTAINER_STATE" | "$CONTAINER_STATE"/* | [!/]*) say "${APP} reads its reference files from ${dir}, not from outside ${CONTAINER_STATE}"; return ;;
     esac
+    # Compose `user:` lands here; empty means the image's own USER, which is
+    # also what a run without --user gets.
+    user="$(dk inspect -f '{{.Config.User}}' "$APP" 2>/dev/null)" \
+        || { say "docker could not say which user ${APP} runs as"; return; }
+    [ -z "$user" ] || as=(--user "$user")
+    volumes="$(dk image inspect -f '{{json .Config.Volumes}}' "$image" 2>/dev/null)" \
+        || { say "docker could not say whether the image of ${APP} declares volumes"; return; }
+    case "$volumes" in
+        null | "{}") ;;
+        *) say "the image of ${APP} declares volumes (${volumes}); a probe container would create one, so its reference files were not looked for"; return ;;
+    esac
     # shellcheck disable=SC2016,SC2086
-    missing="$(dk run --rm --network none --entrypoint sh -e "REFERENCE_DATA_DIR=${dir}" "$image" \
-        -c 'for n; do test -r "$REFERENCE_DATA_DIR/$n" || { printf %s "$n"; exit 1; }; done' sh $REFERENCE_FILES 2>/dev/null)" || rc=$?
-    if [ "$rc" = "1" ] && [ -n "$missing" ]; then
-        say "the image of ${APP} does not carry ${missing} under ${dir}; deploy the build that does first"
-    elif [ "$rc" != "0" ]; then
-        say "docker could not run the image of ${APP} to look for its reference files (exit ${rc})"
-    fi
+    found="$(dk run --rm --read-only --network none ${as[@]+"${as[@]}"} --entrypoint sh -e "REFERENCE_DATA_DIR=${dir}" "$image" \
+        -c 'state=$1; shift; cd -- "$REFERENCE_DATA_DIR" 2>/dev/null || exit 3
+real=$(pwd -P); case "$real/" in "$state"/*) printf %s "$real"; exit 2 ;; esac
+for n; do test -r "$n" || { printf %s "$n"; exit 1; }; done' sh "$CONTAINER_STATE" $REFERENCE_FILES 2>/dev/null)" || rc=$?
+    case "$rc:${found:+set}" in
+        0:*) ;;
+        1:set) say "the image of ${APP} does not carry ${found} under ${dir} readable by ${user:-its default user}; deploy the build that does first" ;;
+        2:set) say "${APP} reads its reference files from ${dir}, which is ${found} in the image, not from outside ${CONTAINER_STATE}" ;;
+        3:*) say "the image of ${APP} has no directory ${dir} that ${user:-its default user} can enter" ;;
+        *) say "docker could not run the image of ${APP} to look for its reference files (exit ${rc})" ;;
+    esac
 }
 
 device_of() {
