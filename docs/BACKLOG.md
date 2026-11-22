@@ -13,6 +13,58 @@ must be an ancestor of `main`.
 
 ## Open
 
+### The mover's reference probes `cd` logically, so a `..` after a link checks another directory
+
+- **Anchor:** `tools/move_data_dir.sh` (`reference_gap`: the probe's
+  `cd -- "$REFERENCE_DATA_DIR"` and the walker `w`'s `..` case, which drops
+  the last component of the spelling; `live_reference_gap`: the same `cd`) (#639).
+- **Found 2026-11-22** in the fourth review of #708 (`af58f85..9ea4c7a`):
+  with `REFERENCE_DATA_DIR=/opt/jump/../reference`, `/opt/jump` a link to
+  `/srv/nested` and the JSON files only in `/opt/reference`, both probes pass,
+  while the app's open through the configured path resolves the `..` after the
+  link and looks in `/srv/reference`. What breaks if never fixed: `--check`
+  says the reference files are readable and the app then fails to read them.
+  Not reproduced on live and not covered by `tools/move_data_dir_test.sh`.
+
+### The mover resolves links in the reference path but compares it with the literal mount target
+
+- **Anchor:** `tools/move_data_dir.sh` (`reference_gap`: the walker `w`'s
+  comparison of each resolved component with `"$state"`, which is the literal
+  `CONTAINER_STATE`) (#639).
+- **Found 2026-11-22** in the fourth review of #708 (`af58f85..9ea4c7a`):
+  with `/app` a link to `/srv` in the image, the bind at `/app/data` covers
+  `/srv/data`; `REFERENCE_DATA_DIR=/srv/data/reference` never passes through a
+  component spelled `/app/data`, so the probe passes although the state mount
+  hides the image's copy. What breaks if never fixed: `--check` approves a
+  layout where the reference files are read from the state directory it is
+  about to move. Not reproduced on live and not covered by
+  `tools/move_data_dir_test.sh`.
+
+### A directory named like a reference file passes the mover's `test -r`
+
+- **Anchor:** `tools/move_data_dir.sh` (`reference_gap` and
+  `live_reference_gap`: `test -r "$n"` over `REFERENCE_FILES`, e.g.
+  `top_agencies.json`) (#639).
+- **Found 2026-11-22** in the fourth review of #708 (`af58f85..9ea4c7a`): a
+  readable directory named `top_agencies.json` passes both probes and the path
+  walk; the app's JSON read of it fails with `EISDIR`. What breaks if never
+  fixed: `--check` reports the reference files present when one is a
+  directory. Not reproduced on live; the harness covers missing and unreadable
+  files only.
+
+### The mover matches the app's state mount by its literal Destination spelling
+
+- **Anchor:** `tools/move_data_dir.sh` (`mount_source`: the template
+  `eq .Destination "/app/data"`; the other-mounts loop's
+  `[ "$target" = "$CONTAINER_STATE" ]`) (#639).
+- **Found 2026-11-22** in the review rounds of #708: a Destination spelled
+  `/app//data` or `/app/data/` is not normalised (the reference probe's
+  spelling is; these two comparisons are not). What breaks if never fixed:
+  `mount_source` finds no mount and the loop does not recognise the app's own
+  mount, so `--check` refuses a correct setup (fail-closed, a false refusal,
+  never a false pass). Not reproduced on live: whether docker stores a
+  Destination with the spelling compose was given was not measured.
+
 ### A struck price in a fotocasa alert card is found by a hand-written tag scanner
 
 - **Anchor:** `services/fotocasa_source.py` (`_anchors`, `cards_in_email`,
