@@ -72,8 +72,24 @@
 --    profile-side foreign key is NO ACTION. The two code paths that delete a
 --    profile move or count memberships first; anything else is refused loudly
 --    instead of dropping a membership silently.
+-- 5. EVERY WRITER HERE RUNS AT READ COMMITTED, and is refused at any other
+--    level by one check, `property_subscription_require_read_committed()`.
+--    The rules above read rows another transaction may have committed while
+--    this one waited or since it began: the membership a home move must
+--    delete, the memberships a route must carry, the route and home an
+--    insert must compare with. A trigger's statements see the statement's
+--    snapshot. Under READ COMMITTED that includes every commit up to the
+--    statement and, after a row lock wait, the row as committed; under
+--    REPEATABLE READ or SERIALIZABLE it is the transaction's FIRST snapshot,
+--    and a row committed since is invisible to the trigger while still being
+--    in the table (three reviews of #705 found one such statement each). So
+--    the class is closed, not its instances: a membership insert, a home
+--    MOVE and a route are refused outside READ COMMITTED, before they read
+--    anything. Every writer in the app runs at READ COMMITTED (PostgreSQL's
+--    default); the one REPEATABLE READ user, `utils/report_arrivals.py`, is
+--    READ ONLY and writes nothing.
 --
--- EVERY STATEMENT THAT COULD BREAK RULE 3, and what answers it:
+-- EVERY STATEMENT THAT COULD BREAK RULES 2 OR 3, and what answers it:
 --   INSERT membership                 -> skipped under FOR SHARE (trigger b)
 --   INSERT racing a home change       -> the row lock above, both orders
 --   INSERT for a listing not yet committed -> refused like the foreign key:
@@ -81,10 +97,9 @@
 --                                        the FK check runs after the statement,
 --                                        when the listing may be committed
 --   UPDATE membership key columns     -> refused
---   UPDATE properties.search_profile_id -> the home trigger deletes the twin;
---                                        a home MOVE outside READ COMMITTED is
---                                        refused, its snapshot can miss one
+--   UPDATE properties.search_profile_id -> the home trigger deletes the twin
 --   UPDATE search_profiles.routed_to  -> re-insert through trigger b
+--   any of the three writers above outside READ COMMITTED -> refused (rule 5)
 --   INSERT properties                 -> no membership can exist yet: trigger
 --                                        b refuses one this side cannot see
 --   DELETE on either table            -> cannot create the equality
@@ -119,6 +134,25 @@ CREATE TABLE IF NOT EXISTS property_subscription (
 CREATE INDEX IF NOT EXISTS ix_property_subscription_search_profile_id
     ON property_subscription(search_profile_id);
 
+-- Rule 5, the one check every writer trigger below calls first.
+CREATE OR REPLACE FUNCTION property_subscription_require_read_committed(what text)
+RETURNS void AS $$
+DECLARE
+    level text := current_setting('transaction_isolation');
+BEGIN
+    IF level NOT IN ('read committed', 'read uncommitted') THEN
+        -- The USING MESSAGE form, as in migration 014: the ordinary form
+        -- takes percent placeholders.
+        RAISE EXCEPTION USING
+            ERRCODE = 'object_not_in_prerequisite_state',
+            MESSAGE = what || ' runs at READ COMMITTED, not ' || level
+                || ' (its triggers would read the transaction''s first '
+                || 'snapshot and miss a row committed since; see rule 5 of '
+                || 'migration 030)';
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Rule 1.
 DROP TRIGGER IF EXISTS trg_property_subscription_a_canonical_profile
     ON property_subscription;
@@ -133,6 +167,10 @@ DECLARE
     catch_all boolean;
     home integer;
 BEGIN
+    PERFORM property_subscription_require_read_committed(
+        'property_subscription: a membership insert for listing '
+        || NEW.property_id);
+
     SELECT is_default INTO catch_all
         FROM search_profiles
         WHERE id = NEW.search_profile_id;
@@ -196,21 +234,12 @@ CREATE TRIGGER trg_property_subscription_key_is_never_updated
 CREATE OR REPLACE FUNCTION drop_property_subscription_equal_to_home()
 RETURNS trigger AS $$
 BEGIN
-    -- The DELETE below sees what the statement's snapshot sees. Under READ
-    -- COMMITTED that is everything committed before it, the membership the
-    -- row lock made it wait for included. Under REPEATABLE READ or
-    -- SERIALIZABLE it is the transaction's first snapshot, which can miss a
-    -- membership committed since (review of #705), so a home MOVE is refused
-    -- there instead of leaving that membership behind.
-    IF NEW.search_profile_id IS DISTINCT FROM OLD.search_profile_id
-       AND current_setting('transaction_isolation')
-           NOT IN ('read committed', 'read uncommitted') THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'object_not_in_prerequisite_state',
-            MESSAGE = 'properties ' || NEW.id || ': a home change runs at '
-                || 'READ COMMITTED, not '
-                || current_setting('transaction_isolation')
-                || ' (property_subscription would miss a committed membership)';
+    -- Rule 5: the DELETE below must see the membership the row lock made it
+    -- wait for. A statement that leaves the home where it was is not a move
+    -- and is allowed at any level.
+    IF NEW.search_profile_id IS DISTINCT FROM OLD.search_profile_id THEN
+        PERFORM property_subscription_require_read_committed(
+            'properties ' || NEW.id || ': a home change');
     END IF;
     IF NEW.search_profile_id IS NOT NULL THEN
         DELETE FROM property_subscription
@@ -231,6 +260,11 @@ CREATE TRIGGER trg_properties_home_drops_redundant_subscription
 CREATE OR REPLACE FUNCTION move_property_subscriptions_on_route()
 RETURNS trigger AS $$
 BEGIN
+    -- Rule 5: the move must see a membership committed after this
+    -- transaction began (third review of #705).
+    PERFORM property_subscription_require_read_committed(
+        'search_profiles ' || NEW.id || ': a route');
+
     INSERT INTO property_subscription
             (property_id, search_profile_id, first_seen_at, source)
         SELECT ps.property_id, NEW.routed_to, ps.first_seen_at, ps.source

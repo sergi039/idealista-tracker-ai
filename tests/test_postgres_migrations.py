@@ -4613,6 +4613,107 @@ def test_030_a_home_move_outside_read_committed_is_refused(postgres_url):
         engine.dispose()
 
 
+def test_030_a_route_outside_read_committed_is_refused(postgres_url):
+    """Third review of #705, verbatim: listing 10 is homed on profile 1;
+    A starts a REPEATABLE READ transaction and reads; B inserts (10, 2) and
+    commits; A routes profile 2 to profile 3 and commits. The route trigger's
+    INSERT ... SELECT and DELETE ran on A's first snapshot, missed B's
+    membership, and (10, 2) stayed on a routed stub. The route is refused at
+    that isolation, by the same check as every other writer here (rule 5)."""
+    from sqlalchemy.exc import DBAPIError
+
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+        with engine.begin() as connection:
+            one = _profile(connection, "030 rr route home")
+            two = _profile(connection, "030 rr route stub")
+            three = _profile(connection, "030 rr route target")
+            listing = _insert_property(
+                connection, source_email_id="sub:rr-route", search_profile_id=one
+            )
+
+        def routed_to(profile_id):
+            with engine.connect() as connection:
+                return connection.execute(
+                    text("SELECT routed_to FROM search_profiles WHERE id = :s"),
+                    {"s": profile_id},
+                ).scalar_one()
+
+        for level in ("REPEATABLE READ", "SERIALIZABLE"):
+            with engine.connect().execution_options(isolation_level=level) as router:
+                assert (
+                    router.execute(
+                        text("SELECT routed_to FROM search_profiles WHERE id = :s"),
+                        {"s": two},
+                    ).scalar_one()
+                    is None
+                )
+                with engine.begin() as connection:
+                    _join(connection, listing, two)
+
+                with pytest.raises(DBAPIError, match="a route runs at READ COMMITTED"):
+                    router.execute(
+                        text("UPDATE search_profiles SET routed_to = :t WHERE id = :s"),
+                        {"t": three, "s": two},
+                    )
+                router.rollback()
+
+            assert routed_to(two) is None
+            assert _memberships(engine) == {(listing, two)}
+            with engine.begin() as connection:
+                connection.execute(text("DELETE FROM property_subscription"))
+
+        # The same route at READ COMMITTED carries the membership with it.
+        with engine.begin() as connection:
+            _join(connection, listing, two)
+        with engine.begin() as connection:
+            connection.execute(
+                text("UPDATE search_profiles SET routed_to = :t WHERE id = :s"),
+                {"t": three, "s": two},
+            )
+        assert routed_to(two) == three
+        assert _memberships(engine) == {(listing, three)}
+    finally:
+        engine.dispose()
+
+
+def test_030_a_membership_insert_outside_read_committed_is_refused(postgres_url):
+    """Rule 5 for the insert: its canonicalizing and skip triggers compare
+    with a route and a home another transaction may have committed since this
+    one began, so a membership is written at READ COMMITTED or not at all."""
+    from sqlalchemy.exc import DBAPIError
+
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+        with engine.begin() as connection:
+            one = _profile(connection, "030 rr insert home")
+            two = _profile(connection, "030 rr insert other")
+            listing = _insert_property(
+                connection, source_email_id="sub:rr-insert", search_profile_id=one
+            )
+
+        for level in ("REPEATABLE READ", "SERIALIZABLE"):
+            with engine.connect().execution_options(isolation_level=level) as joiner:
+                with pytest.raises(
+                    DBAPIError, match="a membership insert for listing .* runs at"
+                ):
+                    _join(joiner, listing, two)
+                joiner.rollback()
+            assert _memberships(engine) == set()
+
+        with engine.begin() as connection:
+            _join(connection, listing, two)
+        assert _memberships(engine) == {(listing, two)}
+    finally:
+        engine.dispose()
+
+
 def test_030_a_route_moves_the_memberships_and_a_home_move_drops_its_own(
     postgres_url,
 ):
