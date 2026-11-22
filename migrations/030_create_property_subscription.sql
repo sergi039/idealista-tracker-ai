@@ -36,9 +36,9 @@
 --    INSERT trigger runs before ON CONFLICT picks its arbiter row, so
 --    `ON CONFLICT DO NOTHING` sees the rewritten key.
 -- 2. A route moves the stub's memberships with it, in the routing statement's
---    own transaction: AFTER UPDATE OF routed_to re-INSERTS each of them
---    against the target -- through rules 1 and 3, `ON CONFLICT DO NOTHING`
---    for the ones the target already has -- and deletes the stub's rows. "A
+--    own transaction: AFTER UPDATE OF routed_to deletes the stub's rows and
+--    re-INSERTS what it deleted against the target -- through rules 1 and 3,
+--    `ON CONFLICT DO NOTHING` for the ones the target already has. "A
 --    stub holds nothing" stays true for both tables.
 -- 3. A membership is never the listing's own home, and never the catch-all.
 --    The insert is skipped (RETURN NULL: not an error, the fact is already
@@ -265,16 +265,18 @@ BEGIN
     PERFORM property_subscription_require_read_committed(
         'search_profiles ' || NEW.id || ': a route');
 
+    -- What is carried is what was deleted: a DELETE that waited on a row
+    -- returns it as committed, while a copy read first would carry the
+    -- version from before the wait (fifth review of #705).
+    WITH moved AS (
+        DELETE FROM property_subscription
+            WHERE search_profile_id = NEW.id
+            RETURNING property_id, first_seen_at, source)
     INSERT INTO property_subscription
             (property_id, search_profile_id, first_seen_at, source)
-        SELECT ps.property_id, NEW.routed_to, ps.first_seen_at, ps.source
-            FROM property_subscription ps
-            WHERE ps.search_profile_id = NEW.id
-            ORDER BY ps.property_id
+        SELECT property_id, NEW.routed_to, first_seen_at, source
+            FROM moved ORDER BY property_id
         ON CONFLICT DO NOTHING;
-
-    DELETE FROM property_subscription
-        WHERE search_profile_id = NEW.id;
 
     RETURN NULL;
 END;

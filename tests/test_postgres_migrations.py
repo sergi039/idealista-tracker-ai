@@ -4332,6 +4332,47 @@ def _waits_on_a_lock(engine, pid, seconds=10) -> bool:
     return False
 
 
+def _holds_then_waits(engine, hold, wait) -> bool:
+    """`hold` runs in one session and stays uncommitted while `wait` runs in
+    a second; True if `wait` was seen waiting on a lock. Both then commit."""
+    import threading
+
+    errors: list = []
+    with engine.connect() as first, engine.connect() as second:
+        pid = second.execute(text("SELECT pg_backend_pid()")).scalar_one()
+        second.commit()
+
+        def run() -> None:
+            try:
+                wait(second)
+                second.commit()
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        hold(first)
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        waited = _waits_on_a_lock(engine, pid)
+        first.commit()
+        thread.join(15)
+    assert not thread.is_alive() and errors == []
+    return waited
+
+
+def _route(connection, stub, target):
+    connection.execute(
+        text("UPDATE search_profiles SET routed_to = :t WHERE id = :s"),
+        {"t": target, "s": stub},
+    )
+
+
+def _set_home(connection, listing, profile):
+    connection.execute(
+        text("UPDATE properties SET search_profile_id = :t WHERE id = :p"),
+        {"t": profile, "p": listing},
+    )
+
+
 def test_030_a_membership_is_never_re_pointed(postgres_url):
     """Review of #705, verbatim: listing 10 has home 1 and membership (10, 2);
     `UPDATE property_subscription SET search_profile_id = 1` used to succeed
@@ -4390,7 +4431,6 @@ def test_030_a_membership_inserted_during_a_home_change_waits_and_is_skipped(
     has not committed; B inserts (10, 2). B must wait for the listing's row
     and then see the home A committed. Without the row lock B reads the old
     home, both commit, and profile 2 is the home and a membership at once."""
-    import threading
 
     from migrations.runner import run_migrations
 
@@ -4404,29 +4444,11 @@ def test_030_a_membership_inserted_during_a_home_change_waits_and_is_skipped(
                 connection, source_email_id="sub:race1", search_profile_id=one
             )
 
-        errors: dict = {}
-        with engine.connect() as changer, engine.connect() as joiner:
-            pid = joiner.execute(text("SELECT pg_backend_pid()")).scalar_one()
-            joiner.commit()
-
-            def join() -> None:
-                try:
-                    _join(joiner, listing, two)
-                    joiner.commit()
-                except BaseException as exc:  # noqa: BLE001
-                    errors["join"] = exc
-
-            changer.execute(
-                text("UPDATE properties SET search_profile_id = :t WHERE id = :p"),
-                {"t": two, "p": listing},
-            )
-            thread = threading.Thread(target=join, daemon=True)
-            thread.start()
-            waited = _waits_on_a_lock(engine, pid)
-            changer.commit()
-            thread.join(15)
-
-        assert not thread.is_alive() and errors == {}
+        waited = _holds_then_waits(
+            engine,
+            lambda c: _set_home(c, listing, two),
+            lambda c: _join(c, listing, two),
+        )
         assert waited, "the membership insert did not wait for the home change"
         assert _home(engine, listing) == two
         assert _memberships(engine) == set()
@@ -4439,7 +4461,6 @@ def test_030_a_home_change_during_a_membership_insert_waits_and_drops_it(
 ):
     """The other order: B has inserted (10, 2) and not committed; A moves the
     home to 2. A must wait for B, and then delete the membership B committed."""
-    import threading
 
     from migrations.runner import run_migrations
 
@@ -4453,31 +4474,11 @@ def test_030_a_home_change_during_a_membership_insert_waits_and_drops_it(
                 connection, source_email_id="sub:race2", search_profile_id=one
             )
 
-        errors: dict = {}
-        with engine.connect() as changer, engine.connect() as joiner:
-            pid = changer.execute(text("SELECT pg_backend_pid()")).scalar_one()
-            changer.commit()
-
-            def change() -> None:
-                try:
-                    changer.execute(
-                        text(
-                            "UPDATE properties SET search_profile_id = :t WHERE id = :p"
-                        ),
-                        {"t": two, "p": listing},
-                    )
-                    changer.commit()
-                except BaseException as exc:  # noqa: BLE001
-                    errors["change"] = exc
-
-            _join(joiner, listing, two)
-            thread = threading.Thread(target=change, daemon=True)
-            thread.start()
-            waited = _waits_on_a_lock(engine, pid)
-            joiner.commit()
-            thread.join(15)
-
-        assert not thread.is_alive() and errors == {}
+        waited = _holds_then_waits(
+            engine,
+            lambda c: _join(c, listing, two),
+            lambda c: _set_home(c, listing, two),
+        )
         assert waited, "the home change did not wait for the membership insert"
         assert _home(engine, listing) == two
         assert _memberships(engine) == set()
@@ -4849,7 +4850,6 @@ def test_030_a_membership_written_during_a_route_lands_on_the_target(postgres_ur
     the assertion is the destination: without the canonicalizing trigger the
     row lands on the freshly routed stub (measured by removing it).
     """
-    import threading
 
     from migrations.runner import run_migrations
 
@@ -4864,39 +4864,62 @@ def test_030_a_membership_written_during_a_route_lands_on_the_target(postgres_ur
                 connection, source_email_id="sub:wait", search_profile_id=home
             )
 
-        failure: dict[str, object] = {}
-
-        def join_while_the_route_is_held() -> None:
-            try:
-                with engine.begin() as connection:
-                    connection.execute(text("SET lock_timeout = '20s'"))
-                    _join(connection, prop, stub)
-            except Exception as exc:  # noqa: BLE001
-                failure["v"] = exc
-
-        with engine.connect() as connection:
-            connection.execute(
+        def hold_and_route(c) -> None:
+            c.execute(
                 text(
                     "SELECT id FROM search_profiles WHERE id IN (:s, :t) "
                     "ORDER BY id FOR UPDATE"
                 ),
                 {"s": stub, "t": target},
             )
-            thread = threading.Thread(target=join_while_the_route_is_held, daemon=True)
-            thread.start()
-            thread.join(2)
-            assert thread.is_alive(), "the insert did not wait for the route writer"
-            assert _memberships(engine) == set()
-            connection.execute(
-                text("UPDATE search_profiles SET routed_to = :t WHERE id = :s"),
-                {"t": target, "s": stub},
-            )
-            connection.commit()
-        thread.join(30)
+            _route(c, stub, target)
 
-        assert not thread.is_alive()
-        assert failure == {}
+        waited = _holds_then_waits(
+            engine, hold_and_route, lambda c: _join(c, prop, stub)
+        )
+        assert waited, "the insert did not wait for the route writer"
         assert _memberships(engine) == {(prop, target)}
+    finally:
+        engine.dispose()
+
+
+def test_030_a_route_carries_the_membership_as_committed_after_its_wait(
+    postgres_url,
+):
+    """Fifth review of #705: B changes a stub membership's source and has not
+    committed; A routes the stub. A copy read before A's DELETE waited
+    carried the old source, and B's change was lost with the deleted row."""
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+        with engine.begin() as connection:
+            home = _profile(connection, "030 carry home")
+            target = _profile(connection, "030 carry target")
+            stub = _profile(connection, "030 carry stub")
+            listing = _insert_property(
+                connection, source_email_id="sub:carry", search_profile_id=home
+            )
+            _join(connection, listing, stub)
+
+        waited = _holds_then_waits(
+            engine,
+            lambda c: c.execute(
+                text(
+                    "UPDATE property_subscription SET source = 'journal' "
+                    "WHERE search_profile_id = :s"
+                ),
+                {"s": stub},
+            ),
+            lambda c: _route(c, stub, target),
+        )
+        assert waited, "the route did not wait for the membership's writer"
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text("SELECT search_profile_id, source FROM property_subscription")
+            ).all()
+        assert [tuple(row) for row in rows] == [(target, "journal")]
     finally:
         engine.dispose()
 
