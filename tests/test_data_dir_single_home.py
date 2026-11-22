@@ -131,9 +131,8 @@ def test_the_watcher_keeps_its_files_where_the_state_is():
 
 
 def test_the_check_before_the_move_changes_nothing():
-    """tools/move_data_dir.sh against a stub docker: a ready deployment is
-    called ready, and every refusal names its reason and leaves the state
-    directory, `.env` and the container exactly as they were."""
+    """tools/move_data_dir.sh against a stub docker: the check changes
+    nothing, and a failed move ends on the original directory."""
     for tool in ("git", "python3", "shasum"):
         assert shutil.which(tool), f"the harness needs {tool} on PATH"
     result = subprocess.run(
@@ -145,11 +144,11 @@ def test_the_check_before_the_move_changes_nothing():
         env=_environment(),
     )
     assert result.returncode == 0, (
-        "tools/move_data_dir.sh --check accepts a deployment it should refuse, "
-        "or changes something\n"
+        "tools/move_data_dir.sh can leave the deployment stopped, split or "
+        "changed after a failed move\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
-    assert "ALL 3 GROUPS PASSED" in result.stdout, result.stdout
+    assert "ALL 9 GROUPS PASSED" in result.stdout, result.stdout
 
 
 def _resolve(repo: Path, **extra: str) -> subprocess.CompletedProcess:

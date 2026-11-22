@@ -10,13 +10,24 @@
 # IDEALISTA_DATA_DIR in `<repo>/.env`, at the new place - with the app stopped
 # for about a minute.
 #
-#   move_data_dir.sh [--check] /absolute/destination
+#   move_data_dir.sh --check  /absolute/destination   # read-only: may it run?
+#   move_data_dir.sh --apply  /absolute/destination   # do it (owner's command)
 #
-# This file is the question before that move, and only the question: it reads
-# and reports, and holds no command that stops a container, renames a
-# directory or writes `.env`. Every problem is listed, not just the first, and
-# the exit status is the verdict: 0 ready, 1 not. The move itself, and the way
-# back, are the next change.
+# `--check` (the default) only reads. `--apply` is one rename(2) on the same
+# volume after a checksummed safety copy. There is no `--rollback` in this
+# version: undoing a finished move is the manual commands `recover` prints.
+#
+# `--apply` takes the deploy and merge locks BEFORE its preflight, so a second
+# `--apply` stops at the lock or, once the first is done, at the preflight -
+# never on checks read before the first one moved anything.
+#
+# Once the app is stopped, every exit but success (a failed step, Ctrl-C, a
+# closed terminal, `kill`) runs `recover`: by what is on disk, idempotently,
+# back to <repo>/data with the app started. SIGKILL runs no trap: the `.env`
+# line naming the destination is written BEFORE the stop, and what is left is
+# undone by hand with the commands `recover` prints.
+#
+# `docker compose` runs without IDEALISTA_DATA_DIR: only `.env` decides.
 
 set -euo pipefail
 
@@ -36,6 +47,14 @@ BRANCH="${MOVE_BRANCH:-main}"
 COMPOSE_FILE="${MOVE_COMPOSE_FILE:-docker-compose.yml}"
 APP="${MOVE_APP_CONTAINER:-${COMPOSE_CONTAINER_PREFIX:-idealista}-app}"
 CONTAINER_STATE="/app/data"
+HEALTH_URL="${MOVE_HEALTH_URL:-http://127.0.0.1:5001/api/healthz}"
+HEALTH_TIMEOUT="${MOVE_HEALTH_TIMEOUT:-180}"
+HEALTH_POLL="${MOVE_HEALTH_POLL:-5}"
+BACKUP_ROOT="${MOVE_BACKUP_ROOT:-${HOME}/IdealistaRank-backups}"
+# The watcher's and the merge bot's lock files, held for the whole move: no
+# tick builds and no merge pass writes while the state is in two places.
+DEPLOY_LOCK="${MOVE_DEPLOY_LOCK:-/tmp/idealista-autopilot-deploy.lock.d}"
+MERGE_LOCK="${MOVE_MERGE_LOCK:-/tmp/idealista-autopilot-merge.lock.d}"
 STATUS_CMD="${MOVE_STATUS_CMD:-${REPO}/tools/backfill_status.sh}"
 # The four committed reference files (docs/rules/reference-data.md). They stay
 # tracked in <repo>/data and the image carries its own copy.
@@ -46,14 +65,25 @@ SRC="$(/bin/bash "${LIB_DIR}/data_dir.sh" --default "$REPO")" || {
     printf 'cannot read %s/data_dir.sh - is this the repository that carries it?\n' "$LIB_DIR" >&2
     exit 2
 }
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+PHASE="preflight"
 DEST=""
+ASIDE=""
+WORK=""
+# --apply: "0" until its rename succeeded, "1" after.
+RENAMED=""
+# The `docker compose` call --apply is waiting on, while it runs.
+BG_PID=""
 
 say() { printf '%s\n' "$*"; }
+note() { printf '  %s\n' "$*"; }
 
 usage() {
     cat >&2 <<'EOF'
 usage:
   move_data_dir.sh [--check] /absolute/destination   read-only: may the move run?
+  move_data_dir.sh --apply   /absolute/destination   move the state directory
+(there is no --rollback in this version)
 EOF
 }
 
@@ -61,7 +91,41 @@ EOF
 
 # Never from stdin: the readers below run inside `while read` loops fed by a
 # here-string, and a command that read stdin would eat the rest of the list.
-dk() { docker "$@" </dev/null; }
+# Closed for every child: a helper that outlived this script would hold the
+# deploy lock with nobody behind it, and every later watcher tick would skip.
+dk() { docker "$@" </dev/null 8>&- 9>&-; }
+
+compose() {
+    ( cd "$REPO" && env -u "$KEY" docker compose -f "$COMPOSE_FILE" "$@" ) </dev/null 8>&- 9>&-
+}
+
+# The same call, started in the background and waited for. Bash runs a trap
+# only once a foreground command returns: a `compose up` that hangs would hold
+# SIGTERM back for ever. `wait` returns on a trapped signal at once, and
+# `recover` ends the call by its saved PID (`exec`: the PID is docker's own).
+compose_waited() {
+    local rc=0
+    ( cd "$REPO" && exec env -u "$KEY" docker compose -f "$COMPOSE_FILE" "$@" ) </dev/null 8>&- 9>&- &
+    BG_PID=$!
+    wait "$BG_PID" || rc=$?
+    BG_PID=""
+    return "$rc"
+}
+
+# TERM, ten seconds, then KILL: recovery must not wait on it either.
+end_waited() {
+    local waited=0
+    [ -n "$BG_PID" ] || return 0
+    kill -TERM "$BG_PID" 2>/dev/null || true
+    while kill -0 "$BG_PID" 2>/dev/null && [ "$waited" -lt 100 ]; do
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+    kill -KILL "$BG_PID" 2>/dev/null || true
+    wait "$BG_PID" 2>/dev/null || true
+    note "ended the interrupted 'docker compose' call (pid ${BG_PID})"
+    BG_PID=""
+}
 
 # 0 running, 1 stopped, 2 could not tell. "Could not tell" is its own answer:
 # a probe that failed must never read as "stopped".
@@ -221,6 +285,12 @@ for source in sources:
 print("yes" if hit else "no")' "$SRC" "$1" </dev/null 2>/dev/null
 }
 
+# rename(2) and nothing else: `mv` onto a directory that exists moves the
+# source INSIDE it. A rename replaces an empty directory and fails otherwise.
+rename_exact() {
+    python3 -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$1" "$2" 2>/dev/null
+}
+
 env_line_count() {
     if [ ! -f "${REPO}/.env" ]; then
         printf '0\n'
@@ -229,11 +299,305 @@ env_line_count() {
     grep -c "^${KEY}=" "${REPO}/.env" || true
 }
 
+# The value the one reader gives, with this process's own export out of the
+# way: the question is what `.env` says.
+resolved_data_dir() {
+    env -u "$KEY" /bin/bash "${LIB_DIR}/data_dir.sh" "$REPO"
+}
+
 # The tombstone is the FACT that an entry of that name exists - a file, a
 # directory, a FIFO, a link whose target is gone - read the same way by
 # lib/data_dir.sh and app.py. Never decided by reading it.
 has_tombstone() {
     [ -e "${1}/${TOMBSTONE}" ] || [ -L "${1}/${TOMBSTONE}" ]
+}
+
+# Write or remove the one line, never printing `.env`: same-mode temp, fsync,
+# atomic rename (a half-written `.env` stops the deployment).
+set_env_line() {
+    python3 - "${REPO}/.env" "$KEY" "${1:-}" <<'PY'
+import os
+import stat
+import sys
+import tempfile
+
+path, key, value = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path, "rb") as handle:
+    lines = handle.read().splitlines(keepends=True)
+prefix = (key + "=").encode()
+kept = [line for line in lines if not line.startswith(prefix)]
+if kept and not kept[-1].endswith(b"\n"):
+    kept[-1] += b"\n"
+if value:
+    kept.append(prefix + value.encode() + b"\n")
+mode = stat.S_IMODE(os.stat(path).st_mode)
+fd, temporary = tempfile.mkstemp(prefix=".env.", dir=os.path.dirname(path))
+try:
+    with os.fdopen(fd, "wb") as handle:
+        handle.writelines(kept)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temporary, mode)
+    os.replace(temporary, path)
+except BaseException:
+    try:
+        os.unlink(temporary)
+    except OSError:
+        pass
+    raise
+PY
+}
+
+# Every regular file's sha256, plus the name of everything that is not one, so
+# an empty directory that went missing is a difference too.
+manifest() {
+    ( cd "$1" && {
+        find . -type f -exec shasum -a 256 {} +
+        find . ! -type f -print | sed 's/^/entry  /'
+    } | LC_ALL=C sort ) >"$2"
+}
+
+# Equal, or different only in `*.log` files: host processes this script does
+# not stop append to logs here. Anything else that differs is a failed copy.
+manifests_agree() {
+    local first="$1" second="$2" label="$3" differing
+    if cmp -s "$first" "$second"; then
+        return 0
+    fi
+    differing="$(diff "$first" "$second" | grep '^[<>]' | sed 's/^[<>] *[^ ]*  *//' | LC_ALL=C sort -u || true)"
+    if [ -z "$differing" ]; then
+        return 0
+    fi
+    if printf '%s\n' "$differing" | grep -v '\.log$' >/dev/null; then
+        say "ERROR: ${label}: these entries differ and are not logs:"
+        printf '%s\n' "$differing" | grep -v '\.log$' | sed 's/^/    /'
+        return 1
+    fi
+    note "${label}: only logs differ (a host process appended meanwhile):"
+    printf '%s\n' "$differing" | sed 's/^/      /'
+    return 0
+}
+
+take_lock() {
+    # take_lock <fd> <file>: flock(2), the same primitive lib/lock.sh uses, on
+    # a descriptor this shell keeps open until it exits.
+    # shellcheck disable=SC2034  # `file` is read by the eval below
+    local fd="$1" file="$2"
+    eval "exec ${fd}>\"\$file\"" || return 1
+    python3 -c 'import fcntl, sys
+try:
+    fcntl.flock(int(sys.argv[1]), fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError:
+    sys.exit(1)' "$fd"
+}
+
+take_both_locks() {
+    if ! take_lock 9 "$DEPLOY_LOCK"; then
+        say "STOP: the deploy watcher holds ${DEPLOY_LOCK} - a deploy is in progress. Nothing was touched."
+        exit 1
+    fi
+    if ! take_lock 8 "$MERGE_LOCK"; then
+        say "STOP: the merge bot holds ${MERGE_LOCK} - a merge pass is in progress. Nothing was touched."
+        exit 1
+    fi
+    note "holding the deploy lock and the merge lock until this script exits"
+}
+
+# --- is the app serving from the directory it should? ------------------------
+
+verify_serving() {
+    # verify_serving <expected host directory>
+    local expected="$1" source waited=0 url token probe seen gap
+    source="$(mount_source)" || true
+    if [ -z "$source" ] || [ "$(phys "$source")" != "$(phys "$expected")" ]; then
+        say "ERROR: ${APP} mounts '${source:-nothing}' at ${CONTAINER_STATE}, expected ${expected}"
+        return 1
+    fi
+    note "mount: ${source} -> ${CONTAINER_STATE}"
+
+    until curl -fsS --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; do
+        waited=$((waited + HEALTH_POLL))
+        if [ "$waited" -gt "$HEALTH_TIMEOUT" ]; then
+            say "ERROR: ${HEALTH_URL} did not answer within ${HEALTH_TIMEOUT}s"
+            return 1
+        fi
+        sleep "$HEALTH_POLL"
+    done
+    note "healthz: ok"
+
+    # A green healthz is not acceptance (lib/render_check.sh): a page that
+    # renders a template must answer 200, and a 3xx is the failure looked for.
+    # shellcheck disable=SC1091
+    . "${LIB_DIR}/render_check.sh"
+    url="$(deploy_render_url "$(deploy_render_origin "$HEALTH_URL")")"
+    if [ -z "$url" ]; then
+        say "ERROR: the page check is switched off (DEPLOY_RENDER_PATH is empty); a move cannot be called verified without it"
+        return 1
+    fi
+    if ! deploy_render_ok "$url"; then
+        say "ERROR: ${url} answered ${DEPLOY_RENDER_STATUS:-nothing}, not 200"
+        return 1
+    fi
+    note "page: ${url} -> 200"
+
+    # A token written here on the host is read back through the container:
+    # stronger than the mail cursor, which the scheduler may advance at once.
+    token="move-probe-${STAMP}-$$"
+    probe="${expected}/.move-probe-${STAMP}"
+    printf '%s\n' "$token" >"$probe"
+    seen="$(dk exec "$APP" cat "${CONTAINER_STATE}/.move-probe-${STAMP}" 2>/dev/null || true)"
+    rm -f "$probe"
+    if [ "$seen" != "$token" ]; then
+        say "ERROR: a file written to ${expected} on the host is not what ${APP} reads at ${CONTAINER_STATE}"
+        return 1
+    fi
+    note "the container reads the host directory (probe round-trip)"
+
+    gap="$(reference_gap)"
+    if [ -n "$gap" ]; then
+        say "ERROR: ${gap}"
+        return 1
+    fi
+    note "reference files: in the image, outside ${CONTAINER_STATE}"
+    return 0
+}
+
+# --- back to the directory inside the checkout -------------------------------
+
+manual_recovery() {
+    cat <<EOF
+
+  Production may be DOWN. Nothing below was done for you; run it by hand, in
+  this order, and stop at the first command that fails:
+
+    cd ${REPO}
+    env -u ${KEY} docker compose -f ${COMPOSE_FILE} stop app
+    # if ${DEST:-<destination>} exists and ${SRC} is the small rebuilt directory
+    # (it holds ${TOMBSTONE}):
+    mv ${SRC} ${BACKUP_ROOT}/checkout-data-at-rollback-${STAMP}
+    mv ${DEST:-<destination>} ${SRC}
+    git -C ${REPO} checkout -- data
+    # then remove the line '${KEY}=...' from ${REPO}/.env
+    env -u ${KEY} docker compose -f ${COMPOSE_FILE} up -d --no-build app
+    curl -s -o /dev/null -w '%{http_code}\n' ${HEALTH_URL%/api/healthz}/properties   # must print 200
+
+  A safety copy from before the move, if taken, is under
+  ${BACKUP_ROOT}/data-pre-move-* (older than anything written since).
+EOF
+}
+
+# Idempotent, and driven by what is on disk rather than by PHASE. Returns 0
+# only when the app is serving from <repo>/data again.
+restore_original() {
+    local running_rc=0 rebuilt=0
+
+    # Nothing was moved (or this run had not renamed yet: what is at the
+    # destination is somebody else's, left alone). Only the `.env` line is
+    # undone and nothing is stopped: the app may still be running, and `up`
+    # leaves a running container alone.
+    if [ -d "$SRC" ] && ! has_tombstone "$SRC" \
+        && { [ -z "$DEST" ] || [ "$RENAMED" = "0" ] || { [ ! -e "$DEST" ] && [ ! -L "$DEST" ]; }; }; then
+        note "nothing was moved; making sure ${APP} is up on ${SRC}"
+        if [ "$(env_line_count)" != "0" ]; then
+            set_env_line "" || {
+                say "ERROR: could not remove the ${KEY} line from ${REPO}/.env"
+                return 1
+            }
+            note "removed the ${KEY} line from .env"
+        fi
+        if ! compose up -d --no-build app >/dev/null 2>&1; then
+            say "ERROR: 'docker compose up -d --no-build app' failed"
+            return 1
+        fi
+        verify_serving "$SRC"
+        return
+    fi
+
+    compose stop app >/dev/null 2>&1 || true
+    app_running || running_rc=$?
+    if [ "$running_rc" != "1" ]; then
+        say "ERROR: cannot confirm ${APP} is stopped (probe answered ${running_rc}); not moving a directory under a container that may be running"
+        return 1
+    fi
+
+    if [ -n "$DEST" ] && [ -d "$DEST" ]; then
+        if [ -e "$SRC" ]; then
+            if has_tombstone "$SRC"; then
+                rebuilt=1
+            elif rmdir "$SRC" 2>/dev/null; then
+                # An empty directory: the rebuild got as far as mkdir.
+                rebuilt=0
+            else
+                say "ERROR: both ${SRC} (without ${TOMBSTONE}) and ${DEST} exist; cannot tell which holds the state"
+                return 1
+            fi
+        fi
+        if [ "$rebuilt" = "1" ]; then
+            ASIDE="${BACKUP_ROOT}/checkout-data-at-rollback-${STAMP}"
+            mkdir -p "$BACKUP_ROOT" || return 1
+            rename_exact "$SRC" "$ASIDE" || {
+                say "ERROR: could not move the rebuilt ${SRC} aside to ${ASIDE}"
+                return 1
+            }
+            note "the rebuilt ${SRC} is kept at ${ASIDE}"
+        fi
+        rename_exact "$DEST" "$SRC" || {
+            say "ERROR: could not rename ${DEST} back to ${SRC}"
+            return 1
+        }
+        note "renamed ${DEST} back to ${SRC}"
+        # The tracked reference files as HEAD has them: a merge may have
+        # updated one while the old copies sat in the moved directory.
+        git -C "$REPO" checkout -- data >/dev/null 2>&1 \
+            || note "WARNING: 'git checkout -- data' failed; check the four reference files by hand"
+        if [ -n "$ASIDE" ] && [ -f "${ASIDE}/.orchestrator" ]; then
+            cp -p "${ASIDE}/.orchestrator" "${SRC}/.orchestrator" \
+                || note "WARNING: could not restore the newer .orchestrator from ${ASIDE}"
+        fi
+    elif [ ! -d "$SRC" ] || has_tombstone "$SRC"; then
+        say "ERROR: ${SRC} is not the original directory and ${DEST:-the destination} does not exist"
+        return 1
+    fi
+
+    if [ "$(env_line_count)" != "0" ]; then
+        set_env_line "" || {
+            say "ERROR: could not remove the ${KEY} line from ${REPO}/.env"
+            return 1
+        }
+        note "removed the ${KEY} line from .env"
+    fi
+
+    if ! compose up -d --no-build app >/dev/null 2>&1; then
+        say "ERROR: 'docker compose up -d --no-build app' failed"
+        return 1
+    fi
+    verify_serving "$SRC"
+}
+
+recover() {
+    local rc=$?
+    trap - EXIT
+    trap '' HUP INT TERM
+    set +e
+    end_waited
+    [ -n "$WORK" ] && rm -rf "$WORK"
+    if [ "$PHASE" = "done" ] || [ "$PHASE" = "preflight" ]; then
+        exit "$rc"
+    fi
+    say ""
+    say "FAILED in phase '${PHASE}' (exit ${rc}). Returning production to ${SRC}."
+    if restore_original; then
+        say "RECOVERED: the app is serving from ${SRC} again. The move did not happen."
+        exit 1
+    fi
+    say "RECOVERY INCOMPLETE."
+    manual_recovery
+    exit 3
+}
+
+die() {
+    say "ERROR: $*"
+    exit 1
 }
 
 # --- preflight: read-only, and every problem is listed, not just the first ---
@@ -279,7 +643,7 @@ preflight_common() {
 
 preflight_apply() {
     local head deployed parent source count other others mounts dirty running_rc=0 link would_mount gap complete field
-    local here there here_at there_at kind volume target
+    local here there here_at there_at kind volume target backup_at
     say "preflight (read-only):"
     preflight_common
 
@@ -318,6 +682,30 @@ preflight_apply() {
                 # is the proof, and a failed one is undone.
                 fine "${DEST} is free, outside the repository, on the same device and mount point"
             fi
+        fi
+    fi
+
+    # The safety copy's directory. A failed move keeps the rebuilt ${SRC}
+    # aside there by one rename(2): on another filesystem that rename fails
+    # (EXDEV) with the app already stopped. Asked of the nearest directory
+    # that exists, as `mkdir -p` will create the rest.
+    backup_at="$BACKUP_ROOT"
+    while [ ! -e "$backup_at" ] && [ "$backup_at" != "/" ]; do
+        backup_at="$(dirname "$backup_at")"
+    done
+    if [ -d "$SRC" ]; then
+        here="$(device_of "$SRC")" || here=""
+        there="$(device_of "$backup_at")" || there=""
+        here_at="$(mount_point_of "$SRC")" || here_at=""
+        there_at="$(mount_point_of "$backup_at")" || there_at=""
+        if [ ! -d "$backup_at" ]; then
+            problem "${backup_at} is not a directory; the safety copy goes under ${BACKUP_ROOT}"
+        elif [ -z "$here" ] || [ -z "$there" ] || [ -z "$here_at" ] || [ -z "$there_at" ]; then
+            problem "could not establish which filesystem ${SRC} and ${backup_at} are on"
+        elif [ "$here" != "$there" ] || [ "$here_at" != "$there_at" ]; then
+            problem "${BACKUP_ROOT} is not on the mounted filesystem of ${SRC}; a failed move puts the rebuilt directory there by one rename. Set MOVE_BACKUP_ROOT"
+        else
+            fine "${BACKUP_ROOT} is on the same device and mount point as ${SRC}"
         fi
     fi
 
@@ -442,20 +830,119 @@ preflight_apply() {
     done <<<"$others"
 }
 
-# --- the one mode -------------------------------------------------------------
+# --- modes -------------------------------------------------------------------
 
+MODE="check"
 case "${1:-}" in
-    --check) shift ;;
+    --check) MODE="check"; shift ;;
+    --apply) MODE="apply"; shift ;;
     -h | --help) usage; exit 0 ;;
-    -*) usage; exit 2 ;;
 esac
 
 [ $# -eq 1 ] || { usage; exit 2; }
 DEST="$1"
-preflight_apply
+# --apply holds both locks from before its preflight to its exit: the checks
+# describe the world the move then acts on, and a second --apply stops here.
+# The preflight's children do not inherit the descriptors (bash keeps its own
+# copies close-on-exec for the call), so none of them can outlive the lock.
+[ "$MODE" = "check" ] || take_both_locks
+preflight_apply 8>&- 9>&-
 if [ "$PROBLEMS" != "0" ]; then
     say "NOT MOVED: ${PROBLEMS} problem(s) above. Nothing was touched."
     exit 1
 fi
-say "READY: nothing above stops the move. Nothing was touched."
-say "  not asked, because asking would write: whether the rename itself succeeds. The move finds out, and undoes a failed one."
+if [ "$MODE" = "check" ]; then
+    say "READY: nothing above stops the move. Nothing was touched."
+    say "  not asked, because asking would write: whether the rename itself succeeds. The move finds out, and undoes a failed one."
+    say "  to move:  $0 --apply ${DEST}"
+    say "  it stops ${APP} for about a minute, copies ${SRC} to ${BACKUP_ROOT}/data-pre-move-<UTC>,"
+    say "  writes ${KEY} to .env, renames ${SRC} to ${DEST} and starts the app again."
+    exit 0
+fi
+
+BACKUP="${BACKUP_ROOT}/data-pre-move-${STAMP}"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/idealista-move.XXXXXX")"
+
+# From here on, no exit leaves the app down.
+trap recover EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# The intent first, on disk. Until the rename it names a missing directory,
+# which the reader and Compose refuse: loud, as a move in progress should be.
+RENAMED="0"
+PHASE="recording"
+say "0/6 recording ${DEST} in .env"
+set_env_line "$DEST"
+
+PHASE="stopping"
+say "1/6 stopping ${APP} (downtime starts)"
+compose_waited stop app
+stopped_rc=0
+app_running || stopped_rc=$?
+[ "$stopped_rc" = "1" ] || die "${APP} is not confirmed stopped (probe answered ${stopped_rc})"
+# Only now, with no container writing: what the directory holds.
+manifest "$SRC" "${WORK}/before"
+
+PHASE="copying"
+say "2/6 safety copy -> ${BACKUP}"
+mkdir -p "$BACKUP_ROOT"
+[ ! -e "$BACKUP" ] || die "${BACKUP} already exists"
+cp -Rp "$SRC" "$BACKUP"
+manifest "$BACKUP" "${WORK}/copy"
+manifests_agree "${WORK}/before" "${WORK}/copy" "safety copy" \
+    || die "the safety copy does not match the directory"
+
+PHASE="renaming"
+say "3/6 renaming ${SRC} -> ${DEST}"
+# Asked again right before: whatever appeared since the preflight is refused.
+# (After this line rename(2) decides: it replaces only an empty directory.)
+if [ -e "$DEST" ] || [ -L "$DEST" ]; then
+    die "${DEST} exists now: it was created after the preflight, and the move needs a free name"
+fi
+rename_exact "$SRC" "$DEST" || die "could not rename ${SRC} to ${DEST}"
+RENAMED="1"
+[ ! -e "$SRC" ] || die "${SRC} still exists after the rename"
+[ -d "$DEST" ] || die "${DEST} is not a directory after the rename"
+manifest "$DEST" "${WORK}/moved"
+manifests_agree "${WORK}/before" "${WORK}/moved" "moved directory" \
+    || die "the moved directory does not match what was there before"
+
+PHASE="switching"
+say "4/6 rebuilding ${SRC}"
+# The tombstone first, synced with its directory: a rebuilt <repo>/data always
+# carries it, which is how recovery tells it from the original.
+mkdir "$SRC"
+python3 -c 'import os, sys
+fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+os.write(fd, ("moved_to=%s\nmoved_at=%s\n" % (sys.argv[2], sys.argv[3])).encode())
+os.fsync(fd)
+os.close(fd)
+fd = os.open(os.path.dirname(sys.argv[1]), os.O_RDONLY)
+os.fsync(fd)
+os.close(fd)' "${SRC}/${TOMBSTONE}" "$DEST" "$STAMP"
+git -C "$REPO" checkout -- data
+if [ -f "${DEST}/.orchestrator" ]; then
+    # An agreement between sessions, read from the checkout; not state.
+    cp -p "${DEST}/.orchestrator" "${SRC}/.orchestrator"
+fi
+[ "$(resolved_data_dir)" = "$DEST" ] \
+    || die "tools/autopilot/lib/data_dir.sh does not resolve ${DEST} from .env"
+
+PHASE="starting"
+say "5/6 starting ${APP}"
+compose_waited up -d --no-build app
+
+say "6/6 verifying"
+verify_serving "$DEST" || die "the app is not serving correctly from ${DEST}"
+
+PHASE="done"
+trap - EXIT HUP INT TERM
+rm -rf "$WORK"
+say ""
+say "MOVED: the deployment's state is in ${DEST}."
+say "  .env:        ${KEY}=${DEST}"
+say "  safety copy: ${BACKUP} (delete it once you trust the move)"
+say "  ${SRC} now holds the four reference files, ${TOMBSTONE} and .orchestrator."
+say "  to undo:     not automated in this version: there is no --rollback yet."
