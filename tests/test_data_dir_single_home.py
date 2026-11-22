@@ -37,6 +37,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 LIB = REPO_ROOT / "tools" / "autopilot" / "lib" / "data_dir.sh"
 LIB_TEST = REPO_ROOT / "tools" / "autopilot" / "lib" / "data_dir_test.sh"
 WATCHER_TEST = REPO_ROOT / "tools" / "autopilot" / "deploy_data_dir_test.sh"
+MOVE_TEST = REPO_ROOT / "tools" / "move_data_dir_test.sh"
 
 # The harness is a few dozen runs of a short shell script. The bound is there
 # to fail a hang.
@@ -127,6 +128,28 @@ def test_the_watcher_keeps_its_files_where_the_state_is():
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
     assert result.stdout.count("OK: ") == 5, result.stdout
+
+
+def test_the_check_before_the_move_changes_nothing():
+    """tools/move_data_dir.sh against a stub docker: a ready deployment is
+    called ready, and every refusal names its reason and leaves the state
+    directory, `.env` and the container exactly as they were."""
+    for tool in ("git", "python3", "shasum"):
+        assert shutil.which(tool), f"the harness needs {tool} on PATH"
+    result = subprocess.run(
+        ["/bin/bash", str(MOVE_TEST)],
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT_SECONDS,
+        cwd=REPO_ROOT,
+        env=_environment(),
+    )
+    assert result.returncode == 0, (
+        "tools/move_data_dir.sh --check accepts a deployment it should refuse, "
+        "or changes something\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert "ALL 3 GROUPS PASSED" in result.stdout, result.stdout
 
 
 def _resolve(repo: Path, **extra: str) -> subprocess.CompletedProcess:
