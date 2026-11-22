@@ -161,6 +161,38 @@ must be an ancestor of `main`.
   #634's text reading cannot move most of the gap.
 - **Check:** `python -m utils.backfill_plot_from_text` prints the per-portal split.
 
+### Nobody knows whether the recommendations beat a plain sort
+
+- **Anchor:** `services/taste_service.py` (`taste_score`);
+  `services/taste_recommendation.py` (`recommended`); #635 (closed `not planned`
+  2026-11-22, owner decision).
+- **Measured 2026-11-10** on subscription 24, read-only: 17 positive and 37
+  negative labels; `taste_score` AUC 1.00 is trained on those same labels and
+  proves nothing; every other order (`score_lifestyle` 0.68, `score_total` 0.56,
+  newest first 0.51, price 0.40) is within about 1.5 standard errors of 0.5.
+  Telling 0.65 from 0.5 at ~80% power needs about 110–185 new decisions on
+  listings the owner had not seen, with the scores stored before the decision;
+  past scores are not stored. **2026-11-22:** one new decision since 2026-11-10
+  (`owner_verdict_at`), so the measurement cannot be repeated.
+- **What breaks, for whom:** the owner may be ranking by a score that orders his
+  listings no better than the date; nothing is removed or added until it is
+  measured.
+- **Returns when:** at least 110 new decisions exist on listings whose scores
+  were recorded before the decision.
+
+### Milanuncios alert mail waits on the portal with no email-card fallback
+
+- **Anchor:** `services/milanuncios_source.py` (`resolve_tracker`,
+  `fetch_listing`, `_refusal_row`); `utils/uid_cursor.py` (`HeldUids`);
+  fotocasa's card fallback is `fotocasa_source.cards_in_email` (#636).
+- **Measured 2026-11-22** after the 07:00 run, read-only: 9 milanuncios emails
+  held on the retry list after portal refusals, one of them new that morning;
+  fotocasa is down to one email waiting only for a slot.
+- **What breaks, for whom:** listings from the owner's milanuncios searches never
+  reach `/properties` while the portal refuses this machine, and every run with
+  them held ends `partial`. Owner decision 2026-11-22: one backlog line, not a
+  new issue.
+
 ### `utils/backfill_plot_area.py` skips rows filled from text
 
 - **Anchor:** `utils/backfill_plot_area.py` (`Property.plot_area.is_(None)`).
