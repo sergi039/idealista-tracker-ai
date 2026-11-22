@@ -58,8 +58,10 @@ write_stubs() {
 # app's image id), $STUB/ref-env (the app's REFERENCE_DATA_DIR),
 # $STUB/image-root (that image's file tree, with nothing mounted), $STUB/user
 # (the app's Config.User), $STUB/image-user (the image's own USER),
-# $STUB/image-volumes (its Config.Volumes) and $STUB/unreadable-by (a user who
-# cannot read the image's reference files).
+# $STUB/image-volumes (its Config.Volumes), $STUB/unreadable-by (a user who
+# cannot read the image's reference files) and $STUB/live-ref (the directory
+# the running app sees at its REFERENCE_DATA_DIR, when a mount covers the
+# image's; absent, it sees the image's).
 #
 # The check may only ask. Anything outside the verbs below is recorded in
 # forbidden and refused - and a stop is still obeyed, so a check that stopped
@@ -175,6 +177,16 @@ case "$1" in
         else
             REFERENCE_DATA_DIR="$root$dir" sh -c "$script" sh "$root$state" "$@"
         fi
+        ;;
+    exec)
+        # The running app looks at its own REFERENCE_DATA_DIR: exactly
+        # `exec <app> sh -c <script> sh <files>`, nothing else.
+        [ "$2" = "$STUB_APP" ] && [ "$3 $4" = "sh -c" ] && [ "$6" = "sh" ] || forbidden "$*"
+        hook exec && exit 1
+        script="$5"
+        shift 6
+        if [ -e "$STUB/live-ref" ]; then live="$STUB/live-ref"; else live="$(cd "$STUB/image-root" && pwd -P)$(cat "$STUB/ref-env")"; fi
+        REFERENCE_DATA_DIR="$live" sh -c "$script" sh "$@"
         ;;
     ps)
         [ "$*" = "ps -a --format {{.Names}}" ] || forbidden "$*"
@@ -471,6 +483,33 @@ new_world; mkdir -p "$STUB/image-root/app/data"
 mv "$STUB/image-root/opt/idealista/reference_data/top_agencies.json" "$STUB/image-root/app/data/image-only.json"
 ln -s ../../../app/data/image-only.json "$STUB/image-root/opt/idealista/reference_data/top_agencies.json"
 refusal "a reference file links into the mount" "which the state mount hides from the app"
+# A chain whose middle link lies under the mount ends outside it, and the app
+# still cannot follow it: every hop counts, not where the chain ends.
+new_world; mkdir -p "$STUB/image-root/app/data" "$STUB/image-root/opt/bundled"
+mv "$STUB/image-root/opt/idealista/reference_data/top_agencies.json" "$STUB/image-root/opt/bundled/top_agencies.json"
+ln -s ../../../app/data/agency-link "$STUB/image-root/opt/idealista/reference_data/top_agencies.json"
+ln -s ../../opt/bundled/top_agencies.json "$STUB/image-root/app/data/agency-link"
+refusal "a two-hop link through the mount" "/app/data/agency-link under /app/data, which the state mount hides"
+expect_untouched "preflight: a two-hop link through the mount"
+# So does a parent directory a link passes through.
+new_world; mkdir -p "$STUB/image-root/app/data/refs" "$STUB/image-root/srv"
+mv "$STUB/image-root/opt/idealista/reference_data/top_agencies.json" "$STUB/image-root/app/data/refs/top_agencies.json"
+ln -s ../app/data/refs "$STUB/image-root/srv/refs"
+ln -s ../../../srv/refs/top_agencies.json "$STUB/image-root/opt/idealista/reference_data/top_agencies.json"
+refusal "a link through a parent under the mount" "which the state mount hides from the app"
+# A link that stays outside the mount is followed and passes.
+new_world; mkdir -p "$STUB/image-root/opt/bundled"
+mv "$STUB/image-root/opt/idealista/reference_data/top_agencies.json" "$STUB/image-root/opt/bundled/top_agencies.json"
+ln -s ../../bundled/top_agencies.json "$STUB/image-root/opt/idealista/reference_data/top_agencies.json"
+run_move -- --check "$DEST"
+[ "$RC" = "0" ] || fail "preflight: a reference file linked outside the mount refused (rc=${RC}): $(grep -m 1 'NOT\|^ *-' "${W}/out")"
+# The image carries the files, but the running app mounts an empty, unrelated
+# directory over them.
+new_world; mkdir "$STUB/live-ref"
+refusal "an empty mount over the reference directory" "as it runs now cannot read ine_municipal.json under /opt/idealista/reference_data"
+expect_untouched "preflight: an empty mount over the reference directory"
+new_world; : >"$STUB/fail.exec"
+refusal "docker cannot look into the app" "could not look into idealista-app for its reference files"
 # A newline ends the value; $(...) would strip it and check another directory.
 new_world; printf '/opt/idealista/reference_data\n' >"$STUB/ref-env"
 refusal "REFERENCE_DATA_DIR ends in a newline" "holds a control character or a newline"
