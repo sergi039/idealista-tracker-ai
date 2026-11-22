@@ -356,3 +356,52 @@ must be an ancestor of `main`.
   against Compose itself, and a refusal of any control character before grep.
   Not covered: a path with a line break at its very end is refused by the
   parser alone (`$(...)` drops it before the reader's own check can see it).
+
+### The Compose state-mount test reads only the default profile and only `/app/data` (#706 review)
+
+- **Anchor:** `_services_as_compose_reads_them` and `_state_mounts` in `tests/test_compose_state_mount.py`.
+- **Found 2026-11-21** by the review of #706: `docker compose config` without
+  `--profile '*'` leaves out every service behind a profile, and a service is
+  judged only by a mount whose target is `/app/data`, so a profiled service, or
+  one that binds the state directory at another target, could still say
+  `create_host_path: true` and the test would pass. The probe's `down` has no
+  `--volumes`, so an anonymous volume the image declares would be left behind.
+- **What breaks, for whom:** today nothing - the repository's one service that
+  binds the state is unprofiled and mounts it at `/app/data`, and the probe
+  image declares no volume. A later service that breaks either assumption
+  would bring back a `docker compose up` that starts on an empty directory and
+  loses the mail cursor, with the test still green.
+- **Fix:** read every profile and judge a mount by its source (the state
+  directory) across all services; `down --volumes` in the probe.
+
+### `lock_race_test.sh` lost a round under load: no process took the lock
+
+- **Anchor:** `tools/autopilot/lib/lock_race_test.sh` (`orphan round`), run by `tests/test_autopilot_lock.py::test_autopilot_lock_admits_exactly_one_holder`.
+- **Observed 2026-11-21** in a pre-push gate on the mini: `FAIL: orphan round
+  9: 0 simultaneous winners (expected 1)`, the other four checks passed, the
+  suite ended `1 failed, 6835 passed`; the next run of the same commit passed.
+  Load average was about 16-17 then, with several gates running at once (it
+  reached 51 within minutes). The pushed diff touched no lock file.
+- **What breaks, for whom:** a push is refused by a test of code it did not
+  change, and the cause is not established: a timing assumption in the test
+  under load, or a real window in which a dead holder's lock is taken by
+  nobody. The second would be a missed autopilot run, not two at once.
+- **Check:** run the script in a loop while four `tools/ci/local_ci.sh` run.
+
+### The fresh-session recovery of a job's "running" mark missed once in CI
+
+- **Anchor:** `tests/test_issue_176_persist_jobs.py::test_a_running_mark_that_fails_recovers_via_a_fresh_session`, `_write_status` in `services/background_jobs.py`.
+- **Observed 2026-11-21 16:39 Madrid** in CI, run 44919330153 attempt 1, on a
+  pull request that touches neither file: `assert 'queued' == 'success'`, the
+  suite ended `1 failed, 6975 passed`. The attempt counter was as expected
+  (three refused, one fresh-session call), and that call logged `lost
+  ownership before recording {'status': 'running', ...} (expected
+  status='queued')`: the fresh session's compare-and-swap matched no row.
+  Attempt 2 of the same run passed (`6976 passed`), as did `main` at the same
+  commit.
+- **What breaks, for whom:** a merge is held by a test of code it did not
+  change, and the cause is not established: the test's shared in-memory
+  SQLite connection, or a real case in which the fallback does not see the
+  `queued` row - then a job stays `queued` and never runs.
+- **Check:** the test in a loop under `pytest -p no:randomly`, then in the
+  order the full suite reaches it.

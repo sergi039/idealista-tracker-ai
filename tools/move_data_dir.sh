@@ -92,6 +92,42 @@ mount_source() {
 
 phys() { ( cd "$1" 2>/dev/null && pwd -P ); }
 
+# One container's mounts from `{{json .Mounts}}` on stdin: per mount the word
+# "mount", then Type, Name, Destination and Source, each NUL-terminated, and
+# "end" once all were read. A path may hold any character but NUL; a list
+# that stops before "end" was not read.
+MOUNTS_PY='import json, sys
+for m in json.load(sys.stdin) or []:
+    f = ["mount"] + [m.get(k) or "" for k in ("Type", "Name", "Destination", "Source")]
+    if any("\0" in v for v in f):
+        sys.exit(1)
+    sys.stdout.write("".join(v + "\0" for v in f))
+sys.stdout.write("end\0")'
+
+# What is wrong with the reference files the app reads, or nothing. The
+# directory is the container's own REFERENCE_DATA_DIR (that one variable is
+# read, no other); the files are looked for in a throwaway container of the
+# same image with nothing mounted - an exec would look through the state mount.
+reference_gap() {
+    local image dir missing rc=0
+    image="$(dk inspect -f '{{.Image}}' "$APP" 2>/dev/null)" && [ -n "$image" ] \
+        || { say "docker could not say which image ${APP} runs"; return; }
+    dir="$(dk inspect -f '{{range .Config.Env}}{{if ge (len .) 19}}{{if eq (slice . 0 19) "REFERENCE_DATA_DIR="}}{{slice . 19}}{{end}}{{end}}{{end}}' "$APP" 2>/dev/null)" \
+        || { say "docker could not say where ${APP} reads its reference files"; return; }
+    case "$dir" in
+        "") say "${APP} has no REFERENCE_DATA_DIR, so it reads its reference files from ${CONTAINER_STATE}"; return ;;
+        "$CONTAINER_STATE" | "$CONTAINER_STATE"/* | [!/]*) say "${APP} reads its reference files from ${dir}, not from outside ${CONTAINER_STATE}"; return ;;
+    esac
+    # shellcheck disable=SC2016,SC2086
+    missing="$(dk run --rm --network none --entrypoint sh -e "REFERENCE_DATA_DIR=${dir}" "$image" \
+        -c 'for n; do test -r "$REFERENCE_DATA_DIR/$n" || { printf %s "$n"; exit 1; }; done' sh $REFERENCE_FILES 2>/dev/null)" || rc=$?
+    if [ "$rc" = "1" ] && [ -n "$missing" ]; then
+        say "the image of ${APP} does not carry ${missing} under ${dir}; deploy the build that does first"
+    elif [ "$rc" != "0" ]; then
+        say "docker could not run the image of ${APP} to look for its reference files (exit ${rc})"
+    fi
+}
+
 device_of() {
     python3 -c 'import os, sys; print(os.stat(sys.argv[1]).st_dev)' "$1" 2>/dev/null
 }
@@ -178,7 +214,7 @@ preflight_common() {
 }
 
 preflight_apply() {
-    local head deployed parent source count name other others mounts dirty running_rc=0 link would_mount
+    local head deployed parent source count other others mounts dirty running_rc=0 link would_mount gap complete field
     local here there here_at there_at kind volume target
     say "preflight (read-only):"
     preflight_common
@@ -265,8 +301,12 @@ preflight_apply() {
 
     # What is serving.
     head="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || true)"
-    deployed="$(cat "${SRC}/.deployed_sha" 2>/dev/null || true)"
-    if [ -z "$head" ] || [ "$deployed" != "$head" ]; then
+    # Only a regular file is read: a FIFO of that name holds `cat` for ever.
+    deployed=""
+    [ ! -f "${SRC}/.deployed_sha" ] || deployed="$(cat "${SRC}/.deployed_sha" 2>/dev/null || true)"
+    if [ ! -f "${SRC}/.deployed_sha" ]; then
+        problem "${SRC}/.deployed_sha is missing or not a regular file: what serves is not known"
+    elif [ -z "$head" ] || [ "$deployed" != "$head" ]; then
         problem "a deploy is pending: .deployed_sha is '${deployed:0:7}', HEAD is '${head:0:7}'. Let the watcher finish"
     else
         fine "what serves is HEAD (${head:0:7})"
@@ -282,14 +322,9 @@ preflight_apply() {
             fine "${APP} mounts ${SRC}"
         fi
         # The image has to carry its own reference files, or the app loses
-        # them the moment /app/data stops being the checkout's directory. The
-        # one `exec` of this check: `test -r` in the container, which reads.
-        for name in $REFERENCE_FILES; do
-            # shellcheck disable=SC2016
-            if ! dk exec "$APP" sh -c 'test -r "${REFERENCE_DATA_DIR:?}/$1"' sh "$name" >/dev/null 2>&1; then
-                problem "the running image does not carry ${name} under REFERENCE_DATA_DIR; deploy the build that does first"
-            fi
-        done
+        # them the moment /app/data stops being the checkout's directory.
+        gap="$(reference_gap)"
+        if [ -n "$gap" ]; then problem "$gap"; else fine "the image carries the reference files"; fi
     fi
     # Every mount of every container, running or not, against the state
     # directory: a source inside it (a container on data/.inflight can write
@@ -302,12 +337,17 @@ preflight_apply() {
     fi
     while IFS= read -r other; do
         [ -n "$other" ] || continue
-        if ! mounts="$(dk inspect -f '{{range .Mounts}}{{.Type}}|{{.Name}}|{{.Destination}}|{{.Source}}{{"\n"}}{{end}}' "$other" 2>/dev/null)"; then
+        if ! mounts="$(dk inspect -f '{{json .Mounts}}' "$other" 2>/dev/null)"; then
             problem "docker could not say what container ${other} mounts"
             continue
         fi
-        while IFS='|' read -r kind volume target source; do
-            [ -n "$kind" ] || continue
+        complete=no
+        while IFS= read -r -d '' field; do
+            [ "$field" != "end" ] || { complete=yes; break; }
+            if ! { IFS= read -r -d '' kind && IFS= read -r -d '' volume \
+                && IFS= read -r -d '' target && IFS= read -r -d '' source; }; then
+                break
+            fi
             if [ "$other" = "$APP" ] && [ "$target" = "$CONTAINER_STATE" ]; then
                 continue
             fi
@@ -333,7 +373,8 @@ preflight_apply() {
                 yes) problem "container ${other} mounts ${source} at ${target}: it is ${SRC}, inside it, or holds it. Remove the container first (docker rm ${other})" ;;
                 *) problem "could not compare what container ${other} mounts with ${SRC}" ;;
             esac
-        done <<<"$mounts"
+        done < <(printf '%s' "$mounts" | python3 -c "$MOUNTS_PY" 2>/dev/null)
+        [ "$complete" = "yes" ] || problem "the mounts of container ${other} could not be read in full"
     done <<<"$others"
 }
 
