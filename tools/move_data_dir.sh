@@ -12,10 +12,12 @@
 #
 #   move_data_dir.sh --check  /absolute/destination   # read-only: may it run?
 #   move_data_dir.sh --apply  /absolute/destination   # do it (owner's command)
+#   move_data_dir.sh --rollback                       # move it back
 #
 # `--check` (the default) only reads. `--apply` is one rename(2) on the same
-# volume after a checksummed safety copy. There is no `--rollback` in this
-# version: undoing a finished move is the manual commands `recover` prints.
+# volume after a checksummed safety copy. `--rollback` finds the directory by
+# .env (or the tombstone), refuses before it stops anything, and renames it
+# back; it is idempotent, so a second run finishes what a killed first left.
 #
 # `--apply` takes the deploy and merge locks BEFORE its preflight, so a second
 # `--apply` stops at the lock or, once the first is done, at the preflight -
@@ -74,6 +76,8 @@ ASIDE=""
 WORK=""
 # --apply: "0" until its rename succeeded, "1" after.
 RENAMED=""
+# --rollback: "1" when .env names nothing and <repo>/data carries no tombstone.
+NOTHING_TO_UNDO=""
 # The `docker compose` call --apply is waiting on, while it runs.
 BG_PID=""
 
@@ -85,7 +89,7 @@ usage() {
 usage:
   move_data_dir.sh [--check] /absolute/destination   read-only: may the move run?
   move_data_dir.sh --apply   /absolute/destination   move the state directory
-(there is no --rollback in this version)
+  move_data_dir.sh --rollback                        move it back into the checkout
 EOF
 }
 
@@ -121,26 +125,41 @@ end_waited() {
     done
     kill -KILL "$BG_PID" 2>/dev/null || true
     wait "$BG_PID" 2>/dev/null || true
-    note "ended the interrupted 'docker compose' call (pid ${BG_PID})"
+    note "ended the interrupted call (pid ${BG_PID})"
     BG_PID=""
 }
 
-# compose_waited for recovery: 124 once COMPOSE_LIMIT_S has passed.
-compose_bounded() {
-    local rc=0 waited=0
-    ( cd "$REPO" && exec env -u "$KEY" docker compose -f "$COMPOSE_FILE" "$@" ) </dev/null >/dev/null 2>&1 8>&- 9>&- &
+# run_bounded <label> <stdout file> <command...>: in the background, polled,
+# 124 once COMPOSE_LIMIT_S has passed. Polling, not `wait`: recovery ignores
+# signals, and a probe under a trapped signal must not hang either.
+run_bounded() {
+    local label="$1" out="$2" rc=0 waited=0
+    shift 2
+    "$@" </dev/null >"$out" 2>/dev/null 8>&- 9>&- &
     BG_PID=$!
     while kill -0 "$BG_PID" 2>/dev/null && [ "$waited" -lt $((COMPOSE_LIMIT_S * 10)) ]; do
         sleep 0.1
         waited=$((waited + 1))
     done
     if kill -0 "$BG_PID" 2>/dev/null; then
-        say "ERROR: 'docker compose $*' did not finish in ${COMPOSE_LIMIT_S} s"
+        say "ERROR: '${label}' did not finish in ${COMPOSE_LIMIT_S} s"
         end_waited
         return 124
     fi
     wait "$BG_PID" || rc=$?
     BG_PID=""
+    return "$rc"
+}
+compose_in_repo() { cd "$REPO" && exec env -u "$KEY" docker compose -f "$COMPOSE_FILE" "$@"; }
+compose_bounded() { run_bounded "docker compose $*" /dev/null compose_in_repo "$@"; }
+# A bounded call's stdout, for $(...); its status, or 124.
+bounded_out() {
+    local label="$1" tmp rc=0
+    shift
+    tmp="$(mktemp "${TMPDIR:-/tmp}/idealista-move-out.XXXXXX")" || return 1
+    run_bounded "$label" "$tmp" "$@" >&2 || rc=$?
+    cat "$tmp"
+    rm -f "$tmp"
     return "$rc"
 }
 
@@ -231,7 +250,7 @@ reference_gap() {
         *) say "the image of ${APP} declares volumes (${volumes}); a probe container would create one, so its reference files were not looked for"; return ;;
     esac
     # shellcheck disable=SC2016,SC2086
-    found="$(dk run --rm --read-only --network none ${as[@]+"${as[@]}"} --entrypoint sh -e "REFERENCE_DATA_DIR=${dir}" "$image" \
+    found="$(bounded_out "docker run ${image}" docker run --rm --read-only --network none ${as[@]+"${as[@]}"} --entrypoint sh -e "REFERENCE_DATA_DIR=${dir}" "$image" \
         -c 'state=$1; shift; cd -- "$REFERENCE_DATA_DIR" 2>/dev/null || exit 3
 w() { rest=$1; cur=; k=0
 while :; do rest=${rest#"${rest%%[!/]*}"}; [ -n "$rest" ] || return 0
@@ -244,7 +263,7 @@ t=$(readlink -- "$p" && printf .) || return 4; t=${t%?.}
 case $t in /*) cur= ;; esac; rest=$t${rest:+/$rest}; done; }
 w "$REFERENCE_DATA_DIR" || { e=$?; [ "$e" = 5 ] || exit 6; printf %s "$p"; exit 2; }
 for n; do test -r "$n" || { printf %s "$n"; exit 1; }
-w "$REFERENCE_DATA_DIR/$n" || { e=$?; [ "$e" = 5 ] || { printf %s "$n"; exit 4; }; printf "%s -> %s" "$n" "$p"; exit 5; }; done' sh "$CONTAINER_STATE" $REFERENCE_FILES 2>/dev/null)" || rc=$?
+w "$REFERENCE_DATA_DIR/$n" || { e=$?; [ "$e" = 5 ] || { printf %s "$n"; exit 4; }; printf "%s -> %s" "$n" "$p"; exit 5; }; done' sh "$CONTAINER_STATE" $REFERENCE_FILES)" || rc=$?
     case "$rc:${found:+set}" in
         0:*) live_reference_gap "$dir" ;;
         1:set) say "the image of ${APP} does not carry ${found} under ${dir} readable by ${user:-its default user}; deploy the build that does first" ;;
@@ -263,8 +282,8 @@ w "$REFERENCE_DATA_DIR/$n" || { e=$?; [ "$e" = 5 ] || { printf %s "$n"; exit 4; 
 live_reference_gap() {
     local found rc=0
     # shellcheck disable=SC2016,SC2086
-    found="$(dk exec "$APP" sh -c 'cd -- "$REFERENCE_DATA_DIR" 2>/dev/null || exit 3
-for n; do test -r "$n" || { printf %s "$n"; exit 1; }; done' sh $REFERENCE_FILES 2>/dev/null)" || rc=$?
+    found="$(bounded_out "docker exec ${APP} sh" docker exec "$APP" sh -c 'cd -- "$REFERENCE_DATA_DIR" 2>/dev/null || exit 3
+for n; do test -r "$n" || { printf %s "$n"; exit 1; }; done' sh $REFERENCE_FILES)" || rc=$?
     case "$rc:${found:+set}" in
         0:*) ;;
         1:set) say "${APP} as it runs now cannot read ${found} under ${1}, although its image carries it: a mount hides it" ;;
@@ -327,6 +346,40 @@ resolved_data_dir() {
 # lib/data_dir.sh and app.py. Never decided by reading it.
 has_tombstone() {
     [ -e "${1}/${TOMBSTONE}" ] || [ -L "${1}/${TOMBSTONE}" ]
+}
+
+# The moved_to= line of a tombstone that is a regular file, else nothing.
+tombstone_destination() {
+    python3 - "${1}/${TOMBSTONE}" 2>/dev/null <<'PY' || :
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+try:
+    if not stat.S_ISREG(os.lstat(path).st_mode):
+        sys.exit(0)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            sys.exit(0)
+        raw = os.read(descriptor, 4096)
+    finally:
+        os.close(descriptor)
+except OSError:
+    sys.exit(0)
+for line in raw.decode("utf-8", errors="replace").splitlines():
+    if line.startswith("moved_to="):
+        value = line[len("moved_to="):]
+        print("".join(ch for ch in value if ch.isprintable()).strip()[:512])
+        break
+PY
+}
+
+# The state, the destination and the backup root: no one inside another.
+refuse_overlap() {
+    [ -z "$1" ] || [ -z "$2" ] || [ "$(overlaps_state "$1" "$2")" = "no" ] \
+        || problem "${1} and ${2}: one holds the other; the destination and MOVE_BACKUP_ROOT go beside ${SRC}, not in it"
 }
 
 # Write or remove the one line, never printing `.env`: same-mode temp, fsync,
@@ -462,7 +515,7 @@ verify_serving() {
     token="move-probe-${STAMP}-$$"
     probe="${expected}/.move-probe-${STAMP}"
     printf '%s\n' "$token" >"$probe"
-    seen="$(dk exec "$APP" cat "${CONTAINER_STATE}/.move-probe-${STAMP}" 2>/dev/null || true)"
+    seen="$(bounded_out "docker exec ${APP} cat" docker exec "$APP" cat "${CONTAINER_STATE}/.move-probe-${STAMP}")" || true
     rm -f "$probe"
     if [ "$seen" != "$token" ]; then
         say "ERROR: a file written to ${expected} on the host is not what ${APP} reads at ${CONTAINER_STATE}"
@@ -482,6 +535,13 @@ verify_serving() {
 # --- back to the directory inside the checkout -------------------------------
 
 manual_recovery() {
+    local back=""
+    if [ "$RENAMED" = "1" ] || [ "$MODE" = "rollback" ]; then
+        back="    mkdir -p ${BACKUP_ROOT}
+    [ ! -d ${DEST:-DESTINATION} ] || [ ! -e ${SRC} ] || rmdir ${SRC} 2>/dev/null || mv ${SRC} ${BACKUP_ROOT}/checkout-data-at-rollback-${STAMP}
+    [ ! -d ${DEST:-DESTINATION} ] || mv ${DEST:-DESTINATION} ${SRC}
+"
+    fi
     cat <<EOF
 
   Production may be DOWN. Nothing below was done for you; run it by hand, in
@@ -489,11 +549,7 @@ manual_recovery() {
 
     cd ${REPO}
     env -u ${KEY} docker compose -f ${COMPOSE_FILE} stop app
-    # the rebuilt ${SRC} (it holds ${TOMBSTONE}, or nothing) aside, if there
-    # is one, then ${DEST:-<destination>} back, if ${SRC} is free:
-    [ ! -f ${SRC}/${TOMBSTONE} ] || mv ${SRC} ${BACKUP_ROOT}/checkout-data-at-rollback-${STAMP}
-    rmdir ${SRC} 2>/dev/null || true
-    [ -e ${SRC} ] || mv ${DEST:-<destination>} ${SRC}
+${back}    [ -d ${SRC} -a ! -e ${SRC}/${TOMBSTONE} ]    # must succeed: the state is back
     git -C ${REPO} checkout -- data
     # then remove the line '${KEY}=...' from ${REPO}/.env
     env -u ${KEY} docker compose -f ${COMPOSE_FILE} up -d --no-build app
@@ -502,6 +558,23 @@ manual_recovery() {
   A safety copy from before the move, if taken, is under
   ${BACKUP_ROOT}/data-pre-move-* (older than anything written since).
 EOF
+}
+
+# The tracked reference files as HEAD has them (a merge may have updated one
+# while the old copies sat in the moved directory), and the .orchestrator the
+# rebuilt directory got meanwhile: this run's aside, or a killed rollback's.
+refresh_checkout_files() {
+    local aside="$ASIDE" last
+    git -C "$REPO" checkout -- data >/dev/null 2>&1 \
+        || note "WARNING: 'git checkout -- data' failed; check the four reference files by hand"
+    if [ -z "$aside" ]; then
+        for last in "${BACKUP_ROOT}"/checkout-data-at-rollback-*; do [ -d "$last" ] && aside="$last"; done
+    fi
+    [ -n "$aside" ] && [ -f "${aside}/.orchestrator" ] || return 0
+    [ "$aside" = "$ASIDE" ] || [ ! -e "${SRC}/.orchestrator" ] \
+        || [ "${aside}/.orchestrator" -nt "${SRC}/.orchestrator" ] || return 0
+    cp -p "${aside}/.orchestrator" "${SRC}/.orchestrator" \
+        || note "WARNING: could not restore the newer .orchestrator from ${aside}"
 }
 
 # Idempotent, and driven by what is on disk rather than by PHASE. Returns 0
@@ -523,6 +596,7 @@ restore_original() {
             }
             note "removed the ${KEY} line from .env"
         fi
+        [ "$MODE" != "rollback" ] || refresh_checkout_files
         if ! compose_bounded up -d --no-build app; then
             say "ERROR: 'docker compose up -d --no-build app' failed"
             return 1
@@ -541,7 +615,9 @@ restore_original() {
 
     if [ -n "$DEST" ] && [ -d "$DEST" ]; then
         if [ -e "$SRC" ]; then
-            if has_tombstone "$SRC"; then
+            if has_tombstone "$SRC" || [ "$RENAMED" = "1" ]; then
+                # This run renamed the state away: whatever stands here now
+                # was made since.
                 rebuilt=1
             elif rmdir "$SRC" 2>/dev/null; then
                 # An empty directory: the rebuild got as far as mkdir.
@@ -565,14 +641,7 @@ restore_original() {
             return 1
         }
         note "renamed ${DEST} back to ${SRC}"
-        # The tracked reference files as HEAD has them: a merge may have
-        # updated one while the old copies sat in the moved directory.
-        git -C "$REPO" checkout -- data >/dev/null 2>&1 \
-            || note "WARNING: 'git checkout -- data' failed; check the four reference files by hand"
-        if [ -n "$ASIDE" ] && [ -f "${ASIDE}/.orchestrator" ]; then
-            cp -p "${ASIDE}/.orchestrator" "${SRC}/.orchestrator" \
-                || note "WARNING: could not restore the newer .orchestrator from ${ASIDE}"
-        fi
+        refresh_checkout_files
     elif [ ! -d "$SRC" ] || has_tombstone "$SRC"; then
         say "ERROR: ${SRC} is not the original directory and ${DEST:-the destination} does not exist"
         return 1
@@ -660,9 +729,36 @@ preflight_common() {
     esac
 }
 
+check_backup_root() {
+    local backup_at here there here_at there_at
+    # The safety copy's directory. A failed move keeps the rebuilt ${SRC}
+    # aside there by one rename(2): on another filesystem that rename fails
+    # (EXDEV) with the app already stopped. Asked of the nearest directory
+    # that exists, as `mkdir -p` will create the rest.
+    backup_at="$BACKUP_ROOT"
+    while [ ! -e "$backup_at" ] && [ "$backup_at" != "/" ]; do
+        backup_at="$(dirname "$backup_at")"
+    done
+    if [ -d "$SRC" ]; then
+        here="$(device_of "$SRC")" || here=""
+        there="$(device_of "$backup_at")" || there=""
+        here_at="$(mount_point_of "$SRC")" || here_at=""
+        there_at="$(mount_point_of "$backup_at")" || there_at=""
+        if [ ! -d "$backup_at" ]; then
+            problem "${backup_at} is not a directory; the safety copy goes under ${BACKUP_ROOT}"
+        elif [ -z "$here" ] || [ -z "$there" ] || [ -z "$here_at" ] || [ -z "$there_at" ]; then
+            problem "could not establish which filesystem ${SRC} and ${backup_at} are on"
+        elif [ "$here" != "$there" ] || [ "$here_at" != "$there_at" ]; then
+            problem "${BACKUP_ROOT} is not on the mounted filesystem of ${SRC}; a failed move puts the rebuilt directory there by one rename. Set MOVE_BACKUP_ROOT"
+        else
+            fine "${BACKUP_ROOT} is on the same device and mount point as ${SRC}"
+        fi
+    fi
+}
+
 preflight_apply() {
     local head deployed parent source count other others mounts dirty running_rc=0 link would_mount gap complete field
-    local here there here_at there_at kind volume target backup_at
+    local here there here_at there_at kind volume target
     say "preflight (read-only):"
     preflight_common
 
@@ -704,32 +800,10 @@ preflight_apply() {
         fi
     fi
 
-    # The safety copy's directory. A failed move keeps the rebuilt ${SRC}
-    # aside there by one rename(2): on another filesystem that rename fails
-    # (EXDEV) with the app already stopped. Asked of the nearest directory
-    # that exists, as `mkdir -p` will create the rest.
-    backup_at="$BACKUP_ROOT"
-    while [ ! -e "$backup_at" ] && [ "$backup_at" != "/" ]; do
-        backup_at="$(dirname "$backup_at")"
-    done
-    if [ "$(overlaps_state "$BACKUP_ROOT" "$DEST")" != "no" ]; then
-        problem "${BACKUP_ROOT} and ${DEST}: one holds the other; set MOVE_BACKUP_ROOT beside the destination"
-    fi
-    if [ -d "$SRC" ]; then
-        here="$(device_of "$SRC")" || here=""
-        there="$(device_of "$backup_at")" || there=""
-        here_at="$(mount_point_of "$SRC")" || here_at=""
-        there_at="$(mount_point_of "$backup_at")" || there_at=""
-        if [ ! -d "$backup_at" ]; then
-            problem "${backup_at} is not a directory; the safety copy goes under ${BACKUP_ROOT}"
-        elif [ -z "$here" ] || [ -z "$there" ] || [ -z "$here_at" ] || [ -z "$there_at" ]; then
-            problem "could not establish which filesystem ${SRC} and ${backup_at} are on"
-        elif [ "$here" != "$there" ] || [ "$here_at" != "$there_at" ]; then
-            problem "${BACKUP_ROOT} is not on the mounted filesystem of ${SRC}; a failed move puts the rebuilt directory there by one rename. Set MOVE_BACKUP_ROOT"
-        else
-            fine "${BACKUP_ROOT} is on the same device and mount point as ${SRC}"
-        fi
-    fi
+    check_backup_root
+    refuse_overlap "$SRC" "$DEST"
+    refuse_overlap "$SRC" "$BACKUP_ROOT"
+    refuse_overlap "$DEST" "$BACKUP_ROOT"
 
     # The contract, asked of Compose itself: with the variable naming the
     # destination, would it mount the destination? In a checkout whose compose
@@ -757,7 +831,7 @@ preflight_apply() {
         fine "the checkout is on ${BRANCH} and clean"
     fi
     count="$(env_line_count)"
-    [ "$count" = "0" ] || problem "${REPO}/.env already sets ${KEY} (${count} line(s)); the state may already be moved"
+    [ "$count" = "0" ] || problem "${REPO}/.env already sets ${KEY} (${count} line(s)); the state may already be moved - see --rollback"
     ! has_tombstone "$SRC" || problem "${SRC}/${TOMBSTONE} exists; the state was moved before"
     [ -d "$SRC" ] || problem "${SRC} is not a directory"
     if [ -d "$SRC" ]; then
@@ -852,14 +926,86 @@ preflight_apply() {
     done <<<"$others"
 }
 
+preflight_rollback() {
+    local value recorded
+    say "preflight (read-only):"
+    preflight_common
+    value="$(resolved_data_dir 2>/dev/null || true)"
+    if [ "$(env_line_count)" = "0" ] && ! has_tombstone "$SRC"; then
+        if [ -d "$SRC" ]; then
+            NOTHING_TO_UNDO="1"
+            fine "nothing to undo: .env has no ${KEY} line and ${SRC} carries no ${TOMBSTONE}"
+        else
+            problem "${SRC} is not a directory, and neither .env nor a ${TOMBSTONE} says where the state is"
+        fi
+        return 0
+    fi
+    recorded="$(tombstone_destination "$SRC")"
+    if [ -z "$value" ] || [ "$value" = "$SRC" ]; then
+        value="$recorded"
+    elif [ -n "$recorded" ] && [ "$recorded" != "$value" ]; then
+        problem "${SRC}/${TOMBSTONE} records ${recorded}, .env names ${value}; make them agree by hand first"
+    fi
+    DEST="${value%/}"
+    if [ -n "$DEST" ] && [ -d "$DEST" ]; then
+        fine "the state is in ${DEST}"
+        if [ -d "$SRC" ] && ! has_tombstone "$SRC" && [ -n "$(ls -A "$SRC" 2>/dev/null)" ]; then
+            problem "both ${SRC} (without ${TOMBSTONE}) and ${DEST} hold files; cannot tell which holds the state"
+        fi
+    elif [ -d "$SRC" ] && ! has_tombstone "$SRC"; then
+        fine "the state is in ${SRC} - no rename to undo, only the .env line"
+    else
+        problem "cannot find the moved directory ('${DEST:-unknown}' is not a directory)"
+    fi
+    check_backup_root
+    refuse_overlap "$SRC" "$DEST"
+    refuse_overlap "$SRC" "$BACKUP_ROOT"
+    refuse_overlap "$DEST" "$BACKUP_ROOT"
+}
+
 # --- modes -------------------------------------------------------------------
 
 MODE="check"
 case "${1:-}" in
     --check) MODE="check"; shift ;;
     --apply) MODE="apply"; shift ;;
+    --rollback) MODE="rollback"; shift ;;
     -h | --help) usage; exit 0 ;;
 esac
+
+if [ "$MODE" = "rollback" ]; then
+    [ $# -eq 0 ] || { usage; exit 2; }
+    take_both_locks
+    preflight_rollback 8>&- 9>&-
+    if [ "$PROBLEMS" != "0" ]; then
+        say "NOT ROLLED BACK: ${PROBLEMS} problem(s) above. Nothing was touched."
+        exit 1
+    fi
+    if [ "$NOTHING_TO_UNDO" = "1" ] && app_running \
+        && [ "$(phys "$(mount_source)")" = "$(phys "$SRC")" ]; then
+        say "ALREADY ROLLED BACK: ${APP} is running on ${SRC}. Nothing was touched."
+        exit 0
+    fi
+    # Not up on it: a rollback that died after its last write. Start it.
+    trap recover EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    PHASE="rolling-back"
+    say "rolling back: ${DEST:-nothing} -> ${SRC} (the app stops for about a minute)"
+    if restore_original; then
+        PHASE="done"
+        trap - EXIT HUP INT TERM
+        say "ROLLED BACK: the app is serving from ${SRC}."
+        [ -z "$ASIDE" ] || say "  the small directory that stood in ${SRC} meanwhile is kept at ${ASIDE}"
+        exit 0
+    fi
+    PHASE="done"
+    trap - EXIT HUP INT TERM
+    say "ROLLBACK INCOMPLETE."
+    manual_recovery
+    exit 3
+fi
 
 [ $# -eq 1 ] || { usage; exit 2; }
 DEST="$1"
@@ -967,4 +1113,4 @@ say "MOVED: the deployment's state is in ${DEST}."
 say "  .env:        ${KEY}=${DEST}"
 say "  safety copy: ${BACKUP} (delete it once you trust the move)"
 say "  ${SRC} now holds the four reference files, ${TOMBSTONE} and .orchestrator."
-say "  to undo:     not automated in this version: there is no --rollback yet."
+say "  to undo:     $0 --rollback"
