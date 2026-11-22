@@ -127,7 +127,10 @@ case "$1" in
                 cat "$STUB/user"
                 ;;
             *'"REFERENCE_DATA_DIR="'*)
+                # The value, the template's text after its last {{end}}, and
+                # the newline docker ends every answer with.
                 cat "$STUB/ref-env"
+                printf '%s\n' "${3##*\{\{end\}\}}"
                 ;;
             *'eq .Destination "/app/data"'*)
                 cat "$STUB/mount"
@@ -463,6 +466,16 @@ mv "$STUB/image-root/opt/idealista/reference_data" "$STUB/image-root/app/data/re
 ln -s ../../app/data/reference "$STUB/image-root/opt/idealista/reference_data"
 refusal "reference directory links into the mount" "in the image, not from outside /app/data"
 expect_untouched "preflight: reference directory links into the mount"
+# A single file linked under the mount is hidden from the app as well.
+new_world; mkdir -p "$STUB/image-root/app/data"
+mv "$STUB/image-root/opt/idealista/reference_data/top_agencies.json" "$STUB/image-root/app/data/image-only.json"
+ln -s ../../../app/data/image-only.json "$STUB/image-root/opt/idealista/reference_data/top_agencies.json"
+refusal "a reference file links into the mount" "which the state mount hides from the app"
+# A newline ends the value; $(...) would strip it and check another directory.
+new_world; printf '/opt/idealista/reference_data\n' >"$STUB/ref-env"
+refusal "REFERENCE_DATA_DIR ends in a newline" "holds a control character or a newline"
+new_world; printf '/opt/idealista/reference_data\t' >"$STUB/ref-env"
+refusal "REFERENCE_DATA_DIR holds a tab" "holds a control character or a newline"
 # The probe reads as the user the app runs as (Compose `user:`), not as the
 # image's default.
 new_world; printf '1001:1001' >"$STUB/user"; printf '1001:1001' >"$STUB/unreadable-by"
