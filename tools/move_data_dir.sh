@@ -348,9 +348,11 @@ has_tombstone() {
     [ -e "${1}/${TOMBSTONE}" ] || [ -L "${1}/${TOMBSTONE}" ]
 }
 
-# The moved_to= line of a tombstone that is a regular file, else nothing.
+# The moved_to= line of a tombstone that is a regular file, else nothing; exit
+# 2 when that line is not exactly what step 4 writes (an absolute plain path,
+# no trailing slash): it is never trimmed into a guess.
 tombstone_destination() {
-    python3 - "${1}/${TOMBSTONE}" 2>/dev/null <<'PY' || :
+    python3 - "${1}/${TOMBSTONE}" 2>/dev/null <<'PY'
 import os
 import stat
 import sys
@@ -368,10 +370,17 @@ try:
         os.close(descriptor)
 except OSError:
     sys.exit(0)
-for line in raw.decode("utf-8", errors="replace").splitlines():
+try:
+    text = raw.decode("utf-8")
+except UnicodeDecodeError:
+    sys.exit(2)
+for line in text.split("\n"):
     if line.startswith("moved_to="):
         value = line[len("moved_to="):]
-        print("".join(ch for ch in value if ch.isprintable()).strip()[:512])
+        plain = all(ch.isprintable() and not ch.isspace() and ch not in "\"'#$\\" for ch in value)
+        if not (plain and value.startswith("/") and (value == "/" or not value.endswith("/")) and len(value) <= 512):
+            sys.exit(2)
+        print(value)
         break
 PY
 }
@@ -562,7 +571,9 @@ EOF
 
 # The tracked reference files as HEAD has them (a merge may have updated one
 # while the old copies sat in the moved directory), and the .orchestrator the
-# rebuilt directory got meanwhile: this run's aside, or a killed rollback's.
+# rebuilt directory got meanwhile: this run's aside, or a killed rollback's -
+# by content, never by mtime, and a killed rollback's only until it is restored
+# once (the marker), so a later --rollback keeps a newer one.
 refresh_checkout_files() {
     local aside="$ASIDE" last
     git -C "$REPO" checkout -- data >/dev/null 2>&1 \
@@ -571,10 +582,15 @@ refresh_checkout_files() {
         for last in "${BACKUP_ROOT}"/checkout-data-at-rollback-*; do [ -d "$last" ] && aside="$last"; done
     fi
     [ -n "$aside" ] && [ -f "${aside}/.orchestrator" ] || return 0
-    [ "$aside" = "$ASIDE" ] || [ ! -e "${SRC}/.orchestrator" ] \
-        || [ "${aside}/.orchestrator" -nt "${SRC}/.orchestrator" ] || return 0
-    cp -p "${aside}/.orchestrator" "${SRC}/.orchestrator" \
-        || note "WARNING: could not restore the newer .orchestrator from ${aside}"
+    if [ "$aside" != "$ASIDE" ]; then
+        [ ! -e "${aside}/.orchestrator.restored" ] || return 0
+        [ ! -e "${SRC}/.orchestrator" ] || ! cmp -s "${aside}/.orchestrator" "${SRC}/.orchestrator" || return 0
+    fi
+    if cp -p "${aside}/.orchestrator" "${SRC}/.orchestrator"; then
+        : >"${aside}/.orchestrator.restored"
+    else
+        note "WARNING: could not restore the newer .orchestrator from ${aside}"
+    fi
 }
 
 # Idempotent, and driven by what is on disk rather than by PHASE. Returns 0
@@ -927,7 +943,7 @@ preflight_apply() {
 }
 
 preflight_rollback() {
-    local value recorded
+    local value recorded near here there here_at there_at
     say "preflight (read-only):"
     preflight_common
     value="$(resolved_data_dir 2>/dev/null || true)"
@@ -940,7 +956,8 @@ preflight_rollback() {
         fi
         return 0
     fi
-    recorded="$(tombstone_destination "$SRC")"
+    recorded="$(tombstone_destination "$SRC")" \
+        || problem "${SRC}/${TOMBSTONE} does not record a destination the way this script writes one; read it and set ${KEY} in .env by hand"
     if [ -z "$value" ] || [ "$value" = "$SRC" ]; then
         value="$recorded"
     elif [ -n "$recorded" ] && [ "$recorded" != "$value" ]; then
@@ -951,6 +968,19 @@ preflight_rollback() {
         fine "the state is in ${DEST}"
         if [ -d "$SRC" ] && ! has_tombstone "$SRC" && [ -n "$(ls -A "$SRC" 2>/dev/null)" ]; then
             problem "both ${SRC} (without ${TOMBSTONE}) and ${DEST} hold files; cannot tell which holds the state"
+        fi
+        # The rename back is one rename(2): the state must be on the mounted
+        # filesystem of the checkout, or it fails (EXDEV) with the app stopped.
+        near="$REPO"
+        [ ! -d "$SRC" ] || near="$SRC"
+        here="$(device_of "$near")" || here=""
+        there="$(device_of "$DEST")" || there=""
+        here_at="$(mount_point_of "$near")"
+        there_at="$(mount_point_of "$DEST")"
+        if [ -z "$here" ] || [ -z "$there" ] || [ -z "$here_at" ] || [ -z "$there_at" ]; then
+            problem "could not establish whether ${DEST} and ${near} are on one filesystem"
+        elif [ "$here" != "$there" ] || [ "$here_at" != "$there_at" ]; then
+            problem "${DEST} is not on the mounted filesystem of ${near}; the rename back would fail (EXDEV) with the app stopped"
         fi
     elif [ -d "$SRC" ] && ! has_tombstone "$SRC"; then
         fine "the state is in ${SRC} - no rename to undo, only the .env line"

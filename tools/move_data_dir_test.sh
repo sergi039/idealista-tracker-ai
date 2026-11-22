@@ -632,6 +632,21 @@ moved_world "scenario 3e"
 printf '%s\n' "$BACKUPS" >"$STUB/df-elsewhere"
 run_move -- --rollback
 not_rolled_back "scenario 3e (backup root elsewhere)" "is not on the mounted filesystem of"
+# A tombstone with no .env line, its path one trailing space away from another
+# directory (#712 review, finding 1): never trimmed into that directory.
+moved_world "scenario 3f"
+grep -v '^IDEALISTA_DATA_DIR=' "$REPO/.env" >"${W}/env.without" && cat "${W}/env.without" >"$REPO/.env"
+mkdir "${W}/archive" && echo theirs >"${W}/archive/x"
+printf 'moved_to=%s \nmoved_at=x\n' "${W}/archive" >"$REPO/data/.moved-to"
+run_move -- --rollback
+not_rolled_back "scenario 3f (moved_to with a trailing space)" "does not record a destination the way"
+[ "$(cat "${W}/archive/x")" = "theirs" ] || fail "scenario 3f: the other directory was touched"
+# The state directory on another filesystem than the checkout, the backup root
+# on the same (#712 review, finding 2): the rename back would fail after the stop.
+moved_world "scenario 3g"
+printf '%s\n' "$DEST" >"$STUB/df-elsewhere"
+run_move -- --rollback
+not_rolled_back "scenario 3g (state elsewhere)" "the rename back would fail"
 pass "--rollback finds the moved directory from the tombstone, and refuses before the stop what it cannot undo"
 
 # --- 4. preflight refusals: each leaves everything untouched ---------------
@@ -1211,7 +1226,8 @@ printf '{"changed":1}\n' >"$REPO/data/ine_municipal.json"
 git -C "$REPO" add data/ine_municipal.json
 git -C "$REPO" commit --quiet -m "a merge"
 printf 'session=local_newer\n' >"$REPO/data/.orchestrator"
-touch -t 202001010000 "$DEST/.orchestrator"
+# One mtime, two contents (#712 review, finding 3): decided by content.
+touch -t 202001010000 "$REPO/data/.orchestrator" "$DEST/.orchestrator"
 printf '#!/bin/bash\nfor arg in "$@"; do [ "$arg" != "checkout" ] || { kill -KILL "$PPID"; exit 0; }; done\nexec "%s" "$@"\n' "$(command -v git)" >"${W}/bin/git"
 chmod +x "${W}/bin/git"
 run_move -- --rollback
@@ -1225,6 +1241,12 @@ run_move -- --rollback
 [ "$(cat "$REPO/data/ine_municipal.json")" = '{"changed":1}' ] && [ -z "$(git -C "$REPO" status --porcelain)" ] \
     || fail "scenario 6p: the second --rollback left the reference files as the moved directory had them"
 [ "$(cat "$REPO/data/.orchestrator")" = "session=local_newer" ] || fail "scenario 6p: the newer .orchestrator was lost"
+# A later --rollback (app stopped) keeps a .orchestrator written since.
+printf 'session=local_later\n' >"$REPO/data/.orchestrator"
+printf 'false\n' >"$STUB/running"
+run_move -- --rollback
+[ "$RC" = "0" ] && [ "$(cat "$REPO/data/.orchestrator")" = "session=local_later" ] \
+    || fail "scenario 6p: a later --rollback put back the .orchestrator of an aside already restored (exit ${RC})"
 
 pass "a failure at every step after the stop ends with the app running on the original directory"
 
