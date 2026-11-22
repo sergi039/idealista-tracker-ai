@@ -198,6 +198,8 @@ def _create_historical_schema(engine):
         connection.execute(text("DROP TABLE taste_profile"))
         # Migration 029 (issue #633) added the owner's duplicate links.
         connection.execute(text("DROP TABLE property_duplicate_link"))
+        # Migration 030 (issue #632) added a listing's additional subscriptions.
+        connection.execute(text("DROP TABLE property_subscription"))
 
 
 def test_the_stated_historical_table_matches_the_runners_fingerprint(tmp_path):

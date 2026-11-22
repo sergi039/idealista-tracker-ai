@@ -137,26 +137,90 @@ sys.stdout.write("end\0")'
 
 # What is wrong with the reference files the app reads, or nothing. The
 # directory is the container's own REFERENCE_DATA_DIR (that one variable is
-# read, no other); the files are looked for in a throwaway container of the
-# same image with nothing mounted - an exec would look through the state mount.
+# read, no other). Two looks, and both must pass:
+#   * the image: a throwaway container of the same image with nothing mounted
+#     (an exec would look through the state mount), as the user the app runs
+#     as, read-only, without a network, and only for an image that declares no
+#     VOLUME (a run would create an anonymous volume). The probe walks the
+#     directory's and every file's path one component and one link hop at a
+#     time - `readlink` without -f, at most 40 hops - and refuses when any
+#     component, any parent a link passes through, or any intermediate link
+#     lies under the state directory: the mount hides each of them;
+#   * the app as it runs (`docker exec`, its own environment and user): a
+#     mount over the directory - an empty bind of something else - hides the
+#     image's copy even though the image carries it.
+# The spelling is normalised (`/app/./data`, `//app/data`). The value is read
+# up to a "." docker prints after it, so a trailing newline is not stripped by
+# $(...); any control character refuses.
 reference_gap() {
-    local image dir missing rc=0
+    local image raw dir norm user volumes found rc=0
+    local -a as=()
     image="$(dk inspect -f '{{.Image}}' "$APP" 2>/dev/null)" && [ -n "$image" ] \
         || { say "docker could not say which image ${APP} runs"; return; }
-    dir="$(dk inspect -f '{{range .Config.Env}}{{if ge (len .) 19}}{{if eq (slice . 0 19) "REFERENCE_DATA_DIR="}}{{slice . 19}}{{end}}{{end}}{{end}}' "$APP" 2>/dev/null)" \
-        || { say "docker could not say where ${APP} reads its reference files"; return; }
+    raw="$(dk inspect -f '{{range .Config.Env}}{{if ge (len .) 19}}{{if eq (slice . 0 19) "REFERENCE_DATA_DIR="}}{{slice . 19}}{{end}}{{end}}{{end}}.' "$APP" 2>/dev/null)" \
+        && [ "${raw%.}" != "$raw" ] || { say "docker could not say where ${APP} reads its reference files"; return; }
+    dir="${raw%.}"
     case "$dir" in
-        "") say "${APP} has no REFERENCE_DATA_DIR, so it reads its reference files from ${CONTAINER_STATE}"; return ;;
+        *[[:cntrl:]]*) say "the REFERENCE_DATA_DIR of ${APP} holds a control character or a newline; it is not checked"; return ;;
+    esac
+    [ -n "$dir" ] || { say "${APP} has no REFERENCE_DATA_DIR, so it reads its reference files from ${CONTAINER_STATE}"; return; }
+    norm="$(python3 -c 'import posixpath, sys; p = posixpath.normpath(sys.argv[1]); print("/" + p.lstrip("/") if p[:1] == "/" else p)' "$dir" 2>/dev/null)" \
+        || { say "the REFERENCE_DATA_DIR of ${APP} (${dir}) could not be read as a path"; return; }
+    case "$norm" in
         "$CONTAINER_STATE" | "$CONTAINER_STATE"/* | [!/]*) say "${APP} reads its reference files from ${dir}, not from outside ${CONTAINER_STATE}"; return ;;
     esac
+    # Compose `user:` lands here; empty means the image's own USER, which is
+    # also what a run without --user gets.
+    user="$(dk inspect -f '{{.Config.User}}' "$APP" 2>/dev/null)" \
+        || { say "docker could not say which user ${APP} runs as"; return; }
+    [ -z "$user" ] || as=(--user "$user")
+    volumes="$(dk image inspect -f '{{json .Config.Volumes}}' "$image" 2>/dev/null)" \
+        || { say "docker could not say whether the image of ${APP} declares volumes"; return; }
+    case "$volumes" in
+        null | "{}") ;;
+        *) say "the image of ${APP} declares volumes (${volumes}); a probe container would create one, so its reference files were not looked for"; return ;;
+    esac
     # shellcheck disable=SC2016,SC2086
-    missing="$(dk run --rm --network none --entrypoint sh -e "REFERENCE_DATA_DIR=${dir}" "$image" \
-        -c 'for n; do test -r "$REFERENCE_DATA_DIR/$n" || { printf %s "$n"; exit 1; }; done' sh $REFERENCE_FILES 2>/dev/null)" || rc=$?
-    if [ "$rc" = "1" ] && [ -n "$missing" ]; then
-        say "the image of ${APP} does not carry ${missing} under ${dir}; deploy the build that does first"
-    elif [ "$rc" != "0" ]; then
-        say "docker could not run the image of ${APP} to look for its reference files (exit ${rc})"
-    fi
+    found="$(dk run --rm --read-only --network none ${as[@]+"${as[@]}"} --entrypoint sh -e "REFERENCE_DATA_DIR=${dir}" "$image" \
+        -c 'state=$1; shift; cd -- "$REFERENCE_DATA_DIR" 2>/dev/null || exit 3
+w() { rest=$1; cur=; k=0
+while :; do rest=${rest#"${rest%%[!/]*}"}; [ -n "$rest" ] || return 0
+c=${rest%%/*}; case $rest in */*) rest=${rest#*/} ;; *) rest= ;; esac
+case $c in .) continue ;; ..) cur=${cur%/*}; continue ;; esac
+p=$cur/$c; case "$p/" in "$state"/*) p=$p${rest:+/$rest}; return 5 ;; esac
+[ -L "$p" ] || { cur=$p; continue; }
+k=$((k + 1)); [ "$k" -le 40 ] || return 4
+t=$(readlink -- "$p" && printf .) || return 4; t=${t%?.}
+case $t in /*) cur= ;; esac; rest=$t${rest:+/$rest}; done; }
+w "$REFERENCE_DATA_DIR" || { e=$?; [ "$e" = 5 ] || exit 6; printf %s "$p"; exit 2; }
+for n; do test -r "$n" || { printf %s "$n"; exit 1; }
+w "$REFERENCE_DATA_DIR/$n" || { e=$?; [ "$e" = 5 ] || { printf %s "$n"; exit 4; }; printf "%s -> %s" "$n" "$p"; exit 5; }; done' sh "$CONTAINER_STATE" $REFERENCE_FILES 2>/dev/null)" || rc=$?
+    case "$rc:${found:+set}" in
+        0:*) live_reference_gap "$dir" ;;
+        1:set) say "the image of ${APP} does not carry ${found} under ${dir} readable by ${user:-its default user}; deploy the build that does first" ;;
+        2:set) say "${APP} reads its reference files from ${dir}, which is ${found} in the image, not from outside ${CONTAINER_STATE}" ;;
+        3:*) say "the image of ${APP} has no directory ${dir} that ${user:-its default user} can enter" ;;
+        4:set) say "the image of ${APP} has ${found} under ${dir}, but its link could not be resolved" ;;
+        5:set) say "the image of ${APP} links ${found} under ${CONTAINER_STATE}, which the state mount hides from the app" ;;
+        6:*) say "the image of ${APP} has a link on the way to ${dir} that could not be resolved" ;;
+        *) say "docker could not run the image of ${APP} to look for its reference files (exit ${rc})" ;;
+    esac
+}
+
+# The second look: can the app, as it runs now, read every reference file in
+# its directory? `docker exec` with the container's own environment and user;
+# a read and nothing else.
+live_reference_gap() {
+    local found rc=0
+    # shellcheck disable=SC2016,SC2086
+    found="$(dk exec "$APP" sh -c 'cd -- "$REFERENCE_DATA_DIR" 2>/dev/null || exit 3
+for n; do test -r "$n" || { printf %s "$n"; exit 1; }; done' sh $REFERENCE_FILES 2>/dev/null)" || rc=$?
+    case "$rc:${found:+set}" in
+        0:*) ;;
+        1:set) say "${APP} as it runs now cannot read ${found} under ${1}, although its image carries it: a mount hides it" ;;
+        3:*) say "${APP} as it runs now has no directory ${1} it can enter, although its image has" ;;
+        *) say "docker could not look into ${APP} for its reference files (exit ${rc})" ;;
+    esac
 }
 
 device_of() {

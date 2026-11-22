@@ -13,6 +13,58 @@ must be an ancestor of `main`.
 
 ## Open
 
+### The mover's reference probes `cd` logically, so a `..` after a link checks another directory
+
+- **Anchor:** `tools/move_data_dir.sh` (`reference_gap`: the probe's
+  `cd -- "$REFERENCE_DATA_DIR"` and the walker `w`'s `..` case, which drops
+  the last component of the spelling; `live_reference_gap`: the same `cd`) (#639).
+- **Found 2026-11-22** in the fourth review of #708 (`af58f85..9ea4c7a`):
+  with `REFERENCE_DATA_DIR=/opt/jump/../reference`, `/opt/jump` a link to
+  `/srv/nested` and the JSON files only in `/opt/reference`, both probes pass,
+  while the app's open through the configured path resolves the `..` after the
+  link and looks in `/srv/reference`. What breaks if never fixed: `--check`
+  says the reference files are readable and the app then fails to read them.
+  Not reproduced on live and not covered by `tools/move_data_dir_test.sh`.
+
+### The mover resolves links in the reference path but compares it with the literal mount target
+
+- **Anchor:** `tools/move_data_dir.sh` (`reference_gap`: the walker `w`'s
+  comparison of each resolved component with `"$state"`, which is the literal
+  `CONTAINER_STATE`) (#639).
+- **Found 2026-11-22** in the fourth review of #708 (`af58f85..9ea4c7a`):
+  with `/app` a link to `/srv` in the image, the bind at `/app/data` covers
+  `/srv/data`; `REFERENCE_DATA_DIR=/srv/data/reference` never passes through a
+  component spelled `/app/data`, so the probe passes although the state mount
+  hides the image's copy. What breaks if never fixed: `--check` approves a
+  layout where the reference files are read from the state directory it is
+  about to move. Not reproduced on live and not covered by
+  `tools/move_data_dir_test.sh`.
+
+### A directory named like a reference file passes the mover's `test -r`
+
+- **Anchor:** `tools/move_data_dir.sh` (`reference_gap` and
+  `live_reference_gap`: `test -r "$n"` over `REFERENCE_FILES`, e.g.
+  `top_agencies.json`) (#639).
+- **Found 2026-11-22** in the fourth review of #708 (`af58f85..9ea4c7a`): a
+  readable directory named `top_agencies.json` passes both probes and the path
+  walk; the app's JSON read of it fails with `EISDIR`. What breaks if never
+  fixed: `--check` reports the reference files present when one is a
+  directory. Not reproduced on live; the harness covers missing and unreadable
+  files only.
+
+### The mover matches the app's state mount by its literal Destination spelling
+
+- **Anchor:** `tools/move_data_dir.sh` (`mount_source`: the template
+  `eq .Destination "/app/data"`; the other-mounts loop's
+  `[ "$target" = "$CONTAINER_STATE" ]`) (#639).
+- **Found 2026-11-22** in the review rounds of #708: a Destination spelled
+  `/app//data` or `/app/data/` is not normalised (the reference probe's
+  spelling is; these two comparisons are not). What breaks if never fixed:
+  `mount_source` finds no mount and the loop does not recognise the app's own
+  mount, so `--check` refuses a correct setup (fail-closed, a false refusal,
+  never a false pass). Not reproduced on live: whether docker stores a
+  Destination with the spelling compose was given was not measured.
+
 ### A struck price in a fotocasa alert card is found by a hand-written tag scanner
 
 - **Anchor:** `services/fotocasa_source.py` (`_anchors`, `cards_in_email`,
@@ -66,6 +118,53 @@ must be an ancestor of `main`.
 - **Check:** a fix makes the test observe
   `pg_stat_activity.wait_event_type = 'Lock'` for the second session, as
   `test_029_set_link_waits_for_the_row_lock_it_takes` does.
+
+### A bare route of a subscription can leave a membership on the routed stub
+
+- **Anchor:** `migrations/030_create_property_subscription.sql`
+  (`trg_property_subscription_a_canonical_profile` over
+  `canonicalize_search_profile()`, `move_property_subscriptions_on_route`, and
+  the header's "WHAT IS NOT CLOSED", which already names this gap);
+  `services/search_profile_service.py` (`route_profile`). Fifth review of #705 (`af58f85..e48a982`), 2026-11-22;
+  merged by hand on the owner's command ("Да, оба").
+- **Finding:** the canonicalizing trigger reads the subscription under
+  `FOR KEY SHARE`, which does not conflict with an UPDATE of `routed_to` (not
+  a key column). Session A runs a bare `UPDATE search_profiles SET routed_to`
+  and stays open after its move trigger ran; session B inserts a membership on
+  that subscription, still sees it unrouted, and both commit with the
+  membership left on the stub.
+- **Measured:** not reproduced; the review's reasoning only. Today
+  `route_profile()` is the only writer that routes an existing subscription,
+  and it takes both rows `FOR UPDATE` first, which does conflict with
+  `FOR KEY SHARE`; the other places that set `routed_to` create a new
+  subscription, which has no memberships yet. Nothing writes
+  `property_subscription` yet either (schema only, #632).
+- **What breaks, for whom:** once ingestion writes memberships (#632 slice 2),
+  a route done by hand in SQL, or by a future writer that bypasses
+  `route_profile()`, can leave a listing counted under a stub the owner no
+  longer sees.
+- **Check:** the trigger takes `FOR SHARE` (or `FOR NO KEY UPDATE`) on the
+  subscription, or a test routes with a bare UPDATE and asserts the membership
+  landed on the target.
+
+### A route can deadlock with the deletion of a listing homed outside it
+
+- **Anchor:** `migrations/030_create_property_subscription.sql`
+  (`move_property_subscriptions_on_route`,
+  `skip_redundant_property_subscription`). Same review as the entry above.
+- **Finding:** session A locks a listing `FOR UPDATE` (to delete it); session
+  B routes a subscription holding a membership of that listing, deletes the
+  membership and waits for `FOR SHARE` on the listing during re-insertion; A's
+  delete then cascades to the membership B already deleted and waits for B.
+  PostgreSQL aborts one of the two.
+- **Measured:** not reproduced; the review's reasoning only. The app has no
+  path that deletes a property, so the cycle needs a hand-run DELETE.
+- **What breaks, for whom:** nothing today; if a property delete is ever
+  added, a route that collides with it fails with a deadlock error, and the
+  route (or the delete) has to be retried. Nothing is half-written: the
+  aborted transaction rolls back whole.
+- **Check:** a two-session test of a route against a listing delete, once a
+  delete path exists.
 
 ### `tools/backup_attachments.sh` has no schedule
 
@@ -160,6 +259,38 @@ must be an ancestor of `main`.
 - **What breaks, for whom:** the plot criterion stays `unknown` for them, so
   #634's text reading cannot move most of the gap.
 - **Check:** `python -m utils.backfill_plot_from_text` prints the per-portal split.
+
+### Nobody knows whether the recommendations beat a plain sort
+
+- **Anchor:** `services/taste_service.py` (`taste_score`);
+  `services/taste_recommendation.py` (`recommended`); #635 (closed `not planned`
+  2026-11-22, owner decision).
+- **Measured 2026-11-10** on subscription 24, read-only: 17 positive and 37
+  negative labels; `taste_score` AUC 1.00 is trained on those same labels and
+  proves nothing; every other order (`score_lifestyle` 0.68, `score_total` 0.56,
+  newest first 0.51, price 0.40) is within about 1.5 standard errors of 0.5.
+  Telling 0.65 from 0.5 at ~80% power needs about 110–185 new decisions on
+  listings the owner had not seen, with the scores stored before the decision;
+  past scores are not stored. **2026-11-22:** one new decision since 2026-11-10
+  (`owner_verdict_at`), so the measurement cannot be repeated.
+- **What breaks, for whom:** the owner may be ranking by a score that orders his
+  listings no better than the date; nothing is removed or added until it is
+  measured.
+- **Returns when:** at least 110 new decisions exist on listings whose scores
+  were recorded before the decision.
+
+### Milanuncios alert mail waits on the portal with no email-card fallback
+
+- **Anchor:** `services/milanuncios_source.py` (`resolve_tracker`,
+  `fetch_listing`, `_refusal_row`); `utils/uid_cursor.py` (`HeldUids`);
+  fotocasa's card fallback is `fotocasa_source.cards_in_email` (#636).
+- **Measured 2026-11-22** after the 07:00 run, read-only: 9 milanuncios emails
+  held on the retry list after portal refusals, one of them new that morning;
+  fotocasa is down to one email waiting only for a slot.
+- **What breaks, for whom:** listings from the owner's milanuncios searches never
+  reach `/properties` while the portal refuses this machine, and every run with
+  them held ends `partial`. Owner decision 2026-11-22: one backlog line, not a
+  new issue.
 
 ### `utils/backfill_plot_area.py` skips rows filled from text
 
