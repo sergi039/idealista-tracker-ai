@@ -1633,6 +1633,48 @@ class PropertyDuplicateLink(db.Model):
         )
 
 
+class PropertySubscription(db.Model):
+    """One ADDITIONAL subscription a listing belongs to (#632, migration 030).
+
+    `Property.search_profile_id` stays the row's one home: scoring, criteria,
+    taste and similarity read that and nothing here changes it. A row in this
+    table says only that this subscription delivered the listing too.
+
+    The invariants are the database's (triggers in migration 030), because
+    SQLite runs none of them: a membership never names a routed stub, the
+    catch-all or the listing's own home, a route moves memberships with it,
+    and a subscription holding one cannot be deleted. A membership is
+    inserted or deleted, never updated: the database refuses an UPDATE of
+    either key column. Nothing writes or reads this table yet.
+    """
+
+    __tablename__ = "property_subscription"
+
+    property_id = db.Column(
+        db.Integer,
+        db.ForeignKey("properties.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    search_profile_id = db.Column(
+        db.Integer,
+        db.ForeignKey("search_profiles.id"),
+        primary_key=True,
+        index=True,
+    )
+    first_seen_at = db.Column(db.DateTime, nullable=False, default=_utcnow_naive)
+    source = db.Column(db.String(16), nullable=False, default="ingest")
+
+    __table_args__ = (
+        CheckConstraint(
+            "source IN ('ingest', 'import', 'journal')",
+            name="ck_property_subscription_source",
+        ),
+    )
+
+    def __repr__(self):
+        return f"<PropertySubscription {self.property_id}-{self.search_profile_id}>"
+
+
 class BackgroundJob(db.Model):
     """Persists the state `services/background_jobs.py` used to keep only in a
     process-local dict (issue #176).
