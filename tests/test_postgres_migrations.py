@@ -4485,6 +4485,134 @@ def test_030_a_home_change_during_a_membership_insert_waits_and_drops_it(
         engine.dispose()
 
 
+def test_030_a_membership_for_a_listing_not_yet_committed_is_refused(postgres_url):
+    """Second review of #705, verbatim: listing 11 is homed on profile 1;
+    A inserts listing 10 with home 2 and locks listing 11 FOR UPDATE; B
+    inserts `VALUES (10, 2), (11, 3)`. The skip trigger could not see
+    listing 10 and let (10, 2) through, the second row waited on listing 11,
+    and the foreign key, checked after the statement, saw listing 10 once A
+    committed: both committed, and profile 2 was the home and a membership.
+    A listing the insert cannot see is refused at once, as the foreign key
+    would refuse it."""
+    import threading
+
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+        with engine.begin() as connection:
+            one = _profile(connection, "030 unseen home")
+            two = _profile(connection, "030 unseen new home")
+            three = _profile(connection, "030 unseen other")
+            eleven = _insert_property(
+                connection, source_email_id="sub:unseen11", search_profile_id=one
+            )
+
+        errors: dict = {}
+        with engine.connect() as inserter, engine.connect() as joiner:
+            pid = joiner.execute(text("SELECT pg_backend_pid()")).scalar_one()
+            joiner.commit()
+            ten = _insert_property(
+                inserter, source_email_id="sub:unseen10", search_profile_id=two
+            )
+            inserter.execute(
+                text("SELECT id FROM properties WHERE id = :p FOR UPDATE"),
+                {"p": eleven},
+            )
+
+            def join() -> None:
+                try:
+                    joiner.execute(
+                        text(
+                            "INSERT INTO property_subscription "
+                            "(property_id, search_profile_id) "
+                            "VALUES (:ten, :two), (:eleven, :three)"
+                        ),
+                        {"ten": ten, "two": two, "eleven": eleven, "three": three},
+                    )
+                    joiner.commit()
+                except BaseException as exc:  # noqa: BLE001
+                    errors["join"] = exc
+                    joiner.rollback()
+
+            thread = threading.Thread(target=join, daemon=True)
+            thread.start()
+            thread.join(2)
+            # Either the insert was refused already or it is waiting on
+            # listing 11; only then may A commit.
+            waited = thread.is_alive() and _waits_on_a_lock(engine, pid)
+            inserter.commit()
+            thread.join(15)
+
+        assert not thread.is_alive()
+        assert not waited, "the insert waited on listing 11 instead of refusing"
+        assert "is not visible to this transaction" in str(errors.get("join"))
+        assert _home(engine, ten) == two
+        assert _memberships(engine) == set()
+    finally:
+        engine.dispose()
+
+
+def test_030_a_home_move_outside_read_committed_is_refused(postgres_url):
+    """Second review of #705, verbatim: A starts a REPEATABLE READ
+    transaction and reads listing 10 with home 1; B inserts (10, 2) and
+    commits; A moves the home to 2 and commits. The home trigger's DELETE ran
+    on A's first snapshot, missed B's membership, and both rows persisted.
+    The move is refused at that isolation; READ COMMITTED is the level every
+    writer here uses, and a statement that leaves the home where it was is
+    not a move."""
+    from sqlalchemy.exc import DBAPIError
+
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+        with engine.begin() as connection:
+            one = _profile(connection, "030 rr home")
+            two = _profile(connection, "030 rr other")
+            listing = _insert_property(
+                connection, source_email_id="sub:rr", search_profile_id=one
+            )
+
+        for level in ("REPEATABLE READ", "SERIALIZABLE"):
+            with engine.connect().execution_options(isolation_level=level) as mover:
+                assert (
+                    mover.execute(
+                        text("SELECT search_profile_id FROM properties WHERE id = :p"),
+                        {"p": listing},
+                    ).scalar_one()
+                    == one
+                )
+                with engine.begin() as connection:
+                    _join(connection, listing, two)
+
+                # Not a move: allowed at any level.
+                mover.execute(
+                    text(
+                        "UPDATE properties SET search_profile_id = search_profile_id "
+                        "WHERE id = :p"
+                    ),
+                    {"p": listing},
+                )
+                with pytest.raises(DBAPIError, match="a home change runs at"):
+                    mover.execute(
+                        text(
+                            "UPDATE properties SET search_profile_id = :t WHERE id = :p"
+                        ),
+                        {"t": two, "p": listing},
+                    )
+                mover.rollback()
+
+            assert _home(engine, listing) == one
+            assert _memberships(engine) == {(listing, two)}
+            with engine.begin() as connection:
+                connection.execute(text("DELETE FROM property_subscription"))
+    finally:
+        engine.dispose()
+
+
 def test_030_a_route_moves_the_memberships_and_a_home_move_drops_its_own(
     postgres_url,
 ):

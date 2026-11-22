@@ -76,10 +76,17 @@
 -- EVERY STATEMENT THAT COULD BREAK RULE 3, and what answers it:
 --   INSERT membership                 -> skipped under FOR SHARE (trigger b)
 --   INSERT racing a home change       -> the row lock above, both orders
+--   INSERT for a listing not yet committed -> refused like the foreign key:
+--                                        trigger b cannot read its home, and
+--                                        the FK check runs after the statement,
+--                                        when the listing may be committed
 --   UPDATE membership key columns     -> refused
---   UPDATE properties.search_profile_id -> the home trigger deletes the twin
+--   UPDATE properties.search_profile_id -> the home trigger deletes the twin;
+--                                        a home MOVE outside READ COMMITTED is
+--                                        refused, its snapshot can miss one
 --   UPDATE search_profiles.routed_to  -> re-insert through trigger b
---   INSERT properties                 -> no membership can exist yet (FK)
+--   INSERT properties                 -> no membership can exist yet: trigger
+--                                        b refuses one this side cannot see
 --   DELETE on either table            -> cannot create the equality
 --   COPY / multi-row INSERT           -> row triggers fire per row
 --
@@ -138,6 +145,17 @@ BEGIN
         FROM properties
         WHERE id = NEW.property_id
         FOR SHARE;
+    IF NOT FOUND THEN
+        -- A listing this statement cannot see has no home to compare with,
+        -- and the foreign key is checked only after the statement, by when
+        -- another transaction may have committed it (review of #705). The
+        -- refusal the foreign key would give, given here.
+        RAISE EXCEPTION USING
+            ERRCODE = 'foreign_key_violation',
+            MESSAGE = 'property_subscription: listing ' || NEW.property_id
+                || ' is not visible to this transaction (not committed yet, '
+                || 'deleted, or never existed)';
+    END IF;
     IF home IS NOT DISTINCT FROM NEW.search_profile_id THEN
         RETURN NULL;
     END IF;
@@ -178,6 +196,22 @@ CREATE TRIGGER trg_property_subscription_key_is_never_updated
 CREATE OR REPLACE FUNCTION drop_property_subscription_equal_to_home()
 RETURNS trigger AS $$
 BEGIN
+    -- The DELETE below sees what the statement's snapshot sees. Under READ
+    -- COMMITTED that is everything committed before it, the membership the
+    -- row lock made it wait for included. Under REPEATABLE READ or
+    -- SERIALIZABLE it is the transaction's first snapshot, which can miss a
+    -- membership committed since (review of #705), so a home MOVE is refused
+    -- there instead of leaving that membership behind.
+    IF NEW.search_profile_id IS DISTINCT FROM OLD.search_profile_id
+       AND current_setting('transaction_isolation')
+           NOT IN ('read committed', 'read uncommitted') THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'object_not_in_prerequisite_state',
+            MESSAGE = 'properties ' || NEW.id || ': a home change runs at '
+                || 'READ COMMITTED, not '
+                || current_setting('transaction_isolation')
+                || ' (property_subscription would miss a committed membership)';
+    END IF;
     IF NEW.search_profile_id IS NOT NULL THEN
         DELETE FROM property_subscription
             WHERE property_id = NEW.id
