@@ -13,7 +13,8 @@ read and without an offset where it did not) and the UTC time of recording
 -- and never touches `search_profile_id`, so
 every filter, count, score, criteria verdict and the `routed_to` rule are
 what they were. Showing a listing under a second subscription is a separate
-change (migration 030); nothing reads the journal yet except `read()`.
+change (migration 030); nothing reads the journal except `read()` and the
+read-only count built on it, `utils/report_arrivals.py`.
 
 An entry means: "an email that resolves to this subscription named a listing
 already stored under another one". After a full re-read of the mailbox that
@@ -54,6 +55,7 @@ import page for a listing stored under another subscription.
 """
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -82,16 +84,64 @@ def _is_id(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
-def _is_entry(item: Any) -> bool:
-    """The one definition of an entry: who, which portal, which delivery."""
-    if not isinstance(item, dict):
+# Every key `record()` writes. Each must be PRESENT: `received_at` is written
+# as an explicit null when the mail layer gave no time, so an absent key is
+# not that null (review of #704), it is an item `record()` did not write.
+ENTRY_FIELDS = ("profile_id", "source", "method", "ref", "received_at", "recorded_at")
+
+# The two texts `_utc_text` writes, to the second: a UTC time with its
+# `+00:00`, or a time read without a zone and written without an offset. A
+# bare date is neither (review of #704: `fromisoformat` reads "2026-11-21" as
+# midnight), and neither is any other offset, a `Z` or a fraction of a second.
+_UTC_TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00")
+_ZONELESS_TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
+
+
+def _is_time(value: Any, *, zoneless: bool = False) -> bool:
+    """Text in a shape `_utc_text` writes, naming a real moment.
+
+    Always UTC with its offset; `zoneless=True` also accepts the offset-less
+    text written for a time whose zone nobody knew.
+    """
+    if not isinstance(value, str):
         return False
-    profile_id = item.get("profile_id")
+    if not (
+        _UTC_TIME.fullmatch(value) or (zoneless and _ZONELESS_TIME.fullmatch(value))
+    ):
+        return False
+    try:
+        datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _is_entry(item: Any) -> bool:
+    """The one definition of an entry: every field `record()` writes, typed.
+
+    Who (`profile_id`, an integer), which portal and which delivery (`source`
+    and `ref`, text), through which door (`method`, text), and the two times:
+    `recorded_at` is always written, as UTC; `received_at` is written as null,
+    as UTC, or without an offset where the zone was unknown. Every one of the
+    six keys must be present (`ENTRY_FIELDS`). An item with any of them
+    missing, of another type or not a time in the written shape is not an
+    entry, however plausible the rest looks (reviews of #698 and #704:
+    `"method": []` with a null `recorded_at` was counted as a delivery, and
+    so were an absent `received_at` and a bare-date `recorded_at`). Keys
+    beyond these six do not disqualify an item.
+    """
+    if not isinstance(item, dict) or not all(key in item for key in ENTRY_FIELDS):
+        return False
+    profile_id = item["profile_id"]
+    received_at = item["received_at"]
     return (
         isinstance(profile_id, int)
         and not isinstance(profile_id, bool)
-        and _is_id(item.get("source"))
-        and _is_id(item.get("ref"))
+        and _is_id(item["source"])
+        and _is_id(item["ref"])
+        and _is_id(item["method"])
+        and _is_time(item["recorded_at"])
+        and (received_at is None or _is_time(received_at, zoneless=True))
     )
 
 
