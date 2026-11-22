@@ -51,9 +51,17 @@ write_stubs() {
     cat >"${W}/bin/docker" <<'STUB'
 #!/bin/bash
 # State: $STUB/running (true|false), $STUB/mount (host directory at /app/data),
-# $STUB/containers (docker ps -a), $STUB/mounts.<name> (Type|Name|Destination|
-# Source lines; for the app, its mounts besides /app/data), $STUB/volume.<name>
-# (the local driver's device option).
+# $STUB/containers (docker ps -a), $STUB/mounts.<name> (Type, Name, Destination,
+# Source, tab-separated; for the app, its mounts besides /app/data; a
+# $STUB/raw-mounts.<name> is answered verbatim instead),
+# $STUB/volume.<name> (the local driver's device option), $STUB/image (the
+# app's image id), $STUB/ref-env (the app's REFERENCE_DATA_DIR),
+# $STUB/image-root (that image's file tree, with nothing mounted), $STUB/user
+# (the app's Config.User), $STUB/image-user (the image's own USER),
+# $STUB/image-volumes (its Config.Volumes), $STUB/unreadable-by (a user who
+# cannot read the image's reference files) and $STUB/live-ref (the directory
+# the running app sees at its REFERENCE_DATA_DIR, when a mount covers the
+# image's; absent, it sees the image's).
 #
 # The check may only ask. Anything outside the verbs below is recorded in
 # forbidden and refused - and a stop is still obeyed, so a check that stopped
@@ -106,10 +114,25 @@ case "$1" in
                 [ ! -e "$STUB/gone" ] || { echo "Error: No such object: $name" >&2; exit 1; }
                 cat "$STUB/running"
                 ;;
-            *'{{.Type}}|{{.Name}}|{{.Destination}}|{{.Source}}'*)
+            '{{json .Mounts}}')
                 hook "inspect-mounts.$name" && exit 1
-                if [ "$name" = "$STUB_APP" ]; then printf 'bind||/app/data|%s\n' "$(cat "$STUB/mount")"; fi
-                cat "$STUB/mounts.$name" 2>/dev/null || true
+                if [ -e "$STUB/raw-mounts.$name" ]; then cat "$STUB/raw-mounts.$name"; exit 0; fi
+                {
+                    if [ "$name" = "$STUB_APP" ]; then printf 'bind\t\t/app/data\t%s\n' "$(cat "$STUB/mount")"; fi
+                    cat "$STUB/mounts.$name" 2>/dev/null || true
+                } | python3 -c 'import json, sys; print(json.dumps([dict(zip(("Type", "Name", "Destination", "Source"), l.rstrip("\n").split("\t"))) for l in sys.stdin]))'
+                ;;
+            '{{.Image}}')
+                cat "$STUB/image"
+                ;;
+            '{{.Config.User}}')
+                cat "$STUB/user"
+                ;;
+            *'"REFERENCE_DATA_DIR="'*)
+                # The value, the template's text after its last {{end}}, and
+                # the newline docker ends every answer with.
+                cat "$STUB/ref-env"
+                printf '%s\n' "${3##*\{\{end\}\}}"
                 ;;
             *'eq .Destination "/app/data"'*)
                 cat "$STUB/mount"
@@ -122,14 +145,48 @@ case "$1" in
         hook "volume.$5" && exit 1
         cat "$STUB/volume.$5" 2>/dev/null || printf '\n'
         ;;
+    image)
+        [ "$2 $3 $4" = "inspect -f {{json .Config.Volumes}}" ] && [ "$5" = "$(cat "$STUB/image")" ] && [ $# -eq 5 ] \
+            || forbidden "$*"
+        cat "$STUB/image-volumes"
+        ;;
+    run)
+        # A throwaway container of the app's image with nothing mounted,
+        # read-only and offline, as --user or the image's own USER: the
+        # probe's own script runs against the image's tree. Docker would give
+        # an image that declares a VOLUME an anonymous one, so that is refused.
+        args="$*"
+        shift
+        [ "$1 $2 $3 $4" = "--rm --read-only --network none" ] || forbidden "$args"
+        shift 4
+        as="$(cat "$STUB/image-user")"
+        [ "$1" != "--user" ] || { as="$2"; shift 2; }
+        [ "$1 $2 $3" = "--entrypoint sh -e" ] && [ "${4%%=*}" = "REFERENCE_DATA_DIR" ] \
+            && [ "$5" = "$(cat "$STUB/image")" ] && [ "$6" = "-c" ] && [ "$8" = "sh" ] || forbidden "$args"
+        case "$(cat "$STUB/image-volumes")" in null | "{}") ;; *) forbidden "an anonymous volume: $args" ;; esac
+        dir="${4#REFERENCE_DATA_DIR=}"
+        script="$7"
+        shift 8
+        state="$1"
+        shift
+        root="$(cd "$STUB/image-root" && pwd -P)"
+        # A user who may not read the files sees a directory without them.
+        if [ "$as" = "$(cat "$STUB/unreadable-by" 2>/dev/null)" ]; then
+            mkdir -p "$STUB/as-denied"
+            REFERENCE_DATA_DIR="$STUB/as-denied" sh -c "$script" sh "$root$state" "$@"
+        else
+            REFERENCE_DATA_DIR="$root$dir" sh -c "$script" sh "$root$state" "$@"
+        fi
+        ;;
     exec)
-        # The one exec the check may run: `test -r` of a reference file.
-        case "$*" in
-            "exec $STUB_APP sh -c test -r \"\${REFERENCE_DATA_DIR:?}/\$1\" sh "*) ;;
-            *) forbidden "$*" ;;
-        esac
-        [ "$(cat "$STUB/running")" = "true" ] || exit 1
-        [ ! -e "$STUB/no-reference" ]
+        # The running app looks at its own REFERENCE_DATA_DIR: exactly
+        # `exec <app> sh -c <script> sh <files>`, nothing else.
+        [ "$2" = "$STUB_APP" ] && [ "$3 $4" = "sh -c" ] && [ "$6" = "sh" ] || forbidden "$*"
+        hook exec && exit 1
+        script="$5"
+        shift 6
+        if [ -e "$STUB/live-ref" ]; then live="$STUB/live-ref"; else live="$(cd "$STUB/image-root" && pwd -P)$(cat "$STUB/ref-env")"; fi
+        REFERENCE_DATA_DIR="$live" sh -c "$script" sh "$@"
         ;;
     ps)
         [ "$*" = "ps -a --format {{.Names}}" ] || forbidden "$*"
@@ -202,9 +259,17 @@ new_world() {
     # move: the app's other ones, a database on a named volume, a sibling
     # whose source merely starts with the same characters.
     printf 'idealista-app\nidealista-db\nidealista-backup\n' >"$STUB/containers"
-    printf 'bind||/app/code|%s\ntmpfs||/run|\n' "$REPO/tools" >"$STUB/mounts.idealista-app"
-    printf 'volume|pgdata|/var/lib/postgresql/data|/var/lib/docker/volumes/pgdata/_data\n' >"$STUB/mounts.idealista-db"
-    printf 'bind||/backup|%s\n' "$REPO/data-old" >"$STUB/mounts.idealista-backup"
+    printf 'bind\t\t/app/code\t%s\ntmpfs\t\t/run\t\n' "$REPO/tools" >"$STUB/mounts.idealista-app"
+    printf 'volume\tpgdata\t/var/lib/postgresql/data\t/var/lib/docker/volumes/pgdata/_data\n' >"$STUB/mounts.idealista-db"
+    printf 'bind\t\t/backup\t%s\n' "$REPO/data-old" >"$STUB/mounts.idealista-backup"
+    # The image carries the reference files outside /app/data.
+    printf 'sha256:stubimage\n' >"$STUB/image"
+    printf '/opt/idealista/reference_data' >"$STUB/ref-env"
+    mkdir -p "$STUB/image-root/opt/idealista/reference_data"
+    for name in $REFERENCE; do printf '{}\n' >"$STUB/image-root/opt/idealista/reference_data/$name"; done
+    : >"$STUB/user"
+    printf 'appuser' >"$STUB/image-user"
+    printf 'null' >"$STUB/image-volumes"
     printf '200' >"$STUB/page"
     printf '0\n' >"$STUB/status-rc"
     : >"${W}/docker.log"
@@ -264,6 +329,40 @@ run_move() {
     checkout_snapshot >"${W}/after.snapshot"
     diff "${W}/before.snapshot" "${W}/after.snapshot" >"${W}/written" \
         || fail "the check wrote under the checkout: $(grep '^[<>]' "${W}/written" | head -n 2 | tr '\n' ' ')"
+}
+
+# The script under a ten-second bound: RC is its exit status, or 124 if it was
+# still running then (a read of a FIFO waits for a writer for ever).
+run_move_bounded() {
+    local pid waited=0 writer
+    set +e
+    env -u IDEALISTA_DATA_DIR PATH="${W}/bin:${PATH}" STUB="$STUB" STUB_REPO="$REPO" STUB_APP="idealista-app" \
+        MOVE_BACKUP_ROOT="$BACKUPS" MOVE_DEPLOY_LOCK="${W}/deploy.lock" MOVE_MERGE_LOCK="${W}/merge.lock" \
+        MOVE_HEALTH_URL="http://127.0.0.1:1/api/healthz" MOVE_HEALTH_TIMEOUT=2 MOVE_HEALTH_POLL=1 \
+        /bin/bash "$REPO/tools/move_data_dir.sh" "$@" >"${W}/out" 2>&1 &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 100 ]; do
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+    RC=0
+    if kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null
+        RC=124
+        # Let whatever is still reading a FIFO see end-of-file and go.
+        for writer in "$REPO/data/.moved-to" "$REPO/data/.deployed_sha"; do
+            [ -p "$writer" ] || continue
+            ( : >"$writer" ) 2>/dev/null &
+            sleep 1
+            kill "$!" 2>/dev/null
+            wait "$!" 2>/dev/null
+        done
+    fi
+    # The script's own exit status, from `wait` and nothing else.
+    local status=0
+    wait "$pid" 2>/dev/null || status=$?
+    [ "$RC" = "124" ] || RC=$status
+    set -e
 }
 
 expect_original() {
@@ -359,9 +458,81 @@ printf '2\n' >"$STUB/status-rc"
 refusal "backfill unknown" "answered 2"
 expect_untouched "preflight: backfill unknown"
 
-new_world; : >"$STUB/no-reference"
-refusal "image without reference files" "does not carry"
+# The mount holds all four; only the image's own tree counts.
+new_world; rm "$STUB/image-root/opt/idealista/reference_data/top_agencies.json"
+refusal "image without reference files" "does not carry top_agencies.json under /opt/idealista/reference_data"
 expect_untouched "preflight: old image"
+new_world; printf '/app/data/reference' >"$STUB/ref-env"
+refusal "reference files read from the state mount" "not from outside /app/data"
+expect_untouched "preflight: reference files under the mount"
+new_world; : >"$STUB/ref-env"
+refusal "no REFERENCE_DATA_DIR" "has no REFERENCE_DATA_DIR"
+expect_untouched "preflight: no REFERENCE_DATA_DIR"
+# Other spellings of a directory under the mount, and a link into it.
+for spelling in /app/./data/reference //app/data/reference /opt/../app/data/reference /app/data/; do
+    new_world; printf '%s' "$spelling" >"$STUB/ref-env"
+    refusal "reference files read from ${spelling}" "not from outside /app/data"
+done
+new_world; mkdir -p "$STUB/image-root/app/data"
+mv "$STUB/image-root/opt/idealista/reference_data" "$STUB/image-root/app/data/reference"
+ln -s ../../app/data/reference "$STUB/image-root/opt/idealista/reference_data"
+refusal "reference directory links into the mount" "in the image, not from outside /app/data"
+expect_untouched "preflight: reference directory links into the mount"
+# A single file linked under the mount is hidden from the app as well.
+new_world; mkdir -p "$STUB/image-root/app/data"
+mv "$STUB/image-root/opt/idealista/reference_data/top_agencies.json" "$STUB/image-root/app/data/image-only.json"
+ln -s ../../../app/data/image-only.json "$STUB/image-root/opt/idealista/reference_data/top_agencies.json"
+refusal "a reference file links into the mount" "which the state mount hides from the app"
+# A chain whose middle link lies under the mount ends outside it, and the app
+# still cannot follow it: every hop counts, not where the chain ends.
+new_world; mkdir -p "$STUB/image-root/app/data" "$STUB/image-root/opt/bundled"
+mv "$STUB/image-root/opt/idealista/reference_data/top_agencies.json" "$STUB/image-root/opt/bundled/top_agencies.json"
+ln -s ../../../app/data/agency-link "$STUB/image-root/opt/idealista/reference_data/top_agencies.json"
+ln -s ../../opt/bundled/top_agencies.json "$STUB/image-root/app/data/agency-link"
+refusal "a two-hop link through the mount" "/app/data/agency-link under /app/data, which the state mount hides"
+expect_untouched "preflight: a two-hop link through the mount"
+# So does a parent directory a link passes through.
+new_world; mkdir -p "$STUB/image-root/app/data/refs" "$STUB/image-root/srv"
+mv "$STUB/image-root/opt/idealista/reference_data/top_agencies.json" "$STUB/image-root/app/data/refs/top_agencies.json"
+ln -s ../app/data/refs "$STUB/image-root/srv/refs"
+ln -s ../../../srv/refs/top_agencies.json "$STUB/image-root/opt/idealista/reference_data/top_agencies.json"
+refusal "a link through a parent under the mount" "which the state mount hides from the app"
+# A link that stays outside the mount is followed and passes.
+new_world; mkdir -p "$STUB/image-root/opt/bundled"
+mv "$STUB/image-root/opt/idealista/reference_data/top_agencies.json" "$STUB/image-root/opt/bundled/top_agencies.json"
+ln -s ../../bundled/top_agencies.json "$STUB/image-root/opt/idealista/reference_data/top_agencies.json"
+run_move -- --check "$DEST"
+[ "$RC" = "0" ] || fail "preflight: a reference file linked outside the mount refused (rc=${RC}): $(grep -m 1 'NOT\|^ *-' "${W}/out")"
+# The image carries the files, but the running app mounts an empty, unrelated
+# directory over them.
+new_world; mkdir "$STUB/live-ref"
+refusal "an empty mount over the reference directory" "as it runs now cannot read ine_municipal.json under /opt/idealista/reference_data"
+expect_untouched "preflight: an empty mount over the reference directory"
+new_world; : >"$STUB/fail.exec"
+refusal "docker cannot look into the app" "could not look into idealista-app for its reference files"
+# A newline ends the value; $(...) would strip it and check another directory.
+new_world; printf '/opt/idealista/reference_data\n' >"$STUB/ref-env"
+refusal "REFERENCE_DATA_DIR ends in a newline" "holds a control character or a newline"
+new_world; printf '/opt/idealista/reference_data\t' >"$STUB/ref-env"
+refusal "REFERENCE_DATA_DIR holds a tab" "holds a control character or a newline"
+# The probe reads as the user the app runs as (Compose `user:`), not as the
+# image's default.
+new_world; printf '1001:1001' >"$STUB/user"; printf '1001:1001' >"$STUB/unreadable-by"
+refusal "reference files unreadable by the app's user" "readable by 1001:1001"
+new_world; printf '1001:1001' >"$STUB/user"; printf 'appuser' >"$STUB/unreadable-by"
+run_move -- --check "$DEST"
+[ "$RC" = "0" ] || fail "preflight: files readable by the app's user 1001:1001 refused (rc=${RC})"
+# An image that declares a VOLUME is not run: the run would create one.
+new_world; printf '{"/app/data":{}}' >"$STUB/image-volumes"
+refusal "image declares a volume" "declares volumes"
+
+# A FIFO named .deployed_sha is not read, and nothing waits on it.
+new_world; rm "$REPO/data/.deployed_sha"; mkfifo "$REPO/data/.deployed_sha"
+run_move_bounded --check "$DEST"
+[ "$RC" != "124" ] || fail "preflight: --check was still waiting on a FIFO .deployed_sha after ten seconds"
+[ "$RC" = "1" ] && grep -q "deployed_sha is missing or not a regular file" "${W}/out" \
+    || fail "preflight: a FIFO .deployed_sha: exit ${RC}"
+[ ! -s "${W}/forbidden" ] || fail "preflight: a FIFO .deployed_sha: docker was asked $(head -n 1 "${W}/forbidden")"
 
 # A question docker or git could not answer is a problem, not a "no".
 new_world; : >"$STUB/fail.ps"
@@ -371,6 +542,11 @@ expect_untouched "preflight: docker ps fails"
 new_world; : >"$STUB/fail.inspect-mounts.idealista-db"
 refusal "a sibling's mounts cannot be read" "could not say what container idealista-db mounts"
 expect_untouched "preflight: docker inspect of a sibling fails"
+
+# An answer that cannot be read to its end is not a list of no mounts.
+new_world; printf '[{"Type": "bind", "Destination": "/app/data", "Source": "%s"\n' "$REPO/data" >"$STUB/raw-mounts.idealista-db"
+refusal "a sibling's mounts are cut off" "could not be read in full"
+expect_untouched "preflight: a sibling's mounts are cut off"
 
 new_world
 printf '#!/bin/bash\nfor arg in "$@"; do [ "$arg" != "status" ] || exit 1; done\nexec "%s" "$@"\n' "$(command -v git)" >"${W}/bin/git"
@@ -426,6 +602,7 @@ pass "every preflight refusal leaves the deployment untouched"
 mounted() {
     local label="$1" container="$2" line="$3"
     new_world
+    line="${line//|/$'\t'}"
     line="${line//@REPO@/$REPO}"
     line="${line//@W@/$W}"
     grep -Fx -- "$container" "$STUB/containers" >/dev/null || printf '%s\n' "$container" >>"$STUB/containers"
@@ -438,12 +615,17 @@ mounted "a sibling mounts a directory inside it" idealista-app-run-abc "bind||/a
 mounted "a sibling mounts a directory that holds it" idealista-tools "bind||/work|@W@"
 new_world; ln -s "$REPO" "${W}/link-to-repo"
 printf 'idealista-tools\n' >>"$STUB/containers"
-printf 'bind||/work|%s\n' "${W}/link-to-repo/data/.inflight" >"$STUB/mounts.idealista-tools"
+printf 'bind\t\t/work\t%s\n' "${W}/link-to-repo/data/.inflight" >"$STUB/mounts.idealista-tools"
 refusal "a sibling mounts it through a link" "inside it, or holds it"
 expect_untouched "mounts: through a link"
 mounted "Docker Desktop's spelling of the path" idealista-tools "bind||/state|/host_mnt@REPO@/data/attachments"
 mounted "the app mounts part of it a second time" idealista-app "bind||/app/attachments|@REPO@/data/attachments"
 mounted "a mount of a kind the check does not know" idealista-tools "npipe||/pipe|/var/run/x" "does not know"
+# A path may hold a "|": the mounts are read as JSON, not split on it.
+new_world; printf 'idealista-tools\n' >>"$STUB/containers"
+printf 'bind\t\t/a|b\t%s\n' "$REPO/data" >"$STUB/mounts.idealista-tools"
+refusal "a destination with a pipe in it" "inside it, or holds it"
+expect_untouched "mounts: a pipe in a path"
 new_world; printf '%s\n' "$REPO/data" >"$STUB/volume.pgdata"
 refusal "a volume created over the directory" "inside it, or holds it"
 expect_untouched "mounts: volume over the directory"
@@ -452,7 +634,7 @@ refusal "a volume that cannot be described" "could not describe volume pgdata"
 expect_untouched "mounts: volume inspect fails"
 new_world; : >"$STUB/eat-stdin"
 printf 'idealista-zz-last\n' >>"$STUB/containers"
-printf 'bind||/state|%s\n' "$REPO/data" >"$STUB/mounts.idealista-zz-last"
+printf 'bind\t\t/state\t%s\n' "$REPO/data" >"$STUB/mounts.idealista-zz-last"
 refusal "the last container, behind a docker that reads stdin" "inside it, or holds it"
 expect_untouched "mounts: docker reads stdin"
 pass "a mount of the directory, inside it or above it, in any container, refuses"
