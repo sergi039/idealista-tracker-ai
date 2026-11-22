@@ -56,6 +56,12 @@ ALLOWED: Dict[str, Tuple[str, ...]] = {
     "tests/test_reference_data_location.py": (
         "docker daemon is not running or buildx is missing",
     ),
+    # Asks a real `docker compose up --no-start` whether it creates the app's
+    # container on a state directory that does not exist (#639). Same terms:
+    # CI fails without a daemon, a machine that keeps it off skips.
+    "tests/test_compose_state_mount.py": (
+        "docker daemon is not running or buildx is missing",
+    ),
     # The row-decision script's pure logic runs under node, which CI does not
     # provision (tests/js_harness.py); skipped only when node is missing.
     "tests/test_owner_decision_logic.py": ("node executable not found",),
