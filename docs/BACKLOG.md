@@ -67,6 +67,53 @@ must be an ancestor of `main`.
   `pg_stat_activity.wait_event_type = 'Lock'` for the second session, as
   `test_029_set_link_waits_for_the_row_lock_it_takes` does.
 
+### A bare route of a subscription can leave a membership on the routed stub
+
+- **Anchor:** `migrations/030_create_property_subscription.sql`
+  (`trg_property_subscription_a_canonical_profile` over
+  `canonicalize_search_profile()`, `move_property_subscriptions_on_route`, and
+  the header's "WHAT IS NOT CLOSED", which already names this gap);
+  `services/search_profile_service.py` (`route_profile`). Fifth review of #705 (`af58f85..e48a982`), 2026-11-22;
+  merged by hand on the owner's command ("Да, оба").
+- **Finding:** the canonicalizing trigger reads the subscription under
+  `FOR KEY SHARE`, which does not conflict with an UPDATE of `routed_to` (not
+  a key column). Session A runs a bare `UPDATE search_profiles SET routed_to`
+  and stays open after its move trigger ran; session B inserts a membership on
+  that subscription, still sees it unrouted, and both commit with the
+  membership left on the stub.
+- **Measured:** not reproduced; the review's reasoning only. Today
+  `route_profile()` is the only writer that routes an existing subscription,
+  and it takes both rows `FOR UPDATE` first, which does conflict with
+  `FOR KEY SHARE`; the other places that set `routed_to` create a new
+  subscription, which has no memberships yet. Nothing writes
+  `property_subscription` yet either (schema only, #632).
+- **What breaks, for whom:** once ingestion writes memberships (#632 slice 2),
+  a route done by hand in SQL, or by a future writer that bypasses
+  `route_profile()`, can leave a listing counted under a stub the owner no
+  longer sees.
+- **Check:** the trigger takes `FOR SHARE` (or `FOR NO KEY UPDATE`) on the
+  subscription, or a test routes with a bare UPDATE and asserts the membership
+  landed on the target.
+
+### A route can deadlock with the deletion of a listing homed outside it
+
+- **Anchor:** `migrations/030_create_property_subscription.sql`
+  (`move_property_subscriptions_on_route`,
+  `skip_redundant_property_subscription`). Same review as the entry above.
+- **Finding:** session A locks a listing `FOR UPDATE` (to delete it); session
+  B routes a subscription holding a membership of that listing, deletes the
+  membership and waits for `FOR SHARE` on the listing during re-insertion; A's
+  delete then cascades to the membership B already deleted and waits for B.
+  PostgreSQL aborts one of the two.
+- **Measured:** not reproduced; the review's reasoning only. The app has no
+  path that deletes a property, so the cycle needs a hand-run DELETE.
+- **What breaks, for whom:** nothing today; if a property delete is ever
+  added, a route that collides with it fails with a deadlock error, and the
+  route (or the delete) has to be retried. Nothing is half-written: the
+  aborted transaction rolls back whole.
+- **Check:** a two-session test of a route against a listing delete, once a
+  delete path exists.
+
 ### `tools/backup_attachments.sh` has no schedule
 
 - **Anchor:** `tools/backup_attachments.sh`; LaunchAgent
