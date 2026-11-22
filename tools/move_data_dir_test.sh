@@ -78,12 +78,13 @@ printf '%s | %s=%s\n' "$*" "IDEALISTA_DATA_DIR" "${IDEALISTA_DATA_DIR-<unset>}" 
 # the check is looping over.
 [ "$1" != "inspect" ] || [ ! -e "$STUB/eat-stdin" ] || cat >/dev/null
 hook() { [ -e "$STUB/fail.$1" ] || return 1; [ -e "$STUB/keep.$1" ] || rm -f "$STUB/fail.$1"; return 0; }
-# A call that hangs, once: it records its PID and waits until it is killed
-# (or its world is removed).
+# A call that hangs, once (with hang.wedged, every stop and up after it): it
+# records its PID and waits until it is killed (or its world is removed).
 hang_once() {
     [ -e "$STUB/hang.$1" ] || return 0
     rm -f "$STUB/hang.$1"
-    printf '%s\n' "$$" >"$STUB/hang.pid"
+    [ ! -e "$STUB/hang.wedged" ] || : >"$STUB/hang.stop" >"$STUB/hang.up"
+    printf '%s\n' "$$" >>"$STUB/hang.pid"
     while [ -d "$STUB" ]; do sleep 0.1; done
     exit 1
 }
@@ -533,13 +534,11 @@ no_leak "scenario 2"
 backup="$(find "$BACKUPS" -maxdepth 1 -name 'data-pre-move-*' -type d | head -n 1)"
 [ -n "$backup" ] || fail "scenario 2: no safety copy"
 tree_of "$backup" | cmp -s - "${W}/original.tree" || fail "scenario 2: the safety copy is not the directory as it was"
-# Stop strictly before the rename, start strictly after .env was written: the
+# One stop, then one start that builds nothing, after .env was written: the
 # stub's `up` read the destination from .env, which is what expect_moved saw.
-stop_at="$(grep -n ' stop app' "${W}/docker.log" | head -n 1 | cut -d: -f1)"
-up_at="$(grep -n ' up -d --no-build app' "${W}/docker.log" | head -n 1 | cut -d: -f1)"
-[ -n "$stop_at" ] && [ -n "$up_at" ] && [ "$stop_at" -lt "$up_at" ] || fail "scenario 2: stop/up order"
+calls="$(sed -nE 's/^compose .* (stop|up) (.*) \| IDEALISTA.*/\1 \2/p' "${W}/docker.log" | tr '\n' ';')"
+[ "$calls" = "stop app;up -d --no-build app;" ] || fail "scenario 2: compose calls: ${calls}"
 [ ! -e "$STUB/stop-before-intent" ] || fail "scenario 2: the app was stopped before .env named the destination"
-grep -q -- '--build' "${W}/docker.log" | grep -v -- '--no-build' && fail "scenario 2: the move built an image"
 # The one reader agrees with what was mounted.
 [ "$(env -u IDEALISTA_DATA_DIR PATH="${W}/bin:${PATH}" STUB="$STUB" STUB_REPO="$REPO" /bin/bash "$REPO/tools/autopilot/lib/data_dir.sh" "$REPO")" = "$DEST" ] \
     || fail "scenario 2: data_dir.sh does not resolve the destination"
@@ -584,6 +583,13 @@ done
 new_world; mkdir "$DEST"
 refusal "destination exists" "already exists"
 rmdir "$DEST"; expect_untouched "preflight: destination exists"
+
+# The safety copy in the destination, or the destination in its directory.
+new_world
+for backups in "$DEST" "${DEST}/b" "$W"; do
+    refusal "backup root ${backups#"$W"}" "one holds the other" "MOVE_BACKUP_ROOT=${backups}"
+done
+expect_untouched "preflight: backup root and destination overlap"
 
 new_world
 run_move -- --check "relative/path"
@@ -943,32 +949,49 @@ recovered "scenario 6i (the container reads another directory)"
 # 6j. SIGTERM while `docker compose` hangs (F5; #709 review, finding 5): the
 # trap runs at once, recovery ends the hung call by its PID and finishes. The
 # test never releases the hang.
-for hung in stop:stopping up:starting; do
-    new_world; : >"$STUB/hang.${hung%%:*}"
+term_during_hang() {
+    # term_during_hang <label>: --apply until the stub hangs, then SIGTERM; RC.
     env -u IDEALISTA_DATA_DIR PATH="${W}/bin:${PATH}" STUB="$STUB" STUB_REPO="$REPO" STUB_APP="idealista-app" STUB_MODE=write \
         MOVE_BACKUP_ROOT="$BACKUPS" MOVE_DEPLOY_LOCK="${W}/deploy.lock" MOVE_MERGE_LOCK="${W}/merge.lock" \
-        MOVE_HEALTH_URL="http://127.0.0.1:1/api/healthz" MOVE_HEALTH_TIMEOUT=2 MOVE_HEALTH_POLL=1 \
+        MOVE_HEALTH_URL="http://127.0.0.1:1/api/healthz" MOVE_HEALTH_TIMEOUT=2 MOVE_HEALTH_POLL=1 MOVE_COMPOSE_LIMIT_S=2 \
         /bin/bash "$REPO/tools/move_data_dir.sh" --apply "$DEST" </dev/null >"${W}/out" 2>&1 &
-    mover=$!
+    local mover=$! waited=0 pid
     for _ in $(seq 1 200); do [ -s "$STUB/hang.pid" ] && break; sleep 0.05; done
-    [ -s "$STUB/hang.pid" ] || fail "scenario 6j (${hung%%:*}): the move never reached the hung call"
-    hung_pid="$(cat "$STUB/hang.pid")"
+    [ -s "$STUB/hang.pid" ] || fail "$1: the move never reached the hung call"
     kill -TERM "$mover"
-    waited=0
-    while kill -0 "$mover" 2>/dev/null && [ "$waited" -lt 200 ]; do sleep 0.1; waited=$((waited + 1)); done
+    while kill -0 "$mover" 2>/dev/null && [ "$waited" -lt 300 ]; do sleep 0.1; waited=$((waited + 1)); done
     if kill -0 "$mover" 2>/dev/null; then
-        kill -KILL "$mover" "$hung_pid" 2>/dev/null || true
+        kill -KILL "$mover" $(cat "$STUB/hang.pid") 2>/dev/null || true
         wait "$mover" 2>/dev/null || true
-        fail "scenario 6j (${hung%%:*}): the move was still running 20 seconds after SIGTERM"
+        fail "$1: the move was still running 30 seconds after SIGTERM"
     fi
     RC=0; wait "$mover" || RC=$?
-    if kill -0 "$hung_pid" 2>/dev/null; then
-        kill -KILL "$hung_pid" 2>/dev/null || true
-        fail "scenario 6j (${hung%%:*}): the hung docker call outlived the move"
-    fi
+    for pid in $(cat "$STUB/hang.pid"); do
+        ! kill -0 "$pid" 2>/dev/null || { kill -KILL "$pid"; fail "$1: the hung docker call outlived the move"; }
+    done
+}
+for hung in stop:stopping up:starting; do
+    new_world; : >"$STUB/hang.${hung%%:*}"
+    term_during_hang "scenario 6j (${hung%%:*})"
     recovered "scenario 6j (SIGTERM during a hung ${hung%%:*})"
     grep -q "FAILED in phase '${hung#*:}' (exit 143)" "${W}/out" || fail "scenario 6j (${hung%%:*}): the signal was not what ended the move"
 done
+
+# 6j2. Docker stays hung (#711 review): recovery's own `compose stop` ends on
+# MOVE_COMPOSE_LIMIT_S, and the move exits 3 with the commands.
+new_world; : >"$STUB/hang.up"; : >"$STUB/hang.wedged"
+term_during_hang "scenario 6j2"
+[ "$RC" = "3" ] && grep -q "stop app' did not finish in 2 s" "${W}/out" && grep -q "Production may be DOWN" "${W}/out" \
+    || fail "scenario 6j2: exit ${RC}, expected 3 with the manual commands after a recovery stop that hangs"
+# The printed commands, run by hand here and after 6n's SIGKILL.
+grep -E '^    (\[|rmdir|mv|git) ' "${W}/out" | sed 's/^    //' >"${ROOT}/by-hand"
+printed_in="$W"
+by_hand() {
+    sed "s|${printed_in}|${W}|g" "${ROOT}/by-hand" | bash -e >/dev/null 2>&1 \
+        && [ "$(cat "$REPO/data/.last_seen_uid_properties")" = "4711" ] && [ ! -e "$DEST" ] \
+        || fail "$1: the printed commands do not put the state back in <repo>/data"
+}
+by_hand "scenario 6j2 (the rebuilt directory)"
 
 # 6k. `compose up` fails and leaves no container (#671 review): recovery read
 # the failing inspect as "may be running".
@@ -1028,6 +1051,7 @@ rm -f "${W}/bin/mkdir"
     || fail "scenario 6n: the kill did not land between the rename and the rebuild"
 [ "$(sed -n 's/^IDEALISTA_DATA_DIR=//p' "$REPO/.env")" = "$DEST" ] \
     || fail "scenario 6n: after the kill .env does not name the directory that holds the state"
+by_hand "scenario 6n (killed before the rebuild)"
 
 pass "a failure at every step after the stop ends with the app running on the original directory"
 

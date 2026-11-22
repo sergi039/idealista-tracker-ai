@@ -50,6 +50,8 @@ CONTAINER_STATE="/app/data"
 HEALTH_URL="${MOVE_HEALTH_URL:-http://127.0.0.1:5001/api/healthz}"
 HEALTH_TIMEOUT="${MOVE_HEALTH_TIMEOUT:-180}"
 HEALTH_POLL="${MOVE_HEALTH_POLL:-5}"
+# Recovery ignores signals, so a clock ends each of its `docker compose` calls.
+COMPOSE_LIMIT_S="${MOVE_COMPOSE_LIMIT_S:-120}"
 BACKUP_ROOT="${MOVE_BACKUP_ROOT:-${HOME}/IdealistaRank-backups}"
 # The watcher's and the merge bot's lock files, held for the whole move: no
 # tick builds and no merge pass writes while the state is in two places.
@@ -95,10 +97,6 @@ EOF
 # deploy lock with nobody behind it, and every later watcher tick would skip.
 dk() { docker "$@" </dev/null 8>&- 9>&-; }
 
-compose() {
-    ( cd "$REPO" && env -u "$KEY" docker compose -f "$COMPOSE_FILE" "$@" ) </dev/null 8>&- 9>&-
-}
-
 # The same call, started in the background and waited for. Bash runs a trap
 # only once a foreground command returns: a `compose up` that hangs would hold
 # SIGTERM back for ever. `wait` returns on a trapped signal at once, and
@@ -125,6 +123,25 @@ end_waited() {
     wait "$BG_PID" 2>/dev/null || true
     note "ended the interrupted 'docker compose' call (pid ${BG_PID})"
     BG_PID=""
+}
+
+# compose_waited for recovery: 124 once COMPOSE_LIMIT_S has passed.
+compose_bounded() {
+    local rc=0 waited=0
+    ( cd "$REPO" && exec env -u "$KEY" docker compose -f "$COMPOSE_FILE" "$@" ) </dev/null >/dev/null 2>&1 8>&- 9>&- &
+    BG_PID=$!
+    while kill -0 "$BG_PID" 2>/dev/null && [ "$waited" -lt $((COMPOSE_LIMIT_S * 10)) ]; do
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+    if kill -0 "$BG_PID" 2>/dev/null; then
+        say "ERROR: 'docker compose $*' did not finish in ${COMPOSE_LIMIT_S} s"
+        end_waited
+        return 124
+    fi
+    wait "$BG_PID" || rc=$?
+    BG_PID=""
+    return "$rc"
 }
 
 # 0 running, 1 stopped, 2 could not tell. "Could not tell" is its own answer:
@@ -282,7 +299,7 @@ for source in sources:
     inside = source.startswith(state.rstrip("/") + "/")
     holds = state.startswith(source.rstrip("/") + "/")
     hit = hit or source == state or inside or holds
-print("yes" if hit else "no")' "$SRC" "$1" </dev/null 2>/dev/null
+print("yes" if hit else "no")' "${2:-$SRC}" "$1" </dev/null 2>/dev/null
 }
 
 # rename(2) and nothing else: `mv` onto a directory that exists moves the
@@ -472,10 +489,11 @@ manual_recovery() {
 
     cd ${REPO}
     env -u ${KEY} docker compose -f ${COMPOSE_FILE} stop app
-    # if ${DEST:-<destination>} exists and ${SRC} is the small rebuilt directory
-    # (it holds ${TOMBSTONE}):
-    mv ${SRC} ${BACKUP_ROOT}/checkout-data-at-rollback-${STAMP}
-    mv ${DEST:-<destination>} ${SRC}
+    # the rebuilt ${SRC} (it holds ${TOMBSTONE}, or nothing) aside, if there
+    # is one, then ${DEST:-<destination>} back, if ${SRC} is free:
+    [ ! -f ${SRC}/${TOMBSTONE} ] || mv ${SRC} ${BACKUP_ROOT}/checkout-data-at-rollback-${STAMP}
+    rmdir ${SRC} 2>/dev/null || true
+    [ -e ${SRC} ] || mv ${DEST:-<destination>} ${SRC}
     git -C ${REPO} checkout -- data
     # then remove the line '${KEY}=...' from ${REPO}/.env
     env -u ${KEY} docker compose -f ${COMPOSE_FILE} up -d --no-build app
@@ -505,7 +523,7 @@ restore_original() {
             }
             note "removed the ${KEY} line from .env"
         fi
-        if ! compose up -d --no-build app >/dev/null 2>&1; then
+        if ! compose_bounded up -d --no-build app; then
             say "ERROR: 'docker compose up -d --no-build app' failed"
             return 1
         fi
@@ -513,7 +531,8 @@ restore_original() {
         return
     fi
 
-    compose stop app >/dev/null 2>&1 || true
+    compose_bounded stop app
+    [ "$?" != "124" ] || return 1
     app_running || running_rc=$?
     if [ "$running_rc" != "1" ]; then
         say "ERROR: cannot confirm ${APP} is stopped (probe answered ${running_rc}); not moving a directory under a container that may be running"
@@ -567,7 +586,7 @@ restore_original() {
         note "removed the ${KEY} line from .env"
     fi
 
-    if ! compose up -d --no-build app >/dev/null 2>&1; then
+    if ! compose_bounded up -d --no-build app; then
         say "ERROR: 'docker compose up -d --no-build app' failed"
         return 1
     fi
@@ -693,6 +712,9 @@ preflight_apply() {
     while [ ! -e "$backup_at" ] && [ "$backup_at" != "/" ]; do
         backup_at="$(dirname "$backup_at")"
     done
+    if [ "$(overlaps_state "$BACKUP_ROOT" "$DEST")" != "no" ]; then
+        problem "${BACKUP_ROOT} and ${DEST}: one holds the other; set MOVE_BACKUP_ROOT beside the destination"
+    fi
     if [ -d "$SRC" ]; then
         here="$(device_of "$SRC")" || here=""
         there="$(device_of "$backup_at")" || there=""
