@@ -9,11 +9,14 @@
 #   * a ready deployment is called ready, and --check is the default;
 #   * every refusal names its reason, exits 1, and leaves everything exactly
 #     as it was - no container stopped or started, no file written;
-#   * every run, ready or not: docker is asked only to read (any other verb
-#     fails the run), and nothing under the checkout changes - not a file, not
-#     a timestamp, not the git index;
+#   * every run of --check, ready or not: docker is asked only to read (any
+#     other verb fails the run), and nothing under the checkout changes - not
+#     a file, not a timestamp, not the git index;
 #   * every mount of every container is compared with the state directory by
-#     real path, and two filesystems are told apart by mount point too.
+#     real path, and two filesystems are told apart by mount point too;
+#   * the move and the way back (the stub's `up` mounts what `.env` names);
+#   * a failure at EACH step after the stop, signals included, ends on the
+#     original directory (after SIGKILL: once `--rollback` has run).
 
 set -euo pipefail
 unset IDEALISTA_DATA_DIR
@@ -58,9 +61,9 @@ write_stubs() {
 # app's image id), $STUB/ref-env (the app's REFERENCE_DATA_DIR) and
 # $STUB/image-root (that image's file tree, with nothing mounted).
 #
-# The check may only ask. Anything outside the verbs below is recorded in
-# forbidden and refused - and a stop is still obeyed, so a check that stopped
-# the app also leaves it stopped.
+# A check may only ask; a move or a rollback (STUB_MODE=write) may also stop,
+# start and `exec cat`. Anything else is recorded in forbidden and refused -
+# and a stop is still obeyed, so a check that stopped the app leaves it stopped.
 printf '%s | %s=%s\n' "$*" "IDEALISTA_DATA_DIR" "${IDEALISTA_DATA_DIR-<unset>}" >>"$STUB/../docker.log"
 # An `inspect` that reads its stdin, as a CLI may: it must not eat the list
 # the check is looping over.
@@ -82,7 +85,11 @@ case "$1" in
                 *) break ;;
             esac
         done
-        [ "${1:-}" = "config" ] || forbidden "$all"
+        case "${1:-}" in
+            config) ;;
+            stop | up) [ "${STUB_MODE:-check}" = "write" ] || forbidden "$all" ;;
+            *) forbidden "$all" ;;
+        esac
         case "${1:-}" in
             config)
                 # What Compose would bind at /app/data, the question the
@@ -97,6 +104,24 @@ case "$1" in
                 [ -n "$source" ] || source="$STUB_REPO/data"
                 printf '{"services":{"app":{"volumes":[{"type":"bind","source":"%s","target":"/app/data"}]}}}\n' "$source"
                 ;;
+            stop)
+                hook stop && exit 1
+                grep -q '^IDEALISTA_DATA_DIR=' "$STUB_REPO/.env" || : >"$STUB/stop-before-intent"
+                printf 'false\n' >"$STUB/running"
+                ;;
+            up)
+                while [ -e "$STUB/hang.up" ]; do sleep 0.1; done
+                # Failed half-way: the old container gone, no new one.
+                if hook up-gone; then : >"$STUB/gone"; : >"$STUB/containers"; exit 1; fi
+                hook up && exit 1
+                source="$(sed -n 's/^IDEALISTA_DATA_DIR=//p' "$STUB_REPO/.env" | tail -n 1)"
+                [ -n "$source" ] || source="$STUB_REPO/data"
+                # create_host_path: false - a missing source is an error.
+                [ -d "$source" ] || { echo "stub compose: bind source $source does not exist" >&2; exit 1; }
+                printf '%s\n' "$source" >"$STUB/mount"
+                printf 'true\n' >"$STUB/running"
+                if [ -e "$STUB/gone" ]; then rm -f "$STUB/gone"; printf '%s\n' "$STUB_APP" >"$STUB/containers"; fi
+                ;;
         esac
         ;;
     inspect)
@@ -106,6 +131,7 @@ case "$1" in
         case "$format" in
             *State.Running*)
                 hook inspect-running && exit 1
+                if [ "$(cat "$STUB/running")" = "false" ]; then hook inspect-stopped && exit 1; fi
                 [ ! -e "$STUB/gone" ] || { echo "Error: No such object: $name" >&2; exit 1; }
                 cat "$STUB/running"
                 ;;
@@ -134,6 +160,14 @@ case "$1" in
         hook "volume.$5" && exit 1
         cat "$STUB/volume.$5" 2>/dev/null || printf '\n'
         ;;
+    exec)
+        # The move's round-trip probe only, and only in a move or a rollback.
+        [ "${STUB_MODE:-check}" = "write" ] && [ "$2" = "$STUB_APP" ] && [ "$3" = "cat" ] && [ $# -eq 4 ] \
+            || forbidden "$*"
+        [ "$(cat "$STUB/running")" = "true" ] || exit 1
+        [ -e "$STUB/stale" ] && [ -e "$STUB_REPO/data/.moved-to" ] && { echo stale; exit 0; }
+        cat "$(cat "$STUB/mount")/${4#/app/data/}"
+        ;;
     run)
         # A throwaway container of the app's image with nothing mounted: the
         # probe's own script runs against the image's tree.
@@ -151,7 +185,18 @@ case "$1" in
     *) forbidden "$*" ;;
 esac
 STUB
-    chmod +x "${W}/bin/docker"
+    cat >"${W}/bin/curl" <<'STUB'
+#!/bin/bash
+running="$(cat "$STUB/running")"
+for arg in "$@"; do
+    if [ "$arg" = '%{http_code}' ]; then
+        if [ "$running" = "true" ]; then cat "$STUB/page"; else printf '000'; fi
+        exit 0
+    fi
+done
+[ "$running" = "true" ] && [ ! -e "$STUB/unhealthy" ]
+STUB
+    chmod +x "${W}/bin/docker" "${W}/bin/curl"
 
     # df answers through the real one, except that a path named in
     # $STUB/df-elsewhere is reported on another mount point, and
@@ -229,6 +274,9 @@ new_world() {
     snapshot_original
 }
 
+# A file's mode, in octal - from python: `stat -f` means something else on Linux.
+mode_of() { python3 -c 'import os, stat, sys; print("%o" % stat.S_IMODE(os.stat(sys.argv[1]).st_mode))' "$1"; }
+
 # What "exactly as it was" means: the state directory's content and .env.
 tree_of() { ( cd "$1" && find . -type f ! -name '*.log' -exec shasum -a 256 {} + | LC_ALL=C sort ); }
 snapshot_original() {
@@ -259,25 +307,39 @@ with open(os.path.join(root, ".git", "index"), "rb") as index:
 PY
 }
 
+# check, or write for a move or a rollback: what the stub lets docker do.
+stub_mode() {
+    local arg
+    for arg in "$@"; do case "$arg" in --apply | --rollback) echo write; return ;; esac; done
+    echo check
+}
+
 run_move() {
     # run_move [VAR=value ...] -- <script arguments>
-    # Fails the scenario outright if the run wrote anything under the checkout
-    # or asked docker for anything but a read.
+    # Fails the scenario outright if the run asked docker for what its mode
+    # may not, or - a check - wrote anything under the checkout.
     local envs=()
     while [ $# -gt 0 ] && [ "$1" != "--" ]; do envs+=("$1"); shift; done
     shift
+    local mode
+    mode="$(stub_mode "$@")"
     checkout_snapshot >"${W}/before.snapshot"
     set +e
     # stdin is /dev/null: a reader outside a loop gets end of file, not this
     # harness's own stdin, so a check that reads stdin fails instead of hanging.
     env -u IDEALISTA_DATA_DIR -u GIT_OPTIONAL_LOCKS \
         PATH="${W}/bin:${PATH}" \
-        STUB="$STUB" STUB_REPO="$REPO" STUB_APP="idealista-app" \
+        STUB="$STUB" STUB_REPO="$REPO" STUB_APP="idealista-app" STUB_MODE="$mode" \
+        MOVE_BACKUP_ROOT="$BACKUPS" \
+        MOVE_DEPLOY_LOCK="${W}/deploy.lock" MOVE_MERGE_LOCK="${W}/merge.lock" \
+        MOVE_HEALTH_URL="http://127.0.0.1:1/api/healthz" \
+        MOVE_HEALTH_TIMEOUT=2 MOVE_HEALTH_POLL=1 \
         ${envs[@]+"${envs[@]}"} \
         /bin/bash "$REPO/tools/move_data_dir.sh" "$@" </dev/null >"${W}/out" 2>&1
     RC=$?
     set -e
-    [ ! -s "${W}/forbidden" ] || fail "the check asked docker for more than a read: $(head -n 1 "${W}/forbidden")"
+    [ ! -s "${W}/forbidden" ] || fail "the ${mode} asked docker for what it may not: $(head -n 1 "${W}/forbidden")"
+    [ "$mode" = "check" ] || return 0
     checkout_snapshot >"${W}/after.snapshot"
     diff "${W}/before.snapshot" "${W}/after.snapshot" >"${W}/written" \
         || fail "the check wrote under the checkout: $(grep '^[<>]' "${W}/written" | head -n 2 | tr '\n' ' ')"
@@ -289,6 +351,7 @@ run_move_bounded() {
     local pid waited=0 writer
     set +e
     env -u IDEALISTA_DATA_DIR PATH="${W}/bin:${PATH}" STUB="$STUB" STUB_REPO="$REPO" STUB_APP="idealista-app" \
+        STUB_MODE="$(stub_mode "$@")" \
         MOVE_BACKUP_ROOT="$BACKUPS" MOVE_DEPLOY_LOCK="${W}/deploy.lock" MOVE_MERGE_LOCK="${W}/merge.lock" \
         MOVE_HEALTH_URL="http://127.0.0.1:1/api/healthz" MOVE_HEALTH_TIMEOUT=2 MOVE_HEALTH_POLL=1 \
         /bin/bash "$REPO/tools/move_data_dir.sh" "$@" >"${W}/out" 2>&1 &
@@ -343,6 +406,35 @@ expect_untouched() {
     return 0
 }
 
+expect_moved() {
+    local label="$1" name
+    [ "$RC" = "0" ] || fail "${label}: exit ${RC}"
+    grep -q "^MOVED:" "${W}/out" || fail "${label}: no MOVED line"
+    tree_of "$DEST" | cmp -s - "${W}/original.tree" || fail "${label}: the moved directory is not what was there before"
+    [ "$(sed -n 's/^IDEALISTA_DATA_DIR=//p' "$REPO/.env")" = "$DEST" ] || fail "${label}: .env does not name the destination"
+    grep -q '^DB_PASSWORD=hunter2$' "$REPO/.env" || fail "${label}: another line of .env was lost"
+    [ "$(mode_of "$REPO/.env")" = "600" ] || fail "${label}: .env lost its mode"
+    grep -q hunter2 "${W}/out" && fail "${label}: a line of .env was printed"
+    [ "$(cat "$STUB/running")" = "true" ] || fail "${label}: the app is not running"
+    [ "$(cat "$STUB/mount")" = "$DEST" ] || fail "${label}: the app is not mounted on the destination"
+    for name in $REFERENCE; do
+        [ -f "$REPO/data/$name" ] || fail "${label}: <repo>/data lost the reference file ${name}"
+    done
+    grep -q "^moved_to=${DEST}\$" "$REPO/data/.moved-to" || fail "${label}: no tombstone naming the destination"
+    [ -f "$REPO/data/.orchestrator" ] || fail "${label}: .orchestrator did not stay readable from the checkout"
+    [ ! -e "$REPO/data/.last_seen_uid_properties" ] || fail "${label}: the cursor is still in the checkout"
+    [ -z "$(git -C "$REPO" status --porcelain)" ] || fail "${label}: the checkout is dirty after the move"
+    [ -z "$(find "$DEST" -name '.move-probe-*')" ] || fail "${label}: the probe file was left in the state directory"
+}
+
+no_leak() {
+    # No compose call that acts saw the variable (`config` only renders; the
+    # preflight sets it there on purpose).
+    grep -E '^compose .* (stop|up) ' "${W}/docker.log" | grep -v 'IDEALISTA_DATA_DIR=<unset>' >/dev/null \
+        && fail "$1: docker compose was run with IDEALISTA_DATA_DIR in its environment"
+    return 0
+}
+
 # --- 1. --check says ready and touches nothing ------------------------------
 new_world
 run_move -- --check "$DEST"
@@ -354,7 +446,100 @@ run_move -- "$DEST"
 expect_untouched "scenario 1 (default mode)"
 pass "--check is read-only, and it is the default"
 
-# --- 2. preflight refusals: each leaves everything untouched ---------------
+# --- 2. the move ------------------------------------------------------------
+new_world
+run_move -- --apply "$DEST"
+expect_moved "scenario 2"
+no_leak "scenario 2"
+backup="$(find "$BACKUPS" -maxdepth 1 -name 'data-pre-move-*' -type d | head -n 1)"
+[ -n "$backup" ] || fail "scenario 2: no safety copy"
+tree_of "$backup" | cmp -s - "${W}/original.tree" || fail "scenario 2: the safety copy is not the directory as it was"
+# Stop strictly before the rename, start strictly after .env was written: the
+# stub's `up` read the destination from .env, which is what expect_moved saw.
+stop_at="$(grep -n ' stop app' "${W}/docker.log" | head -n 1 | cut -d: -f1)"
+up_at="$(grep -n ' up -d --no-build app' "${W}/docker.log" | head -n 1 | cut -d: -f1)"
+[ -n "$stop_at" ] && [ -n "$up_at" ] && [ "$stop_at" -lt "$up_at" ] || fail "scenario 2: stop/up order"
+[ ! -e "$STUB/stop-before-intent" ] || fail "scenario 2: the app was stopped before .env named the destination"
+grep -q -- '--build' "${W}/docker.log" | grep -v -- '--no-build' && fail "scenario 2: the move built an image"
+# The one reader agrees with what was mounted.
+[ "$(env -u IDEALISTA_DATA_DIR PATH="${W}/bin:${PATH}" STUB="$STUB" STUB_REPO="$REPO" /bin/bash "$REPO/tools/autopilot/lib/data_dir.sh" "$REPO")" = "$DEST" ] \
+    || fail "scenario 2: data_dir.sh does not resolve the destination"
+pass "the move: state outside the checkout, app on it, safety copy verified, .env intact"
+
+# --- 3. --rollback brings back everything, including later writes ----------
+printf '4750\n' >"$DEST/.last_seen_uid_properties"
+printf '{"api":"places","units":2}\n' >>"$DEST/google_spend.jsonl"
+printf 'session=local_newer\n' >"$REPO/data/.orchestrator"
+tree_of "$DEST" >"${W}/after-move.tree"
+: >"${W}/docker.log"
+run_move -- --rollback
+[ "$RC" = "0" ] || fail "scenario 3: --rollback exit ${RC}"
+grep -q "^ROLLED BACK:" "${W}/out" || fail "scenario 3: no ROLLED BACK line"
+[ ! -e "$DEST" ] || fail "scenario 3: the moved directory still exists"
+[ "$(cat "$REPO/data/.last_seen_uid_properties")" = "4750" ] || fail "scenario 3: a write made after the move was lost"
+grep -q '"units":2' "$REPO/data/google_spend.jsonl" || fail "scenario 3: a ledger line written after the move was lost"
+[ "$(cat "$REPO/data/.orchestrator")" = "session=local_newer" ] || fail "scenario 3: the newer .orchestrator was replaced by the old one"
+[ ! -e "$REPO/data/.moved-to" ] || fail "scenario 3: the tombstone survived the rollback"
+grep -q '^IDEALISTA_DATA_DIR=' "$REPO/.env" && fail "scenario 3: .env still names the variable"
+grep -q '^DB_PASSWORD=hunter2$' "$REPO/.env" || fail "scenario 3: another line of .env was lost"
+[ "$(cat "$STUB/running")" = "true" ] && [ "$(cat "$STUB/mount")" = "$REPO/data" ] \
+    || fail "scenario 3: the app is not running on <repo>/data"
+[ -z "$(git -C "$REPO" status --porcelain)" ] || fail "scenario 3: the checkout is dirty"
+no_leak "scenario 3"
+# Run again: the same answer, and nothing is touched to give it.
+: >"${W}/docker.log"
+run_move -- --rollback
+[ "$RC" = "0" ] && grep -q "^ALREADY ROLLED BACK:" "${W}/out" || fail "scenario 3: a second --rollback: exit ${RC}"
+grep -E '^compose .* (stop|up) ' "${W}/docker.log" >/dev/null && fail "scenario 3: a second --rollback stopped or started the app"
+[ "$(cat "$REPO/data/.last_seen_uid_properties")" = "4750" ] || fail "scenario 3: a second --rollback changed the state"
+pass "--rollback returns the directory with everything written since, and a second one says it is already done"
+
+# --- 3b. a tombstone that is not a file does not hang the script ------------
+# A FIFO of that name used to hang `sed`. Both modes answer within ten
+# seconds and touch nothing; the instrument is checked first (exit 0 is 0).
+run_move_bounded --help
+[ "$RC" = "0" ] || fail "scenario 3b: the bounded run reported exit ${RC} for --help"
+mkfifo "$REPO/data/.moved-to"
+run_move_bounded --rollback
+[ "$RC" != "124" ] || fail "scenario 3b: --rollback was still waiting on a FIFO tombstone after ten seconds"
+[ "$RC" = "1" ] && grep -q "NOT ROLLED BACK" "${W}/out" && grep -q "cannot find the moved directory" "${W}/out" \
+    || fail "scenario 3b: --rollback over a FIFO tombstone: exit ${RC}"
+run_move_bounded --apply "$DEST"
+[ "$RC" != "124" ] || fail "scenario 3b: --apply was still waiting on a FIFO tombstone after ten seconds"
+[ "$RC" = "1" ] && grep -q "the state was moved before" "${W}/out" \
+    || fail "scenario 3b: --apply over a FIFO tombstone: exit ${RC}"
+rm -f "$REPO/data/.moved-to"
+[ "$(cat "$STUB/running")" = "true" ] && [ ! -e "$DEST" ] || fail "scenario 3b: something was touched"
+pass "a FIFO named as the tombstone is refused by both modes, and neither waits on it"
+
+# --- 3c. the .env line is lost: --rollback takes the destination from the ---
+# --- tombstone ---------------------------------------------------------------
+# The line was deleted from .env by hand: only the tombstone says where the
+# state went. (One world each: the safety copy is named to the second.)
+new_world
+run_move -- --apply "$DEST"
+[ "$RC" = "0" ] || fail "scenario 3c: the move that sets the scene failed (exit ${RC})"
+grep -v '^IDEALISTA_DATA_DIR=' "$REPO/.env" >"${W}/env.without" && cat "${W}/env.without" >"$REPO/.env"
+run_move -- --rollback
+[ "$RC" = "0" ] && grep -q "^ROLLED BACK:" "${W}/out" \
+    || fail "scenario 3c: --rollback without the .env line: exit ${RC}"
+[ ! -e "$DEST" ] && [ ! -e "$REPO/data/.moved-to" ] || fail "scenario 3c: the state was not brought back"
+[ "$(cat "$STUB/running")" = "true" ] && [ "$(cat "$STUB/mount")" = "$REPO/data" ] \
+    || fail "scenario 3c: the app is not running on <repo>/data"
+# The tombstone and .env name two different directories: nothing is moved.
+new_world
+run_move -- --apply "$DEST"
+[ "$RC" = "0" ] || fail "scenario 3c: the second move that sets the scene failed (exit ${RC})"
+mkdir "${W}/elsewhere"
+sed "s|^IDEALISTA_DATA_DIR=.*|IDEALISTA_DATA_DIR=${W}/elsewhere|" "$REPO/.env" >"${W}/env.other" && cat "${W}/env.other" >"$REPO/.env"
+: >"${W}/docker.log"
+run_move -- --rollback
+[ "$RC" = "1" ] && grep -q "make them agree by hand" "${W}/out" || fail "scenario 3c: two records that disagree: exit ${RC}"
+[ -d "$DEST" ] && [ -e "$REPO/data/.moved-to" ] && [ -d "${W}/elsewhere" ] || fail "scenario 3c: a directory was moved on a guess"
+grep -E '^compose .* (stop|up) ' "${W}/docker.log" >/dev/null && fail "scenario 3c: the app was stopped on a guess"
+pass "--rollback finds the moved directory from the tombstone when .env no longer names it, and refuses two records that disagree"
+
+# --- 4. preflight refusals: each leaves everything untouched ---------------
 refusal() {
     # refusal <label> <text expected in the output> [VAR=value ...] (after the
     # caller has arranged the world)
@@ -373,6 +558,9 @@ for compose_switch in COMPOSE_ENV_FILES COMPOSE_DISABLE_ENV_FILE COMPOSE_PROJECT
     new_world
     refusal "exported ${compose_switch}" "${compose_switch} is set in this shell's environment" "${compose_switch}=other"
     expect_untouched "preflight: exported ${compose_switch}"
+    run_move "${compose_switch}=other" -- --rollback
+    [ "$RC" = "1" ] && grep -q "${compose_switch} is set" "${W}/out" \
+        || fail "rollback: an exported ${compose_switch} was accepted"
 done
 
 new_world; mkdir "$DEST"
@@ -489,7 +677,7 @@ refusal "df answers nothing" "could not establish which filesystem"
 expect_untouched "preflight: df fails"
 pass "every preflight refusal leaves the deployment untouched"
 
-# --- 3. every mount of every container, by real path ---------------------
+# --- 4b. every mount of every container, by real path --------------------
 # mounted <label> <container> <mount line>: that one mount, added to the
 # ready world, is refused as overlapping the state directory. The line names
 # @REPO@ and @W@, filled in once the new world exists - a ${REPO} expanded at
@@ -533,5 +721,274 @@ printf 'bind\t\t/state\t%s\n' "$REPO/data" >"$STUB/mounts.idealista-zz-last"
 refusal "the last container, behind a docker that reads stdin" "inside it, or holds it"
 expect_untouched "mounts: docker reads stdin"
 pass "a mount of the directory, inside it or above it, in any container, refuses"
+
+# --- 5. a held lock stops it before anything is touched --------------------
+new_world
+python3 - "${W}/deploy.lock" "${W}/held" <<'PY' &
+import fcntl, os, sys, time
+handle = open(sys.argv[1], "w")
+fcntl.flock(handle, fcntl.LOCK_EX)
+open(sys.argv[2], "w").close()
+while os.path.exists(sys.argv[2]):
+    time.sleep(0.05)
+PY
+holder=$!
+for _ in $(seq 1 100); do [ -e "${W}/held" ] && break; sleep 0.05; done
+run_move -- --apply "$DEST"
+rm -f "${W}/held"; wait "$holder" 2>/dev/null || true
+[ "$RC" = "1" ] && grep -q "deploy is in progress" "${W}/out" || fail "scenario 5: a held deploy lock did not stop the move (rc=${RC})"
+expect_untouched "scenario 5"
+# And the preflight is what stands before --apply, not only before --check.
+new_world; printf 'false\n' >"$STUB/running"
+run_move -- --apply "$DEST"
+[ "$RC" = "1" ] && grep -q "NOT MOVED" "${W}/out" || fail "scenario 5: --apply went past a failed preflight (rc=${RC})"
+printf 'true\n' >"$STUB/running"; expect_untouched "scenario 5 (--apply after a failed preflight)"
+pass "a deploy in progress, or a failed preflight, stops the move before it starts"
+
+# --- 6. failures after the app is stopped: each ends on the original -------
+recovered() {
+    local label="$1"
+    [ "$RC" = "1" ] || fail "${label}: exit ${RC}, expected 1 (recovered)"
+    grep -q "^RECOVERED:" "${W}/out" || fail "${label}: no RECOVERED line"
+    expect_original "$label"
+    no_leak "$label"
+}
+
+# 6a. The stop succeeds and its confirmation fails (plan review, F4).
+# Preflight asks once before the stop; only the probe AFTER the stop fails.
+new_world; : >"$STUB/fail.inspect-stopped"
+run_move -- --apply "$DEST"
+recovered "scenario 6a (stop confirmed by a failing probe)"
+grep -q "FAILED in phase 'stopping'" "${W}/out" || fail "scenario 6a: the failure was not attributed to the stopping phase"
+
+# 6b. `compose stop` keeps failing: nothing to undo, and recovery stops nothing.
+new_world; : >"$STUB/fail.stop"; : >"$STUB/keep.stop"
+run_move -- --apply "$DEST"
+recovered "scenario 6b (compose stop keeps failing)"
+grep -q "nothing was moved" "${W}/out" || fail "scenario 6b: recovery did not recognise that nothing was moved"
+[ "$(grep -c ' stop app' "${W}/docker.log")" = "1" ] \
+    || fail "scenario 6b: recovery tried to stop an app that was never taken down"
+
+cp_appends() {
+    # cp_appends <file>: a cp that appends a line to <file> in the copy it made.
+    printf '#!/bin/bash\n/bin/cp "$@" || exit $?\nfor last in "$@"; do :; done\n[ -f "$last/%s" ] && echo more >>"$last/%s"\nexit 0\n' "$1" "$1" >"${W}/bin/cp"
+    chmod +x "${W}/bin/cp"
+}
+
+# 6c. The safety copy does not match (a state file changed under the copy).
+new_world; cp_appends google_spend.jsonl
+run_move -- --apply "$DEST"
+recovered "scenario 6c (safety copy differs)"
+grep -q "google_spend.jsonl" "${W}/out" || fail "scenario 6c: the differing file was not named"
+
+# 6d. A log that grew during the copy is NOT a failed copy.
+new_world; cp_appends autopilot-deploy.log
+run_move -- --apply "$DEST"
+[ "$RC" = "0" ] || fail "scenario 6d: a log appended during the copy failed the move (rc=${RC})"
+grep -q "only logs differ" "${W}/out" || fail "scenario 6d: the tolerated difference was not reported"
+
+# The rename is `python3 -c ...os.rename...`: a python3 stub for that alone.
+REAL_PYTHON="$(command -v python3)"
+rename_stub() {
+    # rename_stub <shell run instead of the rename; "$@" are python's arguments>
+    printf '#!/bin/bash\ncase "${1:-} ${2:-}" in\n"-c "*os.rename*)\n%s\n;;\nesac\nexec "%s" "$@"\n' "$1" "$REAL_PYTHON" >"${W}/bin/python3"
+    chmod +x "${W}/bin/python3"
+}
+
+# 6e. The rename fails.
+new_world
+rename_stub 'exit 1'
+run_move -- --apply "$DEST"
+rm -f "${W}/bin/python3"
+recovered "scenario 6e (rename fails)"
+
+# 6f. The rename succeeds and the directory is then found changed (F1).
+new_world
+# Once: the directory that arrives is not the directory that left.
+rename_stub '"'"$REAL_PYTHON"'" "$@" || exit $?
+for last in "$@"; do :; done
+if [ -f "$last/google_spend.jsonl" ] && [ ! -e "$STUB/tampered-once" ]; then
+    : >"$STUB/tampered-once"
+    : >"$last/.extra-after-rename"
+fi
+exit 0'
+run_move -- --apply "$DEST"
+rm -f "${W}/bin/python3"
+# The directory renamed back is the one that arrived, the extra file and all.
+rm "$REPO/data/.extra-after-rename" || fail "scenario 6f: the directory was not renamed back"
+recovered "scenario 6f (the moved directory differs)"
+
+# 6g. `compose up` fails after the switch.
+new_world; : >"$STUB/fail.up"
+run_move -- --apply "$DEST"
+recovered "scenario 6g (compose up fails after the switch)"
+aside="$(find "$BACKUPS" -maxdepth 1 -name 'checkout-data-at-rollback-*' -type d | head -n 1)"
+[ -n "$aside" ] && [ -f "$aside/.moved-to" ] || fail "scenario 6g: the rebuilt directory was not kept aside"
+
+# 6h. Healthy, and the page redirects: not accepted - nor once back ("incomplete").
+new_world; printf '302' >"$STUB/page"
+run_move -- --apply "$DEST"
+grep -q "answered 302" "${W}/out" || fail "scenario 6h: a redirecting page was accepted as a working deployment (rc=${RC})"
+[ "$RC" = "3" ] || fail "scenario 6h: exit ${RC}, expected 3 (the page still does not render)"
+grep -q "^RECOVERY INCOMPLETE" "${W}/out" || fail "scenario 6h: a deployment whose page redirects was called recovered"
+printf '200' >"$STUB/page"
+expect_original "scenario 6h (page redirects after the switch)"
+no_leak "scenario 6h"
+
+# 6i. The container does not read the directory that was mounted.
+new_world; : >"$STUB/stale"
+run_move -- --apply "$DEST"
+recovered "scenario 6i (the container reads another directory)"
+
+# 6j. SIGTERM while the app is being started (F5).
+new_world; : >"$STUB/hang.up"
+env -u IDEALISTA_DATA_DIR PATH="${W}/bin:${PATH}" STUB="$STUB" STUB_REPO="$REPO" STUB_APP="idealista-app" STUB_MODE=write \
+    MOVE_BACKUP_ROOT="$BACKUPS" MOVE_DEPLOY_LOCK="${W}/deploy.lock" MOVE_MERGE_LOCK="${W}/merge.lock" \
+    MOVE_HEALTH_URL="http://127.0.0.1:1/api/healthz" MOVE_HEALTH_TIMEOUT=2 MOVE_HEALTH_POLL=1 \
+    /bin/bash "$REPO/tools/move_data_dir.sh" --apply "$DEST" >"${W}/out" 2>&1 &
+mover=$!
+for _ in $(seq 1 200); do grep -q ' up -d --no-build app' "${W}/docker.log" 2>/dev/null && break; sleep 0.05; done
+grep -q ' up -d --no-build app' "${W}/docker.log" || fail "scenario 6j: the move never reached the start"
+kill -TERM "$mover"
+rm -f "$STUB/hang.up"
+RC=0; wait "$mover" || RC=$?
+recovered "scenario 6j (SIGTERM during the start)"
+grep -q "FAILED in phase 'starting' (exit 143)" "${W}/out" || fail "scenario 6j: the signal was not what ended the move"
+
+# 6k. `compose up` fails and leaves no container (#671 review): recovery read
+# the failing inspect as "may be running".
+new_world; : >"$STUB/fail.up-gone"
+run_move -- --apply "$DEST"
+recovered "scenario 6k (compose up leaves no container)"
+
+# 6l. A directory appears at the destination after the preflight (#671
+# review): `mv` nested the state in it. Now refused, empty or not, untouched.
+for content in "" "theirs"; do
+    new_world
+    printf '#!/bin/bash\nmkdir -p "%s"\n[ -z "%s" ] || printf theirs >"%s/a-file"\nexec /bin/cp "$@"\n' "$DEST" "$content" "$DEST" >"${W}/bin/cp"
+    chmod +x "${W}/bin/cp"
+    run_move -- --apply "$DEST"
+    [ "$RC" = "1" ] && grep -q "^RECOVERED:" "${W}/out" && grep -q "created after the preflight" "${W}/out" \
+        || fail "scenario 6l (${content:-empty}): exit ${RC}, expected a recovered refusal"
+    [ -d "$DEST" ] && [ "$(cat "$DEST/a-file" 2>/dev/null)" = "$content" ] && [ ! -e "$DEST/data" ] \
+        || fail "scenario 6l (${content:-empty}): the directory that appeared was touched"
+    rm -rf "$DEST"
+    expect_original "scenario 6l (${content:-empty} directory at the destination)"
+    no_leak "scenario 6l"
+done
+
+# 6m. The same between that check and the rename: rename(2) replaces an
+# empty directory exactly, and fails on one with content, left alone.
+new_world
+rename_stub "/bin/mkdir -p '${DEST}'"
+run_move -- --apply "$DEST"
+rm -f "${W}/bin/python3"
+expect_moved "scenario 6m (an empty directory appeared under the rename)"
+[ ! -e "$DEST/data" ] || fail "scenario 6m: the state was moved inside the directory that appeared"
+
+new_world
+rename_stub "[ -e '${DEST}' ] || { /bin/mkdir -p '${DEST}' && printf theirs >'${DEST}/a-file'; }"
+run_move -- --apply "$DEST"
+rm -f "${W}/bin/python3"
+[ "$RC" = "1" ] && grep -q "^RECOVERED:" "${W}/out" || fail "scenario 6m: exit ${RC}, expected a recovered failure"
+[ "$(cat "$DEST/a-file")" = "theirs" ] && [ ! -e "$DEST/data" ] || fail "scenario 6m: the directory that appeared was touched"
+rm -rf "$DEST"
+expect_original "scenario 6m (a directory with content appeared under the rename)"
+
+# 6n-6q. SIGKILL runs no trap (#671 review): `--rollback` has to finish.
+killed_at() {
+    # killed_at <program> <argument>: that call SIGKILLs the script, its parent.
+    printf '#!/bin/bash\nfor arg in "$@"; do [ "$arg" != "%s" ] || { kill -KILL "$PPID"; exit 0; }; done\nexec /bin/%s "$@"\n' "$2" "$1" >"${W}/bin/$1"
+    chmod +x "${W}/bin/$1"
+}
+rolled_back() {
+    local label="$1"
+    [ "$RC" = "0" ] || fail "${label}: --rollback exit ${RC}"
+    grep -q "^ROLLED BACK:" "${W}/out" || fail "${label}: no ROLLED BACK line"
+    expect_original "$label"
+    no_leak "$label"
+}
+
+# 6n. Killed right after the rename, before <repo>/data is rebuilt.
+new_world
+killed_at mkdir "$REPO/data"
+run_move -- --apply "$DEST"
+rm -f "${W}/bin/mkdir"
+[ "$RC" = "137" ] || fail "scenario 6n: exit ${RC}, expected 137 (killed)"
+[ ! -e "$REPO/data" ] && [ "$(cat "$DEST/.last_seen_uid_properties")" = "4711" ] && [ "$(cat "$STUB/running")" = "false" ] \
+    || fail "scenario 6n: the kill did not land between the rename and the rebuild"
+[ "$(sed -n 's/^IDEALISTA_DATA_DIR=//p' "$REPO/.env")" = "$DEST" ] \
+    || fail "scenario 6n: after the kill .env does not name the directory that holds the state"
+run_move -- --rollback
+rolled_back "scenario 6n (SIGKILL after the rename, then --rollback)"
+
+# 6o. Killed right after the stop, before anything is renamed.
+new_world
+killed_at cp "$REPO/data"
+run_move -- --apply "$DEST"
+rm -f "${W}/bin/cp"
+[ "$RC" = "137" ] || fail "scenario 6o: exit ${RC}, expected 137 (killed)"
+[ -d "$REPO/data" ] && [ ! -e "$DEST" ] && [ "$(cat "$STUB/running")" = "false" ] \
+    || fail "scenario 6o: the kill did not land between the stop and the rename"
+run_move -- --rollback
+grep -q "no rename to undo" "${W}/out" || fail "scenario 6o: --rollback did not recognise a move that never renamed"
+rolled_back "scenario 6o (SIGKILL after the stop, then --rollback)"
+
+# 6q. Killed between `mkdir <repo>/data` and its tombstone: an empty directory.
+new_world
+printf '#!/bin/bash\nfor arg in "$@"; do [ "$arg" != "%s" ] || { kill -KILL "$PPID"; exit 0; }; done\nexec "%s" "$@"\n' "$REPO/data/.moved-to" "$REAL_PYTHON" >"${W}/bin/python3"
+chmod +x "${W}/bin/python3"
+run_move -- --apply "$DEST"
+rm -f "${W}/bin/python3"
+[ "$RC" = "137" ] && [ -d "$REPO/data" ] && [ -z "$(ls -A "$REPO/data")" ] || fail "scenario 6q: exit ${RC}, or the kill did not leave an empty <repo>/data"
+run_move -- --rollback
+rolled_back "scenario 6q (SIGKILL before the tombstone, then --rollback)"
+
+# 6r. Nothing to undo and the app down: started, not "already rolled back".
+new_world; printf 'false\n' >"$STUB/running"
+run_move -- --rollback
+rolled_back "scenario 6r (nothing to undo, app stopped)"
+
+# 6p. --rollback killed between the rename back and the `.env` line.
+new_world
+run_move -- --apply "$DEST"
+[ "$RC" = "0" ] || fail "scenario 6p: the move that sets the scene failed (exit ${RC})"
+printf '#!/bin/bash\nfor arg in "$@"; do [ "$arg" != "checkout" ] || { kill -KILL "$PPID"; exit 0; }; done\nexec "%s" "$@"\n' "$(command -v git)" >"${W}/bin/git"
+chmod +x "${W}/bin/git"
+run_move -- --rollback
+rm -f "${W}/bin/git"
+[ "$RC" = "137" ] || fail "scenario 6p: exit ${RC}, expected 137 (killed)"
+[ -f "$REPO/data/.last_seen_uid_properties" ] && [ ! -e "$DEST" ] && grep -q '^IDEALISTA_DATA_DIR=' "$REPO/.env" \
+    || fail "scenario 6p: the kill did not land between the rename back and the .env line"
+git -C "$REPO" checkout -- data
+run_move -- --rollback
+[ "$RC" = "0" ] && grep -q "^ROLLED BACK:" "${W}/out" || fail "scenario 6p: the second --rollback: exit ${RC}"
+[ "$(cat "$STUB/running")" = "true" ] && [ "$(cat "$STUB/mount")" = "$REPO/data" ] && ! grep -q '^IDEALISTA_DATA_DIR=' "$REPO/.env" \
+    || fail "scenario 6p: the second --rollback did not finish the first"
+pass "a failure at every step after the stop ends with the app running on the original directory"
+
+# --- 7. recovery that cannot finish says so, with the commands -------------
+new_world; : >"$STUB/fail.up"; : >"$STUB/keep.up"
+run_move -- --apply "$DEST"
+[ "$RC" = "3" ] || fail "scenario 7: exit ${RC}, expected 3 (recovery incomplete)"
+grep -q "^RECOVERY INCOMPLETE" "${W}/out" || fail "scenario 7: no RECOVERY INCOMPLETE line"
+grep -q "docker compose -f docker-compose.yml up -d --no-build app" "${W}/out" || fail "scenario 7: the manual commands were not printed"
+# The data is back where it was even though the app could not be started.
+[ "$(cat "$REPO/data/.last_seen_uid_properties")" = "4711" ] && [ ! -e "$DEST" ] \
+    || fail "scenario 7: the state was not returned before the start failed"
+grep -q '^IDEALISTA_DATA_DIR=' "$REPO/.env" && fail "scenario 7: .env still names the variable"
+pass "a recovery that cannot start the app returns the data, exits 3 and prints the manual commands"
+
+# --- 8. the locks do not outlive the script --------------------------------
+new_world
+run_move -- --apply "$DEST"
+[ "$RC" = "0" ] || fail "scenario 8: setup move failed"
+python3 - "${W}/deploy.lock" "${W}/merge.lock" <<'PY' || fail "scenario 8: a lock is still held after the script exited"
+import fcntl, sys
+for path in sys.argv[1:]:
+    with open(path, "w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+PY
+pass "both locks are free once the script has exited"
 
 printf '\nALL %d GROUPS PASSED\n' "$passed"
