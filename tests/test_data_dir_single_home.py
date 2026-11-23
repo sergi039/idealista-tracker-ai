@@ -148,7 +148,7 @@ def test_the_check_before_the_move_changes_nothing():
         "changed after a failed move\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
-    assert "ALL 9 GROUPS PASSED" in result.stdout, result.stdout
+    assert "ALL 11 GROUPS PASSED" in result.stdout, result.stdout
 
 
 def _resolve(repo: Path, **extra: str) -> subprocess.CompletedProcess:

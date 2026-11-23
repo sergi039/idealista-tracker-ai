@@ -223,6 +223,7 @@ case "$1" in
         # The move's round-trip probe, only in a move.
         if [ "$3" = "cat" ]; then
             [ "${STUB_MODE:-check}" = "write" ] && [ "$2" = "$STUB_APP" ] && [ $# -eq 4 ] || forbidden "$*"
+            hang_once exec
             [ "$(cat "$STUB/running")" = "true" ] || exit 1
             [ -e "$STUB/stale" ] && [ -e "$STUB_REPO/data/.moved-to" ] && { echo stale; exit 0; }
             cat "$(cat "$STUB/mount")/${4#/app/data/}"
@@ -390,7 +391,7 @@ PY
 # check, or write for a move: what the stub lets docker do.
 stub_mode() {
     local arg
-    for arg in "$@"; do case "$arg" in --apply) echo write; return ;; esac; done
+    for arg in "$@"; do case "$arg" in --apply|--rollback) echo write; return ;; esac; done
     echo check
 }
 
@@ -544,20 +545,109 @@ calls="$(sed -nE 's/^compose .* (stop|up) (.*) \| IDEALISTA.*/\1 \2/p' "${W}/doc
     || fail "scenario 2: data_dir.sh does not resolve the destination"
 pass "the move: state outside the checkout, app on it, safety copy verified, .env intact"
 
+# --- 3. --rollback brings back everything, including later writes ----------
+printf '4750\n' >"$DEST/.last_seen_uid_properties"
+printf '{"api":"places","units":2}\n' >>"$DEST/google_spend.jsonl"
+printf 'session=local_newer\n' >"$REPO/data/.orchestrator"
+: >"${W}/docker.log"
+run_move -- --rollback
+[ "$RC" = "0" ] || fail "scenario 3: --rollback exit ${RC}"
+grep -q "^ROLLED BACK:" "${W}/out" || fail "scenario 3: no ROLLED BACK line"
+[ ! -e "$DEST" ] || fail "scenario 3: the moved directory still exists"
+[ "$(cat "$REPO/data/.last_seen_uid_properties")" = "4750" ] || fail "scenario 3: a write made after the move was lost"
+grep -q '"units":2' "$REPO/data/google_spend.jsonl" || fail "scenario 3: a ledger line written after the move was lost"
+[ "$(cat "$REPO/data/.orchestrator")" = "session=local_newer" ] || fail "scenario 3: the newer .orchestrator was replaced by the old one"
+[ ! -e "$REPO/data/.moved-to" ] || fail "scenario 3: the tombstone survived the rollback"
+grep -q '^IDEALISTA_DATA_DIR=' "$REPO/.env" && fail "scenario 3: .env still names the variable"
+grep -q '^DB_PASSWORD=hunter2$' "$REPO/.env" || fail "scenario 3: another line of .env was lost"
+[ "$(cat "$STUB/running")" = "true" ] && [ "$(cat "$STUB/mount")" = "$REPO/data" ] \
+    || fail "scenario 3: the app is not running on <repo>/data"
+[ -z "$(git -C "$REPO" status --porcelain)" ] || fail "scenario 3: the checkout is dirty"
+no_leak "scenario 3"
+# Run again: the same answer, and nothing is touched to give it.
+: >"${W}/docker.log"
+run_move -- --rollback
+[ "$RC" = "0" ] && grep -q "^ALREADY ROLLED BACK:" "${W}/out" || fail "scenario 3: a second --rollback: exit ${RC}"
+grep -E '^compose .* (stop|up) ' "${W}/docker.log" >/dev/null && fail "scenario 3: a second --rollback stopped or started the app"
+[ "$(cat "$REPO/data/.last_seen_uid_properties")" = "4750" ] || fail "scenario 3: a second --rollback changed the state"
+pass "--rollback returns the directory with everything written since, and a second one says it is already done"
+
 # --- 3b. a tombstone that is not a file does not hang the script ------------
-# A FIFO of that name used to hang `sed`. --apply answers within ten seconds
-# and touches nothing; the instrument is checked first (exit 0 is 0).
+# A FIFO of that name used to hang `sed`. Both modes answer within ten
+# seconds and touch nothing; the instrument is checked first (exit 0 is 0).
 new_world
 run_move_bounded --help
 [ "$RC" = "0" ] || fail "scenario 3b: the bounded run reported exit ${RC} for --help"
 mkfifo "$REPO/data/.moved-to"
+run_move_bounded --rollback
+[ "$RC" != "124" ] || fail "scenario 3b: --rollback was still waiting on a FIFO tombstone after ten seconds"
+[ "$RC" = "1" ] && grep -q "NOT ROLLED BACK" "${W}/out" && grep -q "cannot find the moved directory" "${W}/out" \
+    || fail "scenario 3b: --rollback over a FIFO tombstone: exit ${RC}"
 run_move_bounded --apply "$DEST"
 [ "$RC" != "124" ] || fail "scenario 3b: --apply was still waiting on a FIFO tombstone after ten seconds"
 [ "$RC" = "1" ] && grep -q "the state was moved before" "${W}/out" \
     || fail "scenario 3b: --apply over a FIFO tombstone: exit ${RC}"
 rm -f "$REPO/data/.moved-to"
 [ "$(cat "$STUB/running")" = "true" ] && [ ! -e "$DEST" ] || fail "scenario 3b: something was touched"
-pass "a FIFO named as the tombstone is refused by --apply, which does not wait on it"
+pass "a FIFO named as the tombstone is refused by both modes, and neither waits on it"
+
+# --- 3c. --rollback: the tombstone when .env lost the line; refusals --------
+# (One world each: the safety copy is named to the second.)
+moved_world() {
+    new_world
+    run_move -- --apply "$DEST"
+    [ "$RC" = "0" ] || fail "$1: the move that sets the scene failed (exit ${RC})"
+    : >"${W}/docker.log"
+}
+not_rolled_back() {
+    # not_rolled_back <label> <text>: refused before the app was stopped.
+    [ "$RC" = "1" ] && grep -q "NOT ROLLED BACK" "${W}/out" && grep -q -- "$2" "${W}/out" \
+        || fail "$1: exit ${RC}, expected a refusal mentioning '$2'"
+    grep -E '^compose .* (stop|up) ' "${W}/docker.log" >/dev/null && fail "$1: the app was stopped"
+    [ -d "$DEST" ] && [ "$(cat "$STUB/mount")" = "$DEST" ] || fail "$1: the state was moved"
+}
+moved_world "scenario 3c"
+grep -v '^IDEALISTA_DATA_DIR=' "$REPO/.env" >"${W}/env.without" && cat "${W}/env.without" >"$REPO/.env"
+run_move -- --rollback
+[ "$RC" = "0" ] && grep -q "^ROLLED BACK:" "${W}/out" \
+    || fail "scenario 3c: --rollback without the .env line: exit ${RC}"
+[ ! -e "$DEST" ] && [ ! -e "$REPO/data/.moved-to" ] || fail "scenario 3c: the state was not brought back"
+[ "$(cat "$STUB/running")" = "true" ] && [ "$(cat "$STUB/mount")" = "$REPO/data" ] \
+    || fail "scenario 3c: the app is not running on <repo>/data"
+# The tombstone and .env name two different directories.
+moved_world "scenario 3c"
+mkdir "${W}/elsewhere"
+sed "s|^IDEALISTA_DATA_DIR=.*|IDEALISTA_DATA_DIR=${W}/elsewhere|" "$REPO/.env" >"${W}/env.other" && cat "${W}/env.other" >"$REPO/.env"
+run_move -- --rollback
+not_rolled_back "scenario 3c (two records disagree)" "make them agree by hand"
+# Both directories hold files and no tombstone says which is the state (#709
+# review, finding 2).
+moved_world "scenario 3d"
+rm "$REPO/data/.moved-to"; echo theirs >"$REPO/data/x"
+run_move -- --rollback
+not_rolled_back "scenario 3d (both hold files)" "hold files"
+# A backup root on another filesystem: the aside would fail after the stop
+# (#709 review, finding 3).
+moved_world "scenario 3e"
+printf '%s\n' "$BACKUPS" >"$STUB/df-elsewhere"
+run_move -- --rollback
+not_rolled_back "scenario 3e (backup root elsewhere)" "is not on the mounted filesystem of"
+# A tombstone with no .env line, its path one trailing space away from another
+# directory (#712 review, finding 1): never trimmed into that directory.
+moved_world "scenario 3f"
+grep -v '^IDEALISTA_DATA_DIR=' "$REPO/.env" >"${W}/env.without" && cat "${W}/env.without" >"$REPO/.env"
+mkdir "${W}/archive" && echo theirs >"${W}/archive/x"
+printf 'moved_to=%s \nmoved_at=x\n' "${W}/archive" >"$REPO/data/.moved-to"
+run_move -- --rollback
+not_rolled_back "scenario 3f (moved_to with a trailing space)" "does not record a destination the way"
+[ "$(cat "${W}/archive/x")" = "theirs" ] || fail "scenario 3f: the other directory was touched"
+# The state directory on another filesystem than the checkout, the backup root
+# on the same (#712 review, finding 2): the rename back would fail after the stop.
+moved_world "scenario 3g"
+printf '%s\n' "$DEST" >"$STUB/df-elsewhere"
+run_move -- --rollback
+not_rolled_back "scenario 3g (state elsewhere)" "the rename back would fail"
+pass "--rollback finds the moved directory from the tombstone, and refuses before the stop what it cannot undo"
 
 # --- 4. preflight refusals: each leaves everything untouched ---------------
 refusal() {
@@ -578,6 +668,9 @@ for compose_switch in COMPOSE_ENV_FILES COMPOSE_DISABLE_ENV_FILE COMPOSE_PROJECT
     new_world
     refusal "exported ${compose_switch}" "${compose_switch} is set in this shell's environment" "${compose_switch}=other"
     expect_untouched "preflight: exported ${compose_switch}"
+    run_move "${compose_switch}=other" -- --rollback
+    [ "$RC" = "1" ] && grep -q "${compose_switch} is set" "${W}/out" \
+        || fail "rollback: an exported ${compose_switch} was accepted"
 done
 
 new_world; mkdir "$DEST"
@@ -590,6 +683,10 @@ for backups in "$DEST" "${DEST}/b" "$W"; do
     refusal "backup root ${backups#"$W"}" "one holds the other" "MOVE_BACKUP_ROOT=${backups}"
 done
 expect_untouched "preflight: backup root and destination overlap"
+# The safety copy in the directory it copies (#711 review, :716).
+new_world
+refusal "backup root in the source" "one holds the other" "MOVE_BACKUP_ROOT=${REPO}/data/backups"
+expect_untouched "preflight: backup root in the source"
 
 new_world
 run_move -- --check "relative/path"
@@ -924,6 +1021,18 @@ rm -f "${W}/bin/python3"
 rm "$REPO/data/.extra-after-rename" || fail "scenario 6f: the directory was not renamed back"
 recovered "scenario 6f (the moved directory differs)"
 
+# 6f2. Something makes <repo>/data again right after the rename (#711 review,
+# :495): it is set aside, never taken for the state, and the state comes back.
+new_world
+rename_stub '"'"$REAL_PYTHON"'" "$@" || exit $?
+[ -e "$STUB/made-once" ] || { : >"$STUB/made-once"; mkdir "'"$REPO"'/data" && echo theirs >"'"$REPO"'/data/x"; }
+exit 0'
+run_move -- --apply "$DEST"
+rm -f "${W}/bin/python3"
+recovered "scenario 6f2 (<repo>/data made again after the rename)"
+aside="$(find "$BACKUPS" -maxdepth 1 -name 'checkout-data-at-rollback-*' -type d | head -n 1)"
+[ -n "$aside" ] && [ "$(cat "$aside/x")" = "theirs" ] || fail "scenario 6f2: the directory made meanwhile was not kept aside"
+
 # 6g. `compose up` fails after the switch.
 new_world; : >"$STUB/fail.up"
 run_move -- --apply "$DEST"
@@ -976,6 +1085,11 @@ for hung in stop:stopping up:starting; do
     recovered "scenario 6j (SIGTERM during a hung ${hung%%:*})"
     grep -q "FAILED in phase '${hung#*:}' (exit 143)" "${W}/out" || fail "scenario 6j (${hung%%:*}): the signal was not what ended the move"
 done
+# 6j3. The same while the round-trip probe hangs (#711 review, :465): a
+# $(docker exec) defers the trap until it returns, so it runs on the clock too.
+new_world; : >"$STUB/hang.exec"
+term_during_hang "scenario 6j3"
+recovered "scenario 6j3 (SIGTERM during a hung probe)"
 
 # 6j2. Docker stays hung (#711 review): recovery's own `compose stop` ends on
 # MOVE_COMPOSE_LIMIT_S, and the move exits 3 with the commands.
@@ -984,7 +1098,7 @@ term_during_hang "scenario 6j2"
 [ "$RC" = "3" ] && grep -q "stop app' did not finish in 2 s" "${W}/out" && grep -q "Production may be DOWN" "${W}/out" \
     || fail "scenario 6j2: exit ${RC}, expected 3 with the manual commands after a recovery stop that hangs"
 # The printed commands, run by hand here and after 6n's SIGKILL.
-grep -E '^    (\[|rmdir|mv|git) ' "${W}/out" | sed 's/^    //' >"${ROOT}/by-hand"
+grep -E '^    (\[|mkdir|rmdir|mv|git) ' "${W}/out" | sed 's/^    //' >"${ROOT}/by-hand"
 printed_in="$W"
 by_hand() {
     sed "s|${printed_in}|${W}|g" "${ROOT}/by-hand" | bash -e >/dev/null 2>&1 \
@@ -1052,6 +1166,87 @@ rm -f "${W}/bin/mkdir"
 [ "$(sed -n 's/^IDEALISTA_DATA_DIR=//p' "$REPO/.env")" = "$DEST" ] \
     || fail "scenario 6n: after the kill .env does not name the directory that holds the state"
 by_hand "scenario 6n (killed before the rebuild)"
+# 6n2. And when something made <repo>/data again since (#711 review, :495).
+new_world
+killed_at mkdir "$REPO/data"
+run_move -- --apply "$DEST"
+rm -f "${W}/bin/mkdir"
+mkdir "$REPO/data"; echo theirs >"$REPO/data/x"
+by_hand "scenario 6n2 (killed before the rebuild, <repo>/data made again)"
+rolled_back() {
+    local label="$1"
+    [ "$RC" = "0" ] || fail "${label}: --rollback exit ${RC}"
+    grep -q "^ROLLED BACK:" "${W}/out" || fail "${label}: no ROLLED BACK line"
+    expect_original "$label"
+    no_leak "$label"
+}
+# 6n3. The same kill, undone by --rollback.
+new_world
+killed_at mkdir "$REPO/data"
+run_move -- --apply "$DEST"
+rm -f "${W}/bin/mkdir"
+[ "$RC" = "137" ] && [ ! -e "$REPO/data" ] || fail "scenario 6n3: exit ${RC}, or the kill did not land before the rebuild"
+run_move -- --rollback
+rolled_back "scenario 6n3 (SIGKILL after the rename, then --rollback)"
+
+# 6o. Killed right after the stop, before anything is renamed.
+new_world
+killed_at cp "$REPO/data"
+run_move -- --apply "$DEST"
+rm -f "${W}/bin/cp"
+[ "$RC" = "137" ] || fail "scenario 6o: exit ${RC}, expected 137 (killed)"
+[ -d "$REPO/data" ] && [ ! -e "$DEST" ] && [ "$(cat "$STUB/running")" = "false" ] \
+    || fail "scenario 6o: the kill did not land between the stop and the rename"
+run_move -- --rollback
+grep -q "no rename to undo" "${W}/out" || fail "scenario 6o: --rollback did not recognise a move that never renamed"
+rolled_back "scenario 6o (SIGKILL after the stop, then --rollback)"
+
+# 6q. Killed between `mkdir <repo>/data` and its tombstone: an empty directory.
+new_world
+printf '#!/bin/bash\nfor arg in "$@"; do [ "$arg" != "%s" ] || { kill -KILL "$PPID"; exit 0; }; done\nexec "%s" "$@"\n' "$REPO/data/.moved-to" "$REAL_PYTHON" >"${W}/bin/python3"
+chmod +x "${W}/bin/python3"
+run_move -- --apply "$DEST"
+rm -f "${W}/bin/python3"
+[ "$RC" = "137" ] && [ -d "$REPO/data" ] && [ -z "$(ls -A "$REPO/data")" ] || fail "scenario 6q: exit ${RC}, or the kill did not leave an empty <repo>/data"
+run_move -- --rollback
+rolled_back "scenario 6q (SIGKILL before the tombstone, then --rollback)"
+
+# 6r. Nothing to undo and the app down: started, not "already rolled back".
+new_world; printf 'false\n' >"$STUB/running"
+run_move -- --rollback
+rolled_back "scenario 6r (nothing to undo, app stopped)"
+
+# 6p. --rollback killed right after its rename back (#709 review, finding 4):
+# a merge changed a reference file meanwhile, and a newer .orchestrator sits in
+# the rebuilt directory set aside. The second --rollback restores both, alone.
+new_world
+run_move -- --apply "$DEST"
+[ "$RC" = "0" ] || fail "scenario 6p: the move that sets the scene failed (exit ${RC})"
+printf '{"changed":1}\n' >"$REPO/data/ine_municipal.json"
+git -C "$REPO" add data/ine_municipal.json
+git -C "$REPO" commit --quiet -m "a merge"
+printf 'session=local_newer\n' >"$REPO/data/.orchestrator"
+# One mtime, two contents (#712 review, finding 3): decided by content.
+touch -t 202001010000 "$REPO/data/.orchestrator" "$DEST/.orchestrator"
+printf '#!/bin/bash\nfor arg in "$@"; do [ "$arg" != "checkout" ] || { kill -KILL "$PPID"; exit 0; }; done\nexec "%s" "$@"\n' "$(command -v git)" >"${W}/bin/git"
+chmod +x "${W}/bin/git"
+run_move -- --rollback
+rm -f "${W}/bin/git"
+[ "$RC" = "137" ] && [ -f "$REPO/data/.last_seen_uid_properties" ] && [ ! -e "$DEST" ] && grep -q '^IDEALISTA_DATA_DIR=' "$REPO/.env" \
+    || fail "scenario 6p: exit ${RC}, or the kill did not land between the rename back and the .env line"
+run_move -- --rollback
+[ "$RC" = "0" ] && grep -q "^ROLLED BACK:" "${W}/out" || fail "scenario 6p: the second --rollback: exit ${RC}"
+[ "$(cat "$STUB/running")" = "true" ] && [ "$(cat "$STUB/mount")" = "$REPO/data" ] && ! grep -q '^IDEALISTA_DATA_DIR=' "$REPO/.env" \
+    || fail "scenario 6p: the second --rollback did not finish the first"
+[ "$(cat "$REPO/data/ine_municipal.json")" = '{"changed":1}' ] && [ -z "$(git -C "$REPO" status --porcelain)" ] \
+    || fail "scenario 6p: the second --rollback left the reference files as the moved directory had them"
+[ "$(cat "$REPO/data/.orchestrator")" = "session=local_newer" ] || fail "scenario 6p: the newer .orchestrator was lost"
+# A later --rollback (app stopped) keeps a .orchestrator written since.
+printf 'session=local_later\n' >"$REPO/data/.orchestrator"
+printf 'false\n' >"$STUB/running"
+run_move -- --rollback
+[ "$RC" = "0" ] && [ "$(cat "$REPO/data/.orchestrator")" = "session=local_later" ] \
+    || fail "scenario 6p: a later --rollback put back the .orchestrator of an aside already restored (exit ${RC})"
 
 pass "a failure at every step after the stop ends with the app running on the original directory"
 
