@@ -865,13 +865,14 @@ refusal "a FIFO named as the tombstone" "the state was moved before"
 rm -f "$REPO/data/.moved-to"; expect_untouched "preflight: FIFO tombstone"
 
 if [ "$(id -u)" != "0" ]; then
-    # A directory that may not be searched hides its tombstone from the shell,
+    # A directory that may not be searched hides its tombstone from the shell
+    # (the one reader, data_dir.sh --tombstone, says it cannot establish it),
     # and from find - whose failure used to end the script without a word.
     new_world; chmod 600 "$REPO/data"
     run_move -- --check "$DEST"
     chmod 700 "$REPO/data"
     [ "$RC" = "1" ] && grep -q "NOT MOVED" "${W}/out" || fail "preflight 'unsearchable directory': exit ${RC}"
-    grep -q "cannot be searched by this user" "${W}/out" && grep -q "could not be searched in full" "${W}/out" \
+    grep -q "cannot establish whether" "${W}/out" && grep -q "could not be searched in full" "${W}/out" \
         || fail "preflight 'unsearchable directory': the two reasons are not both listed"
     expect_untouched "preflight: unsearchable directory"
 fi

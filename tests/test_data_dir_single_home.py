@@ -127,7 +127,7 @@ def test_the_watcher_keeps_its_files_where_the_state_is():
         "take every one of the watcher's files with it\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
-    assert result.stdout.count("OK: ") == 5, result.stdout
+    assert result.stdout.count("OK: ") == 7, result.stdout
 
 
 def test_the_check_before_the_move_changes_nothing():
@@ -685,6 +685,87 @@ def test_another_compose_file_is_read_against_the_checkout(tmp_path):
         )
         assert asked.returncode == 0, asked.stderr
         assert _same_directory(asked.stdout.strip(), expected), (shape, asked.stdout)
+
+
+def _ask_about_commit(repo: Path, commit: str, scratch: Path):
+    """`data_dir.sh --commit-source`, the deploy gate's question, with no
+    inherited GIT_* (a hook exports GIT_DIR) and its own temporary root."""
+    env = {k: v for k, v in _environment().items() if not k.startswith("GIT_")}
+    env["TMPDIR"] = str(scratch)
+    return subprocess.run(
+        ["/bin/bash", str(LIB), "--commit-source", str(repo), commit],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+
+
+def test_a_commit_is_asked_about_with_the_files_it_includes(tmp_path):
+    """Second review of #714: the gate copied out the target commit's top
+    compose file only. When the mount lives in a file it `include`s and the
+    target changes just that file, the question was answered by the serving
+    checkout's copy of it - "same directory" - and a commit binding ./data
+    would have deployed onto a moved state. The commit's whole tree is asked
+    now, against the checkout's `.env`."""
+    _docker_compose_or_skip()
+    state = tmp_path / "state"
+    state.mkdir()
+    repo = tmp_path / "repo"
+    (repo / "data").mkdir(parents=True)
+    _git("init", "--quiet", "--initial-branch=main", cwd=repo)
+    (repo / ".gitignore").write_text("data/*\n.env\n", encoding="utf-8")
+    (repo / ".env").write_text(
+        f"DB_PASSWORD=not-a-secret\n{VARIABLE}={state}\n", encoding="utf-8"
+    )
+    (repo / "docker-compose.yml").write_text("include:\n  - mounts.yml\n")
+    mounts = repo / "mounts.yml"
+    mounts.write_text(_SHAPES["variable mounted, long form"], encoding="utf-8")
+    _git("add", ".gitignore", "docker-compose.yml", "mounts.yml", cwd=repo)
+    _git("commit", "--quiet", "-m", "serving", cwd=repo)
+    mounts.write_text(
+        _SHAPES["variable mounted, short form"].replace(
+            "${IDEALISTA_DATA_DIR:-./data}", "./data"
+        ),
+        encoding="utf-8",
+    )
+    _git("commit", "--quiet", "-am", "target", cwd=repo)
+    _git("checkout", "--quiet", "HEAD~1", cwd=repo)
+    scratch = tmp_path / "tmp"
+    scratch.mkdir()
+
+    serving = _ask_about_commit(repo, "main~1", scratch)
+    assert serving.returncode == 0, serving.stderr
+    assert _same_directory(serving.stdout.strip(), state), serving.stdout
+
+    target = _ask_about_commit(repo, "main", scratch)
+    assert not (
+        target.returncode == 0 and _same_directory(target.stdout.strip(), state)
+    ), "a commit whose included file binds ./data was answered with the state"
+    # The tree it wrote to ask is gone, and the checkout is as it was.
+    assert list(scratch.iterdir()) == []
+    assert "${IDEALISTA_DATA_DIR" in mounts.read_text(encoding="utf-8")
+    assert sorted(p.name for p in repo.iterdir()) == [
+        ".env",
+        ".git",
+        ".gitignore",
+        "data",
+        "docker-compose.yml",
+        "mounts.yml",
+    ]
+
+
+def test_a_commit_that_cannot_be_written_out_is_refused(tmp_path):
+    """No such commit: no tree to ask about, and no answer."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git("init", "--quiet", "--initial-branch=main", cwd=repo)
+    scratch = tmp_path / "tmp"
+    scratch.mkdir()
+    asked = _ask_about_commit(repo, "0" * 40, scratch)
+    assert asked.returncode == 1 and asked.stdout == "", asked.stdout
+    assert "cannot write the tree" in asked.stderr, asked.stderr
+    assert list(scratch.iterdir()) == []
 
 
 def test_the_container_side_is_not_fed_the_host_path():

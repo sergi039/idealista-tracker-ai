@@ -347,10 +347,15 @@ resolved_data_dir() {
 }
 
 # The tombstone is the FACT that an entry of that name exists - a file, a
-# directory, a FIFO, a link whose target is gone - read the same way by
-# lib/data_dir.sh and app.py. Never decided by reading it.
+# directory, a FIFO, a link to anything or to nothing. Never decided by
+# reading it, and asked of the one reader: present, absent, or unknown when
+# the directory cannot be searched (the preflight refuses that, so below it
+# "not present" does mean absent).
+tombstone_state() {
+    /bin/bash "${LIB_DIR}/data_dir.sh" --tombstone "$1" 2>/dev/null || printf 'unknown\n'
+}
 has_tombstone() {
-    [ -e "${1}/${TOMBSTONE}" ] || [ -L "${1}/${TOMBSTONE}" ]
+    [ "$(tombstone_state "$1")" = "present" ]
 }
 
 # The moved_to= line of a tombstone that is a regular file, else nothing; exit
@@ -766,6 +771,8 @@ preflight_common() {
     [ -f "${REPO}/.env" ] || problem "${REPO}/.env does not exist"
     [ -r "${LIB_DIR}/data_dir.sh" ] || problem "${LIB_DIR}/data_dir.sh is missing"
     [ -r "${LIB_DIR}/render_check.sh" ] || problem "${LIB_DIR}/render_check.sh is missing"
+    [ "$(tombstone_state "$SRC")" != "unknown" ] \
+        || problem "cannot establish whether ${SRC} carries ${TOMBSTONE}: this process may not search it (or the directory above it)"
 
     "$STATUS_CMD" >/dev/null 2>&1 || status_rc=$?
     case "$status_rc" in
@@ -880,9 +887,6 @@ preflight_apply() {
     ! has_tombstone "$SRC" || problem "${SRC}/${TOMBSTONE} exists; the state was moved before"
     [ -d "$SRC" ] || problem "${SRC} is not a directory"
     if [ -d "$SRC" ]; then
-        # In a directory this user may not search, a tombstone that is there
-        # reads as one that is not.
-        [ -x "$SRC" ] || problem "${SRC} cannot be searched by this user; whether it carries ${TOMBSTONE} cannot be established"
         # A find that could not read every directory has not looked: under
         # pipefail its status used to end the script here without a word.
         if ! link="$(find "$SRC" -type l -print 2>/dev/null)"; then
