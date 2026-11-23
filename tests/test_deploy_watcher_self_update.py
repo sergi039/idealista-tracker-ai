@@ -77,3 +77,6 @@ def test_a_watcher_change_is_deployed_by_the_watcher_it_brings(interpreter):
         f"watcher run by: {interpreter}\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
+    # The handover with the state moved (#639) ran: a harness that lost the
+    # scenario would still exit 0.
+    assert "OK: a handover while the state is moved deploys" in result.stdout

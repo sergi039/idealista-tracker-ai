@@ -29,7 +29,7 @@ STATE_DIR="$(/bin/bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/data_d
 }
 case "$STATE_DIR" in
     /*) ;;
-    *) echo "the reader of the state directory answered '${STATE_DIR}', which is not an absolute path - refusing to run" >&2; exit 1 ;;
+    *) echo "the reader of the state directory answered something that is not an absolute path - refusing to run" >&2; exit 1 ;;
 esac
 LOG_FILE="${AUTOPILOT_ISSUE_LOG:-${STATE_DIR}/autopilot-issues.log}"
 WORKTREE_ROOT="${AUTOPILOT_WORKTREE_ROOT:-${REPO_DIR}/.claude/worktrees}"

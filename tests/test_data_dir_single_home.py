@@ -127,7 +127,7 @@ def test_the_watcher_keeps_its_files_where_the_state_is():
         "take every one of the watcher's files with it\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
-    assert result.stdout.count("OK: ") == 5, result.stdout
+    assert result.stdout.count("OK: ") == 7, result.stdout
 
 
 def test_the_check_before_the_move_changes_nothing():
