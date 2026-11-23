@@ -647,6 +647,28 @@ moved_world "scenario 3g"
 printf '%s\n' "$DEST" >"$STUB/df-elsewhere"
 run_move -- --rollback
 not_rolled_back "scenario 3g (state elsewhere)" "the rename back would fail"
+# A FIFO named as the tombstone in a populated checkout data, .env naming the
+# moved directory (#712 review 2, finding 1): no tombstone, so no rollback.
+moved_world "scenario 3h"
+rm "$REPO/data/.moved-to"; mkfifo "$REPO/data/.moved-to"
+echo 100 >"$REPO/data/.last_seen_uid_properties"
+run_move_bounded --rollback
+[ "$RC" != "124" ] || fail "scenario 3h: --rollback was still waiting on a FIFO tombstone after ten seconds"
+not_rolled_back "scenario 3h (FIFO tombstone, .env names the moved directory)" "is not a regular file"
+[ -p "$REPO/data/.moved-to" ] && [ "$(cat "$REPO/data/.last_seen_uid_properties")" = "100" ] \
+    || fail "scenario 3h: the checkout data was touched"
+rm -f "$REPO/data/.moved-to"
+# The moved directory gone, the checkout data empty, no tombstone (#712 review
+# 2, finding 2): an empty directory is not the restored state.
+moved_world "scenario 3i"
+mv "$DEST" "${W}/gone"
+rm -rf "$REPO/data" && mkdir "$REPO/data"
+run_move -- --rollback
+[ "$RC" = "1" ] && grep -q "NOT ROLLED BACK" "${W}/out" && grep -q "is empty and" "${W}/out" \
+    || fail "scenario 3i (empty checkout data, moved directory gone): exit ${RC}, expected a refusal"
+grep -E '^compose .* (stop|up) ' "${W}/docker.log" >/dev/null && fail "scenario 3i: the app was stopped or started"
+grep -q '^IDEALISTA_DATA_DIR=' "$REPO/.env" && [ -z "$(ls -A "$REPO/data")" ] \
+    || fail "scenario 3i: the .env line or the checkout data was touched"
 pass "--rollback finds the moved directory from the tombstone, and refuses before the stop what it cannot undo"
 
 # --- 4. preflight refusals: each leaves everything untouched ---------------
@@ -1247,6 +1269,25 @@ printf 'false\n' >"$STUB/running"
 run_move -- --rollback
 [ "$RC" = "0" ] && [ "$(cat "$REPO/data/.orchestrator")" = "session=local_later" ] \
     || fail "scenario 6p: a later --rollback put back the .orchestrator of an aside already restored (exit ${RC})"
+# 6q. The same kill with identical .orchestrator copies (#712 review 2,
+# finding 3): the second --rollback copies nothing, and marks the aside all
+# the same, so a later one keeps a .orchestrator written since.
+new_world
+run_move -- --apply "$DEST"
+[ "$RC" = "0" ] || fail "scenario 6q: the move that sets the scene failed (exit ${RC})"
+cp -p "$DEST/.orchestrator" "$REPO/data/.orchestrator"
+printf '#!/bin/bash\nfor arg in "$@"; do [ "$arg" != "checkout" ] || { kill -KILL "$PPID"; exit 0; }; done\nexec "%s" "$@"\n' "$(command -v git)" >"${W}/bin/git"
+chmod +x "${W}/bin/git"
+run_move -- --rollback
+rm -f "${W}/bin/git"
+[ "$RC" = "137" ] && [ ! -e "$DEST" ] || fail "scenario 6q: exit ${RC}, or the kill did not land after the rename back"
+run_move -- --rollback
+[ "$RC" = "0" ] && grep -q "^ROLLED BACK:" "${W}/out" || fail "scenario 6q: the second --rollback: exit ${RC}"
+printf 'session=local_later\n' >"$REPO/data/.orchestrator"
+printf 'false\n' >"$STUB/running"
+run_move -- --rollback
+[ "$RC" = "0" ] && [ "$(cat "$REPO/data/.orchestrator")" = "session=local_later" ] \
+    || fail "scenario 6q: a later --rollback put back an identical aside copy over a newer .orchestrator (exit ${RC})"
 
 pass "a failure at every step after the stop ends with the app running on the original directory"
 

@@ -574,6 +574,11 @@ EOF
 # rebuilt directory got meanwhile: this run's aside, or a killed rollback's -
 # by content, never by mtime, and a killed rollback's only until it is restored
 # once (the marker), so a later --rollback keeps a newer one.
+mark_orchestrator_restored() {
+    : >"${1}/.orchestrator.restored" \
+        || note "WARNING: could not mark ${1}/.orchestrator restored; a later --rollback may put it back over a newer one"
+}
+
 refresh_checkout_files() {
     local aside="$ASIDE" last
     git -C "$REPO" checkout -- data >/dev/null 2>&1 \
@@ -584,10 +589,15 @@ refresh_checkout_files() {
     [ -n "$aside" ] && [ -f "${aside}/.orchestrator" ] || return 0
     if [ "$aside" != "$ASIDE" ]; then
         [ ! -e "${aside}/.orchestrator.restored" ] || return 0
-        [ ! -e "${SRC}/.orchestrator" ] || ! cmp -s "${aside}/.orchestrator" "${SRC}/.orchestrator" || return 0
+        if [ -e "${SRC}/.orchestrator" ] && cmp -s "${aside}/.orchestrator" "${SRC}/.orchestrator"; then
+            # Already in place: marked all the same, or a later --rollback
+            # would put this copy over a newer .orchestrator.
+            mark_orchestrator_restored "$aside"
+            return 0
+        fi
     fi
     if cp -p "${aside}/.orchestrator" "${SRC}/.orchestrator"; then
-        : >"${aside}/.orchestrator.restored"
+        mark_orchestrator_restored "$aside"
     else
         note "WARNING: could not restore the newer .orchestrator from ${aside}"
     fi
@@ -956,6 +966,12 @@ preflight_rollback() {
         fi
         return 0
     fi
+    # Step 4 writes the tombstone as a regular file and nothing else does: a
+    # FIFO, a directory or a link of that name says nothing about whose
+    # files ${SRC} holds.
+    if has_tombstone "$SRC" && { [ ! -f "${SRC}/${TOMBSTONE}" ] || [ -L "${SRC}/${TOMBSTONE}" ]; }; then
+        problem "${SRC}/${TOMBSTONE} is not a regular file; this script never writes one like it - inspect ${SRC} by hand"
+    fi
     recorded="$(tombstone_destination "$SRC")" \
         || problem "${SRC}/${TOMBSTONE} does not record a destination the way this script writes one; read it and set ${KEY} in .env by hand"
     if [ -z "$value" ] || [ "$value" = "$SRC" ]; then
@@ -982,8 +998,12 @@ preflight_rollback() {
         elif [ "$here" != "$there" ] || [ "$here_at" != "$there_at" ]; then
             problem "${DEST} is not on the mounted filesystem of ${near}; the rename back would fail (EXDEV) with the app stopped"
         fi
-    elif [ -d "$SRC" ] && ! has_tombstone "$SRC"; then
+    elif [ -d "$SRC" ] && ! has_tombstone "$SRC" && [ -n "$(ls -A "$SRC" 2>/dev/null)" ]; then
         fine "the state is in ${SRC} - no rename to undo, only the .env line"
+    elif [ -d "$SRC" ] && ! has_tombstone "$SRC"; then
+        # Step 4 writes the tombstone right after mkdir, so an empty ${SRC}
+        # is not state a rollback left behind.
+        problem "${SRC} is empty and '${DEST:-unknown}' is not a directory; the state is in neither - find it before anything is undone"
     else
         problem "cannot find the moved directory ('${DEST:-unknown}' is not a directory)"
     fi
