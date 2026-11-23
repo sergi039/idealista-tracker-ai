@@ -458,6 +458,58 @@ expect_tombstone_refusal "a tombstone with control characters refuses" "hint-zz9
 case "$ERR" in *"$(printf '\033')"* | *"$(printf '\t')"* | *"$(printf '\r')"*) fail "a control character from the tombstone reached stderr" ;; esac
 rm -f "${REPO}/data/.moved-to" "${WORK}/a-fifo"
 
+# 12e3. Whether the tombstone is there is established, or the directory is
+#       refused (third review of #700). In a directory this process may not
+#       search, the shell's tests say "no" to a tombstone that is there: that
+#       used to read as a directory without one, and the default branch then
+#       named the directory the state had left.
+if [ "$(id -u)" != "0" ]; then
+    new_repo
+    : >"${REPO}/data/.moved-to"
+    chmod 600 "${REPO}/data"
+    resolve "$REPO"
+    chmod 700 "${REPO}/data"
+    expect_refusal "a default directory that may not be searched is refused: its tombstone cannot be looked for" "cannot establish whether"
+    new_repo
+    mkdir "${WORK}/locked-state"
+    : >"${WORK}/locked-state/.moved-to"
+    printf 'IDEALISTA_DATA_DIR=%s\n' "${WORK}/locked-state" >"${REPO}/.env"
+    compose_says "[$(bind "${WORK}/locked-state")]"
+    chmod 600 "${WORK}/locked-state"
+    resolve "$REPO"
+    chmod 700 "${WORK}/locked-state"
+    expect_refusal "so is a directory Compose would mount" "cannot establish whether"
+    rm -rf "${WORK}/locked-state"
+    compose_says "[$(bind "$STATE")]"
+fi
+# `--tombstone <dir>`: the same question for tools/move_data_dir.sh.
+tombstone_mode() {
+    RC=0
+    OUT="$("$SHELL_UNDER_TEST" "$LIB" --tombstone "$1" 2>"${WORK}/err")" || RC=$?
+    ERR="$(cat "${WORK}/err")"
+}
+new_repo
+tombstone_mode "${REPO}/data"
+expect_dir "--tombstone says absent for a directory without one" "absent"
+tombstone_mode "${REPO}/not-created-yet"
+expect_dir "--tombstone says absent for a directory that does not exist yet" "absent"
+ln -s "${WORK}/gone/further" "${REPO}/data/.moved-to"
+tombstone_mode "${REPO}/data"
+expect_dir "--tombstone says present for a link whose target cannot be reached" "present"
+rm -f "${REPO}/data/.moved-to"
+if [ "$(id -u)" != "0" ]; then
+    chmod 600 "${REPO}/data"
+    tombstone_mode "${REPO}/data"
+    chmod 700 "${REPO}/data"
+    expect_refusal "--tombstone refuses a directory it may not search" "cannot establish whether"
+    mkdir "${WORK}/closed"
+    chmod 000 "${WORK}/closed"
+    tombstone_mode "${WORK}/closed/data"
+    chmod 700 "${WORK}/closed"
+    expect_refusal "--tombstone refuses a directory it cannot see for the one above it" "cannot establish whether"
+    rmdir "${WORK}/closed"
+fi
+
 # 12f. `--default` names the directory inside the checkout and reads nothing:
 #      not .env, not the environment, not the tombstone, and not Compose.
 new_repo

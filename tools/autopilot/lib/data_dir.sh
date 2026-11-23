@@ -70,6 +70,11 @@
 # prints the directory inside the checkout - what the answer is when nothing
 # is configured - without reading .env or the environment or asking Compose.
 #
+#   data_dir.sh --tombstone <dir>
+#
+# prints `present` or `absent`: whether <dir> carries the tombstone the mover
+# leaves. Exits 1 when that cannot be established.
+#
 #   data_dir.sh --compose-source <repo> [compose-file]
 #
 # prints what Compose would bind at /app/data, unchecked: the directory need
@@ -114,19 +119,50 @@ _data_dir_refuse() {
     return 1
 }
 
+# Whether `<dir>` carries the tombstone: `present` or `absent` on stdout, or a
+# refusal when that cannot be established. The one home of the question on the
+# host; tools/move_data_dir.sh asks it through `--tombstone`.
+#
+# The tombstone is the FACT that an entry of that name exists - a file, a
+# directory, a FIFO, a link to anything or to nothing. The entry is never
+# opened: what the file records is a convenience, and every way of reading it
+# from a shell is a way to hang or to be handed something else.
+idealista_tombstone_state() {
+    local dir="$1" tombstone="${1}/${IDEALISTA_DATA_DIR_TOMBSTONE}" searched
+    # -L first, and it settles a link by itself: an lstat, which does not
+    # resolve the target. `-e` follows links, and a link to a mount that does
+    # not answer would hold the deploy watcher there for ever.
+    if [ -L "$tombstone" ] || [ -e "$tombstone" ]; then
+        printf 'present\n'
+        return 0
+    fi
+    # Neither test saw an entry - which the shell also says when the lookup
+    # itself failed: in a directory this process may not search, a tombstone
+    # that is there reads as one that is not. "Absent" is said only where a
+    # lookup can only have failed for want of the entry: the directory that
+    # was searched (or, when it does not exist, the one above it) is a
+    # directory this process may search.
+    if [ -d "$dir" ]; then
+        searched="$dir"
+    else
+        searched="${dir%/*}"
+        [ -n "$searched" ] || searched="/"
+    fi
+    if [ -d "$searched" ] && [ -x "$searched" ]; then
+        printf 'absent\n'
+        return 0
+    fi
+    _data_dir_refuse "cannot establish whether ${dir} carries ${IDEALISTA_DATA_DIR_TOMBSTONE}: this process may not search ${searched}. It may be the directory the deployment's state was moved out of; refusing to name it"
+    return 1
+}
+
 # Refuses a directory that carries the tombstone, whichever way it was reached:
-# by default, or because Compose would mount it.
+# by default, or because Compose would mount it - and one whose tombstone
+# cannot be looked for.
 _data_dir_refuse_tombstone() {
-    local dir="$1" tombstone="${1}/${IDEALISTA_DATA_DIR_TOMBSTONE}"
-    # The tombstone is the FACT that an entry of that name exists - a file, a
-    # directory, a FIFO, a link whose target is gone (-L: -e follows links).
-    # That is all this reader asks of it. It never opens the entry: what the
-    # file records is a convenience, and every way of reading it from a shell
-    # is a way to hang or to be handed something else - a FIFO put there
-    # after the test that it is a file blocks `head` for ever, and the deploy
-    # watcher with it. The message says where to look; tools/move_data_dir.sh
-    # --rollback reads it, with a descriptor it has checked.
-    [ -e "$tombstone" ] || [ -L "$tombstone" ] || return 0
+    local dir="$1" tombstone="${1}/${IDEALISTA_DATA_DIR_TOMBSTONE}" state
+    state="$(idealista_tombstone_state "$dir")" || return 1
+    [ "$state" != "absent" ] || return 0
     _data_dir_refuse "${dir} carries ${IDEALISTA_DATA_DIR_TOMBSTONE}: the deployment's state was moved out of it and Compose would no longer mount it. Where it went is recorded in ${tombstone} (not read here): put ${IDEALISTA_DATA_DIR_KEY}=<that directory> back in .env, or run tools/move_data_dir.sh --rollback"
     return 1
 }
@@ -350,6 +386,10 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     if [ "${1:-}" = "--compose-source" ]; then
         shift
         idealista_compose_source "$@"
+        exit $?
+    fi
+    if [ "${1:-}" = "--tombstone" ]; then
+        idealista_tombstone_state "${2:?--tombstone takes a directory}"
         exit $?
     fi
     idealista_data_dir "$@"
