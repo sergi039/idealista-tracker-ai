@@ -664,11 +664,24 @@ moved_world "scenario 3i"
 mv "$DEST" "${W}/gone"
 rm -rf "$REPO/data" && mkdir "$REPO/data"
 run_move -- --rollback
-[ "$RC" = "1" ] && grep -q "NOT ROLLED BACK" "${W}/out" && grep -q "is empty and" "${W}/out" \
+[ "$RC" = "1" ] && grep -q "NOT ROLLED BACK" "${W}/out" && grep -q "holds no .deployed_sha and" "${W}/out" \
     || fail "scenario 3i (empty checkout data, moved directory gone): exit ${RC}, expected a refusal"
 grep -E '^compose .* (stop|up) ' "${W}/docker.log" >/dev/null && fail "scenario 3i: the app was stopped or started"
 grep -q '^IDEALISTA_DATA_DIR=' "$REPO/.env" && [ -z "$(ls -A "$REPO/data")" ] \
     || fail "scenario 3i: the .env line or the checkout data was touched"
+# The same, but the checkout data holds a .DS_Store and the reference files
+# (#713 review, finding 1): files that are not the state are not the state.
+moved_world "scenario 3j"
+mv "$DEST" "${W}/gone"
+rm -rf "$REPO/data" && mkdir "$REPO/data"
+git -C "$REPO" checkout -- data
+: >"$REPO/data/.DS_Store"
+run_move -- --rollback
+[ "$RC" = "1" ] && grep -q "NOT ROLLED BACK" "${W}/out" && grep -q "holds no .deployed_sha and" "${W}/out" \
+    || fail "scenario 3j (.DS_Store and reference files only, moved directory gone): exit ${RC}, expected a refusal"
+grep -E '^compose .* (stop|up) ' "${W}/docker.log" >/dev/null && fail "scenario 3j: the app was stopped or started"
+grep -q '^IDEALISTA_DATA_DIR=' "$REPO/.env" && [ -e "$REPO/data/.DS_Store" ] && [ ! -e "$REPO/data/.deployed_sha" ] \
+    || fail "scenario 3j: the .env line or the checkout data was touched"
 pass "--rollback finds the moved directory from the tombstone, and refuses before the stop what it cannot undo"
 
 # --- 4. preflight refusals: each leaves everything untouched ---------------
@@ -1288,6 +1301,51 @@ printf 'false\n' >"$STUB/running"
 run_move -- --rollback
 [ "$RC" = "0" ] && [ "$(cat "$REPO/data/.orchestrator")" = "session=local_later" ] \
     || fail "scenario 6q: a later --rollback put back an identical aside copy over a newer .orchestrator (exit ${RC})"
+# 6s. The same kill, then the aside made read-only (#713 review, finding 2):
+# the second --rollback could not write the marker, so it refuses before the
+# stop; made writable again, it finishes.
+new_world
+run_move -- --apply "$DEST"
+[ "$RC" = "0" ] || fail "scenario 6s: the move that sets the scene failed (exit ${RC})"
+cp -p "$DEST/.orchestrator" "$REPO/data/.orchestrator"
+printf '#!/bin/bash\nfor arg in "$@"; do [ "$arg" != "checkout" ] || { kill -KILL "$PPID"; exit 0; }; done\nexec "%s" "$@"\n' "$(command -v git)" >"${W}/bin/git"
+chmod +x "${W}/bin/git"
+run_move -- --rollback
+rm -f "${W}/bin/git"
+[ "$RC" = "137" ] && [ ! -e "$DEST" ] || fail "scenario 6s: exit ${RC}, or the kill did not land after the rename back"
+aside_6s="$(ls -d "$BACKUPS"/checkout-data-at-rollback-* | tail -n 1)"
+[ -f "${aside_6s}/.orchestrator" ] && [ ! -e "${aside_6s}/.orchestrator.restored" ] \
+    || fail "scenario 6s: the killed rollback did not leave an unmarked aside"
+chmod 0555 "$aside_6s"
+: >"${W}/docker.log"
+run_move -- --rollback
+chmod u+w "$aside_6s"
+[ "$RC" = "1" ] && grep -q "NOT ROLLED BACK" "${W}/out" && grep -q "is not writable" "${W}/out" \
+    || fail "scenario 6s (aside read-only): exit ${RC}, expected a refusal before the stop"
+grep -E '^compose .* (stop|up) ' "${W}/docker.log" >/dev/null && fail "scenario 6s: the app was stopped or started"
+[ ! -e "${aside_6s}/.orchestrator.restored" ] && grep -q '^IDEALISTA_DATA_DIR=' "$REPO/.env" \
+    || fail "scenario 6s: the refusal touched the aside or the .env line"
+run_move -- --rollback
+[ "$RC" = "0" ] && [ -e "${aside_6s}/.orchestrator.restored" ] \
+    || fail "scenario 6s: made writable, the --rollback did not finish and mark (exit ${RC})"
+# 6t. The aside turns read-only during the rollback itself, after the
+# preflight: the app is back on <repo>/data, but a missing marker is exit 4,
+# never a success.
+new_world
+run_move -- --apply "$DEST"
+[ "$RC" = "0" ] || fail "scenario 6t: the move that sets the scene failed (exit ${RC})"
+printf 'session=local_newer\n' >"$REPO/data/.orchestrator"
+printf '#!/bin/bash\nfor arg in "$@"; do [ "$arg" != "checkout" ] || chmod 0555 "%s"/checkout-data-at-rollback-*; done\nexec "%s" "$@"\n' "$BACKUPS" "$(command -v git)" >"${W}/bin/git"
+chmod +x "${W}/bin/git"
+run_move -- --rollback
+rm -f "${W}/bin/git"
+chmod u+w "$BACKUPS"/checkout-data-at-rollback-*
+[ "$RC" = "4" ] && grep -q "^ROLLED BACK, MARKER MISSING:" "${W}/out" && grep -q "touch .*/.orchestrator.restored" "${W}/out" \
+    || fail "scenario 6t (marker not writable): exit ${RC}, expected 4 and the touch command"
+grep -q "^ROLLED BACK:" "${W}/out" && fail "scenario 6t: a missing marker was reported as a plain success"
+[ "$(cat "$STUB/running")" = "true" ] && [ "$(cat "$STUB/mount")" = "$REPO/data" ] \
+    && [ "$(cat "$REPO/data/.orchestrator")" = "session=local_newer" ] \
+    || fail "scenario 6t: the app is not back on <repo>/data with the newer .orchestrator"
 
 pass "a failure at every step after the stop ends with the app running on the original directory"
 
