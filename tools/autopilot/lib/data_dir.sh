@@ -83,6 +83,15 @@
 # force yet: tools/move_data_dir.sh before it moves anything, and the
 # watcher's deploy gate about the commit it is about to deploy. They ask here
 # rather than spell `<repo>/data` themselves, so that name stays in one file.
+#
+#   data_dir.sh --commit-source <repo> <commit> [compose-file]
+#
+# prints what Compose would bind at /app/data if <commit> were checked out in
+# <repo>: the commit's whole tree is written to a temporary directory, the
+# checkout's .env is linked into it, and Compose is asked there. A file the
+# top compose file pulls in - `include`, `extends`, an `env_file` - is the
+# commit's, never the serving checkout's (second review of #714). Exits 1 on
+# any failure to build that tree, as on any refusal of --compose-source.
 
 set -u
 
@@ -139,18 +148,29 @@ idealista_tombstone_state() {
     # Neither test saw an entry - which the shell also says when the lookup
     # itself failed: in a directory this process may not search, a tombstone
     # that is there reads as one that is not. "Absent" is said only where a
-    # lookup can only have failed for want of the entry: the directory that
-    # was searched (or, when it does not exist, the one above it) is a
-    # directory this process may search.
-    if [ -d "$dir" ]; then
+    # lookup can only have failed for want of the entry:
+    #   * <dir> is there and is a directory this process may search, or
+    #   * nothing at all is there by that name (not even a link), and the
+    #     directory above it may be searched.
+    # Anything else is a lookup that failed on the way: <dir> is a link whose
+    # target cannot be reached or searched (`data` -> `closed/state` with
+    # `closed` mode 0600 is not a directory to `-d`, and is not missing
+    # either), a file, or something above it is closed. Each refuses (second
+    # review of #714): the parent being searchable says nothing about where a
+    # link that IS there leads.
+    if [ -L "$dir" ] || [ -e "$dir" ]; then
         searched="$dir"
+        if [ -d "$dir" ] && [ -x "$dir" ]; then
+            printf 'absent\n'
+            return 0
+        fi
     else
         searched="${dir%/*}"
         [ -n "$searched" ] || searched="/"
-    fi
-    if [ -d "$searched" ] && [ -x "$searched" ]; then
-        printf 'absent\n'
-        return 0
+        if [ -d "$searched" ] && [ -x "$searched" ]; then
+            printf 'absent\n'
+            return 0
+        fi
     fi
     _data_dir_refuse "cannot establish whether ${dir} carries ${IDEALISTA_DATA_DIR_TOMBSTONE}: this process may not search ${searched}. It may be the directory the deployment's state was moved out of; refusing to name it"
     return 1
@@ -295,6 +315,46 @@ idealista_compose_source() {
     printf '%s\n' "$(_data_dir_trim "$source")"
 }
 
+# Asks Compose about a commit that is not checked out. The tree is written
+# through a temporary index, not `git archive`, which would apply the
+# export-subst and export-ignore attributes and ask about another tree.
+idealista_commit_compose_source() {
+    local repo="${1:-}" commit="${2:-}" compose_file="${3:-docker-compose.yml}"
+    local tmp status
+
+    if [ -z "$repo" ] || [ ! -d "$repo" ] || [ -z "$commit" ]; then
+        _data_dir_refuse "usage: data_dir.sh --commit-source <repository root> <commit> [compose file]"
+        return 1
+    fi
+    case "$compose_file" in
+        /* | ../* | */../* | ..)
+            _data_dir_refuse "--commit-source takes a compose file inside the tree, not ${compose_file}"
+            return 1
+            ;;
+    esac
+    if ! tmp="$(mktemp -d "${TMPDIR:-/tmp}/idealista-commit-tree.XXXXXX")"; then
+        _data_dir_refuse "cannot create a temporary directory to check ${commit} out into"
+        return 1
+    fi
+    status=0
+    (
+        if ! GIT_INDEX_FILE="${tmp}/index" git -C "$repo" read-tree "${commit}^{tree}" 2>/dev/null \
+            || ! GIT_INDEX_FILE="${tmp}/index" git -C "$repo" checkout-index -a -f --prefix="${tmp}/tree/" 2>/dev/null; then
+            _data_dir_refuse "cannot write the tree of ${commit} from ${repo}, so what it would mount at /app/data is unknown"
+            exit 1
+        fi
+        if [ -e "${repo}/.env" ] || [ -L "${repo}/.env" ]; then
+            if ! ln -s "${repo}/.env" "${tmp}/tree/.env" 2>/dev/null; then
+                _data_dir_refuse "${commit} carries its own .env, so it would not be read against the checkout's"
+                exit 1
+            fi
+        fi
+        idealista_compose_source "${tmp}/tree" "${tmp}/tree/${compose_file}"
+    ) || status=$?
+    rm -rf "$tmp"
+    return "$status"
+}
+
 idealista_data_dir() {
     local repo="${1:-}" value exported
 
@@ -386,6 +446,11 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     if [ "${1:-}" = "--compose-source" ]; then
         shift
         idealista_compose_source "$@"
+        exit $?
+    fi
+    if [ "${1:-}" = "--commit-source" ]; then
+        shift
+        idealista_commit_compose_source "$@"
         exit $?
     fi
     if [ "${1:-}" = "--tombstone" ]; then

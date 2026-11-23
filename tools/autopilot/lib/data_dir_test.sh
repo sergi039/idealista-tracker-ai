@@ -508,6 +508,25 @@ if [ "$(id -u)" != "0" ]; then
     chmod 700 "${WORK}/closed"
     expect_refusal "--tombstone refuses a directory it cannot see for the one above it" "cannot establish whether"
     rmdir "${WORK}/closed"
+    # A link that IS there, into a directory that may not be searched (second
+    # review of #714): `data` -> `closed/state`, `closed` mode 0600. `-d` says
+    # no to the link, and the checkout above it is searchable - which used to
+    # be read as "no tombstone", while `closed/state/.moved-to` is there.
+    mkdir -p "${WORK}/closed/state"
+    : >"${WORK}/closed/state/.moved-to"
+    rm -rf "${REPO}/data"
+    ln -s "${WORK}/closed/state" "${REPO}/data"
+    chmod 600 "${WORK}/closed"
+    tombstone_mode "${REPO}/data"
+    chmod 700 "${WORK}/closed"
+    expect_refusal "--tombstone refuses a link to a directory it may not search" "cannot establish whether"
+    chmod 600 "${WORK}/closed"
+    resolve "$REPO"
+    chmod 700 "${WORK}/closed"
+    expect_refusal "so does the default branch, for the same link as <repo>/data" "cannot establish whether"
+    rm -f "${REPO}/data"
+    rm -rf "${WORK}/closed"
+    mkdir "${REPO}/data"
 fi
 
 # 12f. `--default` names the directory inside the checkout and reads nothing:

@@ -69,16 +69,25 @@ cat >"${STUB_BIN}/docker" <<'STUB'
 case " $* " in " compose "*" config "*) is_config=1 ;; *) is_config=0 ;; esac
 if [ "$is_config" = "1" ]; then
     # Two questions reach Compose: the reader's, about the checkout's own
-    # docker-compose.yml, and the deploy gate's, about a copy of another
-    # commit's file. Each gets what a scenario staged for it; nothing here
-    # works out what a compose file would mount - that would be this harness
-    # agreeing with itself. What the real Compose says about such a file is
-    # held by tests/test_data_dir_single_home.py.
-    file=""
+    # docker-compose.yml, and the deploy gate's, about another commit's tree.
+    # Each gets what a scenario staged for it; nothing here works out what a
+    # compose file would mount - that would be this harness agreeing with
+    # itself. What the real Compose says about such a tree is held by
+    # tests/test_data_dir_single_home.py. One exception, for scenario 6's
+    # include: a mounts.yml in the directory Compose was pointed at that binds
+    # ./data answers that directory's data/, so which tree was asked shows.
+    file="" pdir=""
     while [ $# -gt 0 ]; do
-        if [ "$1" = "-f" ]; then file="$2"; break; fi
+        case "$1" in
+            -f) file="$2"; shift ;;
+            --project-directory) pdir="$2"; shift ;;
+        esac
         shift
     done
+    if [ -n "$pdir" ] && grep -qs -- '- ./data:/app/data' "${pdir}/mounts.yml"; then
+        printf '{"services":{"app":{"volumes":[{"type":"bind","source":"%s/data","target":"/app/data"}]}}}\n' "$pdir"
+        exit 0
+    fi
     answer="${DOCKER_COMPOSE_JSON:-}"
     [ "$file" = "docker-compose.yml" ] || answer="${DOCKER_COMPOSE_TARGET_JSON:-}"
     [ -f "${answer:-/nonexistent}" ] || exit 1
@@ -338,8 +347,8 @@ printf 'OK: a Compose that cannot be asked stops the tick before anything is tou
 # Its docker-compose.yml binds ./data again - the checkout's directory, which
 # by now has no mail cursor. Nothing in that commit can refuse itself, so the
 # watcher that is serving now does: before the fast-forward, with the checkout,
-# the container and the marker untouched. Three shapes of "no contract".
-for shape in compose-binds-data compose-unreadable reader-removed; do
+# the container and the marker untouched. Five shapes of "no contract".
+for shape in compose-binds-data compose-unreadable reader-removed reader-is-a-tree include-changed; do
     new_repo "repo6-${shape}"
     STATE="${WORK}/state6-${shape}"
     mkdir -p "$STATE"
@@ -364,6 +373,30 @@ for shape in compose-binds-data compose-unreadable reader-removed; do
             ;;
         reader-removed)
             git -C "$REPO" rm --quiet tools/autopilot/lib/data_dir.sh
+            ;;
+        reader-is-a-tree)
+            # The path is there, but as a directory: no reader to run. Compose
+            # is staged to agree, so only the object's type can stop it.
+            git -C "$REPO" rm --quiet tools/autopilot/lib/data_dir.sh
+            mkdir -p "${REPO}/tools/autopilot/lib/data_dir.sh"
+            printf 'not a reader\n' >"${REPO}/tools/autopilot/lib/data_dir.sh/x"
+            git -C "$REPO" add tools/autopilot/lib/data_dir.sh/x
+            ;;
+        include-changed)
+            # The serving commit pulls the mount in from mounts.yml; the
+            # target changes only that file, back to ./data. Asking about the
+            # target's top file against this checkout would read the serving
+            # mounts.yml and pass. Compose is staged to agree everywhere else.
+            # shellcheck disable=SC2016
+            printf 'services:\n  app:\n    volumes:\n      - type: bind\n        source: ${IDEALISTA_DATA_DIR:-./data}\n        target: /app/data\n' \
+                >"${REPO}/mounts.yml"
+            printf 'include:\n  - mounts.yml\n' >"${REPO}/docker-compose.yml"
+            git -C "$REPO" add mounts.yml docker-compose.yml
+            git -C "$REPO" commit --quiet -m "the mount lives in an included file"
+            publish_main
+            serving_sha="$(git -C "$REPO" rev-parse HEAD)"
+            printf '%s\n' "$serving_sha" >"${STATE}/.deployed_sha"
+            printf 'services:\n  app:\n    volumes:\n      - ./data:/app/data\n' >"${REPO}/mounts.yml"
             ;;
     esac
     git -C "$REPO" commit --quiet -am "revert the state-directory contract (${shape})"

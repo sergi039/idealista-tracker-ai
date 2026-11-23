@@ -627,22 +627,20 @@ if [ "$state_phys" != "$default_phys" ]; then
 fi
 if [ "$STATE_MOVED" = "1" ]; then
     contract_missing=""
-    if ! git cat-file -e "${remote_sha}:tools/autopilot/lib/data_dir.sh" 2>/dev/null; then
-        contract_missing="tools/autopilot/lib/data_dir.sh is not in it"
+    # A blob, not merely an object: a tree at that path is no reader either.
+    if [ "$(git cat-file -t "${remote_sha}:tools/autopilot/lib/data_dir.sh" 2>/dev/null)" != "blob" ]; then
+        contract_missing="tools/autopilot/lib/data_dir.sh is not a file in it"
     else
-        # Asked of Compose itself, about the target commit's file: what would
-        # it bind at /app/data, read against this checkout's .env? Anything but
-        # the directory the state is in - a literal ./data, a mount that moved,
-        # a file Compose cannot render - is a commit that must not be deployed
-        # onto it. The file is copied out of git to ask; nothing is checked out.
-        would_mount=""
-        target_compose="$(mktemp "${TMPDIR:-/tmp}/idealista-target-compose.XXXXXX")" \
-            || die "cannot create a temporary file to ask Compose about ${remote_sha:0:7}"
-        if git show "${remote_sha}:${COMPOSE_FILE}" >"$target_compose" 2>/dev/null; then
-            would_mount="$("${BASH:-/bin/bash}" "${SCRIPT_DIR}/lib/data_dir.sh" --compose-source "$REPO_DIR" "$target_compose" 2>/dev/null)" \
-                || would_mount=""
-        fi
-        rm -f "$target_compose"
+        # Asked of Compose itself, about the target commit: what would it bind
+        # at /app/data, read against this checkout's .env? Anything but the
+        # directory the state is in - a literal ./data, a mount that moved, a
+        # configuration Compose cannot render - is a commit that must not be
+        # deployed onto it. The reader writes the commit's whole tree to a
+        # temporary directory and asks there, so a file the compose file pulls
+        # in (`include`, `extends`) is the target's and not the one serving
+        # now; the checkout itself is not touched.
+        would_mount="$("${BASH:-/bin/bash}" "${SCRIPT_DIR}/lib/data_dir.sh" --commit-source "$REPO_DIR" "$remote_sha" "$COMPOSE_FILE" 2>/dev/null)" \
+            || would_mount=""
         if [ "$would_mount" != "$STATE_DIR" ]; then
             # Not quoted: what Compose rendered can carry another variable's value.
             contract_missing="${COMPOSE_FILE} there would mount another directory at /app/data, or Compose cannot say"
