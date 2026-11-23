@@ -314,8 +314,10 @@ watcher, `merge_bot.sh`, `autopilot.sh`, `run_issue.sh`,
 `tools/backfill_status.sh`, `tools/backfill_supervisor.sh` and
 `tools/backup_attachments.sh`. Unset, both answer `<repo>/data`, which is what
 all eight spelled out by hand before; so the variable existing changes nothing
-until a machine's `.env` sets it. **On the mini it is not set yet: the state is
-still inside the checkout, and moving it is a separate, owner-commanded step.**
+until a machine's `.env` sets it. **Setting it is the move, and the move is the
+owner's command**: `tools/move_data_dir.sh`, steps, exit codes and rollback in
+`DATA_DIR_RUNBOOK.md`. Whether a machine has moved is what its `.env` says;
+`tools/move_data_dir.sh --check <dir>` reports it without touching anything.
 
 - The name is not `DATA_DIR` on purpose. `.env` is also the app service's
   `env_file` and `config.py` reads `DATA_DIR`; a host path under that name
@@ -384,3 +386,46 @@ still inside the checkout, and moving it is a separate, owner-commanded step.**
   committed reference files (`docs/rules/reference-data.md`),
   `data/.orchestrator` (an agreement between sessions, not state) and the
   launchd stdout logs, whose paths are fixed in the installed plists.
+
+**Moving it is one rename under a recovery trap**
+(`tools/move_data_dir.sh --check | --apply <dir> | --rollback`). `--apply`
+takes the deploy lock and the merge lock *before* its preflight and holds them
+to the end, writes the `.env` line first (until the rename it names a missing
+directory, which the reader and Compose refuse), stops the app, takes a
+checksummed safety copy to `~/IdealistaRank-backups/data-pre-move-<UTC>/`,
+renames `<repo>/data` to the destination on the same mounted filesystem (so
+there is never a second authoritative copy), rebuilds a small `<repo>/data`,
+starts the app with `--no-build` and verifies mount, healthz, the page
+(`lib/render_check.sh`, 200 or it failed), a host-to-container probe and the
+reference files in the image. Every non-success exit after the preflight,
+signals included, runs the same idempotent recovery that `--rollback` runs;
+recovery reads the disk, not the phase. `RECOVERED:` is exit 1, `RECOVERY
+INCOMPLETE` exit 3 with the commands printed; `--rollback` adds `ALREADY ROLLED
+BACK` (0) and `ROLLED BACK, MARKER MISSING` (4: serving, but the
+`.orchestrator.restored` marker of the aside must be written by hand before
+any later rollback). Its own `docker compose` calls drop `IDEALISTA_DATA_DIR`
+from the environment so only `.env` decides the mount.
+
+- **The tombstone.** After the move `<repo>/data` holds the four reference
+  files, `.orchestrator`, launchd logs and `data/.moved-to`. A directory that
+  carries the tombstone is where the state *used* to be: `lib/data_dir.sh`
+  refuses to resolve to it and the app refuses to start on it
+  (`app._state_directory_problem`), so a lost `.env` line is a loud stop
+  rather than an app with no mail cursor. Whether the tombstone is there is
+  asked of the entry (`lstat`, `-L` before `-e`), never by opening it; a lookup
+  that failed is a refusal, not "absent" - in the shell `data_dir.sh
+  --tombstone <dir>` answers `present`, `absent` or fails, and the app reads
+  only `ENOENT` / `ENOTDIR` as absent.
+- **A build that does not know about the move is not deployed onto it.** The
+  tombstone readers are part of what a revert of #639 removes, so they cannot
+  be what stops that revert. The watcher that is *serving* can: while the
+  state directory is not the checkout's own, it refuses, before the
+  checkpoint, the fast-forward and the handover, a target commit without
+  `tools/autopilot/lib/data_dir.sh` as a file (a git blob), or whose
+  `docker-compose.yml` would mount anything but the current state directory.
+  Compose is asked about the commit's whole tree, written to a temporary
+  directory with this checkout's `.env` linked in (`data_dir.sh
+  --commit-source`), so an `include`d or `extends`ed file is the target's and
+  a tree that cannot be written out is refused; the refusal counts toward the
+  stall alarm (#532). `--rollback` first, then the revert deploys normally. A
+  hand `docker compose up --build` of such a tree is not gated.
