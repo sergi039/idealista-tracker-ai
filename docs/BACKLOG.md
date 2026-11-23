@@ -83,6 +83,28 @@ must be an ancestor of `main`.
   What breaks if never fixed: only a link someone placed there by hand can do
   this; the script never creates one. Neither case was reproduced on live.
 
+### `--commit-source` reads an absolute include from the live checkout, and resolves `../` against its temporary tree
+
+- **Anchor:** `tools/autopilot/lib/data_dir.sh` (`--commit-source`: the
+  temporary `checkout-index --prefix="${tmp}/tree/"` handed to
+  `idealista_compose_source`); the test
+  `test_a_commit_is_asked_about_with_the_files_it_includes`
+  in `tests/test_data_dir_single_home.py` (#639).
+- **Found 2026-11-23** in the second review of #714 (`33d214a..f7fef5d`); the
+  owner merged #714 over both (2026-11-23), the review cap of two rounds being
+  spent. (1) A top-level compose file that includes a mounts file by an
+  absolute path inside the checkout: the commit check renders the serving
+  copy of that file, not the target commit's, so a target that rebinds only
+  there to `./data` passes and after the fast-forward Compose mounts the old
+  `data`. What breaks if never fixed: only a compose layout with such an
+  include; the `docker-compose.yml` on `main` on 2026-11-23 has no
+  `include:` at all. (2) State moved to a sibling directory and bound as
+  `../state`: the check resolves the path against the temporary tree, finds
+  no state there, and refuses a correct deploy; the regression test accepts
+  any render failure, so it does not tell this refusal from the intended one.
+  What breaks if never fixed: such a deploy stops (fail-closed, nothing is
+  moved). Neither case was reproduced on live.
+
 ### A struck price in a fotocasa alert card is found by a hand-written tag scanner
 
 - **Anchor:** `services/fotocasa_source.py` (`_anchors`, `cards_in_email`,
