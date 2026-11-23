@@ -18,6 +18,8 @@
 # volume after a checksummed safety copy. `--rollback` finds the directory by
 # .env (or the tombstone), refuses before it stops anything, and renames it
 # back; it is idempotent, so a second run finishes what a killed first left.
+# It exits 4 when the app is back on <repo>/data but the marker that keeps a
+# set-aside .orchestrator from being restored twice could not be written.
 #
 # `--apply` takes the deploy and merge locks BEFORE its preflight, so a second
 # `--apply` stops at the lock or, once the first is done, at the preflight -
@@ -78,6 +80,9 @@ WORK=""
 RENAMED=""
 # --rollback: "1" when .env names nothing and <repo>/data carries no tombstone.
 NOTHING_TO_UNDO=""
+# The set-aside directory whose .orchestrator.restored marker could not be
+# written, if any: the rollback then ends with exit 4, never 0.
+MARK_FAILED=""
 # The `docker compose` call --apply is waiting on, while it runs.
 BG_PID=""
 
@@ -574,20 +579,44 @@ EOF
 # rebuilt directory got meanwhile: this run's aside, or a killed rollback's -
 # by content, never by mtime, and a killed rollback's only until it is restored
 # once (the marker), so a later --rollback keeps a newer one.
+mark_orchestrator_restored() {
+    if ! : >"${1}/.orchestrator.restored"; then
+        MARK_FAILED="$1"
+        note "ERROR: could not write ${1}/.orchestrator.restored; a later --rollback would put that copy over a newer .orchestrator"
+    fi
+}
+
+# The newest directory a rollback set aside, or nothing.
+last_aside() {
+    local last aside=""
+    for last in "${BACKUP_ROOT}"/checkout-data-at-rollback-*; do [ -d "$last" ] && aside="$last"; done
+    printf '%s' "$aside"
+}
+
+# The state directory, not a directory that merely holds files (a .DS_Store, the
+# four reference files): --apply refuses to move one without a .deployed_sha,
+# so every state it moved carries one, and the checkout's leftovers do not.
+holds_state() {
+    [ -f "${1}/.deployed_sha" ] && [ ! -L "${1}/.deployed_sha" ]
+}
+
 refresh_checkout_files() {
-    local aside="$ASIDE" last
+    local aside="$ASIDE"
     git -C "$REPO" checkout -- data >/dev/null 2>&1 \
         || note "WARNING: 'git checkout -- data' failed; check the four reference files by hand"
-    if [ -z "$aside" ]; then
-        for last in "${BACKUP_ROOT}"/checkout-data-at-rollback-*; do [ -d "$last" ] && aside="$last"; done
-    fi
+    [ -n "$aside" ] || aside="$(last_aside)"
     [ -n "$aside" ] && [ -f "${aside}/.orchestrator" ] || return 0
     if [ "$aside" != "$ASIDE" ]; then
         [ ! -e "${aside}/.orchestrator.restored" ] || return 0
-        [ ! -e "${SRC}/.orchestrator" ] || ! cmp -s "${aside}/.orchestrator" "${SRC}/.orchestrator" || return 0
+        if [ -e "${SRC}/.orchestrator" ] && cmp -s "${aside}/.orchestrator" "${SRC}/.orchestrator"; then
+            # Already in place: marked all the same, or a later --rollback
+            # would put this copy over a newer .orchestrator.
+            mark_orchestrator_restored "$aside"
+            return 0
+        fi
     fi
     if cp -p "${aside}/.orchestrator" "${SRC}/.orchestrator"; then
-        : >"${aside}/.orchestrator.restored"
+        mark_orchestrator_restored "$aside"
     else
         note "WARNING: could not restore the newer .orchestrator from ${aside}"
     fi
@@ -943,9 +972,16 @@ preflight_apply() {
 }
 
 preflight_rollback() {
-    local value recorded near here there here_at there_at
+    local value recorded near here there here_at there_at aside
     say "preflight (read-only):"
     preflight_common
+    # A killed rollback's .orchestrator not yet marked restored: the marker must
+    # be writable, or this run would restore it and a later one again, over a
+    # newer .orchestrator.
+    aside="$(last_aside)"
+    if [ -n "$aside" ] && [ -f "${aside}/.orchestrator" ] && [ ! -e "${aside}/.orchestrator.restored" ] && [ ! -w "$aside" ]; then
+        problem "${aside} is not writable, so ${aside}/.orchestrator.restored cannot be written; make it writable (chmod u+w) first"
+    fi
     value="$(resolved_data_dir 2>/dev/null || true)"
     if [ "$(env_line_count)" = "0" ] && ! has_tombstone "$SRC"; then
         if [ -d "$SRC" ]; then
@@ -955,6 +991,12 @@ preflight_rollback() {
             problem "${SRC} is not a directory, and neither .env nor a ${TOMBSTONE} says where the state is"
         fi
         return 0
+    fi
+    # Step 4 writes the tombstone as a regular file and nothing else does: a
+    # FIFO, a directory or a link of that name says nothing about whose
+    # files ${SRC} holds.
+    if has_tombstone "$SRC" && { [ ! -f "${SRC}/${TOMBSTONE}" ] || [ -L "${SRC}/${TOMBSTONE}" ]; }; then
+        problem "${SRC}/${TOMBSTONE} is not a regular file; this script never writes one like it - inspect ${SRC} by hand"
     fi
     recorded="$(tombstone_destination "$SRC")" \
         || problem "${SRC}/${TOMBSTONE} does not record a destination the way this script writes one; read it and set ${KEY} in .env by hand"
@@ -982,8 +1024,12 @@ preflight_rollback() {
         elif [ "$here" != "$there" ] || [ "$here_at" != "$there_at" ]; then
             problem "${DEST} is not on the mounted filesystem of ${near}; the rename back would fail (EXDEV) with the app stopped"
         fi
-    elif [ -d "$SRC" ] && ! has_tombstone "$SRC"; then
+    elif [ -d "$SRC" ] && ! has_tombstone "$SRC" && holds_state "$SRC"; then
         fine "the state is in ${SRC} - no rename to undo, only the .env line"
+    elif [ -d "$SRC" ] && ! has_tombstone "$SRC"; then
+        # Step 4 writes the tombstone right after mkdir, so a ${SRC} without
+        # one and without .deployed_sha (empty, or a .DS_Store) is not state.
+        problem "${SRC} holds no .deployed_sha and '${DEST:-unknown}' is not a directory; the state is in neither - find it before anything is undone"
     else
         problem "cannot find the moved directory ('${DEST:-unknown}' is not a directory)"
     fi
@@ -1026,6 +1072,11 @@ if [ "$MODE" = "rollback" ]; then
     if restore_original; then
         PHASE="done"
         trap - EXIT HUP INT TERM
+        if [ -n "$MARK_FAILED" ]; then
+            say "ROLLED BACK, MARKER MISSING: the app is serving from ${SRC}, but before any later --rollback run:"
+            note "touch ${MARK_FAILED}/.orchestrator.restored"
+            exit 4
+        fi
         say "ROLLED BACK: the app is serving from ${SRC}."
         [ -z "$ASIDE" ] || say "  the small directory that stood in ${SRC} meanwhile is kept at ${ASIDE}"
         exit 0

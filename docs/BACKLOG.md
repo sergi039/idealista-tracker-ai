@@ -65,26 +65,23 @@ must be an ancestor of `main`.
   never a false pass). Not reproduced on live: whether docker stores a
   Destination with the spelling compose was given was not measured.
 
-### `--rollback` has three open review findings, and they come before the first `--apply`
+### `--rollback` refuses on a read-only older set-aside, and follows a link planted as its marker
 
-- **Anchor:** `tools/move_data_dir.sh` (`--rollback`: the tombstone test
-  beside `.moved-to`, the preflight that accepts the checkout `data` as
-  restored state, and the `.orchestrator.restored` marker) (#639).
-- **Found 2026-11-22** in the second review of #712 (`6a04a31..8edbd65`); the
-  owner merged #712 over them with these entries as the condition for the
-  first production `--apply` (2026-11-23). Three cases, none reproduced on
-  live and none covered by `tools/move_data_dir_test.sh`:
-  - a FIFO named `data/.moved-to` with `.env` naming an existing moved
-    directory counts as a tombstone, so rollback stops the app and replaces a
-    populated checkout `data`;
-  - with the moved directory unavailable and an empty checkout `data` without
-    a tombstone, preflight accepts the empty directory as restored state and
-    recovery starts the app on it (the moved state is not deleted);
-  - with identical `.orchestrator` copies, a retry after a kill between the
-    rename back and the copy writes no restoration marker, so a later
-    `--rollback` puts the aside copy over a newer `.orchestrator`.
-  What breaks if never fixed: a rollback in one of these states leaves the
-  app down, running on empty state, or with a stale orchestrator mandate.
+- **Anchor:** `tools/move_data_dir.sh` (`--rollback` preflight: the
+  "is not writable, so ... .orchestrator.restored cannot be written" refusal;
+  `mark_orchestrator_restored`: `: >"${1}/.orchestrator.restored"`) (#639).
+- **Found 2026-11-23** in the second review of #713 (`19cda0d..be2ea7e`); the
+  owner merged #713 over both (2026-11-23), the review cap of two rounds being
+  spent. (1) A valid moved directory and a checkout with the tombstone, but an
+  older set-aside directory left at mode `0555` holding `.orchestrator` with no
+  marker: preflight refuses, although this rollback would set aside into a
+  fresh directory. What breaks if never fixed: the rollback does not start
+  until that directory is made writable by hand (fail-closed, nothing is
+  moved). (2) A retry of a killed rollback with identical `.orchestrator`
+  copies and `.orchestrator.restored` a dangling symlink: the redirect follows
+  the link and creates an empty file where it points, then reports success.
+  What breaks if never fixed: only a link someone placed there by hand can do
+  this; the script never creates one. Neither case was reproduced on live.
 
 ### A struck price in a fotocasa alert card is found by a hand-written tag scanner
 
