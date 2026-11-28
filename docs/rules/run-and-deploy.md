@@ -396,7 +396,8 @@ checksummed safety copy to `~/IdealistaRank-backups/data-pre-move-<UTC>/`,
 renames `<repo>/data` to the destination on the same mounted filesystem (so
 there is never a second authoritative copy), rebuilds a small `<repo>/data`,
 starts the app with `--no-build` and verifies mount, healthz, the page
-(`lib/render_check.sh`, 200 or it failed), a host-to-container probe and the
+(`tools/autopilot/lib/render_check.sh`, 200 or it failed; an empty
+`DEPLOY_RENDER_PATH` fails too, `verify_serving` in `tools/move_data_dir.sh`), a host-to-container probe and the
 reference files in the image. Every non-success exit after the preflight,
 signals included, runs the same idempotent recovery that `--rollback` runs;
 recovery reads the disk, not the phase. `RECOVERED:` is exit 1, `RECOVERY
@@ -408,9 +409,11 @@ from the environment so only `.env` decides the mount.
 
 - **The tombstone.** After the move `<repo>/data` holds the four reference
   files, `.orchestrator`, launchd logs and `data/.moved-to`. A directory that
-  carries the tombstone is where the state *used* to be: `lib/data_dir.sh`
-  refuses to resolve to it and the app refuses to start on it
-  (`app._state_directory_problem`), so a lost `.env` line is a loud stop
+  carries the tombstone is where the state *used* to be:
+  `tools/autopilot/lib/data_dir.sh` refuses to resolve to it
+  (`_data_dir_refuse_tombstone`) and the app refuses to start on it
+  (`_state_directory_problem` in `app.py`, called from `_validate_config`,
+  whose `ValueError` stops `create_app`; skipped only under `TESTING`), so a lost `.env` line is a loud stop
   rather than an app with no mail cursor. Whether the tombstone is there is
   asked of the entry (`lstat`, `-L` before `-e`), never by opening it; a lookup
   that failed is a refusal, not "absent" - in the shell `data_dir.sh
@@ -427,5 +430,11 @@ from the environment so only `.env` decides the mount.
   directory with this checkout's `.env` linked in (`data_dir.sh
   --commit-source`), so an `include`d or `extends`ed file is the target's and
   a tree that cannot be written out is refused; the refusal counts toward the
-  stall alarm (#532). `--rollback` first, then the revert deploys normally. A
-  hand `docker compose up --build` of such a tree is not gated.
+  stall alarm (#532). The code is the section "a moved state directory needs
+  a build that knows where it is (#639)" of `tools/autopilot/deploy_watcher.sh`:
+  `git cat-file -t` must answer `blob`, the `--commit-source` answer must equal
+  `STATE_DIR`, otherwise it logs `REFUSING to deploy`, calls
+  `note_refused_tick` and exits 0. `--rollback` first, then the revert deploys
+  normally; the rollback is the owner's command, and an agent that meets the
+  refusal reports it and waits. A hand `docker compose up --build` of such a
+  tree is not gated.
