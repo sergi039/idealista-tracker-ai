@@ -105,6 +105,26 @@ must be an ancestor of `main`.
   What breaks if never fixed: such a deploy stops (fail-closed, nothing is
   moved). Neither case was reproduced on live.
 
+### `DATA_DIR_RUNBOOK.md` names two scripts without their path and promises timings and backups nothing checks
+
+- **Anchor:** `DATA_DIR_RUNBOOK.md` (the "Why a plain directory and not a
+  Docker volume" paragraph: bare `backfill_status.sh` and
+  `backup_attachments.sh`, and "so that it is inside Time Machine"; "The next
+  watcher tick (≤ 5 min)") (#639).
+- **Found 2026-11-28** in the second review of #716 (`943426e..240ff02`); the
+  owner merged #716 over it (2026-11-28), the review cap of two rounds being
+  spent. (1) The two scripts live at `tools/backfill_status.sh` and
+  `tools/backup_attachments.sh`; a reader looking from the checkout root does
+  not find the bare names. (2) "≤ 5 min" is not tied to the watcher's
+  LaunchAgent interval in the text. (3) An internal-volume `<destination>`
+  can still be excluded from Time Machine, and `--check` does not look.
+  What breaks if never fixed: an operator following the runbook looks for the
+  wrong path, waits on an unstated interval, or assumes a backup that may not
+  exist; nothing in code is affected. Nine other findings of that round
+  asked for evidence the documentation-only review could not see (truncated
+  code excerpts), not for a change to the text; one (the pytest guard and
+  `Config.DATA_DIR`) is already stated in the runbook.
+
 ### A struck price in a fotocasa alert card is found by a hand-written tag scanner
 
 - **Anchor:** `services/fotocasa_source.py` (`_anchors`, `cards_in_email`,
