@@ -287,3 +287,28 @@ since.
   path, and every documented `--snapshot data/x.json` still writes to the
   persisted directory.
 - It does not delete the safety copy or the rollback asides; a person does.
+
+## Known limits, merged as they are
+
+Four findings from the second reviews of #713 and #714 were merged unfixed
+(the review cap of two rounds was spent) and are kept in `docs/BACKLOG.md`.
+None was reproduced on live. Three of them stop the script or the watcher and
+move nothing; one is reachable only through a link put there by hand.
+
+- `--rollback` refuses while an **older** set-aside directory is read-only and
+  still holds an unmarked `.orchestrator`, even though this rollback sets aside
+  into a fresh directory. Make that directory writable (`chmod u+w`) and run it
+  again.
+- `--rollback` follows a symbolic link put in place of
+  `<aside>/.orchestrator.restored`: it creates an empty file where the link
+  points and reports success. The script never creates such a link; do not
+  leave one there.
+- The watcher's gate reads a compose file that the target's `docker-compose.yml`
+  includes **by an absolute path into the checkout** as the serving checkout
+  has it, not as the target commit does. A target that changes the mount only in such a file would
+  pass. The `docker-compose.yml` on `main` has no `include:`; add one only by a
+  relative path.
+- The watcher's gate resolves a relative mount such as `../state` against its
+  temporary tree, so a state directory bound that way is refused and the deploy
+  stops (`REFUSING to deploy`, counted toward the stall alarm). Name the state
+  directory in `.env` by its absolute path, as `--apply` writes it.
